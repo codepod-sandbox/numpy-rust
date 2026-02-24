@@ -4,6 +4,7 @@ pub mod broadcasting;
 pub mod casting;
 pub mod dtype;
 pub mod error;
+pub mod ops;
 
 pub use array::NdArray;
 pub use array_data::ArrayData;
