@@ -1,5 +1,6 @@
 pub mod array;
 pub mod array_data;
+pub mod casting;
 pub mod dtype;
 pub mod error;
 

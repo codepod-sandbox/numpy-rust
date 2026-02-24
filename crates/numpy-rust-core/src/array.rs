@@ -74,6 +74,13 @@ impl NdArray {
     pub fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    /// Cast this array to a different dtype, following NumPy's astype semantics.
+    pub fn astype(&self, dtype: DType) -> Self {
+        Self {
+            data: crate::casting::cast_array_data(&self.data, dtype),
+        }
+    }
 }
 
 // --- Trait for converting Vec<T> to ArrayData ---
