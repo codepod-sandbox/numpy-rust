@@ -10,6 +10,7 @@ pub mod manipulation;
 pub mod fft;
 pub mod linalg;
 pub mod ops;
+pub mod random;
 pub mod utility;
 
 pub use array::NdArray;
