@@ -7,6 +7,7 @@ pub mod dtype;
 pub mod error;
 pub mod indexing;
 pub mod manipulation;
+pub mod linalg;
 pub mod ops;
 pub mod utility;
 
