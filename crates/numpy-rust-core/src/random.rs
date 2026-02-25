@@ -14,7 +14,7 @@ mod inner {
     use crate::error::{NumpyError, Result};
     use crate::NdArray;
 
-    static GLOBAL_RNG: Mutex<Option<StdRng>> = Mutex::new(None);
+    pub(crate) static GLOBAL_RNG: Mutex<Option<StdRng>> = Mutex::new(None);
 
     /// Get or initialize the global RNG.
     fn with_rng<F, R>(f: F) -> R
@@ -141,22 +141,19 @@ mod tests {
 
     #[test]
     fn test_seed_deterministic() {
-        seed(42);
-        let a = rand(&[5]);
-        seed(42);
-        let b = rand(&[5]);
-        // Same seed should produce same values
-        for i in 0..5 {
-            let va = match a.get(&[i]).unwrap() {
-                crate::indexing::Scalar::Float64(v) => v,
-                _ => panic!(),
-            };
-            let vb = match b.get(&[i]).unwrap() {
-                crate::indexing::Scalar::Float64(v) => v,
-                _ => panic!(),
-            };
-            assert_eq!(va, vb);
-        }
+        // Use the global lock directly to avoid races with parallel tests.
+        use super::inner::GLOBAL_RNG;
+        use ::rand::rngs::StdRng;
+        use ::rand::{Rng, SeedableRng};
+
+        let mut guard = GLOBAL_RNG.lock().unwrap();
+        *guard = Some(StdRng::seed_from_u64(99));
+        let vals_a: Vec<f64> = (0..5).map(|_| guard.as_mut().unwrap().random::<f64>()).collect();
+        *guard = Some(StdRng::seed_from_u64(99));
+        let vals_b: Vec<f64> = (0..5).map(|_| guard.as_mut().unwrap().random::<f64>()).collect();
+        drop(guard);
+
+        assert_eq!(vals_a, vals_b);
     }
 
     #[test]

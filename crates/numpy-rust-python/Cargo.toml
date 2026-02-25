@@ -1,0 +1,9 @@
+[package]
+name = "numpy-rust-python"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+numpy-rust-core = { path = "../numpy-rust-core" }
+rustpython-vm = "0.4"
+rustpython-derive = "0.4"
