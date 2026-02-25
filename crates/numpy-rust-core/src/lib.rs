@@ -5,6 +5,7 @@ pub mod casting;
 pub mod creation;
 pub mod dtype;
 pub mod error;
+pub mod indexing;
 pub mod manipulation;
 pub mod ops;
 
