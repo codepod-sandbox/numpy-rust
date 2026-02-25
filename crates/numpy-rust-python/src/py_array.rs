@@ -94,7 +94,7 @@ pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usi
     } else if let Ok(n) = obj.clone().try_into_value::<i64>(vm) {
         Ok(vec![n as usize])
     } else {
-        Err(vm.new_type_error("shape must be a tuple, list, or integer".into()))
+        Err(vm.new_type_error("shape must be a tuple, list, or integer".to_owned()))
     }
 }
 
@@ -277,11 +277,11 @@ impl PyNdArray {
 
     // --- Scalar conversion ---
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn float(&self, vm: &VirtualMachine) -> PyResult<f64> {
         if self.data.size() != 1 {
             return Err(vm.new_type_error(
-                "only size-1 arrays can be converted to Python scalars".into(),
+                "only size-1 arrays can be converted to Python scalars".to_owned(),
             ));
         }
         let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
@@ -294,11 +294,11 @@ impl PyNdArray {
         })
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn int(&self, vm: &VirtualMachine) -> PyResult<i64> {
         if self.data.size() != 1 {
             return Err(vm.new_type_error(
-                "only size-1 arrays can be converted to Python scalars".into(),
+                "only size-1 arrays can be converted to Python scalars".to_owned(),
             ));
         }
         let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
@@ -311,11 +311,11 @@ impl PyNdArray {
         })
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn bool(&self, vm: &VirtualMachine) -> PyResult<bool> {
         if self.data.size() != 1 {
             return Err(vm.new_value_error(
-                "The truth value of an array with more than one element is ambiguous".into(),
+                "The truth value of an array with more than one element is ambiguous".to_owned(),
             ));
         }
         let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
@@ -330,7 +330,7 @@ impl PyNdArray {
 
     // --- Operators ---
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn add(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         (&self.data + &other.data)
@@ -338,7 +338,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn sub(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         (&self.data - &other.data)
@@ -346,7 +346,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn mul(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         (&self.data * &other.data)
@@ -354,7 +354,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn truediv(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         (&self.data / &other.data)
@@ -362,12 +362,12 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn neg(&self) -> PyNdArray {
         PyNdArray::from_core(self.data.neg())
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn eq(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         self.data
@@ -376,7 +376,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn ne(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         self.data
@@ -385,7 +385,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn lt(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         self.data
@@ -394,7 +394,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn gt(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         self.data
@@ -403,7 +403,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn le(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         self.data
@@ -412,7 +412,7 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn ge(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let other = extract_ndarray(&other, vm)?;
         self.data
@@ -423,7 +423,7 @@ impl PyNdArray {
 
     // --- Indexing ---
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn getitem(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         // Integer index -> scalar or sub-array
         if let Ok(idx) = key.clone().try_into_value::<i64>(vm) {
@@ -489,12 +489,12 @@ impl PyNdArray {
             }
         }
 
-        Err(vm.new_type_error("unsupported index type".into()))
+        Err(vm.new_type_error("unsupported index type".to_owned()))
     }
 
     // --- String representations ---
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn repr(&self) -> String {
         format!(
             "ndarray(shape={:?}, dtype={})",
@@ -503,7 +503,7 @@ impl PyNdArray {
         )
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn str(&self) -> String {
         format!(
             "ndarray(shape={:?}, dtype={})",
@@ -512,7 +512,7 @@ impl PyNdArray {
         )
     }
 
-    #[pymethod(magic)]
+    #[pymethod]
     fn len(&self) -> usize {
         if self.data.ndim() == 0 {
             0
@@ -525,7 +525,7 @@ impl PyNdArray {
 /// Extract a PyNdArray from a PyObjectRef.
 fn extract_ndarray<'a>(obj: &'a PyObjectRef, vm: &VirtualMachine) -> PyResult<&'a PyNdArray> {
     obj.payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))
 }
 
 // --- AsNumber implementation for operator dispatch ---
@@ -538,10 +538,10 @@ fn number_bin_op(
 ) -> PyResult {
     let a = a
         .payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     let b = b
         .payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     op(&a.data, &b.data)
         .map(|r| PyNdArray::from_core(r).into_pyobject(vm))
         .map_err(|e| vm.new_value_error(e.to_string()))
@@ -550,17 +550,17 @@ fn number_bin_op(
 fn number_neg(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     Ok(PyNdArray::from_core(a.data.neg()).into_pyobject(vm))
 }
 
 fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     if a.data.size() != 1 {
         return Err(vm.new_type_error(
-            "only size-1 arrays can be converted to Python scalars".into(),
+            "only size-1 arrays can be converted to Python scalars".to_owned(),
         ));
     }
     let s = a.data.get(&vec![0; a.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
@@ -577,10 +577,10 @@ fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
 fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     if a.data.size() != 1 {
         return Err(vm.new_type_error(
-            "only size-1 arrays can be converted to Python scalars".into(),
+            "only size-1 arrays can be converted to Python scalars".to_owned(),
         ));
     }
     let s = a.data.get(&vec![0; a.data.ndim()]).map_err(|e| numpy_err(e, vm))?;

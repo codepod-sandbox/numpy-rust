@@ -27,7 +27,7 @@ pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         }
         Ok(PyNdArray::from_core(NdArray::from_vec(floats)))
     } else {
-        Err(vm.new_type_error("array() requires a list".into()))
+        Err(vm.new_type_error("array() requires a list".to_owned()))
     }
 }
 
@@ -39,12 +39,12 @@ fn parse_nested_list(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<PyN
     for item in items {
         let row = item
             .payload::<PyList>()
-            .ok_or_else(|| vm.new_type_error("expected list of lists".into()))?;
+            .ok_or_else(|| vm.new_type_error("expected list of lists".to_owned()))?;
         let row_items = row.borrow_vec();
         match ncols {
             None => ncols = Some(row_items.len()),
             Some(c) if c != row_items.len() => {
-                return Err(vm.new_value_error("inconsistent row lengths".into()));
+                return Err(vm.new_value_error("inconsistent row lengths".to_owned()));
             }
             _ => {}
         }
@@ -83,7 +83,7 @@ pub fn py_concatenate(
 ) -> PyResult<PyNdArray> {
     let list = arrays_obj
         .payload::<PyList>()
-        .ok_or_else(|| vm.new_type_error("concatenate requires a list of arrays".into()))?;
+        .ok_or_else(|| vm.new_type_error("concatenate requires a list of arrays".to_owned()))?;
     let items = list.borrow_vec();
     let py_arrays: Vec<PyRef<PyNdArray>> = items
         .iter()

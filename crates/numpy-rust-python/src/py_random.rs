@@ -82,5 +82,5 @@ mod _random {
 }
 
 pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
-    _random::make_module(vm).into()
+    _random::module_def(&vm.ctx).create_module(vm).unwrap().into()
 }

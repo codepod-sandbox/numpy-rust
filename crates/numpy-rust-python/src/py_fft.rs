@@ -47,5 +47,5 @@ mod _fft {
 }
 
 pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
-    _fft::make_module(vm).into()
+    _fft::module_def(&vm.ctx).create_module(vm).unwrap().into()
 }

@@ -97,5 +97,5 @@ mod _linalg {
 }
 
 pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
-    _linalg::make_module(vm).into()
+    _linalg::module_def(&vm.ctx).create_module(vm).unwrap().into()
 }

@@ -6,9 +6,9 @@ pub mod py_random;
 
 use rustpython_vm as vm;
 
-/// Public wrapper to register the numpy module with a RustPython interpreter.
-pub fn add_numpy_module(vm: &mut rustpython_vm::VirtualMachine) {
-    vm.add_native_module("numpy".to_owned(), Box::new(numpy::make_module));
+/// Return the numpy module definition for registration with the interpreter builder.
+pub fn numpy_module_def(ctx: &vm::Context) -> &'static vm::builtins::PyModuleDef {
+    numpy::module_def(ctx)
 }
 
 #[vm::pymodule]
