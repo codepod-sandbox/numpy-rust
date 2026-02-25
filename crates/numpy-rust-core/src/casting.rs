@@ -16,6 +16,7 @@ pub fn cast_array_data(data: &ArrayData, target: DType) -> ArrayData {
         DType::Int64 => ArrayData::Int64(cast_to_i64(data)),
         DType::Float32 => ArrayData::Float32(cast_to_f32(data)),
         DType::Float64 => ArrayData::Float64(cast_to_f64(data)),
+        DType::Str => ArrayData::Str(cast_to_str(data)),
     }
 }
 
@@ -26,6 +27,7 @@ fn cast_to_bool(data: &ArrayData) -> ArrayD<bool> {
         ArrayData::Int64(a) => a.mapv(|x| x != 0),
         ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
         ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
+        ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
     }
 }
 
@@ -36,6 +38,7 @@ fn cast_to_i32(data: &ArrayData) -> ArrayD<i32> {
         ArrayData::Int64(a) => a.mapv(|x| x as i32),
         ArrayData::Float32(a) => a.mapv(|x| x as i32),
         ArrayData::Float64(a) => a.mapv(|x| x as i32),
+        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i32>().expect("cannot cast string to i32")),
     }
 }
 
@@ -46,6 +49,7 @@ fn cast_to_i64(data: &ArrayData) -> ArrayD<i64> {
         ArrayData::Int64(a) => a.clone(),
         ArrayData::Float32(a) => a.mapv(|x| x as i64),
         ArrayData::Float64(a) => a.mapv(|x| x as i64),
+        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i64>().expect("cannot cast string to i64")),
     }
 }
 
@@ -56,6 +60,7 @@ fn cast_to_f32(data: &ArrayData) -> ArrayD<f32> {
         ArrayData::Int64(a) => a.mapv(|x| x as f32),
         ArrayData::Float32(a) => a.clone(),
         ArrayData::Float64(a) => a.mapv(|x| x as f32),
+        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<f32>().expect("cannot cast string to f32")),
     }
 }
 
@@ -66,6 +71,18 @@ fn cast_to_f64(data: &ArrayData) -> ArrayD<f64> {
         ArrayData::Int64(a) => a.mapv(|x| x as f64),
         ArrayData::Float32(a) => a.mapv(|x| x as f64),
         ArrayData::Float64(a) => a.clone(),
+        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<f64>().expect("cannot cast string to f64")),
+    }
+}
+
+fn cast_to_str(data: &ArrayData) -> ArrayD<String> {
+    match data {
+        ArrayData::Bool(a) => a.mapv(|x| x.to_string()),
+        ArrayData::Int32(a) => a.mapv(|x| x.to_string()),
+        ArrayData::Int64(a) => a.mapv(|x| x.to_string()),
+        ArrayData::Float32(a) => a.mapv(|x| x.to_string()),
+        ArrayData::Float64(a) => a.mapv(|x| x.to_string()),
+        ArrayData::Str(a) => a.clone(),
     }
 }
 

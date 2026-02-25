@@ -5,6 +5,9 @@ use crate::NdArray;
 
 /// Helper: ensure array is floating-point (cast int/bool to f64, matching NumPy behavior).
 fn ensure_float(data: &ArrayData) -> ArrayData {
+    if data.dtype().is_string() {
+        panic!("math functions not supported for string arrays");
+    }
     match data.dtype() {
         DType::Float32 | DType::Float64 => data.clone(),
         _ => cast_array_data(data, DType::Float64),
@@ -47,6 +50,7 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.abs())),
             ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.abs())),
             ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.abs())),
+            ArrayData::Str(_) => panic!("abs not supported for string arrays"),
         };
         NdArray::from_data(result)
     }
@@ -66,6 +70,7 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| -x)),
             ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| -x)),
             ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| -x)),
+            ArrayData::Str(_) => panic!("negation not supported for string arrays"),
         };
         NdArray::from_data(result)
     }

@@ -26,12 +26,16 @@ impl NdArray {
             DType::Int64 => ArrayData::Int64(ArrayD::zeros(sh)),
             DType::Float32 => ArrayData::Float32(ArrayD::zeros(sh)),
             DType::Float64 => ArrayData::Float64(ArrayD::zeros(sh)),
+            DType::Str => ArrayData::Str(ArrayD::from_elem(sh, String::new())),
         };
         Self { data }
     }
 
     /// Create an array filled with ones.
     pub fn ones(shape: &[usize], dtype: DType) -> Self {
+        if dtype == DType::Str {
+            panic!("ones() not supported for string dtype");
+        }
         let sh = IxDyn(shape);
         let data = match dtype {
             DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, true)),
@@ -39,6 +43,7 @@ impl NdArray {
             DType::Int64 => ArrayData::Int64(ArrayD::ones(sh)),
             DType::Float32 => ArrayData::Float32(ArrayD::ones(sh)),
             DType::Float64 => ArrayData::Float64(ArrayD::ones(sh)),
+            DType::Str => unreachable!(),
         };
         Self { data }
     }
@@ -48,6 +53,13 @@ impl NdArray {
         let sh = IxDyn(shape);
         Self {
             data: ArrayData::Float64(ArrayD::from_elem(sh, value)),
+        }
+    }
+
+    /// Create a 0-dimensional (scalar) array from an f64 value.
+    pub fn from_scalar(value: f64) -> Self {
+        Self {
+            data: ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), value)),
         }
     }
 }
@@ -121,6 +133,13 @@ impl IntoArrayData for Vec<bool> {
     fn into_array_data(self) -> ArrayData {
         let len = self.len();
         ArrayData::Bool(ArrayD::from_shape_vec(IxDyn(&[len]), self).unwrap())
+    }
+}
+
+impl IntoArrayData for Vec<String> {
+    fn into_array_data(self) -> ArrayData {
+        let len = self.len();
+        ArrayData::Str(ArrayD::from_shape_vec(IxDyn(&[len]), self).unwrap())
     }
 }
 

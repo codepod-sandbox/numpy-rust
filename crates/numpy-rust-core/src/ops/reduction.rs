@@ -16,6 +16,9 @@ fn validate_axis(axis: usize, ndim: usize) -> Result<()> {
 impl NdArray {
     /// Sum of array elements over a given axis, or all elements if axis is None.
     pub fn sum(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("sum not supported for string arrays".into()));
+        }
         match axis {
             None => self.reduce_all_sum(),
             Some(ax) => self.reduce_axis_sum(ax),
@@ -24,6 +27,9 @@ impl NdArray {
 
     /// Mean of array elements. Always returns Float64.
     pub fn mean(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("mean not supported for string arrays".into()));
+        }
         let sum = self.astype(DType::Float64).sum(axis)?;
         let count = match axis {
             None => self.size(),
@@ -54,12 +60,18 @@ impl NdArray {
 
     /// Standard deviation. Always returns Float64.
     pub fn std(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("std not supported for string arrays".into()));
+        }
         let var = self.var(axis)?;
         Ok(var.sqrt())
     }
 
     /// Variance. Always returns Float64.
     pub fn var(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("var not supported for string arrays".into()));
+        }
         // var = mean(x^2) - mean(x)^2
         let float_self = self.astype(DType::Float64);
         let x_sq = (&float_self * &float_self)?;
@@ -87,6 +99,7 @@ impl NdArray {
             ArrayData::Int64(a) => a.iter().all(|&x| x != 0),
             ArrayData::Float32(a) => a.iter().all(|&x| x != 0.0),
             ArrayData::Float64(a) => a.iter().all(|&x| x != 0.0),
+            ArrayData::Str(a) => a.iter().all(|x| !x.is_empty()),
         }
     }
 
@@ -98,12 +111,16 @@ impl NdArray {
             ArrayData::Int64(a) => a.iter().any(|&x| x != 0),
             ArrayData::Float32(a) => a.iter().any(|&x| x != 0.0),
             ArrayData::Float64(a) => a.iter().any(|&x| x != 0.0),
+            ArrayData::Str(a) => a.iter().any(|x| !x.is_empty()),
         }
     }
 
     // --- Internal helpers ---
 
     fn reduce_all_sum(&self) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("sum not supported for string arrays".into()));
+        }
         let data = match &self.data {
             ArrayData::Bool(a) => {
                 let s: i32 = a.iter().map(|&x| x as i32).sum();
@@ -125,11 +142,15 @@ impl NdArray {
                 let s: f64 = a.iter().sum();
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), s))
             }
+            ArrayData::Str(_) => unreachable!(),
         };
         Ok(NdArray::from_data(data))
     }
 
     fn reduce_axis_sum(&self, axis: usize) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("sum not supported for string arrays".into()));
+        }
         validate_axis(axis, self.ndim())?;
         let ax = Axis(axis);
         let data = match &self.data {
@@ -141,6 +162,7 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(a.sum_axis(ax)),
             ArrayData::Float32(a) => ArrayData::Float32(a.sum_axis(ax)),
             ArrayData::Float64(a) => ArrayData::Float64(a.sum_axis(ax)),
+            ArrayData::Str(_) => unreachable!(),
         };
         Ok(NdArray::from_data(data))
     }
@@ -166,6 +188,10 @@ impl NdArray {
             ArrayData::Float64(a) => {
                 let v = a.iter().copied().reduce(f64::min).ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
+            }
+            ArrayData::Str(a) => {
+                let v = a.iter().min().ok_or_else(|| NumpyError::ValueError("empty array".into()))?.clone();
+                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v))
             }
         };
         Ok(NdArray::from_data(data))
@@ -193,11 +219,18 @@ impl NdArray {
                 let v = a.iter().copied().reduce(f64::max).ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
             }
+            ArrayData::Str(a) => {
+                let v = a.iter().max().ok_or_else(|| NumpyError::ValueError("empty array".into()))?.clone();
+                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v))
+            }
         };
         Ok(NdArray::from_data(data))
     }
 
     fn reduce_all_argmin(&self) -> Result<usize> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("argmin not supported for string arrays".into()));
+        }
         match &self.data {
             ArrayData::Float64(a) => Ok(a.iter().enumerate()
                 .min_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
@@ -211,6 +244,9 @@ impl NdArray {
     }
 
     fn reduce_all_argmax(&self) -> Result<usize> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError("argmax not supported for string arrays".into()));
+        }
         match &self.data {
             ArrayData::Float64(a) => Ok(a.iter().enumerate()
                 .max_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
@@ -242,6 +278,19 @@ impl NdArray {
             (ArrayData::Float64(a), ReduceOp::Max) => ArrayData::Float64(fold_axis!(a, f64::NEG_INFINITY, |&acc, &x| acc.max(x))),
             (ArrayData::Bool(a), ReduceOp::Min) => ArrayData::Bool(fold_axis!(a, true, |&acc, &x| acc && x)),
             (ArrayData::Bool(a), ReduceOp::Max) => ArrayData::Bool(fold_axis!(a, false, |&acc, &x| acc || x)),
+            (ArrayData::Str(a), ReduceOp::Min) => {
+                // fold_axis with String requires Clone-based fold
+                let result = a.fold_axis(ax, String::from("\u{10FFFF}"), |acc, x| {
+                    if x < acc { x.clone() } else { acc.clone() }
+                });
+                ArrayData::Str(result)
+            }
+            (ArrayData::Str(a), ReduceOp::Max) => {
+                let result = a.fold_axis(ax, String::new(), |acc, x| {
+                    if x > acc { x.clone() } else { acc.clone() }
+                });
+                ArrayData::Str(result)
+            }
         };
         Ok(NdArray::from_data(data))
     }

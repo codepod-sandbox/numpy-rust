@@ -8,6 +8,11 @@ use crate::NdArray;
 
 /// Prepare two NdArrays for a binary operation: promote types and broadcast shapes.
 fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
+    if lhs.dtype().is_string() || rhs.dtype().is_string() {
+        return Err(crate::error::NumpyError::TypeError(
+            "arithmetic not supported for string arrays".into(),
+        ));
+    }
     let common_dtype = lhs.dtype().promote(rhs.dtype());
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 

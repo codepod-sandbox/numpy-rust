@@ -1,5 +1,5 @@
 use rustpython_vm as vm;
-use vm::builtins::PyList;
+use vm::builtins::{PyList, PyStr};
 use vm::{PyObjectRef, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::{DType, NdArray};
@@ -17,6 +17,17 @@ pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         // Check if first element is a list (nested)
         if items[0].payload::<PyList>().is_some() {
             return parse_nested_list(&items, vm);
+        }
+
+        // Check if first element is a string → string array
+        if items[0].payload::<PyStr>().is_some() {
+            let mut strings = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                let s = item.payload::<PyStr>()
+                    .ok_or_else(|| vm.new_type_error("mixed types in list".to_owned()))?;
+                strings.push(s.as_str().to_owned());
+            }
+            return Ok(PyNdArray::from_core(NdArray::from_vec(strings)));
         }
 
         // Flat list — try to extract as floats

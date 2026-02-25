@@ -1,4 +1,4 @@
-/// Supported data types, mirroring NumPy's core numeric dtypes.
+/// Supported data types, mirroring NumPy's core numeric dtypes plus strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
     Bool,
@@ -6,6 +6,7 @@ pub enum DType {
     Int64,
     Float32,
     Float64,
+    Str,
 }
 
 impl DType {
@@ -19,6 +20,9 @@ impl DType {
     pub fn promote(self, other: DType) -> DType {
         if self == other {
             return self;
+        }
+        if self == DType::Str || other == DType::Str {
+            panic!("cannot promote string dtype with numeric dtype");
         }
         let (hi, lo) = if self.rank() >= other.rank() {
             (self, other)
@@ -42,6 +46,7 @@ impl DType {
             DType::Int64 => 2,
             DType::Float32 => 3,
             DType::Float64 => 4,
+            DType::Str => 255,
         }
     }
 
@@ -51,6 +56,7 @@ impl DType {
             DType::Bool => 1,
             DType::Int32 | DType::Float32 => 4,
             DType::Int64 | DType::Float64 => 8,
+            DType::Str => 0, // variable-length
         }
     }
 
@@ -63,6 +69,11 @@ impl DType {
     pub fn is_integer(self) -> bool {
         matches!(self, DType::Int32 | DType::Int64)
     }
+
+    /// Returns true if this is a string type.
+    pub fn is_string(self) -> bool {
+        matches!(self, DType::Str)
+    }
 }
 
 impl std::fmt::Display for DType {
@@ -73,6 +84,7 @@ impl std::fmt::Display for DType {
             DType::Int64 => write!(f, "int64"),
             DType::Float32 => write!(f, "float32"),
             DType::Float64 => write!(f, "float64"),
+            DType::Str => write!(f, "str"),
         }
     }
 }

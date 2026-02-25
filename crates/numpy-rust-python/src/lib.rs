@@ -6,13 +6,13 @@ pub mod py_random;
 
 use rustpython_vm as vm;
 
-/// Return the numpy module definition for registration with the interpreter builder.
+/// Return the native numpy module definition for registration with the interpreter builder.
 pub fn numpy_module_def(ctx: &vm::Context) -> &'static vm::builtins::PyModuleDef {
-    numpy::module_def(ctx)
+    _numpy_native::module_def(ctx)
 }
 
 #[vm::pymodule]
-pub mod numpy {
+pub mod _numpy_native {
     use super::*;
     use crate::py_array::PyNdArray;
     use vm::class::PyClassImpl;

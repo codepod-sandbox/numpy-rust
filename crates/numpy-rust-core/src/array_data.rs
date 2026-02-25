@@ -10,6 +10,7 @@ pub enum ArrayData {
     Int64(ArrayD<i64>),
     Float32(ArrayD<f32>),
     Float64(ArrayD<f64>),
+    Str(ArrayD<String>),
 }
 
 impl ArrayData {
@@ -20,6 +21,7 @@ impl ArrayData {
             ArrayData::Int64(_) => DType::Int64,
             ArrayData::Float32(_) => DType::Float32,
             ArrayData::Float64(_) => DType::Float64,
+            ArrayData::Str(_) => DType::Str,
         }
     }
 
@@ -30,6 +32,7 @@ impl ArrayData {
             ArrayData::Int64(a) => a.shape(),
             ArrayData::Float32(a) => a.shape(),
             ArrayData::Float64(a) => a.shape(),
+            ArrayData::Str(a) => a.shape(),
         }
     }
 
@@ -40,6 +43,7 @@ impl ArrayData {
             ArrayData::Int64(a) => a.ndim(),
             ArrayData::Float32(a) => a.ndim(),
             ArrayData::Float64(a) => a.ndim(),
+            ArrayData::Str(a) => a.ndim(),
         }
     }
 

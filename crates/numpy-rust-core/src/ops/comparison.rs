@@ -8,6 +8,19 @@ use crate::NdArray;
 
 /// Prepare two NdArrays for comparison: promote types and broadcast shapes.
 fn prepare_cmp(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
+    // String vs numeric comparison is not supported
+    if lhs.dtype().is_string() != rhs.dtype().is_string() {
+        return Err(crate::error::NumpyError::TypeError(
+            "comparison between string and numeric arrays not supported".into(),
+        ));
+    }
+    // String+String: skip promotion (both already Str)
+    if lhs.dtype().is_string() {
+        let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
+        let a = broadcast_array_data(&lhs.data, &out_shape);
+        let b = broadcast_array_data(&rhs.data, &out_shape);
+        return Ok((a, b));
+    }
     let common_dtype = lhs.dtype().promote(rhs.dtype());
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
@@ -40,6 +53,9 @@ macro_rules! impl_cmp {
                     }
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => {
                         ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
+                    (ArrayData::Str(a), ArrayData::Str(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y)
                     }
                     _ => unreachable!("promotion ensures matching types"),
                 };

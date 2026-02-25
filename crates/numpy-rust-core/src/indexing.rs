@@ -27,6 +27,7 @@ pub enum Scalar {
     Int64(i64),
     Float32(f32),
     Float64(f64),
+    Str(String),
 }
 
 impl NdArray {
@@ -53,6 +54,10 @@ impl NdArray {
             ArrayData::Float64(a) => a
                 .get(idx)
                 .map(|&v| Scalar::Float64(v))
+                .ok_or_else(|| NumpyError::ValueError("index out of bounds".into())),
+            ArrayData::Str(a) => a
+                .get(idx)
+                .map(|v| Scalar::Str(v.clone()))
                 .ok_or_else(|| NumpyError::ValueError("index out of bounds".into())),
         }
     }
@@ -113,6 +118,7 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(do_slice!(a)),
             ArrayData::Float32(a) => ArrayData::Float32(do_slice!(a)),
             ArrayData::Float64(a) => ArrayData::Float64(do_slice!(a)),
+            ArrayData::Str(a) => ArrayData::Str(do_slice!(a)),
         };
 
         Ok(NdArray::from_data(data))
@@ -144,6 +150,7 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(do_select!(a)),
             ArrayData::Float32(a) => ArrayData::Float32(do_select!(a)),
             ArrayData::Float64(a) => ArrayData::Float64(do_select!(a)),
+            ArrayData::Str(a) => ArrayData::Str(do_select!(a)),
         };
 
         Ok(NdArray::from_data(data))
@@ -195,6 +202,19 @@ impl NdArray {
             ArrayData::Int64(a) => do_mask!(a, Int64),
             ArrayData::Float32(a) => do_mask!(a, Float32),
             ArrayData::Float64(a) => do_mask!(a, Float64),
+            ArrayData::Str(a) => {
+                let flat: Vec<_> = a.iter().cloned().collect();
+                let selected: Vec<_> = flat
+                    .into_iter()
+                    .zip(flat_mask.iter())
+                    .filter(|(_, &m)| m)
+                    .map(|(v, _)| v)
+                    .collect();
+                let len = selected.len();
+                ArrayData::Str(
+                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected).unwrap(),
+                )
+            }
         };
 
         Ok(NdArray::from_data(data))

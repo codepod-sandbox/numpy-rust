@@ -43,6 +43,9 @@ pub fn linspace(start: f64, stop: f64, num: usize) -> NdArray {
 
 /// Create an n x n identity matrix.
 pub fn eye(n: usize, dtype: DType) -> NdArray {
+    if dtype.is_string() {
+        panic!("eye() not supported for string dtype");
+    }
     let mut arr = NdArray::zeros(&[n, n], dtype);
     // Set diagonal to 1
     match &mut arr.data {
@@ -71,6 +74,7 @@ pub fn eye(n: usize, dtype: DType) -> NdArray {
                 a[[i, i]] = 1.0;
             }
         }
+        ArrayData::Str(_) => unreachable!(),
     }
     arr
 }
@@ -84,8 +88,15 @@ pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
         DType::Int64 => ArrayData::Int64(ArrayD::from_elem(sh, value as i64)),
         DType::Float32 => ArrayData::Float32(ArrayD::from_elem(sh, value as f32)),
         DType::Float64 => ArrayData::Float64(ArrayD::from_elem(sh, value)),
+        DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string())),
     };
     NdArray::from_data(data)
+}
+
+/// Create a string array filled with a given string value.
+pub fn full_str(shape: &[usize], value: &str) -> NdArray {
+    let sh = IxDyn(shape);
+    NdArray::from_data(ArrayData::Str(ArrayD::from_elem(sh, value.to_string())))
 }
 
 /// Create an array of zeros with the same shape and dtype as the given array.

@@ -14,10 +14,20 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
         _ => return Err(NumpyError::TypeError("condition must be boolean".into())),
     };
 
-    // Promote x and y to common dtype
-    let common_dtype = x.dtype().promote(y.dtype());
-    let xd = cast_array_data(&x.data, common_dtype);
-    let yd = cast_array_data(&y.data, common_dtype);
+    // Promote x and y to common dtype (skip promotion for string+string)
+    let (xd, yd) = if x.dtype().is_string() && y.dtype().is_string() {
+        (x.data.clone(), y.data.clone())
+    } else if x.dtype().is_string() || y.dtype().is_string() {
+        return Err(NumpyError::TypeError(
+            "where: cannot mix string and numeric arrays".into(),
+        ));
+    } else {
+        let common_dtype = x.dtype().promote(y.dtype());
+        (
+            cast_array_data(&x.data, common_dtype),
+            cast_array_data(&y.data, common_dtype),
+        )
+    };
 
     // Broadcast all three to common shape
     let shape_xy = broadcast_shape(x.shape(), y.shape())?;
@@ -51,6 +61,13 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
         (ArrayData::Int64(xa), ArrayData::Int64(ya)) => do_where!(&xa, &ya, Int64),
         (ArrayData::Int32(xa), ArrayData::Int32(ya)) => do_where!(&xa, &ya, Int32),
         (ArrayData::Bool(xa), ArrayData::Bool(ya)) => do_where!(&xa, &ya, Bool),
+        (ArrayData::Str(xa), ArrayData::Str(ya)) => {
+            let result = ndarray::Zip::from(&cond_arr)
+                .and(&xa)
+                .and(&ya)
+                .map_collect(|&c, xv, yv| if c { xv.clone() } else { yv.clone() });
+            ArrayData::Str(result)
+        }
         _ => unreachable!("promotion ensures matching types"),
     };
 

@@ -32,6 +32,9 @@ impl NdArray {
             ArrayData::Float64(a) => {
                 ArrayData::Float64(a.clone().into_shape_with_order(sh).unwrap())
             }
+            ArrayData::Str(a) => {
+                ArrayData::Str(a.clone().into_shape_with_order(sh).unwrap())
+            }
         };
         Ok(NdArray::from_data(data))
     }
@@ -44,6 +47,7 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(a.t().to_owned()),
             ArrayData::Float32(a) => ArrayData::Float32(a.t().to_owned()),
             ArrayData::Float64(a) => ArrayData::Float64(a.t().to_owned()),
+            ArrayData::Str(a) => ArrayData::Str(a.t().to_owned()),
         };
         NdArray::from_data(data)
     }
@@ -143,6 +147,18 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                 })
                 .collect();
             ArrayData::Float64(ndarray::concatenate(ax, &views).map_err(|e| {
+                NumpyError::ShapeMismatch(e.to_string())
+            })?)
+        }
+        crate::DType::Str => {
+            let views: Vec<_> = promoted
+                .iter()
+                .map(|d| match d {
+                    ArrayData::Str(a) => a.view(),
+                    _ => unreachable!(),
+                })
+                .collect();
+            ArrayData::Str(ndarray::concatenate(ax, &views).map_err(|e| {
                 NumpyError::ShapeMismatch(e.to_string())
             })?)
         }

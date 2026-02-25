@@ -50,6 +50,7 @@ fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
         Scalar::Int64(v) => vm.ctx.new_int(v).into(),
         Scalar::Float32(v) => vm.ctx.new_float(v as f64).into(),
         Scalar::Float64(v) => vm.ctx.new_float(v).into(),
+        Scalar::Str(v) => vm.ctx.new_str(v).into(),
     }
 }
 
@@ -71,6 +72,8 @@ fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "int64" | "i64" | "int" => Ok(DType::Int64),
         "float32" | "f32" => Ok(DType::Float32),
         "float64" | "f64" | "float" => Ok(DType::Float64),
+        "str" | "U" => Ok(DType::Str),
+        _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),
     }
 }
@@ -98,7 +101,7 @@ pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usi
     }
 }
 
-#[vm::pyclass(with(AsNumber, AsMapping, AsSequence))]
+#[vm::pyclass(flags(BASETYPE), with(AsNumber, AsMapping, AsSequence))]
 impl PyNdArray {
     // --- Properties ---
 
@@ -291,6 +294,9 @@ impl PyNdArray {
             Scalar::Int64(v) => v as f64,
             Scalar::Float32(v) => v as f64,
             Scalar::Float64(v) => v,
+            Scalar::Str(v) => v.parse::<f64>().map_err(|_| {
+                vm.new_value_error(format!("could not convert string to float: '{v}'"))
+            })?,
         })
     }
 
@@ -308,6 +314,9 @@ impl PyNdArray {
             Scalar::Int64(v) => v,
             Scalar::Float32(v) => v as i64,
             Scalar::Float64(v) => v as i64,
+            Scalar::Str(v) => v.parse::<i64>().map_err(|_| {
+                vm.new_value_error(format!("could not convert string to int: '{v}'"))
+            })?,
         })
     }
 
@@ -325,106 +334,21 @@ impl PyNdArray {
             Scalar::Int64(v) => v != 0,
             Scalar::Float32(v) => v != 0.0,
             Scalar::Float64(v) => v != 0.0,
+            Scalar::Str(v) => !v.is_empty(),
         })
     }
 
     // --- Operators ---
 
-    #[pymethod]
-    fn add(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        (&self.data + &other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
+    // Arithmetic operators are implemented via AsNumber below.
+    // Reverse ops (radd, rsub, etc.) are handled by the number protocol.
 
-    #[pymethod]
-    fn sub(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        (&self.data - &other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn mul(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        (&self.data * &other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn truediv(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        (&self.data / &other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn neg(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.neg())
-    }
-
-    #[pymethod]
-    fn eq(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        self.data
-            .eq(&other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn ne(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        self.data
-            .ne(&other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn lt(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        self.data
-            .lt(&other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn gt(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        self.data
-            .gt(&other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn le(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        self.data
-            .le(&other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
-
-    #[pymethod]
-    fn ge(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let other = extract_ndarray(&other, vm)?;
-        self.data
-            .ge(&other.data)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
-    }
+    // Comparison operators are implemented via the Comparable trait below.
 
     // --- Indexing ---
 
     #[pymethod]
-    fn getitem(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+    fn __getitem__(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         // Integer index -> scalar or sub-array
         if let Ok(idx) = key.clone().try_into_value::<i64>(vm) {
             let resolved = if idx < 0 {
@@ -492,10 +416,46 @@ impl PyNdArray {
         Err(vm.new_type_error("unsupported index type".to_owned()))
     }
 
+    // --- Comparison (slot-based, returns ndarray like NumPy) ---
+
+    #[pyslot]
+    fn slot_richcompare(
+        zelf: &vm::PyObject,
+        other: &vm::PyObject,
+        op: vm::types::PyComparisonOp,
+        vm: &VirtualMachine,
+    ) -> PyResult<vm::function::Either<PyObjectRef, vm::function::PyComparisonValue>> {
+        let zelf = zelf
+            .downcast_ref::<PyNdArray>()
+            .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+        let other = match obj_to_ndarray(other, vm) {
+            Ok(arr) => arr,
+            Err(_) => {
+                return Ok(vm::function::Either::B(
+                    vm::function::PyComparisonValue::NotImplemented,
+                ))
+            }
+        };
+        let result = match op {
+            vm::types::PyComparisonOp::Eq => zelf.data.eq(&other),
+            vm::types::PyComparisonOp::Ne => zelf.data.ne(&other),
+            vm::types::PyComparisonOp::Lt => zelf.data.lt(&other),
+            vm::types::PyComparisonOp::Le => zelf.data.le(&other),
+            vm::types::PyComparisonOp::Gt => zelf.data.gt(&other),
+            vm::types::PyComparisonOp::Ge => zelf.data.ge(&other),
+        };
+        match result {
+            Ok(arr) => Ok(vm::function::Either::A(
+                PyNdArray::from_core(arr).into_pyobject(vm),
+            )),
+            Err(e) => Err(numpy_err(e, vm)),
+        }
+    }
+
     // --- String representations ---
 
     #[pymethod]
-    fn repr(&self) -> String {
+    fn __repr__(&self) -> String {
         format!(
             "ndarray(shape={:?}, dtype={})",
             self.data.shape(),
@@ -504,7 +464,7 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn str(&self) -> String {
+    fn __str__(&self) -> String {
         format!(
             "ndarray(shape={:?}, dtype={})",
             self.data.shape(),
@@ -513,7 +473,7 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn len(&self) -> usize {
+    fn __len__(&self) -> usize {
         if self.data.ndim() == 0 {
             0
         } else {
@@ -528,6 +488,27 @@ fn extract_ndarray<'a>(obj: &'a PyObjectRef, vm: &VirtualMachine) -> PyResult<&'
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))
 }
 
+/// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).
+fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
+    if let Some(arr) = obj.payload::<PyNdArray>() {
+        return Ok(arr.data.clone());
+    }
+    // Try float (PyFloat)
+    if let Some(f) = obj.payload::<vm::builtins::PyFloat>() {
+        return Ok(NdArray::from_scalar(f.to_f64()));
+    }
+    // Try int (PyInt) — extract i64 then convert to f64
+    if let Some(i) = obj.payload::<vm::builtins::PyInt>() {
+        let val: i64 = i.try_to_primitive(vm)?;
+        return Ok(NdArray::from_scalar(val as f64));
+    }
+    // Try str (PyStr) — create 0-D string array
+    if let Some(s) = obj.payload::<vm::builtins::PyStr>() {
+        return Ok(NdArray::from_vec(vec![s.as_str().to_owned()]));
+    }
+    Err(vm.new_type_error("expected ndarray or scalar".to_owned()))
+}
+
 // --- AsNumber implementation for operator dispatch ---
 
 fn number_bin_op(
@@ -536,13 +517,9 @@ fn number_bin_op(
     op: fn(&NdArray, &NdArray) -> numpy_rust_core::Result<NdArray>,
     vm: &VirtualMachine,
 ) -> PyResult {
-    let a = a
-        .payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-    let b = b
-        .payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-    op(&a.data, &b.data)
+    let a_arr = obj_to_ndarray(a, vm)?;
+    let b_arr = obj_to_ndarray(b, vm)?;
+    op(&a_arr, &b_arr)
         .map(|r| PyNdArray::from_core(r).into_pyobject(vm))
         .map_err(|e| vm.new_value_error(e.to_string()))
 }
@@ -570,6 +547,9 @@ fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
         Scalar::Int64(v) => v as f64,
         Scalar::Float32(v) => v as f64,
         Scalar::Float64(v) => v,
+        Scalar::Str(v) => v.parse::<f64>().map_err(|_| {
+            vm.new_value_error(format!("could not convert string to float: '{v}'"))
+        })?,
     };
     Ok(vm.ctx.new_float(v).into())
 }
@@ -590,6 +570,9 @@ fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
         Scalar::Int64(v) => v,
         Scalar::Float32(v) => v as i64,
         Scalar::Float64(v) => v as i64,
+        Scalar::Str(v) => v.parse::<i64>().map_err(|_| {
+            vm.new_value_error(format!("could not convert string to int: '{v}'"))
+        })?,
     };
     Ok(vm.ctx.new_int(v).into())
 }
@@ -628,7 +611,7 @@ impl AsMapping for PyNdArray {
             }),
             subscript: atomic_func!(|mapping, needle: &vm::PyObject, vm| {
                 let zelf = PyNdArray::mapping_downcast(mapping);
-                zelf.getitem(needle.to_owned(), vm)
+                zelf.__getitem__(needle.to_owned(), vm)
             }),
             ..PyMappingMethods::NOT_IMPLEMENTED
         });
@@ -653,6 +636,9 @@ impl AsSequence for PyNdArray {
         &AS_SEQUENCE
     }
 }
+
+
+
 
 /// Parse an optional axis argument (None means reduce all).
 fn parse_optional_axis(
