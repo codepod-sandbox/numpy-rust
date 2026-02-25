@@ -6,11 +6,23 @@ pub mod py_random;
 
 use rustpython_vm as vm;
 
+/// Public wrapper to register the numpy module with a RustPython interpreter.
+pub fn add_numpy_module(vm: &mut rustpython_vm::VirtualMachine) {
+    vm.add_native_module("numpy".to_owned(), Box::new(numpy::make_module));
+}
+
 #[vm::pymodule]
 pub mod numpy {
     use super::*;
     use crate::py_array::PyNdArray;
+    use vm::class::PyClassImpl;
     use vm::{PyObjectRef, PyResult, VirtualMachine};
+
+    // Register the ndarray class type
+    #[pyattr]
+    fn ndarray(vm: &VirtualMachine) -> vm::builtins::PyTypeRef {
+        PyNdArray::make_class(&vm.ctx)
+    }
 
     // --- Creation functions ---
 

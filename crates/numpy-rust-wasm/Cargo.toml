@@ -1,0 +1,13 @@
+[package]
+name = "numpy-rust-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "numpy-python"
+path = "src/main.rs"
+
+[dependencies]
+numpy-rust-python = { path = "../numpy-rust-python" }
+rustpython = { version = "0.4", default-features = false, features = ["stdlib"] }
+rustpython-vm = "0.4"

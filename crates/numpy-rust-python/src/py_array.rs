@@ -1,5 +1,7 @@
 use rustpython_vm as vm;
 use vm::builtins::{PyList, PyStr, PyTuple};
+use vm::protocol::PyNumberMethods;
+use vm::types::AsNumber;
 use vm::{PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
@@ -85,7 +87,7 @@ pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usi
     }
 }
 
-#[vm::pyclass]
+#[vm::pyclass(with(AsNumber))]
 impl PyNdArray {
     // --- Properties ---
 
@@ -265,28 +267,32 @@ impl PyNdArray {
     // --- Operators ---
 
     #[pymethod(magic)]
-    fn add(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn add(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         (&self.data + &other.data)
             .map(PyNdArray::from_core)
             .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod(magic)]
-    fn sub(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn sub(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         (&self.data - &other.data)
             .map(PyNdArray::from_core)
             .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod(magic)]
-    fn mul(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn mul(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         (&self.data * &other.data)
             .map(PyNdArray::from_core)
             .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod(magic)]
-    fn truediv(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn truediv(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         (&self.data / &other.data)
             .map(PyNdArray::from_core)
             .map_err(|e| numpy_err(e, vm))
@@ -298,7 +304,8 @@ impl PyNdArray {
     }
 
     #[pymethod(magic)]
-    fn eq(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn eq(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         self.data
             .eq(&other.data)
             .map(PyNdArray::from_core)
@@ -306,7 +313,8 @@ impl PyNdArray {
     }
 
     #[pymethod(magic)]
-    fn ne(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn ne(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         self.data
             .ne(&other.data)
             .map(PyNdArray::from_core)
@@ -314,7 +322,8 @@ impl PyNdArray {
     }
 
     #[pymethod(magic)]
-    fn lt(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn lt(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         self.data
             .lt(&other.data)
             .map(PyNdArray::from_core)
@@ -322,7 +331,8 @@ impl PyNdArray {
     }
 
     #[pymethod(magic)]
-    fn gt(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn gt(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         self.data
             .gt(&other.data)
             .map(PyNdArray::from_core)
@@ -330,7 +340,8 @@ impl PyNdArray {
     }
 
     #[pymethod(magic)]
-    fn le(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn le(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         self.data
             .le(&other.data)
             .map(PyNdArray::from_core)
@@ -338,7 +349,8 @@ impl PyNdArray {
     }
 
     #[pymethod(magic)]
-    fn ge(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn ge(&self, other: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let other = extract_ndarray(&other, vm)?;
         self.data
             .ge(&other.data)
             .map(PyNdArray::from_core)
@@ -443,6 +455,56 @@ impl PyNdArray {
         } else {
             self.data.shape()[0]
         }
+    }
+}
+
+/// Extract a PyNdArray from a PyObjectRef.
+fn extract_ndarray<'a>(obj: &'a PyObjectRef, vm: &VirtualMachine) -> PyResult<&'a PyNdArray> {
+    obj.payload::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))
+}
+
+// --- AsNumber implementation for operator dispatch ---
+
+fn number_bin_op(
+    a: &vm::PyObject,
+    b: &vm::PyObject,
+    op: fn(&NdArray, &NdArray) -> numpy_rust_core::Result<NdArray>,
+    vm: &VirtualMachine,
+) -> PyResult {
+    let a = a
+        .payload::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+    let b = b
+        .payload::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+    op(&a.data, &b.data)
+        .map(|r| PyNdArray::from_core(r).into_pyobject(vm))
+        .map_err(|e| vm.new_value_error(e.to_string()))
+}
+
+fn number_neg(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
+    let a = num
+        .payload::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+    Ok(PyNdArray::from_core(a.data.neg()).into_pyobject(vm))
+}
+
+impl PyNdArray {
+    const AS_NUMBER: PyNumberMethods = PyNumberMethods {
+        add: Some(|a, b, vm| number_bin_op(a, b, |x, y| x + y, vm)),
+        subtract: Some(|a, b, vm| number_bin_op(a, b, |x, y| x - y, vm)),
+        multiply: Some(|a, b, vm| number_bin_op(a, b, |x, y| x * y, vm)),
+        true_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x / y, vm)),
+        negative: Some(|a, vm| number_neg(a, vm)),
+        ..PyNumberMethods::NOT_IMPLEMENTED
+    };
+}
+
+impl AsNumber for PyNdArray {
+    fn as_number() -> &'static PyNumberMethods {
+        static AS_NUMBER: PyNumberMethods = PyNdArray::AS_NUMBER;
+        &AS_NUMBER
     }
 }
 
