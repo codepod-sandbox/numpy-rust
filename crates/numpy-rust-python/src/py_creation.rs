@@ -23,7 +23,8 @@ pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         if items[0].payload::<PyStr>().is_some() {
             let mut strings = Vec::with_capacity(items.len());
             for item in items.iter() {
-                let s = item.payload::<PyStr>()
+                let s = item
+                    .payload::<PyStr>()
                     .ok_or_else(|| vm.new_type_error("mixed types in list".to_owned()))?;
                 strings.push(s.as_str().to_owned());
             }

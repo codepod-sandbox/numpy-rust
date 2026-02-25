@@ -3,8 +3,14 @@ name = "numpy-rust-python"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["linalg", "fft", "random"]
+linalg = ["numpy-rust-core/linalg"]
+fft = ["numpy-rust-core/fft"]
+random = ["numpy-rust-core/random"]
+
 [dependencies]
-numpy-rust-core = { path = "../numpy-rust-core" }
+numpy-rust-core = { path = "../numpy-rust-core", default-features = false }
 rustpython-vm = { workspace = true }
 rustpython-derive = { workspace = true }
 crossbeam-utils = "0.8.21"

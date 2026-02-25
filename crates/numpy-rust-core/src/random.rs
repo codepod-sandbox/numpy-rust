@@ -98,13 +98,13 @@ mod inner {
     /// Like `numpy.random.choice(a, size, replace)`.
     pub fn choice(a: &NdArray, size: usize, replace: bool) -> Result<NdArray> {
         if a.ndim() != 1 {
-            return Err(NumpyError::ValueError(
-                "choice requires a 1-D array".into(),
-            ));
+            return Err(NumpyError::ValueError("choice requires a 1-D array".into()));
         }
         let n = a.size();
         if n == 0 {
-            return Err(NumpyError::ValueError("cannot choose from empty array".into()));
+            return Err(NumpyError::ValueError(
+                "cannot choose from empty array".into(),
+            ));
         }
         if !replace && size > n {
             return Err(NumpyError::ValueError(format!(
@@ -148,9 +148,13 @@ mod tests {
 
         let mut guard = GLOBAL_RNG.lock().unwrap();
         *guard = Some(StdRng::seed_from_u64(99));
-        let vals_a: Vec<f64> = (0..5).map(|_| guard.as_mut().unwrap().random::<f64>()).collect();
+        let vals_a: Vec<f64> = (0..5)
+            .map(|_| guard.as_mut().unwrap().random::<f64>())
+            .collect();
         *guard = Some(StdRng::seed_from_u64(99));
-        let vals_b: Vec<f64> = (0..5).map(|_| guard.as_mut().unwrap().random::<f64>()).collect();
+        let vals_b: Vec<f64> = (0..5)
+            .map(|_| guard.as_mut().unwrap().random::<f64>())
+            .collect();
         drop(guard);
 
         assert_eq!(vals_a, vals_b);

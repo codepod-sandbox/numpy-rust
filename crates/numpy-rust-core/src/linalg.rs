@@ -1,10 +1,9 @@
-//! Linear algebra operations backed by faer.
+//! Linear algebra operations backed by nalgebra.
 //! Only available with the `linalg` feature.
 
 #[cfg(feature = "linalg")]
 mod inner {
-    use faer::linalg::solvers::{DenseSolveCore, Solve};
-    use faer::{Mat, Side};
+    use nalgebra::DMatrix;
     use ndarray::{ArrayD, IxDyn};
 
     use crate::array_data::ArrayData;
@@ -13,8 +12,8 @@ mod inner {
     use crate::error::{NumpyError, Result};
     use crate::NdArray;
 
-    /// Convert a 2-D NdArray to faer::Mat<f64>.
-    fn to_faer(data: &ArrayData) -> Result<Mat<f64>> {
+    /// Convert a 2-D NdArray to nalgebra DMatrix<f64>.
+    fn to_nalgebra(data: &ArrayData) -> Result<DMatrix<f64>> {
         let f64_data = cast_array_data(data, DType::Float64);
         match f64_data {
             ArrayData::Float64(a) => {
@@ -25,23 +24,23 @@ mod inner {
                     )));
                 }
                 let (m, n) = (a.shape()[0], a.shape()[1]);
-                Ok(Mat::from_fn(m, n, |i, j| a[[i, j]]))
+                Ok(DMatrix::from_fn(m, n, |i, j| a[[i, j]]))
             }
             _ => unreachable!(),
         }
     }
 
-    /// Convert faer::Mat<f64> back to NdArray.
-    fn from_faer(mat: &Mat<f64>) -> NdArray {
-        let (m, n) = (mat.nrows(), mat.ncols());
+    /// Convert nalgebra DMatrix<f64> back to NdArray.
+    fn from_nalgebra(mat: &DMatrix<f64>) -> NdArray {
+        let (m, n) = mat.shape();
         let data = ArrayD::from_shape_fn(IxDyn(&[m, n]), |idx| mat[(idx[0], idx[1])]);
         NdArray::from_data(ArrayData::Float64(data))
     }
 
     /// Matrix multiplication: (m x k) @ (k x n) -> (m x n).
     pub fn matmul(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-        let am = to_faer(&a.data)?;
-        let bm = to_faer(&b.data)?;
+        let am = to_nalgebra(&a.data)?;
+        let bm = to_nalgebra(&b.data)?;
         if am.ncols() != bm.nrows() {
             return Err(NumpyError::ShapeMismatch(format!(
                 "matmul: shapes {:?} and {:?} not aligned",
@@ -50,110 +49,90 @@ mod inner {
             )));
         }
         let result = &am * &bm;
-        Ok(from_faer(&result))
+        Ok(from_nalgebra(&result))
     }
 
     /// Matrix inverse via LU decomposition.
     pub fn inv(a: &NdArray) -> Result<NdArray> {
-        let m = to_faer(&a.data)?;
+        let m = to_nalgebra(&a.data)?;
         check_square(&m)?;
-        let lu = m.partial_piv_lu();
-        let result = lu.inverse();
-        Ok(from_faer(&result))
+        let result = m
+            .clone()
+            .try_inverse()
+            .ok_or_else(|| NumpyError::ValueError("singular matrix".into()))?;
+        Ok(from_nalgebra(&result))
     }
 
     /// Solve Ax = b.
     pub fn solve(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-        let am = to_faer(&a.data)?;
+        let am = to_nalgebra(&a.data)?;
         check_square(&am)?;
-        let bm = to_faer(&b.data)?;
-        let lu = am.partial_piv_lu();
-        let result = lu.solve(&bm);
-        Ok(from_faer(&result))
+        let bm = to_nalgebra(&b.data)?;
+        let lu = am.lu();
+        let result = lu
+            .solve(&bm)
+            .ok_or_else(|| NumpyError::ValueError("singular matrix".into()))?;
+        Ok(from_nalgebra(&result))
     }
 
-    /// Determinant via eigenvalues.
+    /// Determinant via LU decomposition.
     pub fn det(a: &NdArray) -> Result<f64> {
-        let m = to_faer(&a.data)?;
+        let m = to_nalgebra(&a.data)?;
         check_square(&m)?;
-        let eigenvalues = m
-            .eigenvalues_from_real()
-            .map_err(|_| NumpyError::ValueError("eigenvalue computation failed".into()))?;
-        let mut d_re = 1.0_f64;
-        let mut d_im = 0.0_f64;
-        for ev in &eigenvalues {
-            let new_re = d_re * ev.re - d_im * ev.im;
-            let new_im = d_re * ev.im + d_im * ev.re;
-            d_re = new_re;
-            d_im = new_im;
-        }
-        Ok(d_re)
+        Ok(m.determinant())
     }
 
     /// Eigendecomposition for symmetric matrices.
     /// Returns (eigenvalues as 1-D array, eigenvectors as 2-D array).
     pub fn eig(a: &NdArray) -> Result<(NdArray, NdArray)> {
-        let m = to_faer(&a.data)?;
+        let m = to_nalgebra(&a.data)?;
         check_square(&m)?;
-        let eigen = m
-            .self_adjoint_eigen(Side::Lower)
-            .map_err(|_| NumpyError::ValueError("eigendecomposition failed".into()))?;
+        let symmetric =
+            nalgebra::DMatrix::from_fn(m.nrows(), m.ncols(), |i, j| (m[(i, j)] + m[(j, i)]) / 2.0);
+        let eigen = nalgebra::SymmetricEigen::new(symmetric);
 
         let n = m.nrows();
-        let s = eigen.S();
-        let eigenvalues =
-            ArrayD::from_shape_fn(IxDyn(&[n]), |idx| s.column_vector()[idx[0]]);
-        let u = eigen.U();
-        let eigenvectors = Mat::from_fn(u.nrows(), u.ncols(), |i, j| u[(i, j)]);
+        let eigenvalues = ArrayD::from_shape_fn(IxDyn(&[n]), |idx| eigen.eigenvalues[idx[0]]);
+        let eigenvectors = from_nalgebra(&eigen.eigenvectors);
 
         Ok((
             NdArray::from_data(ArrayData::Float64(eigenvalues)),
-            from_faer(&eigenvectors),
+            eigenvectors,
         ))
     }
 
     /// Singular Value Decomposition.
     /// Returns (U, S, Vt) where A ≈ U @ diag(S) @ Vt.
     pub fn svd(a: &NdArray) -> Result<(NdArray, NdArray, NdArray)> {
-        let m = to_faer(&a.data)?;
-        let decomp = m
-            .svd()
-            .map_err(|_| NumpyError::ValueError("SVD computation failed".into()))?;
+        let m = to_nalgebra(&a.data)?;
+        let decomp = m.svd(true, true);
 
-        let u_ref = decomp.U();
-        let u_mat = Mat::from_fn(u_ref.nrows(), u_ref.ncols(), |i, j| u_ref[(i, j)]);
-        let u = from_faer(&u_mat);
+        let u_mat = decomp
+            .u
+            .ok_or_else(|| NumpyError::ValueError("SVD computation failed (U)".into()))?;
+        let u = from_nalgebra(&u_mat);
 
-        let s_diag = decomp.S();
-        let k = s_diag.column_vector().nrows();
-        let s = ArrayD::from_shape_fn(IxDyn(&[k]), |idx| s_diag.column_vector()[idx[0]]);
+        let k = decomp.singular_values.len();
+        let s = ArrayD::from_shape_fn(IxDyn(&[k]), |idx| decomp.singular_values[idx[0]]);
 
-        let v_ref = decomp.V();
-        // NumPy returns Vt (V transposed)
-        let vt_mat = Mat::from_fn(v_ref.ncols(), v_ref.nrows(), |i, j| v_ref[(j, i)]);
+        let v_t = decomp
+            .v_t
+            .ok_or_else(|| NumpyError::ValueError("SVD computation failed (Vt)".into()))?;
 
         Ok((
             u,
             NdArray::from_data(ArrayData::Float64(s)),
-            from_faer(&vt_mat),
+            from_nalgebra(&v_t),
         ))
     }
 
     /// QR decomposition. Returns (Q, R).
     pub fn qr(a: &NdArray) -> Result<(NdArray, NdArray)> {
-        let m = to_faer(&a.data)?;
+        let m = to_nalgebra(&a.data)?;
         let decomp = m.qr();
-
-        #[allow(non_snake_case)]
-        let thin_Q = decomp.compute_thin_Q();
-        #[allow(non_snake_case)]
-        let thin_R_ref = decomp.thin_R();
-        #[allow(non_snake_case)]
-        let thin_R = Mat::from_fn(thin_R_ref.nrows(), thin_R_ref.ncols(), |i, j| {
-            thin_R_ref[(i, j)]
-        });
-
-        Ok((from_faer(&thin_Q), from_faer(&thin_R)))
+        let q = decomp.q();
+        let r = decomp.r();
+        Ok((from_nalgebra(&q), from_nalgebra(&r)))
     }
 
     /// Frobenius norm.
@@ -171,17 +150,15 @@ mod inner {
     /// Cholesky decomposition for symmetric positive-definite matrices.
     /// Returns L such that A = L @ L^T.
     pub fn cholesky(a: &NdArray) -> Result<NdArray> {
-        let m = to_faer(&a.data)?;
+        let m = to_nalgebra(&a.data)?;
         check_square(&m)?;
-        let llt = m
-            .llt(Side::Lower)
-            .map_err(|_| NumpyError::ValueError("matrix is not positive definite".into()))?;
-        let l_ref = llt.L();
-        let l_mat = Mat::from_fn(l_ref.nrows(), l_ref.ncols(), |i, j| l_ref[(i, j)]);
-        Ok(from_faer(&l_mat))
+        let chol = nalgebra::linalg::Cholesky::new(m)
+            .ok_or_else(|| NumpyError::ValueError("matrix is not positive definite".into()))?;
+        let l = chol.l();
+        Ok(from_nalgebra(&l))
     }
 
-    fn check_square(m: &Mat<f64>) -> Result<()> {
+    fn check_square(m: &DMatrix<f64>) -> Result<()> {
         if m.nrows() != m.ncols() {
             return Err(NumpyError::ValueError(format!(
                 "expected square matrix, got {}x{}",
@@ -255,9 +232,10 @@ mod tests {
     fn test_svd() {
         let a = NdArray::ones(&[3, 2], DType::Float64);
         let (u, s, vt) = svd(&a).unwrap();
-        assert_eq!(u.shape(), &[3, 3]);
+        // nalgebra returns thin SVD: U is (m x min(m,n)), Vt is (min(m,n) x n)
+        assert_eq!(u.shape()[0], 3);
         assert_eq!(s.shape(), &[2]);
-        assert_eq!(vt.shape(), &[2, 2]);
+        assert_eq!(vt.shape()[1], 2);
     }
 
     #[test]

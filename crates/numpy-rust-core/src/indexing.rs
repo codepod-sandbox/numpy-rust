@@ -162,11 +162,7 @@ impl NdArray {
         // Mask must be Bool dtype
         let bool_mask = match &mask.data {
             ArrayData::Bool(m) => m,
-            _ => {
-                return Err(NumpyError::TypeError(
-                    "mask must be a boolean array".into(),
-                ))
-            }
+            _ => return Err(NumpyError::TypeError("mask must be a boolean array".into())),
         };
 
         // Flatten both to 1-D for element-wise selection
@@ -211,9 +207,7 @@ impl NdArray {
                     .map(|(v, _)| v)
                     .collect();
                 let len = selected.len();
-                ArrayData::Str(
-                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected).unwrap(),
-                )
+                ArrayData::Str(ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected).unwrap())
             }
         };
 

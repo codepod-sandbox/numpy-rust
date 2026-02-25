@@ -33,10 +33,7 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
     let shape_xy = broadcast_shape(x.shape(), y.shape())?;
     let out_shape = broadcast_shape(cond.shape(), &shape_xy)?;
 
-    let cond_b = broadcast_array_data(
-        &ArrayData::Bool(bool_cond),
-        &out_shape,
-    );
+    let cond_b = broadcast_array_data(&ArrayData::Bool(bool_cond), &out_shape);
     let xb = broadcast_array_data(&xd, &out_shape);
     let yb = broadcast_array_data(&yd, &out_shape);
 

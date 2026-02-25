@@ -42,12 +42,7 @@ mod _random {
     }
 
     #[pyfunction]
-    fn normal(
-        mean: f64,
-        std: f64,
-        shape: PyObjectRef,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    fn normal(mean: f64, std: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::normal(mean, std, &sh)
             .map(PyNdArray::from_core)
@@ -82,5 +77,8 @@ mod _random {
 }
 
 pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
-    _random::module_def(&vm.ctx).create_module(vm).unwrap().into()
+    _random::module_def(&vm.ctx)
+        .create_module(vm)
+        .unwrap()
+        .into()
 }

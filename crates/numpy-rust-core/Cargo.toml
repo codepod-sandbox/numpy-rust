@@ -10,13 +10,14 @@ thiserror = "2"
 
 [features]
 default = ["linalg", "fft", "random"]
-linalg = ["dep:faer"]
+linalg = ["dep:nalgebra"]
 fft = ["dep:rustfft"]
 random = ["dep:rand", "dep:rand_distr"]
 
-[dependencies.faer]
-version = "0.21"
+[dependencies.nalgebra]
+version = "0.33"
 default-features = false
+features = ["std"]
 optional = true
 
 [dependencies.rustfft]

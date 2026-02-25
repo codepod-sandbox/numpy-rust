@@ -31,11 +31,7 @@ mod _linalg {
     }
 
     #[pyfunction]
-    fn solve(
-        a: PyRef<PyNdArray>,
-        b: PyRef<PyNdArray>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    fn solve(a: PyRef<PyNdArray>, b: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         numpy_rust_core::linalg::solve(a.inner(), b.inner())
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
@@ -97,5 +93,8 @@ mod _linalg {
 }
 
 pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
-    _linalg::module_def(&vm.ctx).create_module(vm).unwrap().into()
+    _linalg::module_def(&vm.ctx)
+        .create_module(vm)
+        .unwrap()
+        .into()
 }

@@ -81,10 +81,7 @@ mod tests {
 
     #[test]
     fn test_higher_rank() {
-        assert_eq!(
-            broadcast_shape(&[2, 1, 5], &[3, 1]).unwrap(),
-            vec![2, 3, 5]
-        );
+        assert_eq!(broadcast_shape(&[2, 1, 5], &[3, 1]).unwrap(), vec![2, 3, 5]);
     }
 
     #[test]

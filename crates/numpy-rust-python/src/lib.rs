@@ -1,7 +1,10 @@
 pub mod py_array;
 pub mod py_creation;
+#[cfg(feature = "fft")]
 pub mod py_fft;
+#[cfg(feature = "linalg")]
 pub mod py_linalg;
+#[cfg(feature = "random")]
 pub mod py_random;
 
 use rustpython_vm as vm;
@@ -97,18 +100,21 @@ pub mod _numpy_native {
         py_creation::py_concatenate(arrays, axis.unwrap_or(0), vm)
     }
 
-    // --- Submodules (registered as attributes) ---
+    // --- Submodules (registered as attributes, feature-gated) ---
 
+    #[cfg(feature = "linalg")]
     #[pyattr]
     fn linalg(vm: &VirtualMachine) -> PyObjectRef {
         py_linalg::make_module(vm)
     }
 
+    #[cfg(feature = "fft")]
     #[pyattr]
     fn fft(vm: &VirtualMachine) -> PyObjectRef {
         py_fft::make_module(vm)
     }
 
+    #[cfg(feature = "random")]
     #[pyattr]
     fn random(vm: &VirtualMachine) -> PyObjectRef {
         py_random::make_module(vm)

@@ -17,24 +17,16 @@ impl NdArray {
         }
         let sh = IxDyn(shape);
         let data = match &self.data {
-            ArrayData::Bool(a) => {
-                ArrayData::Bool(a.clone().into_shape_with_order(sh).unwrap())
-            }
-            ArrayData::Int32(a) => {
-                ArrayData::Int32(a.clone().into_shape_with_order(sh).unwrap())
-            }
-            ArrayData::Int64(a) => {
-                ArrayData::Int64(a.clone().into_shape_with_order(sh).unwrap())
-            }
+            ArrayData::Bool(a) => ArrayData::Bool(a.clone().into_shape_with_order(sh).unwrap()),
+            ArrayData::Int32(a) => ArrayData::Int32(a.clone().into_shape_with_order(sh).unwrap()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.clone().into_shape_with_order(sh).unwrap()),
             ArrayData::Float32(a) => {
                 ArrayData::Float32(a.clone().into_shape_with_order(sh).unwrap())
             }
             ArrayData::Float64(a) => {
                 ArrayData::Float64(a.clone().into_shape_with_order(sh).unwrap())
             }
-            ArrayData::Str(a) => {
-                ArrayData::Str(a.clone().into_shape_with_order(sh).unwrap())
-            }
+            ArrayData::Str(a) => ArrayData::Str(a.clone().into_shape_with_order(sh).unwrap()),
         };
         Ok(NdArray::from_data(data))
     }
@@ -98,9 +90,10 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                     _ => unreachable!(),
                 })
                 .collect();
-            ArrayData::Bool(ndarray::concatenate(ax, &views).map_err(|e| {
-                NumpyError::ShapeMismatch(e.to_string())
-            })?)
+            ArrayData::Bool(
+                ndarray::concatenate(ax, &views)
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?,
+            )
         }
         crate::DType::Int32 => {
             let views: Vec<_> = promoted
@@ -110,9 +103,10 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                     _ => unreachable!(),
                 })
                 .collect();
-            ArrayData::Int32(ndarray::concatenate(ax, &views).map_err(|e| {
-                NumpyError::ShapeMismatch(e.to_string())
-            })?)
+            ArrayData::Int32(
+                ndarray::concatenate(ax, &views)
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?,
+            )
         }
         crate::DType::Int64 => {
             let views: Vec<_> = promoted
@@ -122,9 +116,10 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                     _ => unreachable!(),
                 })
                 .collect();
-            ArrayData::Int64(ndarray::concatenate(ax, &views).map_err(|e| {
-                NumpyError::ShapeMismatch(e.to_string())
-            })?)
+            ArrayData::Int64(
+                ndarray::concatenate(ax, &views)
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?,
+            )
         }
         crate::DType::Float32 => {
             let views: Vec<_> = promoted
@@ -134,9 +129,10 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                     _ => unreachable!(),
                 })
                 .collect();
-            ArrayData::Float32(ndarray::concatenate(ax, &views).map_err(|e| {
-                NumpyError::ShapeMismatch(e.to_string())
-            })?)
+            ArrayData::Float32(
+                ndarray::concatenate(ax, &views)
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?,
+            )
         }
         crate::DType::Float64 => {
             let views: Vec<_> = promoted
@@ -146,9 +142,10 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                     _ => unreachable!(),
                 })
                 .collect();
-            ArrayData::Float64(ndarray::concatenate(ax, &views).map_err(|e| {
-                NumpyError::ShapeMismatch(e.to_string())
-            })?)
+            ArrayData::Float64(
+                ndarray::concatenate(ax, &views)
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?,
+            )
         }
         crate::DType::Str => {
             let views: Vec<_> = promoted
@@ -158,9 +155,10 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                     _ => unreachable!(),
                 })
                 .collect();
-            ArrayData::Str(ndarray::concatenate(ax, &views).map_err(|e| {
-                NumpyError::ShapeMismatch(e.to_string())
-            })?)
+            ArrayData::Str(
+                ndarray::concatenate(ax, &views)
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?,
+            )
         }
     };
 

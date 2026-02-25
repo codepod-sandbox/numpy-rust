@@ -38,7 +38,10 @@ impl PyNdArray {
 }
 
 /// Convert a NumpyError to a Python exception.
-fn numpy_err(e: numpy_rust_core::NumpyError, vm: &VirtualMachine) -> vm::builtins::PyBaseExceptionRef {
+fn numpy_err(
+    e: numpy_rust_core::NumpyError,
+    vm: &VirtualMachine,
+) -> vm::builtins::PyBaseExceptionRef {
     vm.new_value_error(e.to_string())
 }
 
@@ -287,9 +290,18 @@ impl PyNdArray {
                 "only size-1 arrays can be converted to Python scalars".to_owned(),
             ));
         }
-        let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+        let s = self
+            .data
+            .get(&vec![0; self.data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?;
         Ok(match s {
-            Scalar::Bool(v) => if v { 1.0 } else { 0.0 },
+            Scalar::Bool(v) => {
+                if v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             Scalar::Int32(v) => v as f64,
             Scalar::Int64(v) => v as f64,
             Scalar::Float32(v) => v as f64,
@@ -307,9 +319,18 @@ impl PyNdArray {
                 "only size-1 arrays can be converted to Python scalars".to_owned(),
             ));
         }
-        let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+        let s = self
+            .data
+            .get(&vec![0; self.data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?;
         Ok(match s {
-            Scalar::Bool(v) => if v { 1 } else { 0 },
+            Scalar::Bool(v) => {
+                if v {
+                    1
+                } else {
+                    0
+                }
+            }
             Scalar::Int32(v) => v as i64,
             Scalar::Int64(v) => v,
             Scalar::Float32(v) => v as i64,
@@ -327,7 +348,10 @@ impl PyNdArray {
                 "The truth value of an array with more than one element is ambiguous".to_owned(),
             ));
         }
-        let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+        let s = self
+            .data
+            .get(&vec![0; self.data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?;
         Ok(match s {
             Scalar::Bool(v) => v,
             Scalar::Int32(v) => v != 0,
@@ -358,10 +382,7 @@ impl PyNdArray {
             };
 
             if self.data.ndim() == 1 {
-                let s = self
-                    .data
-                    .get(&[resolved])
-                    .map_err(|e| numpy_err(e, vm))?;
+                let s = self.data.get(&[resolved]).map_err(|e| numpy_err(e, vm))?;
                 return Ok(scalar_to_py(s, vm));
             } else {
                 let result = self
@@ -536,20 +557,29 @@ fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
         .payload::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     if a.data.size() != 1 {
-        return Err(vm.new_type_error(
-            "only size-1 arrays can be converted to Python scalars".to_owned(),
-        ));
+        return Err(
+            vm.new_type_error("only size-1 arrays can be converted to Python scalars".to_owned())
+        );
     }
-    let s = a.data.get(&vec![0; a.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+    let s = a
+        .data
+        .get(&vec![0; a.data.ndim()])
+        .map_err(|e| numpy_err(e, vm))?;
     let v = match s {
-        Scalar::Bool(v) => if v { 1.0 } else { 0.0 },
+        Scalar::Bool(v) => {
+            if v {
+                1.0
+            } else {
+                0.0
+            }
+        }
         Scalar::Int32(v) => v as f64,
         Scalar::Int64(v) => v as f64,
         Scalar::Float32(v) => v as f64,
         Scalar::Float64(v) => v,
-        Scalar::Str(v) => v.parse::<f64>().map_err(|_| {
-            vm.new_value_error(format!("could not convert string to float: '{v}'"))
-        })?,
+        Scalar::Str(v) => v
+            .parse::<f64>()
+            .map_err(|_| vm.new_value_error(format!("could not convert string to float: '{v}'")))?,
     };
     Ok(vm.ctx.new_float(v).into())
 }
@@ -559,20 +589,29 @@ fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
         .payload::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     if a.data.size() != 1 {
-        return Err(vm.new_type_error(
-            "only size-1 arrays can be converted to Python scalars".to_owned(),
-        ));
+        return Err(
+            vm.new_type_error("only size-1 arrays can be converted to Python scalars".to_owned())
+        );
     }
-    let s = a.data.get(&vec![0; a.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+    let s = a
+        .data
+        .get(&vec![0; a.data.ndim()])
+        .map_err(|e| numpy_err(e, vm))?;
     let v = match s {
-        Scalar::Bool(v) => if v { 1i64 } else { 0 },
+        Scalar::Bool(v) => {
+            if v {
+                1i64
+            } else {
+                0
+            }
+        }
         Scalar::Int32(v) => v as i64,
         Scalar::Int64(v) => v,
         Scalar::Float32(v) => v as i64,
         Scalar::Float64(v) => v as i64,
-        Scalar::Str(v) => v.parse::<i64>().map_err(|_| {
-            vm.new_value_error(format!("could not convert string to int: '{v}'"))
-        })?,
+        Scalar::Str(v) => v
+            .parse::<i64>()
+            .map_err(|_| vm.new_value_error(format!("could not convert string to int: '{v}'")))?,
     };
     Ok(vm.ctx.new_int(v).into())
 }
@@ -636,9 +675,6 @@ impl AsSequence for PyNdArray {
         &AS_SEQUENCE
     }
 }
-
-
-
 
 /// Parse an optional axis argument (None means reduce all).
 fn parse_optional_axis(

@@ -131,7 +131,11 @@ mod tests {
             (DType::Int64, DType::Float32),
         ];
         for (a, b) in pairs {
-            assert_eq!(a.promote(b), b.promote(a), "promote({a:?}, {b:?}) not symmetric");
+            assert_eq!(
+                a.promote(b),
+                b.promote(a),
+                "promote({a:?}, {b:?}) not symmetric"
+            );
         }
     }
 
