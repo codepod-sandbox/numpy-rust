@@ -148,6 +148,57 @@ impl NdArray {
 
         Ok(NdArray::from_data(data))
     }
+
+    /// Select elements where mask is true, returning a 1-D array.
+    /// Like `a[mask]` in NumPy where mask is a boolean array.
+    pub fn mask_select(&self, mask: &NdArray) -> Result<NdArray> {
+        // Mask must be Bool dtype
+        let bool_mask = match &mask.data {
+            ArrayData::Bool(m) => m,
+            _ => {
+                return Err(NumpyError::TypeError(
+                    "mask must be a boolean array".into(),
+                ))
+            }
+        };
+
+        // Flatten both to 1-D for element-wise selection
+        if bool_mask.len() != self.size() {
+            return Err(NumpyError::ShapeMismatch(format!(
+                "mask size {} does not match array size {}",
+                bool_mask.len(),
+                self.size()
+            )));
+        }
+
+        let flat_mask: Vec<bool> = bool_mask.iter().copied().collect();
+
+        macro_rules! do_mask {
+            ($arr:expr, $variant:ident) => {{
+                let flat: Vec<_> = $arr.iter().copied().collect();
+                let selected: Vec<_> = flat
+                    .into_iter()
+                    .zip(flat_mask.iter())
+                    .filter(|(_, &m)| m)
+                    .map(|(v, _)| v)
+                    .collect();
+                let len = selected.len();
+                ArrayData::$variant(
+                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected).unwrap(),
+                )
+            }};
+        }
+
+        let data = match &self.data {
+            ArrayData::Bool(a) => do_mask!(a, Bool),
+            ArrayData::Int32(a) => do_mask!(a, Int32),
+            ArrayData::Int64(a) => do_mask!(a, Int64),
+            ArrayData::Float32(a) => do_mask!(a, Float32),
+            ArrayData::Float64(a) => do_mask!(a, Float64),
+        };
+
+        Ok(NdArray::from_data(data))
+    }
 }
 
 /// Resolve a possibly-negative index to a positive one.
@@ -261,5 +312,44 @@ mod tests {
     fn test_index_select_invalid_axis() {
         let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
         assert!(a.index_select(5, &[0]).is_err());
+    }
+
+    #[test]
+    fn test_mask_select() {
+        let a = NdArray::from_vec(vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
+        let mask = NdArray::from_vec(vec![true, false, true, false, true]);
+        let b = a.mask_select(&mask).unwrap();
+        assert_eq!(b.shape(), &[3]);
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_mask_select_all_false() {
+        let a = NdArray::from_vec(vec![1_i32, 2, 3]);
+        let mask = NdArray::from_vec(vec![false, false, false]);
+        let b = a.mask_select(&mask).unwrap();
+        assert_eq!(b.shape(), &[0]);
+    }
+
+    #[test]
+    fn test_mask_select_all_true() {
+        let a = NdArray::from_vec(vec![1_i32, 2, 3]);
+        let mask = NdArray::from_vec(vec![true, true, true]);
+        let b = a.mask_select(&mask).unwrap();
+        assert_eq!(b.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_mask_select_size_mismatch() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let mask = NdArray::from_vec(vec![true, false]);
+        assert!(a.mask_select(&mask).is_err());
+    }
+
+    #[test]
+    fn test_mask_select_non_bool_mask() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        let mask = NdArray::from_vec(vec![1_i32, 0]);
+        assert!(a.mask_select(&mask).is_err());
     }
 }
