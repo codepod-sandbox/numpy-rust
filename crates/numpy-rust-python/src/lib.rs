@@ -70,9 +70,9 @@ pub mod numpy {
         a: vm::PyRef<PyNdArray>,
         b: vm::PyRef<PyNdArray>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         numpy_rust_core::dot(a.inner(), b.inner())
-            .map(PyNdArray::from_core)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 

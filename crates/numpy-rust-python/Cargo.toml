@@ -7,3 +7,5 @@ edition = "2021"
 numpy-rust-core = { path = "../numpy-rust-core" }
 rustpython-vm = "0.4"
 rustpython-derive = "0.4"
+crossbeam-utils = "0.8.21"
+once_cell = "1.21.3"

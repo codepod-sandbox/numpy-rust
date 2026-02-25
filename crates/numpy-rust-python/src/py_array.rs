@@ -1,7 +1,8 @@
 use rustpython_vm as vm;
+use vm::atomic_func;
 use vm::builtins::{PyList, PyStr, PyTuple};
-use vm::protocol::PyNumberMethods;
-use vm::types::AsNumber;
+use vm::protocol::{PyMappingMethods, PyNumberMethods, PySequenceMethods};
+use vm::types::{AsMapping, AsNumber, AsSequence};
 use vm::{PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
@@ -52,6 +53,16 @@ fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
     }
 }
 
+/// Convert an NdArray result to PyObjectRef, returning a scalar for 0-D arrays.
+pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
+    if arr.ndim() == 0 {
+        let s = arr.get(&[]).unwrap();
+        scalar_to_py(s, vm)
+    } else {
+        PyNdArray::from_core(arr).into_pyobject(vm)
+    }
+}
+
 /// Parse a Python dtype string to DType.
 fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
     match s {
@@ -87,7 +98,7 @@ pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usi
     }
 }
 
-#[vm::pyclass(with(AsNumber))]
+#[vm::pyclass(with(AsNumber, AsMapping, AsSequence))]
 impl PyNdArray {
     // --- Properties ---
 
@@ -159,11 +170,11 @@ impl PyNdArray {
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
             .sum(ax)
-            .map(PyNdArray::from_core)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -172,11 +183,11 @@ impl PyNdArray {
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
             .mean(ax)
-            .map(PyNdArray::from_core)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -185,11 +196,11 @@ impl PyNdArray {
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
             .min(ax)
-            .map(PyNdArray::from_core)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -198,11 +209,11 @@ impl PyNdArray {
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
             .max(ax)
-            .map(PyNdArray::from_core)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -211,11 +222,11 @@ impl PyNdArray {
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
             .std(ax)
-            .map(PyNdArray::from_core)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -224,11 +235,11 @@ impl PyNdArray {
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
             .var(ax)
-            .map(PyNdArray::from_core)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -262,6 +273,59 @@ impl PyNdArray {
     #[pymethod]
     fn sqrt(&self) -> PyNdArray {
         PyNdArray::from_core(self.data.sqrt())
+    }
+
+    // --- Scalar conversion ---
+
+    #[pymethod(magic)]
+    fn float(&self, vm: &VirtualMachine) -> PyResult<f64> {
+        if self.data.size() != 1 {
+            return Err(vm.new_type_error(
+                "only size-1 arrays can be converted to Python scalars".into(),
+            ));
+        }
+        let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+        Ok(match s {
+            Scalar::Bool(v) => if v { 1.0 } else { 0.0 },
+            Scalar::Int32(v) => v as f64,
+            Scalar::Int64(v) => v as f64,
+            Scalar::Float32(v) => v as f64,
+            Scalar::Float64(v) => v,
+        })
+    }
+
+    #[pymethod(magic)]
+    fn int(&self, vm: &VirtualMachine) -> PyResult<i64> {
+        if self.data.size() != 1 {
+            return Err(vm.new_type_error(
+                "only size-1 arrays can be converted to Python scalars".into(),
+            ));
+        }
+        let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+        Ok(match s {
+            Scalar::Bool(v) => if v { 1 } else { 0 },
+            Scalar::Int32(v) => v as i64,
+            Scalar::Int64(v) => v,
+            Scalar::Float32(v) => v as i64,
+            Scalar::Float64(v) => v as i64,
+        })
+    }
+
+    #[pymethod(magic)]
+    fn bool(&self, vm: &VirtualMachine) -> PyResult<bool> {
+        if self.data.size() != 1 {
+            return Err(vm.new_value_error(
+                "The truth value of an array with more than one element is ambiguous".into(),
+            ));
+        }
+        let s = self.data.get(&vec![0; self.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+        Ok(match s {
+            Scalar::Bool(v) => v,
+            Scalar::Int32(v) => v != 0,
+            Scalar::Int64(v) => v != 0,
+            Scalar::Float32(v) => v != 0.0,
+            Scalar::Float64(v) => v != 0.0,
+        })
     }
 
     // --- Operators ---
@@ -490,6 +554,46 @@ fn number_neg(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     Ok(PyNdArray::from_core(a.data.neg()).into_pyobject(vm))
 }
 
+fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
+    let a = num
+        .payload::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+    if a.data.size() != 1 {
+        return Err(vm.new_type_error(
+            "only size-1 arrays can be converted to Python scalars".into(),
+        ));
+    }
+    let s = a.data.get(&vec![0; a.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+    let v = match s {
+        Scalar::Bool(v) => if v { 1.0 } else { 0.0 },
+        Scalar::Int32(v) => v as f64,
+        Scalar::Int64(v) => v as f64,
+        Scalar::Float32(v) => v as f64,
+        Scalar::Float64(v) => v,
+    };
+    Ok(vm.ctx.new_float(v).into())
+}
+
+fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
+    let a = num
+        .payload::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".into()))?;
+    if a.data.size() != 1 {
+        return Err(vm.new_type_error(
+            "only size-1 arrays can be converted to Python scalars".into(),
+        ));
+    }
+    let s = a.data.get(&vec![0; a.data.ndim()]).map_err(|e| numpy_err(e, vm))?;
+    let v = match s {
+        Scalar::Bool(v) => if v { 1i64 } else { 0 },
+        Scalar::Int32(v) => v as i64,
+        Scalar::Int64(v) => v,
+        Scalar::Float32(v) => v as i64,
+        Scalar::Float64(v) => v as i64,
+    };
+    Ok(vm.ctx.new_int(v).into())
+}
+
 impl PyNdArray {
     const AS_NUMBER: PyNumberMethods = PyNumberMethods {
         add: Some(|a, b, vm| number_bin_op(a, b, |x, y| x + y, vm)),
@@ -497,6 +601,8 @@ impl PyNdArray {
         multiply: Some(|a, b, vm| number_bin_op(a, b, |x, y| x * y, vm)),
         true_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x / y, vm)),
         negative: Some(|a, vm| number_neg(a, vm)),
+        int: Some(|a, vm| number_int(a, vm)),
+        float: Some(|a, vm| number_float(a, vm)),
         ..PyNumberMethods::NOT_IMPLEMENTED
     };
 }
@@ -505,6 +611,46 @@ impl AsNumber for PyNdArray {
     fn as_number() -> &'static PyNumberMethods {
         static AS_NUMBER: PyNumberMethods = PyNdArray::AS_NUMBER;
         &AS_NUMBER
+    }
+}
+
+impl AsMapping for PyNdArray {
+    fn as_mapping() -> &'static PyMappingMethods {
+        use once_cell::sync::Lazy;
+        static AS_MAPPING: Lazy<PyMappingMethods> = Lazy::new(|| PyMappingMethods {
+            length: atomic_func!(|mapping, _vm| {
+                let zelf = PyNdArray::mapping_downcast(mapping);
+                Ok(if zelf.data.ndim() == 0 {
+                    0
+                } else {
+                    zelf.data.shape()[0]
+                })
+            }),
+            subscript: atomic_func!(|mapping, needle: &vm::PyObject, vm| {
+                let zelf = PyNdArray::mapping_downcast(mapping);
+                zelf.getitem(needle.to_owned(), vm)
+            }),
+            ..PyMappingMethods::NOT_IMPLEMENTED
+        });
+        &AS_MAPPING
+    }
+}
+
+impl AsSequence for PyNdArray {
+    fn as_sequence() -> &'static PySequenceMethods {
+        use once_cell::sync::Lazy;
+        static AS_SEQUENCE: Lazy<PySequenceMethods> = Lazy::new(|| PySequenceMethods {
+            length: atomic_func!(|seq, _vm| {
+                let zelf = PyNdArray::sequence_downcast(seq);
+                Ok(if zelf.data.ndim() == 0 {
+                    0
+                } else {
+                    zelf.data.shape()[0]
+                })
+            }),
+            ..PySequenceMethods::NOT_IMPLEMENTED
+        });
+        &AS_SEQUENCE
     }
 }
 

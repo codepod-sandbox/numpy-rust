@@ -1362,7 +1362,9 @@ dependencies = [
 name = "numpy-rust-python"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-utils",
  "numpy-rust-core",
+ "once_cell",
  "rustpython-derive",
  "rustpython-vm",
 ]
