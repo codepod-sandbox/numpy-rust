@@ -5,10 +5,12 @@ pub mod casting;
 pub mod creation;
 pub mod dtype;
 pub mod error;
+pub mod manipulation;
 pub mod ops;
 
 pub use array::NdArray;
 pub use array_data::ArrayData;
 pub use creation::{arange, eye, full, linspace, ones_like, zeros_like};
+pub use manipulation::{concatenate, hstack, stack, vstack};
 pub use dtype::DType;
 pub use error::{NumpyError, Result};
