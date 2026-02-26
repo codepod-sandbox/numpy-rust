@@ -57,7 +57,7 @@ pub mod _numpy_native {
         _vm: &VirtualMachine,
     ) -> PyNdArray {
         let step = step.unwrap_or(1.0);
-        PyNdArray::from_core(numpy_rust_core::creation::arange(start, stop, step))
+        PyNdArray::from_core(numpy_rust_core::creation::arange(start, stop, step, None))
     }
 
     #[pyfunction]

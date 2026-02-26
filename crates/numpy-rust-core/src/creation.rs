@@ -6,7 +6,7 @@ use crate::dtype::DType;
 use crate::NdArray;
 
 /// Create a 1-D array with evenly spaced values within [start, stop).
-pub fn arange(start: f64, stop: f64, step: f64) -> NdArray {
+pub fn arange(start: f64, stop: f64, step: f64, dtype: Option<DType>) -> NdArray {
     let mut values = Vec::new();
     let mut v = start;
     if step > 0.0 {
@@ -21,25 +21,36 @@ pub fn arange(start: f64, stop: f64, step: f64) -> NdArray {
         }
     }
     let len = values.len();
-    NdArray::from_data(ArrayData::Float64(
+    let arr = NdArray::from_data(ArrayData::Float64(
         ArrayD::from_shape_vec(IxDyn(&[len]), values).expect("vec length matches shape"),
-    ))
+    ));
+    match dtype {
+        Some(dt) => arr.astype(dt),
+        None => arr,
+    }
 }
 
 /// Create a 1-D array with `num` evenly spaced values from start to stop (inclusive).
 pub fn linspace(start: f64, stop: f64, num: usize) -> NdArray {
-    let values: Vec<f64> = if num == 0 {
-        Vec::new()
+    linspace_with_step(start, stop, num).0
+}
+
+/// Same as linspace but also returns the step size.
+pub fn linspace_with_step(start: f64, stop: f64, num: usize) -> (NdArray, f64) {
+    let (values, step) = if num == 0 {
+        (Vec::new(), 0.0)
     } else if num == 1 {
-        vec![start]
+        (vec![start], 0.0)
     } else {
         let step = (stop - start) / (num - 1) as f64;
-        (0..num).map(|i| start + step * i as f64).collect()
+        let vals: Vec<f64> = (0..num).map(|i| start + step * i as f64).collect();
+        (vals, step)
     };
     let len = values.len();
-    NdArray::from_data(ArrayData::Float64(
+    let arr = NdArray::from_data(ArrayData::Float64(
         ArrayD::from_shape_vec(IxDyn(&[len]), values).expect("vec length matches shape"),
-    ))
+    ));
+    (arr, step)
 }
 
 /// Create a 2-D array with ones on the k-th diagonal and zeros elsewhere.
@@ -156,27 +167,34 @@ mod tests {
 
     #[test]
     fn test_arange() {
-        let a = arange(0.0, 5.0, 1.0);
+        let a = arange(0.0, 5.0, 1.0, None);
         assert_eq!(a.shape(), &[5]);
         assert_eq!(a.dtype(), DType::Float64);
     }
 
     #[test]
     fn test_arange_fractional_step() {
-        let a = arange(0.0, 1.0, 0.5);
+        let a = arange(0.0, 1.0, 0.5, None);
         assert_eq!(a.shape(), &[2]);
     }
 
     #[test]
     fn test_arange_negative_step() {
-        let a = arange(5.0, 0.0, -1.0);
+        let a = arange(5.0, 0.0, -1.0, None);
         assert_eq!(a.shape(), &[5]);
     }
 
     #[test]
     fn test_arange_empty() {
-        let a = arange(5.0, 0.0, 1.0);
+        let a = arange(5.0, 0.0, 1.0, None);
         assert_eq!(a.shape(), &[0]);
+    }
+
+    #[test]
+    fn test_arange_with_dtype() {
+        let a = arange(0.0, 5.0, 1.0, Some(DType::Int32));
+        assert_eq!(a.shape(), &[5]);
+        assert_eq!(a.dtype(), DType::Int32);
     }
 
     #[test]
@@ -196,6 +214,13 @@ mod tests {
     fn test_linspace_empty() {
         let a = linspace(0.0, 1.0, 0);
         assert_eq!(a.shape(), &[0]);
+    }
+
+    #[test]
+    fn test_linspace_with_step() {
+        let (a, step) = linspace_with_step(0.0, 1.0, 5);
+        assert_eq!(a.shape(), &[5]);
+        assert!((step - 0.25).abs() < 1e-10);
     }
 
     #[test]

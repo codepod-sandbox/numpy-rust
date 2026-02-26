@@ -678,6 +678,17 @@ def test_compress():
     assert result.shape == (2,)
 
 
+def test_linspace_retstep():
+    arr, step = np.linspace(0, 1, 5, retstep=True)
+    assert arr.shape == (5,)
+    assert abs(step - 0.25) < 1e-10
+
+def test_arange_basic():
+    # Test that arange works as before
+    a = np.arange(0, 5, 1)
+    assert a.shape == (5,)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

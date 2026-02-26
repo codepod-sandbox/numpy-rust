@@ -15,7 +15,7 @@ pub mod utility;
 
 pub use array::NdArray;
 pub use array_data::ArrayData;
-pub use creation::{arange, eye, full, linspace, ones_like, zeros_like};
+pub use creation::{arange, eye, full, linspace, linspace_with_step, ones_like, zeros_like};
 pub use dtype::DType;
 pub use error::{NumpyError, Result};
 pub use manipulation::{concatenate, hstack, stack, vstack};

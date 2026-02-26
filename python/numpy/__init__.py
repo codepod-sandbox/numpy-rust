@@ -110,10 +110,18 @@ def ones(shape, dtype=None, order="C", like=None):
     return _native.ones(shape)
 
 def arange(*args, dtype=None, like=None, **kwargs):
-    return _native.arange(*args, **kwargs)
+    float_args = [float(a) for a in args]
+    return _native.arange(*float_args, **kwargs)
 
 def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis=0):
-    return _native.linspace(start, stop, num)
+    start = float(start)
+    stop = float(stop)
+    num = int(num)
+    result = _native.linspace(start, stop, num)
+    if retstep:
+        step = (stop - start) / max(num - 1, 1) if num > 1 else 0.0
+        return result, step
+    return result
 
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
     if M is not None:
