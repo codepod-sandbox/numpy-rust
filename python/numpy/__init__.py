@@ -442,6 +442,23 @@ def prod(a, axis=None, dtype=None, out=None, keepdims=False):
         return result
     return a
 
+def cumsum(a, axis=None, dtype=None, out=None):
+    if isinstance(a, ndarray):
+        return a.cumsum(axis)
+    return array(a).cumsum(axis)
+
+def cumprod(a, axis=None, dtype=None, out=None):
+    if isinstance(a, ndarray):
+        return a.cumprod(axis)
+    return array(a).cumprod(axis)
+
+def diff(a, n=1, axis=-1, prepend=None, append=None):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    if axis is not None and axis < 0:
+        axis = a.ndim + axis
+    return _native.diff(a, n, axis)
+
 def mean(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
         if axis is not None:

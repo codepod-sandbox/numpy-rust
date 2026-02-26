@@ -649,6 +649,38 @@ impl PyNdArray {
             .map_err(|e| numpy_err(e, vm))
     }
 
+    // --- Cumulative operations ---
+
+    #[pymethod]
+    fn cumsum(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let axis = parse_optional_axis(axis, vm)?;
+        self.data
+            .read()
+            .unwrap()
+            .cumsum(axis)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pymethod]
+    fn cumprod(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let axis = parse_optional_axis(axis, vm)?;
+        self.data
+            .read()
+            .unwrap()
+            .cumprod(axis)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Operators ---
 
     // Arithmetic operators are implemented via AsNumber below.

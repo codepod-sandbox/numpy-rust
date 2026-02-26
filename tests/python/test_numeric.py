@@ -763,6 +763,43 @@ def test_module_var_ddof():
     assert abs(v1 - 4.571428) < 0.01
 
 
+# --- cumsum / cumprod / diff ---
+
+def test_cumsum_1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    result = np.cumsum(a)
+    assert result.shape == (4,)
+    expected = np.array([1.0, 3.0, 6.0, 10.0])
+    assert np.allclose(result, expected)
+
+def test_cumsum_2d_axis0():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.cumsum(a, axis=0)
+    assert result.shape == (2, 2)
+    expected = np.array([[1.0, 2.0], [4.0, 6.0]])
+    assert np.allclose(result, expected)
+
+def test_cumprod_1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    result = np.cumprod(a)
+    expected = np.array([1.0, 2.0, 6.0, 24.0])
+    assert np.allclose(result, expected)
+
+def test_diff_1d():
+    a = np.array([1.0, 3.0, 6.0, 10.0])
+    result = np.diff(a)
+    assert result.shape == (3,)
+    expected = np.array([2.0, 3.0, 4.0])
+    assert np.allclose(result, expected)
+
+def test_diff_n2():
+    a = np.array([1.0, 3.0, 6.0, 10.0])
+    result = np.diff(a, n=2)
+    assert result.shape == (2,)
+    expected = np.array([1.0, 1.0])
+    assert np.allclose(result, expected)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
