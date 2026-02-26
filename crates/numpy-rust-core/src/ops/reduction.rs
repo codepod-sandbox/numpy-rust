@@ -16,7 +16,12 @@ fn validate_axis(axis: usize, ndim: usize) -> Result<()> {
 
 /// If `keepdims` is true and a specific axis was reduced, re-insert a size-1
 /// dimension at `axis` so the output rank matches the input rank.
-fn maybe_keepdims(result: NdArray, axis: Option<usize>, keepdims: bool) -> NdArray {
+fn maybe_keepdims(
+    result: NdArray,
+    axis: Option<usize>,
+    keepdims: bool,
+    original_ndim: usize,
+) -> NdArray {
     if !keepdims {
         return result;
     }
@@ -27,7 +32,11 @@ fn maybe_keepdims(result: NdArray, axis: Option<usize>, keepdims: bool) -> NdArr
             .reshape(&new_shape)
             .expect("keepdims reshape cannot fail")
     } else {
+        // axis=None reduced everything to scalar — wrap in shape (1, 1, ..., 1)
+        let new_shape = vec![1; original_ndim];
         result
+            .reshape(&new_shape)
+            .expect("keepdims reshape cannot fail")
     }
 }
 
@@ -43,7 +52,7 @@ impl NdArray {
             None => self.reduce_all_sum(),
             Some(ax) => self.reduce_axis_sum(ax),
         }?;
-        Ok(maybe_keepdims(result, axis, keepdims))
+        Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
     /// Mean of array elements. Returns Float64, or Complex128 for complex inputs.
@@ -68,7 +77,7 @@ impl NdArray {
         };
         let divisor = NdArray::full_f64(sum.shape(), count as f64);
         let result = (&sum / &divisor)?;
-        Ok(maybe_keepdims(result, axis, keepdims))
+        Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
     /// Minimum element over a given axis, or global minimum.
@@ -82,7 +91,7 @@ impl NdArray {
             None => self.reduce_all_min(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Min),
         }?;
-        Ok(maybe_keepdims(result, axis, keepdims))
+        Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
     /// Maximum element over a given axis, or global maximum.
@@ -96,7 +105,7 @@ impl NdArray {
             None => self.reduce_all_max(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Max),
         }?;
-        Ok(maybe_keepdims(result, axis, keepdims))
+        Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
     /// Standard deviation. Always returns Float64.
@@ -106,9 +115,14 @@ impl NdArray {
                 "std not supported for string arrays".into(),
             ));
         }
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "std not supported for complex arrays (use abs() first)".into(),
+            ));
+        }
         let var = self.var(axis, ddof, false)?;
         let result = var.sqrt();
-        Ok(maybe_keepdims(result, axis, keepdims))
+        Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
     /// Variance. Always returns Float64.
@@ -116,6 +130,11 @@ impl NdArray {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "var not supported for string arrays".into(),
+            ));
+        }
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "var not supported for complex arrays (use abs() first)".into(),
             ));
         }
         // var = mean(x^2) - mean(x)^2
@@ -135,13 +154,13 @@ impl NdArray {
             };
             if ddof >= n {
                 let nan_val = NdArray::full_f64(result.shape(), f64::NAN);
-                return Ok(maybe_keepdims(nan_val, axis, keepdims));
+                return Ok(maybe_keepdims(nan_val, axis, keepdims, self.ndim()));
             }
             let correction = NdArray::full_f64(result.shape(), n as f64 / (n - ddof) as f64);
             let corrected = (&result * &correction)?;
-            return Ok(maybe_keepdims(corrected, axis, keepdims));
+            return Ok(maybe_keepdims(corrected, axis, keepdims, self.ndim()));
         }
-        Ok(maybe_keepdims(result, axis, keepdims))
+        Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
     /// Index of minimum element.

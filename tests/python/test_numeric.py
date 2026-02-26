@@ -689,6 +689,80 @@ def test_arange_basic():
     assert a.shape == (5,)
 
 
+# --- NumPy-compat regression tests (from code review) ---
+
+def test_keepdims_axis_none():
+    """keepdims=True with axis=None should return shape (1,1,...) matching ndim."""
+    a = np.ones((3, 4))
+    s = np.sum(a, keepdims=True)
+    assert s.shape == (1, 1), f"expected (1, 1), got {s.shape}"
+    assert_close(float(s[0, 0]), 12.0)
+
+def test_keepdims_axis_none_3d():
+    """keepdims with axis=None on 3D array."""
+    a = np.ones((2, 3, 4))
+    s = np.sum(a, keepdims=True)
+    assert s.shape == (1, 1, 1), f"expected (1, 1, 1), got {s.shape}"
+
+def test_compress_values():
+    """compress should return the correct element values, not just shape."""
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    cond = np.array([True, False, True, False])
+    result = np.compress(cond, a)
+    assert_close(float(result[0]), 1.0)
+    assert_close(float(result[1]), 3.0)
+
+def test_searchsorted_invalid_side():
+    """searchsorted with invalid side should raise an error."""
+    a = np.array([1.0, 3.0, 5.0])
+    v = np.array([2.0])
+    raised = False
+    try:
+        np.searchsorted(a, v, side="invalid")
+    except (ValueError, Exception):
+        raised = True
+    assert raised, "searchsorted with side='invalid' should raise ValueError"
+
+def test_choose_basic():
+    """choose selects from choices based on index array."""
+    a = np.array([0.0, 1.0, 0.0, 1.0])
+    c0 = np.array([10.0, 20.0, 30.0, 40.0])
+    c1 = np.array([50.0, 60.0, 70.0, 80.0])
+    result = np.choose(a, [c0, c1])
+    assert_close(float(result[0]), 10.0)
+    assert_close(float(result[1]), 60.0)
+    assert_close(float(result[2]), 30.0)
+    assert_close(float(result[3]), 80.0)
+
+def test_str_len_unicode():
+    """str_len should count characters, not bytes."""
+    a = np.array(["abc", "de"])
+    b = np.char.str_len(a)
+    assert int(b[0]) == 3
+    assert int(b[1]) == 2
+
+def test_linspace_retstep_num1():
+    """linspace with num=1 should have step=0.0."""
+    arr, step = np.linspace(0, 10, 1, retstep=True)
+    assert arr.shape == (1,)
+    assert step == 0.0, f"expected step=0.0, got {step}"
+
+def test_module_std_ddof():
+    """Module-level np.std should support ddof parameter."""
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    s0 = float(np.std(a, ddof=0))
+    s1 = float(np.std(a, ddof=1))
+    assert s1 > s0, f"ddof=1 std ({s1}) should be > ddof=0 std ({s0})"
+
+def test_module_var_ddof():
+    """Module-level np.var should support ddof parameter."""
+    a = np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
+    v0 = float(np.var(a))
+    v1 = float(np.var(a, ddof=1))
+    assert abs(v0 - 4.0) < 0.01
+    assert abs(v1 - 4.571428) < 0.01
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

@@ -311,13 +311,13 @@ pub mod _numpy_native {
         a: vm::PyRef<PyNdArray>,
         v: vm::PyRef<PyNdArray>,
         side: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
-        _vm: &VirtualMachine,
+        vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let side_str = side.as_ref().map(|s| s.as_str()).unwrap_or("left");
         a.inner()
             .searchsorted(&v.inner(), side_str)
-            .map(|arr| py_array::ndarray_or_scalar(arr, _vm))
-            .map_err(|e| _vm.new_value_error(e.to_string()))
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     #[pyfunction]

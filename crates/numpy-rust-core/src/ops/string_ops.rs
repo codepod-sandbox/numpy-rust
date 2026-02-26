@@ -58,7 +58,7 @@ impl NdArray {
     pub fn str_len(&self) -> Result<NdArray> {
         let a = require_string(self)?;
         Ok(NdArray::from_data(ArrayData::Int64(
-            a.mapv(|s| s.len() as i64),
+            a.mapv(|s| s.chars().count() as i64),
         )))
     }
 

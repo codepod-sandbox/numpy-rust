@@ -525,6 +525,11 @@ impl PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().conj())
     }
 
+    #[pymethod]
+    fn angle(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().angle())
+    }
+
     // --- Scalar conversion ---
 
     #[pymethod]
@@ -1423,8 +1428,20 @@ fn format_scalar(s: &Scalar) -> String {
         Scalar::Int64(v) => v.to_string(),
         Scalar::Float32(v) => format_float(*v as f64),
         Scalar::Float64(v) => format_float(*v),
-        Scalar::Complex64(v) => format!("({}+{}j)", v.re, v.im),
-        Scalar::Complex128(v) => format!("({}+{}j)", v.re, v.im),
+        Scalar::Complex64(v) => {
+            if v.im >= 0.0 {
+                format!("({}+{}j)", v.re, v.im)
+            } else {
+                format!("({}{}j)", v.re, v.im)
+            }
+        }
+        Scalar::Complex128(v) => {
+            if v.im >= 0.0 {
+                format!("({}+{}j)", v.re, v.im)
+            } else {
+                format!("({}{}j)", v.re, v.im)
+            }
+        }
         Scalar::Str(v) => format!("'{v}'"),
     }
 }

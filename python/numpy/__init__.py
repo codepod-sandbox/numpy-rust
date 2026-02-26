@@ -948,8 +948,7 @@ conjugate = conj
 def angle(a, deg=False):
     """Return the angle (argument) of complex elements."""
     if isinstance(a, ndarray):
-        # angle not exposed as a native method yet; stub
-        return a
+        return a.angle()
     return 0
 
 def einsum(*operands, **kwargs):

@@ -121,8 +121,20 @@ fn cast_to_str(data: &ArrayData) -> ArrayD<String> {
         ArrayData::Int64(a) => a.mapv(|x| x.to_string()),
         ArrayData::Float32(a) => a.mapv(|x| x.to_string()),
         ArrayData::Float64(a) => a.mapv(|x| x.to_string()),
-        ArrayData::Complex64(a) => a.mapv(|x| format!("({}+{}j)", x.re, x.im)),
-        ArrayData::Complex128(a) => a.mapv(|x| format!("({}+{}j)", x.re, x.im)),
+        ArrayData::Complex64(a) => a.mapv(|x| {
+            if x.im >= 0.0 {
+                format!("({}+{}j)", x.re, x.im)
+            } else {
+                format!("({}{}j)", x.re, x.im)
+            }
+        }),
+        ArrayData::Complex128(a) => a.mapv(|x| {
+            if x.im >= 0.0 {
+                format!("({}+{}j)", x.re, x.im)
+            } else {
+                format!("({}{}j)", x.re, x.im)
+            }
+        }),
         ArrayData::Str(a) => a.clone(),
     }
 }

@@ -23,7 +23,15 @@ impl NdArray {
             unreachable!()
         };
         let sorted_slice: Vec<f64> = sorted_arr.iter().copied().collect();
-        let left = side == "left";
+        let left = match side {
+            "left" => true,
+            "right" => false,
+            _ => {
+                return Err(NumpyError::ValueError(format!(
+                    "searchsorted: invalid side '{side}', must be 'left' or 'right'"
+                )))
+            }
+        };
 
         let mut indices = Vec::with_capacity(vals_arr.len());
         for &v in vals_arr.iter() {
@@ -86,30 +94,43 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
         unreachable!()
     };
 
-    // Flatten all choices
-    let flat_choices: Vec<NdArray> = choices
+    let n_choices = choices.len();
+
+    // Flatten all choices to Vec<f64> for O(1) indexing
+    let flat_vecs: Vec<Vec<f64>> = choices
         .iter()
-        .map(|c| c.astype(DType::Float64).flatten())
+        .map(|c| {
+            let f = c.astype(DType::Float64).flatten();
+            let ArrayData::Float64(arr) = &f.data else {
+                unreachable!()
+            };
+            arr.iter().copied().collect()
+        })
         .collect();
 
     let mut result = Vec::with_capacity(idx_arr.len());
     for (pos, &i) in idx_arr.iter().enumerate() {
-        let choice_idx = i as usize;
-        if choice_idx >= flat_choices.len() {
+        if i < 0 {
             return Err(NumpyError::ValueError(format!(
-                "choose index {} out of range for {} choices",
-                choice_idx,
-                flat_choices.len()
+                "invalid entry {i} in choice array (negative indices not supported)"
             )));
         }
-        let ArrayData::Float64(arr) = &flat_choices[choice_idx].data else {
-            unreachable!()
-        };
-        if pos < arr.len() {
-            result.push(arr.iter().nth(pos).copied().unwrap_or(0.0));
-        } else {
-            result.push(0.0);
+        let choice_idx = i as usize;
+        if choice_idx >= n_choices {
+            return Err(NumpyError::ValueError(format!(
+                "invalid entry {i} in choice array (out of range for {n_choices} choices)"
+            )));
         }
+        let vec = &flat_vecs[choice_idx];
+        if pos >= vec.len() {
+            return Err(NumpyError::ValueError(format!(
+                "shape mismatch: index array has {} elements but choice {} has {}",
+                idx_arr.len(),
+                choice_idx,
+                vec.len()
+            )));
+        }
+        result.push(vec[pos]);
     }
 
     let out_shape = a.shape().to_vec();

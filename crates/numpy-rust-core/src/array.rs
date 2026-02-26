@@ -159,14 +159,18 @@ impl IntoArrayData for Vec<String> {
 impl IntoArrayData for Vec<Complex<f32>> {
     fn into_array_data(self) -> ArrayData {
         let len = self.len();
-        ArrayData::Complex64(ArrayD::from_shape_vec(IxDyn(&[len]), self).unwrap())
+        ArrayData::Complex64(
+            ArrayD::from_shape_vec(IxDyn(&[len]), self).expect("vec length matches 1-D shape"),
+        )
     }
 }
 
 impl IntoArrayData for Vec<Complex<f64>> {
     fn into_array_data(self) -> ArrayData {
         let len = self.len();
-        ArrayData::Complex128(ArrayD::from_shape_vec(IxDyn(&[len]), self).unwrap())
+        ArrayData::Complex128(
+            ArrayD::from_shape_vec(IxDyn(&[len]), self).expect("vec length matches 1-D shape"),
+        )
     }
 }
 
