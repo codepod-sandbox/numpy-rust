@@ -13,28 +13,46 @@ fn validate_axis(axis: usize, ndim: usize) -> Result<()> {
     Ok(())
 }
 
+/// If `keepdims` is true and a specific axis was reduced, re-insert a size-1
+/// dimension at `axis` so the output rank matches the input rank.
+fn maybe_keepdims(result: NdArray, axis: Option<usize>, keepdims: bool) -> NdArray {
+    if !keepdims {
+        return result;
+    }
+    if let Some(ax) = axis {
+        let mut new_shape = result.shape().to_vec();
+        new_shape.insert(ax, 1);
+        result
+            .reshape(&new_shape)
+            .expect("keepdims reshape cannot fail")
+    } else {
+        result
+    }
+}
+
 impl NdArray {
     /// Sum of array elements over a given axis, or all elements if axis is None.
-    pub fn sum(&self, axis: Option<usize>) -> Result<NdArray> {
+    pub fn sum(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "sum not supported for string arrays".into(),
             ));
         }
-        match axis {
+        let result = match axis {
             None => self.reduce_all_sum(),
             Some(ax) => self.reduce_axis_sum(ax),
-        }
+        }?;
+        Ok(maybe_keepdims(result, axis, keepdims))
     }
 
     /// Mean of array elements. Always returns Float64.
-    pub fn mean(&self, axis: Option<usize>) -> Result<NdArray> {
+    pub fn mean(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "mean not supported for string arrays".into(),
             ));
         }
-        let sum = self.astype(DType::Float64).sum(axis)?;
+        let sum = self.astype(DType::Float64).sum(axis, false)?;
         let count = match axis {
             None => self.size(),
             Some(ax) => {
@@ -43,38 +61,42 @@ impl NdArray {
             }
         };
         let divisor = NdArray::full_f64(sum.shape(), count as f64);
-        &sum / &divisor
+        let result = (&sum / &divisor)?;
+        Ok(maybe_keepdims(result, axis, keepdims))
     }
 
     /// Minimum element over a given axis, or global minimum.
-    pub fn min(&self, axis: Option<usize>) -> Result<NdArray> {
-        match axis {
+    pub fn min(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        let result = match axis {
             None => self.reduce_all_min(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Min),
-        }
+        }?;
+        Ok(maybe_keepdims(result, axis, keepdims))
     }
 
     /// Maximum element over a given axis, or global maximum.
-    pub fn max(&self, axis: Option<usize>) -> Result<NdArray> {
-        match axis {
+    pub fn max(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        let result = match axis {
             None => self.reduce_all_max(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Max),
-        }
+        }?;
+        Ok(maybe_keepdims(result, axis, keepdims))
     }
 
     /// Standard deviation. Always returns Float64.
-    pub fn std(&self, axis: Option<usize>) -> Result<NdArray> {
+    pub fn std(&self, axis: Option<usize>, ddof: usize, keepdims: bool) -> Result<NdArray> {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "std not supported for string arrays".into(),
             ));
         }
-        let var = self.var(axis)?;
-        Ok(var.sqrt())
+        let var = self.var(axis, ddof, false)?;
+        let result = var.sqrt();
+        Ok(maybe_keepdims(result, axis, keepdims))
     }
 
     /// Variance. Always returns Float64.
-    pub fn var(&self, axis: Option<usize>) -> Result<NdArray> {
+    pub fn var(&self, axis: Option<usize>, ddof: usize, keepdims: bool) -> Result<NdArray> {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "var not supported for string arrays".into(),
@@ -83,10 +105,27 @@ impl NdArray {
         // var = mean(x^2) - mean(x)^2
         let float_self = self.astype(DType::Float64);
         let x_sq = (&float_self * &float_self)?;
-        let mean_x_sq = x_sq.mean(axis)?;
-        let mean_x = float_self.mean(axis)?;
+        let mean_x_sq = x_sq.mean(axis, false)?;
+        let mean_x = float_self.mean(axis, false)?;
         let mean_x_squared = (&mean_x * &mean_x)?;
-        &mean_x_sq - &mean_x_squared
+        let result = (&mean_x_sq - &mean_x_squared)?;
+        if ddof > 0 {
+            let n = match axis {
+                None => self.size(),
+                Some(ax) => {
+                    validate_axis(ax, self.ndim())?;
+                    self.shape()[ax]
+                }
+            };
+            if ddof >= n {
+                let nan_val = NdArray::full_f64(result.shape(), f64::NAN);
+                return Ok(maybe_keepdims(nan_val, axis, keepdims));
+            }
+            let correction = NdArray::full_f64(result.shape(), n as f64 / (n - ddof) as f64);
+            let corrected = (&result * &correction)?;
+            return Ok(maybe_keepdims(corrected, axis, keepdims));
+        }
+        Ok(maybe_keepdims(result, axis, keepdims))
     }
 
     /// Index of minimum element (flattened).
@@ -399,7 +438,7 @@ mod tests {
     #[test]
     fn test_sum_all() {
         let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
-        let s = a.sum(None).unwrap();
+        let s = a.sum(None, false).unwrap();
         assert_eq!(s.size(), 1);
         assert_eq!(s.shape(), &[]);
         assert_eq!(s.dtype(), DType::Float64);
@@ -408,27 +447,27 @@ mod tests {
     #[test]
     fn test_sum_axis() {
         let a = NdArray::ones(&[3, 4], DType::Float64);
-        let s = a.sum(Some(0)).unwrap();
+        let s = a.sum(Some(0), false).unwrap();
         assert_eq!(s.shape(), &[4]);
     }
 
     #[test]
     fn test_sum_axis_1() {
         let a = NdArray::ones(&[3, 4], DType::Float64);
-        let s = a.sum(Some(1)).unwrap();
+        let s = a.sum(Some(1), false).unwrap();
         assert_eq!(s.shape(), &[3]);
     }
 
     #[test]
     fn test_sum_invalid_axis() {
         let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
-        assert!(a.sum(Some(5)).is_err());
+        assert!(a.sum(Some(5), false).is_err());
     }
 
     #[test]
     fn test_mean() {
         let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
-        let m = a.mean(None).unwrap();
+        let m = a.mean(None, false).unwrap();
         assert_eq!(m.size(), 1);
         assert_eq!(m.dtype(), DType::Float64);
     }
@@ -436,15 +475,15 @@ mod tests {
     #[test]
     fn test_mean_axis() {
         let a = NdArray::ones(&[3, 4], DType::Float64);
-        let m = a.mean(Some(0)).unwrap();
+        let m = a.mean(Some(0), false).unwrap();
         assert_eq!(m.shape(), &[4]);
     }
 
     #[test]
     fn test_min_max_all() {
         let a = NdArray::from_vec(vec![3.0_f64, 1.0, 2.0]);
-        let mn = a.min(None).unwrap();
-        let mx = a.max(None).unwrap();
+        let mn = a.min(None, false).unwrap();
+        let mx = a.max(None, false).unwrap();
         assert_eq!(mn.size(), 1);
         assert_eq!(mx.size(), 1);
     }
@@ -452,15 +491,15 @@ mod tests {
     #[test]
     fn test_min_axis() {
         let a = NdArray::ones(&[3, 4], DType::Int32);
-        let mn = a.min(Some(0)).unwrap();
+        let mn = a.min(Some(0), false).unwrap();
         assert_eq!(mn.shape(), &[4]);
     }
 
     #[test]
     fn test_var_std() {
         let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
-        let v = a.var(None).unwrap();
-        let s = a.std(None).unwrap();
+        let v = a.var(None, 0, false).unwrap();
+        let s = a.std(None, 0, false).unwrap();
         assert_eq!(v.dtype(), DType::Float64);
         assert_eq!(s.dtype(), DType::Float64);
     }
@@ -498,7 +537,30 @@ mod tests {
     #[test]
     fn test_sum_bool() {
         let a = NdArray::from_vec(vec![true, false, true]);
-        let s = a.sum(None).unwrap();
+        let s = a.sum(None, false).unwrap();
         assert_eq!(s.dtype(), DType::Int32);
+    }
+
+    #[test]
+    fn test_sum_keepdims() {
+        let a = NdArray::ones(&[3, 4], DType::Float64);
+        let s = a.sum(Some(0), true).unwrap();
+        assert_eq!(s.shape(), &[1, 4]);
+    }
+
+    #[test]
+    fn test_mean_keepdims() {
+        let a = NdArray::ones(&[3, 4], DType::Float64);
+        let m = a.mean(Some(1), true).unwrap();
+        assert_eq!(m.shape(), &[3, 1]);
+    }
+
+    #[test]
+    fn test_var_ddof() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let v0 = a.var(None, 0, false).unwrap();
+        let v1 = a.var(None, 1, false).unwrap();
+        assert_eq!(v0.dtype(), DType::Float64);
+        assert_eq!(v1.dtype(), DType::Float64);
     }
 }

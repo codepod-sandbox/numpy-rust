@@ -172,7 +172,7 @@ pub mod _numpy_native {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         a.inner()
-            .sum(ax)
+            .sum(ax, false)
             .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
@@ -185,7 +185,7 @@ pub mod _numpy_native {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         a.inner()
-            .mean(ax)
+            .mean(ax, false)
             .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
@@ -198,7 +198,7 @@ pub mod _numpy_native {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         a.inner()
-            .min(ax)
+            .min(ax, false)
             .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
@@ -211,7 +211,7 @@ pub mod _numpy_native {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         a.inner()
-            .max(ax)
+            .max(ax, false)
             .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
@@ -224,7 +224,7 @@ pub mod _numpy_native {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         a.inner()
-            .std(ax)
+            .std(ax, 0, false)
             .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
@@ -237,7 +237,7 @@ pub mod _numpy_native {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         a.inner()
-            .var(ax)
+            .var(ax, 0, false)
             .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }

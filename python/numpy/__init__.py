@@ -416,7 +416,9 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
 
 def sum(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
-        return a.sum(axis=axis) if axis is not None else a.sum()
+        if axis is not None:
+            return a.sum(axis, keepdims)
+        return a.sum(None, keepdims)
     return __builtins__["sum"](a) if isinstance(__builtins__, dict) else a
 
 def prod(a, axis=None, dtype=None, out=None, keepdims=False):
@@ -430,29 +432,39 @@ def prod(a, axis=None, dtype=None, out=None, keepdims=False):
 
 def mean(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
-        return a.mean(axis=axis) if axis is not None else a.mean()
+        if axis is not None:
+            return a.mean(axis, keepdims)
+        return a.mean(None, keepdims)
     return a
 
 def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if isinstance(a, ndarray):
-        return a.std(axis=axis) if axis is not None else a.std()
+        if axis is not None:
+            return a.std(axis, ddof, keepdims)
+        return a.std(None, ddof, keepdims)
     return 0.0
 
 def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if isinstance(a, ndarray):
-        return a.var(axis=axis) if axis is not None else a.var()
+        if axis is not None:
+            return a.var(axis, ddof, keepdims)
+        return a.var(None, ddof, keepdims)
     return 0.0
 
 def max(a, axis=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
-        return a.max(axis=axis) if axis is not None else a.max()
+        if axis is not None:
+            return a.max(axis, keepdims)
+        return a.max(None, keepdims)
     return a
 
 amax = max
 
 def min(a, axis=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
-        return a.min(axis=axis) if axis is not None else a.min()
+        if axis is not None:
+            return a.min(axis, keepdims)
+        return a.min(None, keepdims)
     return a
 
 amin = min

@@ -248,13 +248,15 @@ impl PyNdArray {
     fn sum(
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
+        let kd = keepdims.unwrap_or(false);
         self.data
             .read()
             .unwrap()
-            .sum(ax)
+            .sum(ax, kd)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
@@ -263,13 +265,15 @@ impl PyNdArray {
     fn mean(
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
+        let kd = keepdims.unwrap_or(false);
         self.data
             .read()
             .unwrap()
-            .mean(ax)
+            .mean(ax, kd)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
@@ -278,13 +282,15 @@ impl PyNdArray {
     fn min(
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
+        let kd = keepdims.unwrap_or(false);
         self.data
             .read()
             .unwrap()
-            .min(ax)
+            .min(ax, kd)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
@@ -293,13 +299,15 @@ impl PyNdArray {
     fn max(
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
+        let kd = keepdims.unwrap_or(false);
         self.data
             .read()
             .unwrap()
-            .max(ax)
+            .max(ax, kd)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
@@ -308,13 +316,17 @@ impl PyNdArray {
     fn std(
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
+        ddof: vm::function::OptionalArg<usize>,
+        keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
+        let dd = ddof.unwrap_or(0);
+        let kd = keepdims.unwrap_or(false);
         self.data
             .read()
             .unwrap()
-            .std(ax)
+            .std(ax, dd, kd)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
@@ -323,13 +335,17 @@ impl PyNdArray {
     fn var(
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
+        ddof: vm::function::OptionalArg<usize>,
+        keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
+        let dd = ddof.unwrap_or(0);
+        let kd = keepdims.unwrap_or(false);
         self.data
             .read()
             .unwrap()
-            .var(ax)
+            .var(ax, dd, kd)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }

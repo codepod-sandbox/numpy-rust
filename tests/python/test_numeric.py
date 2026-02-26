@@ -474,6 +474,35 @@ def test_sort_method():
     assert_close(b[2], 3.0)
 
 
+def test_keepdims_sum():
+    a = np.ones((3, 4))
+    s = np.sum(a, axis=0, keepdims=True)
+    assert s.shape == (1, 4), f"expected (1, 4), got {s.shape}"
+
+def test_keepdims_mean():
+    a = np.ones((3, 4))
+    m = np.mean(a, axis=1, keepdims=True)
+    assert m.shape == (3, 1), f"expected (3, 1), got {m.shape}"
+
+def test_keepdims_max():
+    a = np.ones((2, 3, 4))
+    mx = a.max(1, True)
+    assert mx.shape == (2, 1, 4), f"expected (2, 1, 4), got {mx.shape}"
+
+def test_ddof_std():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    s0 = float(np.std(a, ddof=0))
+    s1 = float(np.std(a, ddof=1))
+    assert s1 > s0, f"ddof=1 std ({s1}) should be > ddof=0 std ({s0})"
+
+def test_ddof_var():
+    a = np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
+    v0 = float(np.var(a))
+    v1 = float(np.var(a, ddof=1))
+    assert abs(v0 - 4.0) < 0.01, f"population variance should be ~4.0, got {v0}"
+    assert abs(v1 - 4.571428) < 0.01, f"sample variance should be ~4.571, got {v1}"
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
