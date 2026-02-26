@@ -705,8 +705,10 @@ def resize(a, new_shape):
     return array(result).reshape(new_shape)
 
 def choose(a, choices, out=None, mode="raise"):
-    """Stub for np.choose."""
-    return choices[0]  # rough stub
+    if isinstance(a, ndarray):
+        choice_arrays = [c if isinstance(c, ndarray) else array(c) for c in choices]
+        return _native.choose(a, choice_arrays)
+    return choices[0]
 
 def compress(condition, a, axis=None):
     if isinstance(a, ndarray):

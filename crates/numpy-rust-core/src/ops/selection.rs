@@ -129,6 +129,12 @@ mod tests {
         let v = NdArray::from_vec(vec![2.0_f64, 4.0, 6.0]);
         let idx = a.searchsorted(&v, "left").unwrap();
         assert_eq!(idx.shape(), &[3]);
+        let ArrayData::Int64(arr) = idx.data() else {
+            panic!("expected Int64");
+        };
+        assert_eq!(arr[[0]], 1); // 2.0 goes at index 1
+        assert_eq!(arr[[1]], 2); // 4.0 goes at index 2
+        assert_eq!(arr[[2]], 3); // 6.0 goes at index 3
     }
 
     #[test]

@@ -334,6 +334,28 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    #[pyfunction]
+    fn choose(
+        a: vm::PyRef<PyNdArray>,
+        choices: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let list = choices
+            .downcast_ref::<vm::builtins::PyList>()
+            .ok_or_else(|| vm.new_type_error("choose requires a list of arrays".to_owned()))?;
+        let items = list.borrow_vec();
+        let py_arrays: Vec<vm::PyRef<PyNdArray>> = items
+            .iter()
+            .map(|item| item.clone().try_into_value::<vm::PyRef<PyNdArray>>(vm))
+            .collect::<PyResult<Vec<_>>>()?;
+        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
+            py_arrays.iter().map(|c| c.inner()).collect();
+        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        numpy_rust_core::choose(&a.inner(), &refs)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- String (char) operations ---
 
     #[pyfunction]
