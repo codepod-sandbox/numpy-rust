@@ -66,9 +66,18 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
-    fn eye(n: usize, _vm: &VirtualMachine) -> PyNdArray {
+    fn eye(
+        n: usize,
+        m: vm::function::OptionalArg<usize>,
+        k: vm::function::OptionalArg<isize>,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        let m_val = m.into_option();
+        let k_val = k.unwrap_or(0);
         PyNdArray::from_core(numpy_rust_core::creation::eye(
             n,
+            m_val,
+            k_val,
             numpy_rust_core::DType::Float64,
         ))
     }

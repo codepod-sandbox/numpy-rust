@@ -180,7 +180,7 @@ mod tests {
     use crate::{DType, NdArray};
 
     fn eye_3x3() -> NdArray {
-        crate::creation::eye(3, DType::Float64)
+        crate::creation::eye(3, None, 0, DType::Float64)
     }
 
     #[test]

@@ -503,6 +503,23 @@ def test_ddof_var():
     assert abs(v1 - 4.571428) < 0.01, f"sample variance should be ~4.571, got {v1}"
 
 
+def test_eye_rectangular():
+    a = np.eye(3, 4)
+    assert a.shape == (3, 4), f"expected (3, 4), got {a.shape}"
+
+def test_eye_offset():
+    a = np.eye(3, k=1)
+    assert a.shape == (3, 3)
+    assert float(a[0, 1]) == 1.0
+    assert float(a[0, 0]) == 0.0
+
+def test_eye_negative_offset():
+    a = np.eye(3, k=-1)
+    assert a.shape == (3, 3)
+    assert float(a[1, 0]) == 1.0
+    assert float(a[0, 0]) == 0.0
+
+
 def test_expand_dims():
     a = np.array([1.0, 2.0, 3.0])
     b = np.expand_dims(a, 0)

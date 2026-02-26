@@ -116,6 +116,10 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
     return _native.linspace(start, stop, num)
 
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
+    if M is not None:
+        return _native.eye(N, M, k)
+    if k != 0:
+        return _native.eye(N, N, k)
     return _native.eye(N)
 
 def where(condition, x=None, y=None):
