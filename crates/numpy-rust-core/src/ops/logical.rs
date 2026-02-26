@@ -76,6 +76,85 @@ impl NdArray {
         Ok(NdArray::from_data(result))
     }
 
+    /// Element-wise bitwise XOR. For Bool arrays: logical XOR. For integers: bitwise ^.
+    pub fn bitwise_xor(&self, other: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_bitwise(self, other)?;
+        let result = match (a, b) {
+            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
+                let r: ArrayD<bool> = ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x ^ y);
+                ArrayData::Bool(r)
+            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
+                ArrayData::Int32(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x ^ y))
+            }
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
+                ArrayData::Int64(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x ^ y))
+            }
+            _ => unreachable!("promotion ensures matching types"),
+        };
+        Ok(NdArray::from_data(result))
+    }
+
+    /// Element-wise left shift. Bool arrays are cast to Int64 first.
+    /// Shift amounts are masked to avoid overflow panics.
+    pub fn left_shift(&self, other: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_bitwise(self, other)?;
+        let result = match (a, b) {
+            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
+                // Cast bools to i64 first for shift operations
+                let a = a.mapv(|x| x as i64);
+                let b = b.mapv(|x| x as i64);
+                ArrayData::Int64(
+                    ndarray::Zip::from(&a)
+                        .and(&b)
+                        .map_collect(|&x, &y| x << (y & 63)),
+                )
+            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x << (y & 31)),
+            ),
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x << (y & 63)),
+            ),
+            _ => unreachable!("promotion ensures matching types"),
+        };
+        Ok(NdArray::from_data(result))
+    }
+
+    /// Element-wise right shift. Bool arrays are cast to Int64 first.
+    /// Shift amounts are masked to avoid overflow panics.
+    pub fn right_shift(&self, other: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_bitwise(self, other)?;
+        let result = match (a, b) {
+            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
+                // Cast bools to i64 first for shift operations
+                let a = a.mapv(|x| x as i64);
+                let b = b.mapv(|x| x as i64);
+                ArrayData::Int64(
+                    ndarray::Zip::from(&a)
+                        .and(&b)
+                        .map_collect(|&x, &y| x >> (y & 63)),
+                )
+            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x >> (y & 31)),
+            ),
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x >> (y & 63)),
+            ),
+            _ => unreachable!("promotion ensures matching types"),
+        };
+        Ok(NdArray::from_data(result))
+    }
+
     /// Element-wise bitwise NOT. For Bool arrays: logical NOT. For integers: bitwise !.
     pub fn bitwise_not(&self) -> Result<NdArray> {
         if self.dtype().is_complex() {
@@ -157,5 +236,49 @@ mod tests {
         assert!(a.bitwise_and(&b).is_err());
         assert!(a.bitwise_or(&b).is_err());
         assert!(a.bitwise_not().is_err());
+    }
+
+    #[test]
+    fn test_bitwise_xor_bool() {
+        let a = NdArray::from_vec(vec![true, true, false, false]);
+        let b = NdArray::from_vec(vec![true, false, true, false]);
+        let c = a.bitwise_xor(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
+        assert_eq!(c.shape(), &[4]);
+    }
+
+    #[test]
+    fn test_bitwise_xor_int() {
+        let a = NdArray::from_vec(vec![0b1100_i32, 0b1010]);
+        let b = NdArray::from_vec(vec![0b1010_i32, 0b1100]);
+        let c = a.bitwise_xor(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Int32);
+        assert_eq!(c.shape(), &[2]);
+    }
+
+    #[test]
+    fn test_left_shift_int() {
+        let a = NdArray::from_vec(vec![1_i64, 2, 4]);
+        let b = NdArray::from_vec(vec![3_i64, 2, 1]);
+        let c = a.left_shift(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Int64);
+        assert_eq!(c.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_right_shift_int() {
+        let a = NdArray::from_vec(vec![8_i64, 16, 32]);
+        let b = NdArray::from_vec(vec![2_i64, 3, 4]);
+        let c = a.right_shift(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Int64);
+        assert_eq!(c.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_shift_float_fails() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        let b = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        assert!(a.left_shift(&b).is_err());
+        assert!(a.right_shift(&b).is_err());
     }
 }

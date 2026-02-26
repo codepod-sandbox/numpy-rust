@@ -960,6 +960,38 @@ fn number_invert(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     Ok(PyNdArray::from_core(result).into_pyobject(vm))
 }
 
+fn number_absolute(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
+    let a = num
+        .downcast_ref::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+    Ok(PyNdArray::from_core(a.data.read().unwrap().abs()).into_pyobject(vm))
+}
+
+fn number_boolean(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult<bool> {
+    let a = num
+        .downcast_ref::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+    let data = a.data.read().unwrap();
+    if data.size() != 1 {
+        return Err(vm.new_value_error(
+            "The truth value of an array with more than one element is ambiguous".to_owned(),
+        ));
+    }
+    let s = data
+        .get(&vec![0; data.ndim()])
+        .map_err(|e| numpy_err(e, vm))?;
+    Ok(match s {
+        Scalar::Bool(v) => v,
+        Scalar::Int32(v) => v != 0,
+        Scalar::Int64(v) => v != 0,
+        Scalar::Float32(v) => v != 0.0,
+        Scalar::Float64(v) => v != 0.0,
+        Scalar::Complex64(v) => v.re != 0.0 || v.im != 0.0,
+        Scalar::Complex128(v) => v.re != 0.0 || v.im != 0.0,
+        Scalar::Str(v) => !v.is_empty(),
+    })
+}
+
 fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .downcast_ref::<PyNdArray>()
@@ -1104,8 +1136,16 @@ impl PyNdArray {
             *a_py.data.write().unwrap() = result;
             Ok(a.to_owned())
         }),
+        xor: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.bitwise_xor(y), vm)),
+        lshift: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.left_shift(y), vm)),
+        rshift: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.right_shift(y), vm)),
         inplace_and: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.bitwise_and(y), vm)),
         inplace_or: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.bitwise_or(y), vm)),
+        inplace_xor: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.bitwise_xor(y), vm)),
+        inplace_lshift: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.left_shift(y), vm)),
+        inplace_rshift: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.right_shift(y), vm)),
+        absolute: Some(number_absolute),
+        boolean: Some(number_boolean),
         ..PyNumberMethods::NOT_IMPLEMENTED
     };
 }
