@@ -711,19 +711,10 @@ def ptp(a, axis=None):
     return 0
 
 def repeat(a, repeats, axis=None):
-    flat = a.flatten()
-    result = []
-    for i in range(flat.size):
-        for _ in range(repeats):
-            result.append(float(flat[i]))
-    return array(result)
+    return _native.repeat(a, repeats, axis)
 
 def tile(a, reps):
-    if isinstance(reps, int):
-        reps = (reps,)
-    flat = list(float(a.flatten()[i]) for i in range(a.size))
-    result = flat * reps[-1]
-    return array(result)
+    return _native.tile(a, reps)
 
 def resize(a, new_shape):
     if isinstance(new_shape, int):

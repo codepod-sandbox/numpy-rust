@@ -321,6 +321,71 @@ pub fn hsplit(a: &NdArray, spec: &SplitSpec) -> Result<Vec<NdArray>> {
     }
 }
 
+/// Repeat elements of an array.
+/// axis=None: flatten then repeat. axis=Some: repeat along that axis.
+pub fn repeat(a: &NdArray, repeats: usize, axis: Option<usize>) -> Result<NdArray> {
+    match axis {
+        None => {
+            let flat = a.flatten();
+            repeat_along_axis(&flat, repeats, 0)
+        }
+        Some(ax) => {
+            if ax >= a.ndim() {
+                return Err(NumpyError::InvalidAxis {
+                    axis: ax,
+                    ndim: a.ndim(),
+                });
+            }
+            repeat_along_axis(a, repeats, ax)
+        }
+    }
+}
+
+fn repeat_along_axis(a: &NdArray, repeats: usize, axis: usize) -> Result<NdArray> {
+    let axis_len = a.shape()[axis];
+    let mut parts = Vec::with_capacity(axis_len * repeats);
+    for i in 0..axis_len {
+        let slice = a.index_select(axis, &[i])?;
+        for _ in 0..repeats {
+            parts.push(slice.clone());
+        }
+    }
+    let refs: Vec<&NdArray> = parts.iter().collect();
+    concatenate(&refs, axis)
+}
+
+/// Tile an array by repeating it along each axis.
+pub fn tile(a: &NdArray, reps: &[usize]) -> Result<NdArray> {
+    if reps.is_empty() {
+        return Ok(a.clone());
+    }
+    let ndim = a.ndim().max(reps.len());
+    let mut arr = a.clone();
+
+    // Prepend size-1 dims if reps has more dims
+    while arr.ndim() < ndim {
+        arr = arr.expand_dims(0)?;
+    }
+
+    // Pad reps with 1s if array has more dims
+    let mut full_reps = vec![1usize; ndim];
+    let offset = ndim - reps.len();
+    for (i, &r) in reps.iter().enumerate() {
+        full_reps[offset + i] = r;
+    }
+
+    // Concatenate along each axis
+    for (ax, &r) in full_reps.iter().enumerate() {
+        if r > 1 {
+            let copies: Vec<NdArray> = (0..r).map(|_| arr.clone()).collect();
+            let refs: Vec<&NdArray> = copies.iter().collect();
+            arr = concatenate(&refs, ax)?;
+        }
+    }
+
+    Ok(arr)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +561,37 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0].shape(), &[2, 2]);
         assert_eq!(parts[1].shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_repeat_flat() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let r = super::repeat(&a, 2, None).unwrap();
+        assert_eq!(r.shape(), &[6]);
+    }
+
+    #[test]
+    fn test_repeat_axis0() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let r = super::repeat(&a, 3, Some(0)).unwrap();
+        assert_eq!(r.shape(), &[6, 2]);
+    }
+
+    #[test]
+    fn test_tile_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        let t = super::tile(&a, &[3]).unwrap();
+        assert_eq!(t.shape(), &[6]);
+    }
+
+    #[test]
+    fn test_tile_2d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let t = super::tile(&a, &[2, 3]).unwrap();
+        assert_eq!(t.shape(), &[4, 6]);
     }
 }

@@ -153,6 +153,47 @@ pub mod _numpy_native {
         Ok(vm.ctx.new_list(py_parts).into())
     }
 
+    #[pyfunction]
+    fn repeat(
+        a: vm::PyRef<PyNdArray>,
+        repeats: usize,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let axis = parse_optional_axis(axis, vm)?;
+        numpy_rust_core::manipulation::repeat(&a.inner(), repeats, axis)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn tile(
+        a: vm::PyRef<PyNdArray>,
+        reps: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let reps_vec = if let Ok(n) = reps.clone().try_into_value::<usize>(vm) {
+            vec![n]
+        } else if let Some(tuple) = reps.downcast_ref::<vm::builtins::PyTuple>() {
+            tuple
+                .as_slice()
+                .iter()
+                .map(|item| item.clone().try_into_value::<usize>(vm))
+                .collect::<PyResult<Vec<_>>>()?
+        } else if let Some(list) = reps.downcast_ref::<vm::builtins::PyList>() {
+            let items = list.borrow_vec();
+            items
+                .iter()
+                .map(|item| item.clone().try_into_value::<usize>(vm))
+                .collect::<PyResult<Vec<_>>>()?
+        } else {
+            return Err(vm.new_type_error("reps must be int, tuple, or list".to_owned()));
+        };
+        numpy_rust_core::manipulation::tile(&a.inner(), &reps_vec)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Module-level math functions ---
 
     #[pyfunction]

@@ -848,6 +848,33 @@ def test_vsplit():
     assert parts[0].shape == (2, 2)
 
 
+# --- repeat / tile ---
+
+def test_repeat_flat():
+    a = np.array([1.0, 2.0, 3.0])
+    result = np.repeat(a, 2)
+    assert result.shape == (6,)
+    expected = np.array([1.0, 1.0, 2.0, 2.0, 3.0, 3.0])
+    assert np.allclose(result, expected)
+
+def test_repeat_axis():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.repeat(a, 2, axis=0)
+    assert result.shape == (4, 2)
+
+def test_tile_1d():
+    a = np.array([1.0, 2.0])
+    result = np.tile(a, 3)
+    assert result.shape == (6,)
+    expected = np.array([1.0, 2.0, 1.0, 2.0, 1.0, 2.0])
+    assert np.allclose(result, expected)
+
+def test_tile_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.tile(a, (2, 3))
+    assert result.shape == (4, 6)
+
+
 # --- argwhere ---
 
 def test_argwhere_1d():
