@@ -234,6 +234,31 @@ impl PyNdArray {
     }
 
     #[pymethod]
+    fn expand_dims(&self, axis: usize, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        self.data
+            .read()
+            .unwrap()
+            .expand_dims(axis)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn squeeze(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let ax = parse_optional_axis(axis, vm)?;
+        self.data
+            .read()
+            .unwrap()
+            .squeeze(ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
     fn copy(&self) -> PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().copy())
     }

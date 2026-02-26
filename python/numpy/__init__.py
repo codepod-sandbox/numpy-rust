@@ -494,10 +494,14 @@ def ravel(a, order="C"):
     return array(a).ravel()
 
 def squeeze(a, axis=None):
-    return a  # stub
+    if isinstance(a, ndarray):
+        return a.squeeze(axis)
+    return a
 
 def expand_dims(a, axis):
-    return a  # stub
+    if isinstance(a, ndarray):
+        return a.expand_dims(axis)
+    return a
 
 def stack(arrays, axis=0, out=None):
     return concatenate(arrays, axis=axis)

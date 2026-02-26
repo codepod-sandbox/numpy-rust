@@ -53,6 +53,62 @@ impl NdArray {
     pub fn ravel(&self) -> NdArray {
         self.flatten()
     }
+
+    /// Insert a new axis of size 1 at the given position.
+    pub fn expand_dims(&self, axis: usize) -> Result<NdArray> {
+        if axis > self.ndim() {
+            return Err(NumpyError::InvalidAxis {
+                axis,
+                ndim: self.ndim() + 1,
+            });
+        }
+        let mut new_shape = self.shape().to_vec();
+        new_shape.insert(axis, 1);
+        self.reshape(&new_shape)
+    }
+
+    /// Remove dimensions of size 1.
+    /// If `axis` is Some, only remove that specific axis (error if it's not size 1).
+    /// If `axis` is None, remove all size-1 dimensions.
+    pub fn squeeze(&self, axis: Option<usize>) -> Result<NdArray> {
+        match axis {
+            Some(ax) => {
+                if ax >= self.ndim() {
+                    return Err(NumpyError::InvalidAxis {
+                        axis: ax,
+                        ndim: self.ndim(),
+                    });
+                }
+                if self.shape()[ax] != 1 {
+                    return Err(NumpyError::ValueError(format!(
+                        "cannot squeeze axis {ax} with size {}",
+                        self.shape()[ax]
+                    )));
+                }
+                let new_shape: Vec<usize> = self
+                    .shape()
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, _)| i != ax)
+                    .map(|(_, &s)| s)
+                    .collect();
+                if new_shape.is_empty() {
+                    self.reshape(&[])
+                } else {
+                    self.reshape(&new_shape)
+                }
+            }
+            None => {
+                let new_shape: Vec<usize> =
+                    self.shape().iter().copied().filter(|&s| s != 1).collect();
+                if new_shape.is_empty() {
+                    self.reshape(&[])
+                } else {
+                    self.reshape(&new_shape)
+                }
+            }
+        }
+    }
 }
 
 /// Concatenate arrays along an axis. All arrays must have the same shape
@@ -315,5 +371,40 @@ mod tests {
         let b = NdArray::from_vec(vec![3.0_f64, 4.0, 5.0]);
         let c = hstack(&[&a, &b]).unwrap();
         assert_eq!(c.shape(), &[5]);
+    }
+
+    #[test]
+    fn test_expand_dims() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let b = a.expand_dims(0).unwrap();
+        assert_eq!(b.shape(), &[1, 3]);
+        let c = a.expand_dims(1).unwrap();
+        assert_eq!(c.shape(), &[3, 1]);
+    }
+
+    #[test]
+    fn test_expand_dims_invalid() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        assert!(a.expand_dims(3).is_err()); // ndim=1, max valid axis=1
+    }
+
+    #[test]
+    fn test_squeeze() {
+        let a = NdArray::zeros(&[1, 3, 1], DType::Float64);
+        let b = a.squeeze(None).unwrap();
+        assert_eq!(b.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_squeeze_specific_axis() {
+        let a = NdArray::zeros(&[1, 3, 1], DType::Float64);
+        let b = a.squeeze(Some(0)).unwrap();
+        assert_eq!(b.shape(), &[3, 1]);
+    }
+
+    #[test]
+    fn test_squeeze_non_unit_axis_fails() {
+        let a = NdArray::zeros(&[2, 3], DType::Float64);
+        assert!(a.squeeze(Some(0)).is_err());
     }
 }

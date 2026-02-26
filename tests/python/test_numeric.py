@@ -503,6 +503,24 @@ def test_ddof_var():
     assert abs(v1 - 4.571428) < 0.01, f"sample variance should be ~4.571, got {v1}"
 
 
+def test_expand_dims():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.expand_dims(a, 0)
+    assert b.shape == (1, 3), f"expected (1, 3), got {b.shape}"
+    c = np.expand_dims(a, 1)
+    assert c.shape == (3, 1), f"expected (3, 1), got {c.shape}"
+
+def test_squeeze():
+    a = np.ones((1, 3, 1))
+    b = np.squeeze(a)
+    assert b.shape == (3,), f"expected (3,), got {b.shape}"
+
+def test_squeeze_axis():
+    a = np.ones((1, 3, 1))
+    b = np.squeeze(a, axis=0)
+    assert b.shape == (3, 1), f"expected (3, 1), got {b.shape}"
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
