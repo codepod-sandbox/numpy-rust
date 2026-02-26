@@ -106,6 +106,92 @@ def test_len_1d():
     assert_eq(len(a), 3)
 
 
+# --- Slice indexing (1D) ---
+
+def test_slice_1d_range():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    b = a[1:4]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 20.0)
+    assert_close(b[1], 30.0)
+    assert_close(b[2], 40.0)
+
+def test_slice_1d_from_start():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    b = a[:3]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 10.0)
+    assert_close(b[2], 30.0)
+
+def test_slice_1d_to_end():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    b = a[2:]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 30.0)
+    assert_close(b[2], 50.0)
+
+def test_slice_1d_step():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+    b = a[::2]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 10.0)
+    assert_close(b[1], 30.0)
+    assert_close(b[2], 50.0)
+
+def test_slice_1d_negative():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    b = a[-3:]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 30.0)
+    assert_close(b[2], 50.0)
+
+def test_slice_1d_reverse():
+    a = np.array([10.0, 20.0, 30.0])
+    b = a[::-1]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 30.0)
+    assert_close(b[1], 20.0)
+    assert_close(b[2], 10.0)
+
+def test_slice_1d_full():
+    a = np.array([10.0, 20.0, 30.0])
+    b = a[:]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 10.0)
+    assert_close(b[2], 30.0)
+
+# --- Slice indexing (2D) ---
+
+def test_slice_2d_rows():
+    a = np.arange(0.0, 12.0).reshape((4, 3))
+    b = a[1:3]
+    assert_eq(b.shape, (2, 3))
+
+def test_slice_2d_mixed():
+    """Integer + slice in a tuple: a[0, 1:3]"""
+    a = np.arange(0.0, 12.0).reshape((3, 4))
+    b = a[(0, slice(1, 3))]
+    assert_eq(b.shape, (2,))
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 2.0)
+
+def test_slice_2d_both():
+    """Slice both axes: a[0:2, 1:3]"""
+    a = np.arange(0.0, 12.0).reshape((3, 4))
+    b = a[(slice(0, 2), slice(1, 3))]
+    assert_eq(b.shape, (2, 2))
+
+def test_slice_2d_step():
+    """Step on both axes: a[::2, ::2]"""
+    a = np.arange(0.0, 16.0).reshape((4, 4))
+    b = a[(slice(None, None, 2), slice(None, None, 2))]
+    assert_eq(b.shape, (2, 2))
+    assert_close(b[(0, 0)], 0.0)
+    assert_close(b[(0, 1)], 2.0)
+    assert_close(b[(1, 0)], 8.0)
+    assert_close(b[(1, 1)], 10.0)
+
+
 # --- repr/str ---
 
 def test_repr():

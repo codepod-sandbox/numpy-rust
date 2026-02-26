@@ -47,3 +47,15 @@ jobs:
         run: cargo build -p numpy-rust-wasm --release
       - name: Run vendored Python tests
         run: ./tests/python/run_tests.sh target/release/numpy-python
+
+  wasm-build:
+    name: WASM Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      - name: Build for wasm32-wasip1
+        run: cargo build -p numpy-rust-wasm --target wasm32-wasip1

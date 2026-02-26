@@ -8,23 +8,23 @@ use crate::py_array::{extract_shape, PyNdArray};
 
 /// numpy.array(data) — convert a Python list to an NdArray.
 pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-    if let Some(list) = data.payload::<PyList>() {
+    if let Some(list) = data.downcast_ref::<PyList>() {
         let items = list.borrow_vec();
         if items.is_empty() {
             return Ok(PyNdArray::from_core(NdArray::from_vec(Vec::<f64>::new())));
         }
 
         // Check if first element is a list (nested)
-        if items[0].payload::<PyList>().is_some() {
+        if items[0].downcast_ref::<PyList>().is_some() {
             return parse_nested_list(&items, vm);
         }
 
         // Check if first element is a string → string array
-        if items[0].payload::<PyStr>().is_some() {
+        if items[0].downcast_ref::<PyStr>().is_some() {
             let mut strings = Vec::with_capacity(items.len());
             for item in items.iter() {
                 let s = item
-                    .payload::<PyStr>()
+                    .downcast_ref::<PyStr>()
                     .ok_or_else(|| vm.new_type_error("mixed types in list".to_owned()))?;
                 strings.push(s.as_str().to_owned());
             }
@@ -50,7 +50,7 @@ fn parse_nested_list(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<PyN
 
     for item in items {
         let row = item
-            .payload::<PyList>()
+            .downcast_ref::<PyList>()
             .ok_or_else(|| vm.new_type_error("expected list of lists".to_owned()))?;
         let row_items = row.borrow_vec();
         match ncols {
@@ -94,7 +94,7 @@ pub fn py_concatenate(
     vm: &VirtualMachine,
 ) -> PyResult<PyNdArray> {
     let list = arrays_obj
-        .payload::<PyList>()
+        .downcast_ref::<PyList>()
         .ok_or_else(|| vm.new_type_error("concatenate requires a list of arrays".to_owned()))?;
     let items = list.borrow_vec();
     let py_arrays: Vec<PyRef<PyNdArray>> = items

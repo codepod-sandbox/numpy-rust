@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pre-push hook: full test suite
+set -euo pipefail
+
+echo "pre-push: running Rust tests..."
+cargo test --workspace --all-features
+
+echo "pre-push: building numpy-python binary..."
+cargo build -p numpy-rust-wasm
+
+echo "pre-push: running Python tests..."
+./tests/python/run_tests.sh target/debug/numpy-python
+
+echo "pre-push: OK"

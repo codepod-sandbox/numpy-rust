@@ -43,7 +43,7 @@ impl NdArray {
             }
         };
         let divisor = NdArray::full_f64(sum.shape(), count as f64);
-        (&sum / &divisor).map_err(|e| e)
+        &sum / &divisor
     }
 
     /// Minimum element over a given axis, or global minimum.
@@ -86,7 +86,7 @@ impl NdArray {
         let mean_x_sq = x_sq.mean(axis)?;
         let mean_x = float_self.mean(axis)?;
         let mean_x_squared = (&mean_x * &mean_x)?;
-        (&mean_x_sq - &mean_x_squared).map_err(|e| e)
+        &mean_x_sq - &mean_x_squared
     }
 
     /// Index of minimum element (flattened).

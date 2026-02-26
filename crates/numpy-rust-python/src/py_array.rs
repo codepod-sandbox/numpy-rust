@@ -1,6 +1,6 @@
 use rustpython_vm as vm;
 use vm::atomic_func;
-use vm::builtins::{PyList, PyStr, PyTuple};
+use vm::builtins::{PyList, PySlice, PyStr, PyTuple};
 use vm::protocol::{PyMappingMethods, PyNumberMethods, PySequenceMethods};
 use vm::types::{AsMapping, AsNumber, AsSequence};
 use vm::{PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
@@ -83,14 +83,14 @@ fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
 
 /// Extract a shape tuple from a Python object (tuple or list of ints).
 pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
-    if let Some(tuple) = obj.payload::<PyTuple>() {
+    if let Some(tuple) = obj.downcast_ref::<PyTuple>() {
         let mut shape = Vec::new();
         for item in tuple.as_slice() {
             let n: i64 = item.clone().try_into_value(vm)?;
             shape.push(n as usize);
         }
         Ok(shape)
-    } else if let Some(list) = obj.payload::<PyList>() {
+    } else if let Some(list) = obj.downcast_ref::<PyList>() {
         let mut shape = Vec::new();
         for item in list.borrow_vec().iter() {
             let n: i64 = item.clone().try_into_value(vm)?;
@@ -393,10 +393,33 @@ impl PyNdArray {
             }
         }
 
-        // Tuple index -> multi-dimensional indexing
-        if let Some(tuple) = key.payload::<PyTuple>() {
+        // Single slice -> e.g. a[0:3], a[::2], a[:]
+        if let Some(slice) = key.downcast_ref::<PySlice>() {
+            let arg = py_slice_to_slice_arg(slice, vm)?;
+            let result = self.data.slice(&[arg]).map_err(|e| numpy_err(e, vm))?;
+            return Ok(PyNdArray::from_core(result).to_py(vm));
+        }
+
+        // Tuple index -> multi-dimensional indexing (integers and/or slices)
+        if let Some(tuple) = key.downcast_ref::<PyTuple>() {
+            let items = tuple.as_slice();
+            let has_slice = items
+                .iter()
+                .any(|item| item.downcast_ref::<PySlice>().is_some());
+
+            if has_slice {
+                // Mixed integers and slices — use SliceArg for each element
+                let args: Vec<SliceArg> = items
+                    .iter()
+                    .map(|item| py_obj_to_slice_arg(item, vm))
+                    .collect::<PyResult<Vec<_>>>()?;
+                let result = self.data.slice(&args).map_err(|e| numpy_err(e, vm))?;
+                return Ok(ndarray_or_scalar(result, vm));
+            }
+
+            // All integers
             let mut indices = Vec::new();
-            for item in tuple.as_slice() {
+            for item in items {
                 let i: i64 = item.clone().try_into_value(vm)?;
                 indices.push(i as isize);
             }
@@ -424,7 +447,7 @@ impl PyNdArray {
         }
 
         // Boolean mask
-        if let Some(mask) = key.payload::<PyNdArray>() {
+        if let Some(mask) = key.downcast_ref::<PyNdArray>() {
             if mask.data.dtype() == DType::Bool {
                 let result = self
                     .data
@@ -503,28 +526,22 @@ impl PyNdArray {
     }
 }
 
-/// Extract a PyNdArray from a PyObjectRef.
-fn extract_ndarray<'a>(obj: &'a PyObjectRef, vm: &VirtualMachine) -> PyResult<&'a PyNdArray> {
-    obj.payload::<PyNdArray>()
-        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))
-}
-
 /// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).
 fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
-    if let Some(arr) = obj.payload::<PyNdArray>() {
+    if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
         return Ok(arr.data.clone());
     }
     // Try float (PyFloat)
-    if let Some(f) = obj.payload::<vm::builtins::PyFloat>() {
+    if let Some(f) = obj.downcast_ref::<vm::builtins::PyFloat>() {
         return Ok(NdArray::from_scalar(f.to_f64()));
     }
     // Try int (PyInt) — extract i64 then convert to f64
-    if let Some(i) = obj.payload::<vm::builtins::PyInt>() {
+    if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
         let val: i64 = i.try_to_primitive(vm)?;
         return Ok(NdArray::from_scalar(val as f64));
     }
     // Try str (PyStr) — create 0-D string array
-    if let Some(s) = obj.payload::<vm::builtins::PyStr>() {
+    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
         return Ok(NdArray::from_vec(vec![s.as_str().to_owned()]));
     }
     Err(vm.new_type_error("expected ndarray or scalar".to_owned()))
@@ -547,14 +564,14 @@ fn number_bin_op(
 
 fn number_neg(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
-        .payload::<PyNdArray>()
+        .downcast_ref::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     Ok(PyNdArray::from_core(a.data.neg()).into_pyobject(vm))
 }
 
 fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
-        .payload::<PyNdArray>()
+        .downcast_ref::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     if a.data.size() != 1 {
         return Err(
@@ -586,7 +603,7 @@ fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
 
 fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
-        .payload::<PyNdArray>()
+        .downcast_ref::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
     if a.data.size() != 1 {
         return Err(
@@ -622,9 +639,9 @@ impl PyNdArray {
         subtract: Some(|a, b, vm| number_bin_op(a, b, |x, y| x - y, vm)),
         multiply: Some(|a, b, vm| number_bin_op(a, b, |x, y| x * y, vm)),
         true_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x / y, vm)),
-        negative: Some(|a, vm| number_neg(a, vm)),
-        int: Some(|a, vm| number_int(a, vm)),
-        float: Some(|a, vm| number_float(a, vm)),
+        negative: Some(number_neg),
+        int: Some(number_int),
+        float: Some(number_float),
         ..PyNumberMethods::NOT_IMPLEMENTED
     };
 }
@@ -674,6 +691,42 @@ impl AsSequence for PyNdArray {
         });
         &AS_SEQUENCE
     }
+}
+
+/// Convert a RustPython `PySlice` to a core `SliceArg`.
+fn py_slice_to_slice_arg(slice: &PySlice, vm: &VirtualMachine) -> PyResult<SliceArg> {
+    let start = match &slice.start {
+        Some(obj) if !vm.is_none(obj) => {
+            let v: i64 = obj.clone().try_into_value(vm)?;
+            Some(v as isize)
+        }
+        _ => None,
+    };
+    let stop = if vm.is_none(&slice.stop) {
+        None
+    } else {
+        let v: i64 = slice.stop.clone().try_into_value(vm)?;
+        Some(v as isize)
+    };
+    let step = match &slice.step {
+        Some(obj) if !vm.is_none(obj) => {
+            let v: i64 = obj.clone().try_into_value(vm)?;
+            v as isize
+        }
+        _ => 1,
+    };
+    Ok(SliceArg::Range { start, stop, step })
+}
+
+/// Convert a Python object to a `SliceArg` (either a slice or an integer index).
+fn py_obj_to_slice_arg(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<SliceArg> {
+    if let Some(slice) = obj.downcast_ref::<PySlice>() {
+        return py_slice_to_slice_arg(slice, vm);
+    }
+    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(SliceArg::Index(i as isize));
+    }
+    Err(vm.new_type_error("index must be an integer or slice".to_owned()))
 }
 
 /// Parse an optional axis argument (None means reduce all).

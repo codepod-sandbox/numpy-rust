@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Pre-commit hook: fast checks (formatting + clippy)
+set -euo pipefail
+
+echo "pre-commit: checking formatting..."
+cargo fmt --all -- --check
+
+echo "pre-commit: running clippy..."
+cargo clippy --workspace --all-features -- -D warnings
+
+echo "pre-commit: OK"
