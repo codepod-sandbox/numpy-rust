@@ -17,16 +17,36 @@ impl NdArray {
         }
         let sh = IxDyn(shape);
         let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(a.clone().into_shape_with_order(sh).unwrap()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.clone().into_shape_with_order(sh).unwrap()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.clone().into_shape_with_order(sh).unwrap()),
-            ArrayData::Float32(a) => {
-                ArrayData::Float32(a.clone().into_shape_with_order(sh).unwrap())
-            }
-            ArrayData::Float64(a) => {
-                ArrayData::Float64(a.clone().into_shape_with_order(sh).unwrap())
-            }
-            ArrayData::Str(a) => ArrayData::Str(a.clone().into_shape_with_order(sh).unwrap()),
+            ArrayData::Bool(a) => ArrayData::Bool(
+                a.clone()
+                    .into_shape_with_order(sh)
+                    .expect("size validated above"),
+            ),
+            ArrayData::Int32(a) => ArrayData::Int32(
+                a.clone()
+                    .into_shape_with_order(sh)
+                    .expect("size validated above"),
+            ),
+            ArrayData::Int64(a) => ArrayData::Int64(
+                a.clone()
+                    .into_shape_with_order(sh)
+                    .expect("size validated above"),
+            ),
+            ArrayData::Float32(a) => ArrayData::Float32(
+                a.clone()
+                    .into_shape_with_order(sh)
+                    .expect("size validated above"),
+            ),
+            ArrayData::Float64(a) => ArrayData::Float64(
+                a.clone()
+                    .into_shape_with_order(sh)
+                    .expect("size validated above"),
+            ),
+            ArrayData::Str(a) => ArrayData::Str(
+                a.clone()
+                    .into_shape_with_order(sh)
+                    .expect("size validated above"),
+            ),
         };
         Ok(NdArray::from_data(data))
     }
@@ -46,7 +66,8 @@ impl NdArray {
 
     /// Return a 1-D copy of the array.
     pub fn flatten(&self) -> NdArray {
-        self.reshape(&[self.size()]).unwrap()
+        self.reshape(&[self.size()])
+            .expect("flatten reshape cannot fail")
     }
 
     /// Return a contiguous flattened array (same as flatten for our purposes).
@@ -235,7 +256,8 @@ pub fn stack(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
         .map(|a| {
             let mut new_shape = a.shape().to_vec();
             new_shape.insert(axis, 1);
-            a.reshape(&new_shape).unwrap()
+            a.reshape(&new_shape)
+                .expect("insert-axis reshape cannot fail")
         })
         .collect();
 

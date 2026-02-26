@@ -29,7 +29,8 @@ impl NdArray {
                 let mut flat: Vec<f64> = arr.iter().copied().collect();
                 flat.sort_by(f64_cmp);
                 Ok(NdArray::from_data(ArrayData::Float64(
-                    ArrayD::from_shape_vec(IxDyn(&[flat.len()]), flat).unwrap(),
+                    ArrayD::from_shape_vec(IxDyn(&[flat.len()]), flat)
+                        .expect("flat vec matches shape"),
                 )))
             }
             Some(ax) => {
@@ -73,7 +74,8 @@ impl NdArray {
                 let mut indices: Vec<i64> = (0..flat.len() as i64).collect();
                 indices.sort_by(|&a, &b| f64_cmp(&flat[a as usize], &flat[b as usize]));
                 Ok(NdArray::from_data(ArrayData::Int64(
-                    ArrayD::from_shape_vec(IxDyn(&[indices.len()]), indices).unwrap(),
+                    ArrayD::from_shape_vec(IxDyn(&[indices.len()]), indices)
+                        .expect("flat vec matches shape"),
                 )))
             }
             Some(ax) => {

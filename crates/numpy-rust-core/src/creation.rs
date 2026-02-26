@@ -21,7 +21,7 @@ pub fn arange(start: f64, stop: f64, step: f64) -> NdArray {
     }
     let len = values.len();
     NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&[len]), values).unwrap(),
+        ArrayD::from_shape_vec(IxDyn(&[len]), values).expect("vec length matches shape"),
     ))
 }
 
@@ -37,41 +37,60 @@ pub fn linspace(start: f64, stop: f64, num: usize) -> NdArray {
     };
     let len = values.len();
     NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&[len]), values).unwrap(),
+        ArrayD::from_shape_vec(IxDyn(&[len]), values).expect("vec length matches shape"),
     ))
 }
 
-/// Create an n x n identity matrix.
-pub fn eye(n: usize, dtype: DType) -> NdArray {
+/// Create a 2-D array with ones on the k-th diagonal and zeros elsewhere.
+///
+/// - `n` — number of rows
+/// - `m` — number of columns (defaults to `n` when `None`)
+/// - `k` — diagonal offset: 0 = main, positive = superdiagonal, negative = subdiagonal
+pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> NdArray {
     if dtype.is_string() {
         panic!("eye() not supported for string dtype");
     }
-    let mut arr = NdArray::zeros(&[n, n], dtype);
-    // Set diagonal to 1
+    let cols = m.unwrap_or(n);
+    let mut arr = NdArray::zeros(&[n, cols], dtype);
     match &mut arr.data {
         ArrayData::Bool(a) => {
             for i in 0..n {
-                a[[i, i]] = true;
+                let j = i as isize + k;
+                if j >= 0 && (j as usize) < cols {
+                    a[[i, j as usize]] = true;
+                }
             }
         }
         ArrayData::Int32(a) => {
             for i in 0..n {
-                a[[i, i]] = 1;
+                let j = i as isize + k;
+                if j >= 0 && (j as usize) < cols {
+                    a[[i, j as usize]] = 1;
+                }
             }
         }
         ArrayData::Int64(a) => {
             for i in 0..n {
-                a[[i, i]] = 1;
+                let j = i as isize + k;
+                if j >= 0 && (j as usize) < cols {
+                    a[[i, j as usize]] = 1;
+                }
             }
         }
         ArrayData::Float32(a) => {
             for i in 0..n {
-                a[[i, i]] = 1.0;
+                let j = i as isize + k;
+                if j >= 0 && (j as usize) < cols {
+                    a[[i, j as usize]] = 1.0;
+                }
             }
         }
         ArrayData::Float64(a) => {
             for i in 0..n {
-                a[[i, i]] = 1.0;
+                let j = i as isize + k;
+                if j >= 0 && (j as usize) < cols {
+                    a[[i, j as usize]] = 1.0;
+                }
             }
         }
         ArrayData::Str(_) => unreachable!(),
@@ -160,16 +179,34 @@ mod tests {
 
     #[test]
     fn test_eye() {
-        let a = eye(3, DType::Float64);
+        let a = eye(3, None, 0, DType::Float64);
         assert_eq!(a.shape(), &[3, 3]);
         assert_eq!(a.dtype(), DType::Float64);
     }
 
     #[test]
     fn test_eye_i32() {
-        let a = eye(2, DType::Int32);
+        let a = eye(2, None, 0, DType::Int32);
         assert_eq!(a.shape(), &[2, 2]);
         assert_eq!(a.dtype(), DType::Int32);
+    }
+
+    #[test]
+    fn test_eye_rectangular() {
+        let a = eye(3, Some(4), 0, DType::Float64);
+        assert_eq!(a.shape(), &[3, 4]);
+    }
+
+    #[test]
+    fn test_eye_offset() {
+        let a = eye(3, None, 1, DType::Float64);
+        assert_eq!(a.shape(), &[3, 3]);
+    }
+
+    #[test]
+    fn test_eye_negative_offset() {
+        let a = eye(3, None, -1, DType::Float64);
+        assert_eq!(a.shape(), &[3, 3]);
     }
 
     #[test]
