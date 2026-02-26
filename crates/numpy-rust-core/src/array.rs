@@ -176,6 +176,16 @@ impl NdArray {
             data: vec.into_array_data(),
         }
     }
+
+    /// Convenience constructor for a 1-D Complex128 array.
+    pub fn from_complex128_vec(vec: Vec<Complex<f64>>) -> Self {
+        Self::from_vec(vec)
+    }
+
+    /// Convenience constructor for a 1-D Complex64 array.
+    pub fn from_complex64_vec(vec: Vec<Complex<f32>>) -> Self {
+        Self::from_vec(vec)
+    }
 }
 
 #[cfg(test)]

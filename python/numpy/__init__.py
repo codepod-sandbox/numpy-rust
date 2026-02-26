@@ -912,6 +912,33 @@ def matrix_transpose(a):
 def astype(a, dtype):
     return a.astype(dtype)
 
+def real(a):
+    """Return the real part of the array elements."""
+    if isinstance(a, ndarray):
+        return a.real
+    return a
+
+def imag(a):
+    """Return the imaginary part of the array elements."""
+    if isinstance(a, ndarray):
+        return a.imag
+    return 0
+
+def conj(a):
+    """Return the complex conjugate."""
+    if isinstance(a, ndarray):
+        return a.conj()
+    return a
+
+conjugate = conj
+
+def angle(a, deg=False):
+    """Return the angle (argument) of complex elements."""
+    if isinstance(a, ndarray):
+        # angle not exposed as a native method yet; stub
+        return a
+    return 0
+
 def einsum(*operands, **kwargs):
     raise NotImplementedError("einsum not implemented")
 

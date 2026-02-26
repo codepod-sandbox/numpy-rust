@@ -161,6 +161,8 @@ fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "int64" | "i64" | "int" => Ok(DType::Int64),
         "float32" | "f32" => Ok(DType::Float32),
         "float64" | "f64" | "float" => Ok(DType::Float64),
+        "complex64" | "c64" => Ok(DType::Complex64),
+        "complex128" | "c128" | "complex" => Ok(DType::Complex128),
         "str" | "U" => Ok(DType::Str),
         _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),
@@ -226,6 +228,16 @@ impl PyNdArray {
     #[pygetset(name = "T")]
     fn transpose_prop(&self) -> PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().transpose())
+    }
+
+    #[pygetset]
+    fn real(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().real())
+    }
+
+    #[pygetset]
+    fn imag(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().imag())
     }
 
     // --- Methods ---
@@ -501,6 +513,16 @@ impl PyNdArray {
             .round()
             .map_err(|e| numpy_err(e, vm))?;
         Ok(PyNdArray::from_core(result))
+    }
+
+    #[pymethod]
+    fn conj(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().conj())
+    }
+
+    #[pymethod]
+    fn conjugate(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().conj())
     }
 
     // --- Scalar conversion ---

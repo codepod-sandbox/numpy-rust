@@ -123,6 +123,50 @@ impl NdArray {
         NdArray::from_data(result)
     }
 
+    /// Return the real part of the array.
+    pub fn real(&self) -> NdArray {
+        match &self.data {
+            ArrayData::Complex64(a) => NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re))),
+            ArrayData::Complex128(a) => NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.re))),
+            // Real arrays are their own real part
+            _ => self.clone(),
+        }
+    }
+
+    /// Return the imaginary part of the array.
+    pub fn imag(&self) -> NdArray {
+        match &self.data {
+            ArrayData::Complex64(a) => NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im))),
+            ArrayData::Complex128(a) => NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.im))),
+            // Real arrays have zero imaginary part
+            _ => NdArray::zeros(self.shape(), self.dtype()),
+        }
+    }
+
+    /// Return the complex conjugate.
+    pub fn conj(&self) -> NdArray {
+        match &self.data {
+            ArrayData::Complex64(a) => {
+                NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj())))
+            }
+            ArrayData::Complex128(a) => {
+                NdArray::from_data(ArrayData::Complex128(a.mapv(|c| c.conj())))
+            }
+            // Conjugate of real is self
+            _ => self.clone(),
+        }
+    }
+
+    /// Return the angle (argument) of complex elements.
+    pub fn angle(&self) -> NdArray {
+        match &self.data {
+            ArrayData::Complex64(a) => NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()))),
+            ArrayData::Complex128(a) => NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.arg()))),
+            // Angle of positive real is 0
+            _ => NdArray::zeros(self.shape(), DType::Float64),
+        }
+    }
+
     /// Element-wise negation. Works on int and float types.
     pub fn neg(&self) -> NdArray {
         let result = match &self.data {
@@ -266,5 +310,38 @@ mod tests {
         let a = NdArray::from_vec(vec![Complex::new(-1.0f64, 0.0)]);
         let b = a.sqrt();
         assert_eq!(b.dtype(), DType::Complex128);
+    }
+
+    #[test]
+    fn test_real_imag_complex() {
+        let a = NdArray::from_complex128_vec(vec![Complex::new(1.0, 2.0), Complex::new(3.0, 4.0)]);
+        let r = a.real();
+        assert_eq!(r.shape(), &[2]);
+        assert_eq!(r.dtype(), DType::Float64);
+        let im = a.imag();
+        assert_eq!(im.shape(), &[2]);
+        assert_eq!(im.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_conj() {
+        let a = NdArray::from_complex128_vec(vec![Complex::new(1.0, 2.0)]);
+        let c = a.conj();
+        assert_eq!(c.dtype(), DType::Complex128);
+    }
+
+    #[test]
+    fn test_angle() {
+        let a = NdArray::from_complex128_vec(vec![Complex::new(1.0, 0.0)]);
+        let ang = a.angle();
+        assert_eq!(ang.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_real_on_real_array() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let r = a.real();
+        assert_eq!(r.dtype(), DType::Float64);
+        assert_eq!(r.shape(), &[3]);
     }
 }

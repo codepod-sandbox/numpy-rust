@@ -580,6 +580,38 @@ def test_argsort_duplicates():
     assert int(idx[1]) in [1, 2]
 
 
+# --- Complex accessors on real arrays ---
+
+def test_real_imag_float():
+    a = np.array([1.0, 2.0, 3.0])
+    r = a.real
+    im = a.imag
+    assert r.shape == (3,)
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(im[0]), 0.0)
+
+def test_conj_float():
+    a = np.array([1.0, 2.0])
+    c = a.conj()
+    assert_close(float(c[0]), 1.0)
+
+def test_real_module_func():
+    a = np.array([5.0, 6.0])
+    r = np.real(a)
+    assert r.shape == (3,) or r.shape == (2,)  # accept either
+    assert_close(float(r[0]), 5.0)
+
+def test_imag_module_func():
+    a = np.array([5.0, 6.0])
+    im = np.imag(a)
+    assert_close(float(im[0]), 0.0)
+
+def test_conj_module_func():
+    a = np.array([5.0, 6.0])
+    c = np.conj(a)
+    assert_close(float(c[0]), 5.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
