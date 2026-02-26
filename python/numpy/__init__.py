@@ -119,7 +119,7 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
     num = int(num)
     result = _native.linspace(start, stop, num)
     if retstep:
-        step = (stop - start) / max(num - 1, 1) if num > 1 else 0.0
+        step = (stop - start) / (num - 1) if num > 1 else 0.0
         return result, step
     return result
 
