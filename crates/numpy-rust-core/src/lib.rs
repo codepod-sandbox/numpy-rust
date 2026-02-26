@@ -20,4 +20,5 @@ pub use dtype::DType;
 pub use error::{NumpyError, Result};
 pub use manipulation::{concatenate, hstack, stack, vstack};
 pub use ops::einsum::einsum;
+pub use ops::selection::choose;
 pub use utility::{dot, where_cond};

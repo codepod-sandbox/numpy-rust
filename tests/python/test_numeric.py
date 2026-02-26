@@ -655,6 +655,29 @@ def test_char_str_len():
     assert int(b[1]) == 5, f"expected 5, got {b[1]}"
 
 
+# --- searchsorted / compress ---
+
+def test_searchsorted():
+    a = np.array([1.0, 3.0, 5.0, 7.0])
+    v = np.array([2.0, 4.0, 6.0])
+    idx = np.searchsorted(a, v)
+    assert int(idx[0]) == 1  # 2.0 goes at index 1
+    assert int(idx[1]) == 2  # 4.0 goes at index 2
+    assert int(idx[2]) == 3  # 6.0 goes at index 3
+
+def test_searchsorted_right():
+    a = np.array([1.0, 3.0, 3.0, 5.0])
+    v = np.array([3.0])
+    idx = np.searchsorted(a, v, side="right")
+    assert int(idx[0]) == 3
+
+def test_compress():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    cond = np.array([True, False, True, False])
+    result = np.compress(cond, a)
+    assert result.shape == (2,)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

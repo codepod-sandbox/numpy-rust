@@ -304,6 +304,36 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Selection / Search ---
+
+    #[pyfunction]
+    fn searchsorted(
+        a: vm::PyRef<PyNdArray>,
+        v: vm::PyRef<PyNdArray>,
+        side: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        _vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let side_str = side.as_ref().map(|s| s.as_str()).unwrap_or("left");
+        a.inner()
+            .searchsorted(&v.inner(), side_str)
+            .map(|arr| py_array::ndarray_or_scalar(arr, _vm))
+            .map_err(|e| _vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn compress(
+        condition: vm::PyRef<PyNdArray>,
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .compress(&condition.inner(), ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- String (char) operations ---
 
     #[pyfunction]

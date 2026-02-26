@@ -709,14 +709,17 @@ def choose(a, choices, out=None, mode="raise"):
     return choices[0]  # rough stub
 
 def compress(condition, a, axis=None):
-    """Stub for np.compress."""
-    flat_c = condition if not isinstance(condition, ndarray) else [float(condition.flatten()[i]) for i in range(condition.size)]
-    flat_a = a.flatten()
-    result = [float(flat_a[i]) for i, c in enumerate(flat_c) if c]
-    return array(result)
+    if isinstance(a, ndarray):
+        cond = condition if isinstance(condition, ndarray) else array(condition)
+        return _native.compress(cond, a, axis)
+    return a
 
 def searchsorted(a, v, side="left", sorter=None):
-    return 0  # stub
+    if isinstance(a, ndarray) and isinstance(v, ndarray):
+        return _native.searchsorted(a, v, side)
+    if isinstance(a, ndarray):
+        return _native.searchsorted(a, array([v]), side)
+    return 0
 
 def outer(a, b, out=None):
     """Compute outer product."""
