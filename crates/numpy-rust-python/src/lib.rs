@@ -304,6 +304,85 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- String (char) operations ---
+
+    #[pyfunction]
+    fn char_upper(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_upper()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn char_lower(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_lower()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn char_capitalize(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_capitalize()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn char_strip(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_strip()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn char_str_len(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_len()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn char_startswith(
+        a: vm::PyRef<PyNdArray>,
+        prefix: vm::PyRef<vm::builtins::PyStr>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_startswith(prefix.as_str())
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn char_endswith(
+        a: vm::PyRef<PyNdArray>,
+        suffix: vm::PyRef<vm::builtins::PyStr>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_endswith(suffix.as_str())
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn char_replace(
+        a: vm::PyRef<PyNdArray>,
+        old: vm::PyRef<vm::builtins::PyStr>,
+        new: vm::PyRef<vm::builtins::PyStr>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        a.inner()
+            .str_replace(old.as_str(), new.as_str())
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
     // --- Submodules (registered as attributes, feature-gated) ---
 
     #[cfg(feature = "linalg")]

@@ -634,6 +634,27 @@ def test_einsum_outer():
     assert abs(float(c[1, 2]) - 10.0) < 1e-10
 
 
+# --- String (char) operations ---
+
+def test_char_upper():
+    a = np.array(["hello", "world"])
+    b = np.char.upper(a)
+    assert b[0] == "HELLO", f"expected 'HELLO', got {b[0]!r}"
+    assert b[1] == "WORLD", f"expected 'WORLD', got {b[1]!r}"
+
+def test_char_lower():
+    a = np.array(["HELLO", "WORLD"])
+    b = np.char.lower(a)
+    assert b[0] == "hello", f"expected 'hello', got {b[0]!r}"
+    assert b[1] == "world", f"expected 'world', got {b[1]!r}"
+
+def test_char_str_len():
+    a = np.array(["hi", "hello"])
+    b = np.char.str_len(a)
+    assert int(b[0]) == 2, f"expected 2, got {b[0]}"
+    assert int(b[1]) == 5, f"expected 5, got {b[1]}"
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

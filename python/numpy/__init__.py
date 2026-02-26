@@ -946,6 +946,42 @@ def einsum(*operands, **kwargs):
     arrays = operands[1:]
     return _native.einsum(subscripts, *arrays)
 
+# --- String (char) operations -----------------------------------------------
+class _char_mod:
+    @staticmethod
+    def upper(a):
+        return _native.char_upper(a)
+
+    @staticmethod
+    def lower(a):
+        return _native.char_lower(a)
+
+    @staticmethod
+    def capitalize(a):
+        return _native.char_capitalize(a)
+
+    @staticmethod
+    def strip(a):
+        return _native.char_strip(a)
+
+    @staticmethod
+    def str_len(a):
+        return _native.char_str_len(a)
+
+    @staticmethod
+    def startswith(a, prefix):
+        return _native.char_startswith(a, prefix)
+
+    @staticmethod
+    def endswith(a, suffix):
+        return _native.char_endswith(a, suffix)
+
+    @staticmethod
+    def replace(a, old, new):
+        return _native.char_replace(a, old, new)
+
+char = _char_mod()
+
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:
     pass
