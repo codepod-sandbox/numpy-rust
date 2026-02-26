@@ -17,7 +17,7 @@ pub fn numpy_module_def(ctx: &vm::Context) -> &'static vm::builtins::PyModuleDef
 #[vm::pymodule]
 pub mod _numpy_native {
     use super::*;
-    use crate::py_array::PyNdArray;
+    use crate::py_array::{parse_optional_axis, PyNdArray, PyNdArrayIter};
     use vm::class::PyClassImpl;
     use vm::{PyObjectRef, PyResult, VirtualMachine};
 
@@ -25,6 +25,11 @@ pub mod _numpy_native {
     #[pyattr]
     fn ndarray(vm: &VirtualMachine) -> vm::builtins::PyTypeRef {
         PyNdArray::make_class(&vm.ctx)
+    }
+
+    #[pyattr]
+    fn ndarray_iterator(vm: &VirtualMachine) -> vm::builtins::PyTypeRef {
+        PyNdArrayIter::make_class(&vm.ctx)
     }
 
     // --- Creation functions ---
@@ -103,6 +108,138 @@ pub mod _numpy_native {
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         py_creation::py_concatenate(arrays, axis.unwrap_or(0), vm)
+    }
+
+    // --- Module-level math functions ---
+
+    #[pyfunction]
+    fn abs(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().abs())
+    }
+
+    #[pyfunction]
+    fn sqrt(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().sqrt())
+    }
+
+    #[pyfunction]
+    fn exp(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().exp())
+    }
+
+    #[pyfunction]
+    fn log(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().log())
+    }
+
+    #[pyfunction]
+    fn sin(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().sin())
+    }
+
+    #[pyfunction]
+    fn cos(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().cos())
+    }
+
+    #[pyfunction]
+    fn tan(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().tan())
+    }
+
+    #[pyfunction]
+    fn floor(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().floor())
+    }
+
+    #[pyfunction]
+    fn ceil(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().ceil())
+    }
+
+    #[pyfunction]
+    fn round(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().round())
+    }
+
+    // --- Module-level reduction functions ---
+
+    #[pyfunction]
+    fn sum(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .sum(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn mean(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .mean(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn min(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .min(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn max(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .max(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn std(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .std(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn var(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .var(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     // --- Submodules (registered as attributes, feature-gated) ---

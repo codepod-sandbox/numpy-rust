@@ -158,6 +158,133 @@ def test_sqrt():
     assert_close(b[2], 4.0)
 
 
+# --- Iteration ---
+
+def test_iter_1d():
+    a = np.array([1.0, 2.0, 3.0])
+    result = list(a)
+    assert_eq(len(result), 3)
+    assert_close(result[0], 1.0)
+    assert_close(result[1], 2.0)
+    assert_close(result[2], 3.0)
+
+def test_iter_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    rows = list(a)
+    assert_eq(len(rows), 2)
+    assert_eq(rows[0].shape, (2,))
+    assert_close(rows[0][0], 1.0)
+    assert_close(rows[1][1], 4.0)
+
+def test_iter_in_sum():
+    a = np.array([1.0, 2.0, 3.0])
+    assert_close(sum(a), 6.0)
+
+
+# --- Boolean operators ---
+
+def test_bitwise_and():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    mask = (a > 1.0) & (a < 5.0)
+    assert_eq(mask.dtype, "bool")
+    # mask should be [False, True, True, True, False]
+    assert_eq(mask[0], False)
+    assert_eq(mask[1], True)
+    assert_eq(mask[4], False)
+
+def test_bitwise_or():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    mask = (a < 2.0) | (a > 4.0)
+    assert_eq(mask.dtype, "bool")
+    # mask should be [True, False, False, False, True]
+    assert_eq(mask[0], True)
+    assert_eq(mask[1], False)
+    assert_eq(mask[4], True)
+
+def test_bitwise_not():
+    a = np.array([1.0, 2.0, 3.0])
+    mask = a > 1.0
+    inv = ~mask
+    assert_eq(inv.dtype, "bool")
+    assert_eq(inv[0], True)
+    assert_eq(inv[1], False)
+
+def test_compound_filter():
+    a = np.array([1.0, 5.0, 10.0, 15.0, 3.0])
+    result = a[(a > 2.0) & (a < 12.0)]
+    assert_eq(result.shape, (3,))
+    assert_close(result[0], 5.0)
+    assert_close(result[1], 10.0)
+    assert_close(result[2], 3.0)
+
+
+# --- Module-level math ---
+
+def test_np_abs():
+    a = np.array([-1.0, -2.0, 3.0])
+    b = np.abs(a)
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 2.0)
+    assert_close(b[2], 3.0)
+
+def test_np_sqrt():
+    a = np.array([4.0, 9.0, 16.0])
+    b = np.sqrt(a)
+    assert_close(b[0], 2.0)
+    assert_close(b[1], 3.0)
+
+def test_np_exp():
+    a = np.array([0.0, 1.0])
+    b = np.exp(a)
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 2.718281828, tol=1e-5)
+
+def test_np_log():
+    a = np.array([1.0, 2.718281828])
+    b = np.log(a)
+    assert_close(b[0], 0.0)
+    assert_close(b[1], 1.0, tol=1e-5)
+
+def test_np_sin():
+    a = np.array([0.0])
+    b = np.sin(a)
+    assert_close(b[0], 0.0)
+
+def test_np_cos():
+    a = np.array([0.0])
+    b = np.cos(a)
+    assert_close(b[0], 1.0)
+
+def test_np_sum():
+    a = np.array([1.0, 2.0, 3.0])
+    assert_close(np.sum(a), 6.0)
+
+def test_np_mean():
+    a = np.array([2.0, 4.0, 6.0])
+    assert_close(np.mean(a), 4.0)
+
+
+# --- Matmul operator ---
+
+def test_matmul_operator():
+    A = np.array([[1.0, 2.0], [3.0, 4.0]])
+    B = np.array([[5.0, 6.0], [7.0, 8.0]])
+    C = A @ B
+    # C = [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]] = [[19, 22], [43, 50]]
+    assert_close(C[0, 0], 19.0)
+    assert_close(C[0, 1], 22.0)
+    assert_close(C[1, 0], 43.0)
+    assert_close(C[1, 1], 50.0)
+
+def test_matmul_matvec():
+    A = np.array([[1.0, 2.0], [3.0, 4.0]])
+    v = np.array([1.0, 1.0])
+    result = A @ v
+    # [1+2, 3+4] = [3, 7]
+    assert_close(result[0], 3.0)
+    assert_close(result[1], 7.0)
+
+
 # --- float() / int() conversion ---
 
 def test_float_conversion():

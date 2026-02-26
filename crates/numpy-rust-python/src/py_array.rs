@@ -3,9 +3,9 @@ use std::sync::RwLock;
 use rustpython_vm as vm;
 use vm::atomic_func;
 use vm::builtins::{PyList, PySlice, PyStr, PyTuple};
-use vm::protocol::{PyMappingMethods, PyNumberMethods, PySequenceMethods};
-use vm::types::{AsMapping, AsNumber, AsSequence, Representable};
-use vm::{PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
+use vm::protocol::{PyIterReturn, PyMappingMethods, PyNumberMethods, PySequenceMethods};
+use vm::types::{AsMapping, AsNumber, AsSequence, IterNext, Iterable, Representable, SelfIter};
+use vm::{Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
 use numpy_rust_core::{DType, NdArray};
@@ -40,6 +40,43 @@ impl PyNdArray {
 
     pub fn to_py(self, vm: &VirtualMachine) -> PyObjectRef {
         self.into_pyobject(vm)
+    }
+}
+
+/// Iterator over the first axis of an ndarray.
+#[vm::pyclass(module = "numpy", name = "ndarray_iterator")]
+#[derive(Debug, PyPayload)]
+pub struct PyNdArrayIter {
+    array: PyRef<PyNdArray>,
+    index: std::sync::atomic::AtomicUsize,
+    length: usize,
+}
+
+#[vm::pyclass(flags(DISALLOW_INSTANTIATION), with(IterNext, Iterable))]
+impl PyNdArrayIter {}
+
+impl SelfIter for PyNdArrayIter {}
+
+impl IterNext for PyNdArrayIter {
+    fn next(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyIterReturn> {
+        let idx = zelf
+            .index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if idx >= zelf.length {
+            return Ok(PyIterReturn::StopIteration(None));
+        }
+        let data = zelf.array.data.read().unwrap();
+        if data.ndim() == 1 {
+            let s = data.get(&[idx]).map_err(|e| numpy_err(e, vm))?;
+            Ok(PyIterReturn::Return(scalar_to_py(s, vm)))
+        } else {
+            let result = data
+                .slice(&[SliceArg::Index(idx as isize)])
+                .map_err(|e| numpy_err(e, vm))?;
+            Ok(PyIterReturn::Return(
+                PyNdArray::from_core(result).into_pyobject(vm),
+            ))
+        }
     }
 }
 
@@ -135,7 +172,10 @@ pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usi
     }
 }
 
-#[vm::pyclass(flags(BASETYPE), with(AsNumber, AsMapping, AsSequence, Representable))]
+#[vm::pyclass(
+    flags(BASETYPE),
+    with(AsNumber, AsMapping, AsSequence, Representable, Iterable)
+)]
 impl PyNdArray {
     // --- Properties ---
 
@@ -332,6 +372,46 @@ impl PyNdArray {
     #[pymethod]
     fn sqrt(&self) -> PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().sqrt())
+    }
+
+    #[pymethod]
+    fn exp(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().exp())
+    }
+
+    #[pymethod]
+    fn log(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().log())
+    }
+
+    #[pymethod]
+    fn sin(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().sin())
+    }
+
+    #[pymethod]
+    fn cos(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().cos())
+    }
+
+    #[pymethod]
+    fn tan(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().tan())
+    }
+
+    #[pymethod]
+    fn floor(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().floor())
+    }
+
+    #[pymethod]
+    fn ceil(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().ceil())
+    }
+
+    #[pymethod]
+    fn round(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().round())
     }
 
     // --- Scalar conversion ---
@@ -636,6 +716,13 @@ fn number_neg(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     Ok(PyNdArray::from_core(a.data.read().unwrap().neg()).into_pyobject(vm))
 }
 
+fn number_invert(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
+    let a = num
+        .downcast_ref::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+    Ok(PyNdArray::from_core(a.data.read().unwrap().bitwise_not()).into_pyobject(vm))
+}
+
 fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .downcast_ref::<PyNdArray>()
@@ -709,6 +796,16 @@ impl PyNdArray {
         negative: Some(number_neg),
         int: Some(number_int),
         float: Some(number_float),
+        and: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.bitwise_and(y), vm)),
+        or: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.bitwise_or(y), vm)),
+        invert: Some(number_invert),
+        matrix_multiply: Some(|a, b, vm| {
+            let a_arr = obj_to_ndarray(a, vm)?;
+            let b_arr = obj_to_ndarray(b, vm)?;
+            numpy_rust_core::dot(&a_arr, &b_arr)
+                .map(|r| ndarray_or_scalar(r, vm))
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        }),
         ..PyNumberMethods::NOT_IMPLEMENTED
     };
 }
@@ -769,6 +866,24 @@ impl AsSequence for PyNdArray {
     }
 }
 
+impl Iterable for PyNdArray {
+    fn iter(zelf: PyRef<Self>, vm: &VirtualMachine) -> PyResult {
+        let data = zelf.data.read().unwrap();
+        let length = if data.ndim() == 0 {
+            return Err(vm.new_type_error("iteration over a 0-d array".to_owned()));
+        } else {
+            data.shape()[0]
+        };
+        drop(data);
+        Ok(PyNdArrayIter {
+            array: zelf,
+            index: std::sync::atomic::AtomicUsize::new(0),
+            length,
+        }
+        .into_pyobject(vm))
+    }
+}
+
 /// Convert a RustPython `PySlice` to a core `SliceArg`.
 fn py_slice_to_slice_arg(slice: &PySlice, vm: &VirtualMachine) -> PyResult<SliceArg> {
     let start = match &slice.start {
@@ -806,7 +921,7 @@ fn py_obj_to_slice_arg(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Slice
 }
 
 /// Parse an optional axis argument (None means reduce all).
-fn parse_optional_axis(
+pub fn parse_optional_axis(
     arg: vm::function::OptionalArg<PyObjectRef>,
     vm: &VirtualMachine,
 ) -> PyResult<Option<usize>> {

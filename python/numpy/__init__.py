@@ -349,6 +349,41 @@ def sqrt(x):
         return x.sqrt()
     return _math.sqrt(x)
 
+def exp(x):
+    if isinstance(x, ndarray):
+        return x.exp()
+    return _math.exp(x)
+
+def log(x):
+    if isinstance(x, ndarray):
+        return x.log()
+    return _math.log(x)
+
+def sin(x):
+    if isinstance(x, ndarray):
+        return x.sin()
+    return _math.sin(x)
+
+def cos(x):
+    if isinstance(x, ndarray):
+        return x.cos()
+    return _math.cos(x)
+
+def tan(x):
+    if isinstance(x, ndarray):
+        return x.tan()
+    return _math.tan(x)
+
+def floor(x):
+    if isinstance(x, ndarray):
+        return x.floor()
+    return _math.floor(x)
+
+def ceil(x):
+    if isinstance(x, ndarray):
+        return x.ceil()
+    return _math.ceil(x)
+
 def around(a, decimals=0, out=None):
     factor = 10 ** decimals
     if isinstance(a, ndarray):
