@@ -260,6 +260,22 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Einsum ---
+
+    #[pyfunction]
+    fn einsum(
+        subscripts: vm::PyRef<vm::builtins::PyStr>,
+        args: vm::function::PosArgs<vm::PyRef<PyNdArray>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let operands: Vec<numpy_rust_core::NdArray> =
+            args.iter().map(|a| a.inner().clone()).collect();
+        let refs: Vec<&numpy_rust_core::NdArray> = operands.iter().collect();
+        numpy_rust_core::einsum(subscripts.as_str(), &refs)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Sort / Argsort ---
 
     #[pyfunction]

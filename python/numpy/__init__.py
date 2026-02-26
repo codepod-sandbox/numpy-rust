@@ -940,7 +940,11 @@ def angle(a, deg=False):
     return 0
 
 def einsum(*operands, **kwargs):
-    raise NotImplementedError("einsum not implemented")
+    if len(operands) < 2:
+        raise ValueError("einsum requires at least a subscript string and one operand")
+    subscripts = operands[0]
+    arrays = operands[1:]
+    return _native.einsum(subscripts, *arrays)
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:

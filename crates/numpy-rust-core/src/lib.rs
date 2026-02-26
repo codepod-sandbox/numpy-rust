@@ -19,4 +19,5 @@ pub use creation::{arange, eye, full, linspace, ones_like, zeros_like};
 pub use dtype::DType;
 pub use error::{NumpyError, Result};
 pub use manipulation::{concatenate, hstack, stack, vstack};
+pub use ops::einsum::einsum;
 pub use utility::{dot, where_cond};

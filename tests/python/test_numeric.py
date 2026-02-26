@@ -612,6 +612,28 @@ def test_conj_module_func():
     assert_close(float(c[0]), 5.0)
 
 
+# --- Einsum ---
+
+def test_einsum_matmul():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    c = np.einsum("ij,jk->ik", a, b)
+    assert c.shape == (2, 2)
+    assert abs(float(c[0, 0]) - 19.0) < 1e-10
+
+def test_einsum_trace():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    t = np.einsum("ii->", a)
+    assert abs(float(t) - 5.0) < 1e-10
+
+def test_einsum_outer():
+    a = np.array([1.0, 2.0])
+    b = np.array([3.0, 4.0, 5.0])
+    c = np.einsum("i,j->ij", a, b)
+    assert c.shape == (2, 3)
+    assert abs(float(c[1, 2]) - 10.0) < 1e-10
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
