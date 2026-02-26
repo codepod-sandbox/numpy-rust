@@ -74,7 +74,9 @@ pub mod _numpy_native {
         b: vm::PyRef<PyNdArray>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        numpy_rust_core::dot(a.inner(), b.inner())
+        let a_inner = a.inner();
+        let b_inner = b.inner();
+        numpy_rust_core::dot(&a_inner, &b_inner)
             .map(|arr| py_array::ndarray_or_scalar(arr, vm))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
@@ -86,7 +88,10 @@ pub mod _numpy_native {
         y: vm::PyRef<PyNdArray>,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
-        numpy_rust_core::where_cond(cond.inner(), x.inner(), y.inner())
+        let cond_inner = cond.inner();
+        let x_inner = x.inner();
+        let y_inner = y.inner();
+        numpy_rust_core::where_cond(&cond_inner, &x_inner, &y_inner)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
     }

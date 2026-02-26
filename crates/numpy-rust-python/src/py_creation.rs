@@ -101,7 +101,9 @@ pub fn py_concatenate(
         .iter()
         .map(|item| item.clone().try_into_value::<PyRef<PyNdArray>>(vm))
         .collect::<PyResult<Vec<_>>>()?;
-    let core_refs: Vec<&NdArray> = py_arrays.iter().map(|a| a.inner()).collect();
+    let borrowed: Vec<std::sync::RwLockReadGuard<'_, NdArray>> =
+        py_arrays.iter().map(|a| a.inner()).collect();
+    let core_refs: Vec<&NdArray> = borrowed.iter().map(|r| &**r).collect();
     numpy_rust_core::concatenate(&core_refs, axis)
         .map(PyNdArray::from_core)
         .map_err(|e| vm.new_value_error(e.to_string()))

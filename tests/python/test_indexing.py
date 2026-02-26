@@ -192,12 +192,110 @@ def test_slice_2d_step():
     assert_close(b[(1, 1)], 10.0)
 
 
+# --- setitem ---
+
+def test_setitem_scalar():
+    a = np.array([1.0, 2.0, 3.0])
+    a[0] = 99.0
+    assert_close(a[0], 99.0)
+    assert_close(a[1], 2.0)
+    assert_close(a[2], 3.0)
+
+def test_setitem_negative():
+    a = np.array([1.0, 2.0, 3.0])
+    a[-1] = 99.0
+    assert_close(a[-1], 99.0)
+    assert_close(a[0], 1.0)
+
+def test_setitem_slice():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    a[1:3] = np.array([88.0, 77.0])
+    assert_close(a[0], 1.0)
+    assert_close(a[1], 88.0)
+    assert_close(a[2], 77.0)
+    assert_close(a[3], 4.0)
+
+def test_setitem_2d_scalar():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    a[(0, 1)] = 99.0
+    assert_close(a[(0, 1)], 99.0)
+    assert_close(a[(0, 0)], 1.0)
+
+def test_setitem_2d_row():
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    a[0] = np.array([10.0, 20.0, 30.0])
+    assert_close(a[(0, 0)], 10.0)
+    assert_close(a[(0, 1)], 20.0)
+    assert_close(a[(0, 2)], 30.0)
+    assert_close(a[(1, 0)], 4.0)
+
+
+# --- tolist ---
+
+def test_tolist_1d():
+    a = np.array([1.0, 2.0, 3.0])
+    result = a.tolist()
+    assert_eq(type(result).__name__, "list")
+    assert_eq(len(result), 3)
+    assert_close(result[0], 1.0)
+    assert_close(result[1], 2.0)
+    assert_close(result[2], 3.0)
+
+def test_tolist_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = a.tolist()
+    assert_eq(type(result).__name__, "list")
+    assert_eq(len(result), 2)
+    assert_eq(len(result[0]), 2)
+    assert_close(result[0][0], 1.0)
+    assert_close(result[0][1], 2.0)
+    assert_close(result[1][0], 3.0)
+    assert_close(result[1][1], 4.0)
+
+
+# --- item ---
+
+def test_item_scalar():
+    a = np.array([42.0])
+    assert_close(a.item(), 42.0)
+
+def test_item_error():
+    a = np.array([1.0, 2.0])
+    try:
+        a.item()
+        raise AssertionError("Expected error for non-scalar item()")
+    except Exception:
+        pass  # expected
+
+
 # --- repr/str ---
 
 def test_repr():
     a = np.zeros((2,))
     r = repr(a)
     assert_eq(type(r).__name__, "str")
+
+def test_repr_1d():
+    a = np.array([1.0, 2.0, 3.0])
+    r = repr(a)
+    # Should contain "array(" and actual values
+    assert_eq("array(" in r, True, f"repr was: {r}")
+    assert_eq("1." in r, True, f"repr was: {r}")
+    assert_eq("2." in r, True, f"repr was: {r}")
+    assert_eq("3." in r, True, f"repr was: {r}")
+
+def test_repr_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = repr(a)
+    assert_eq("array(" in r, True, f"repr was: {r}")
+    assert_eq("1." in r, True, f"repr was: {r}")
+    assert_eq("4." in r, True, f"repr was: {r}")
+
+def test_str_shows_values():
+    a = np.array([10.0, 20.0])
+    s = str(a)
+    assert_eq("10." in s, True, f"str was: {s}")
+    assert_eq("20." in s, True, f"str was: {s}")
 
 
 # Run all tests

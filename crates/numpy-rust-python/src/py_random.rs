@@ -70,7 +70,8 @@ mod _random {
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         let replace = replace.unwrap_or(true);
-        numpy_rust_core::random::choice(a.inner(), size, replace)
+        let a_inner = a.inner();
+        numpy_rust_core::random::choice(&a_inner, size, replace)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
     }

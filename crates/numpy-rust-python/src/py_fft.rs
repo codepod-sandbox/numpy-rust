@@ -13,28 +13,32 @@ mod _fft {
 
     #[pyfunction]
     fn fft(a: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        numpy_rust_core::fft::fft(a.inner())
+        let a_inner = a.inner();
+        numpy_rust_core::fft::fft(&a_inner)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
     }
 
     #[pyfunction]
     fn ifft(a: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        numpy_rust_core::fft::ifft(a.inner())
+        let a_inner = a.inner();
+        numpy_rust_core::fft::ifft(&a_inner)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
     }
 
     #[pyfunction]
     fn rfft(a: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        numpy_rust_core::fft::rfft(a.inner())
+        let a_inner = a.inner();
+        numpy_rust_core::fft::rfft(&a_inner)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
     }
 
     #[pyfunction]
     fn irfft(a: PyRef<PyNdArray>, n: usize, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        numpy_rust_core::fft::irfft(a.inner(), n)
+        let a_inner = a.inner();
+        numpy_rust_core::fft::irfft(&a_inner, n)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
     }

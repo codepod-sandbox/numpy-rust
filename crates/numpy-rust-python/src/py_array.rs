@@ -1,35 +1,41 @@
+use std::sync::RwLock;
+
 use rustpython_vm as vm;
 use vm::atomic_func;
 use vm::builtins::{PyList, PySlice, PyStr, PyTuple};
 use vm::protocol::{PyMappingMethods, PyNumberMethods, PySequenceMethods};
-use vm::types::{AsMapping, AsNumber, AsSequence};
+use vm::types::{AsMapping, AsNumber, AsSequence, Representable};
 use vm::{PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
 use numpy_rust_core::{DType, NdArray};
 
 /// Python-visible ndarray class wrapping the core NdArray.
+/// Uses `RwLock` for interior mutability so `__setitem__` can work
+/// through RustPython's `&self` method signatures.
 #[vm::pyclass(module = "numpy", name = "ndarray")]
 #[derive(Debug, PyPayload)]
 pub struct PyNdArray {
-    data: NdArray,
+    data: RwLock<NdArray>,
 }
 
 impl Clone for PyNdArray {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data: RwLock::new(self.data.read().unwrap().clone()),
         }
     }
 }
 
 impl PyNdArray {
     pub fn from_core(data: NdArray) -> Self {
-        Self { data }
+        Self {
+            data: RwLock::new(data),
+        }
     }
 
-    pub fn inner(&self) -> &NdArray {
-        &self.data
+    pub fn inner(&self) -> std::sync::RwLockReadGuard<'_, NdArray> {
+        self.data.read().unwrap()
     }
 
     pub fn to_py(self, vm: &VirtualMachine) -> PyObjectRef {
@@ -55,6 +61,31 @@ fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
         Scalar::Float64(v) => vm.ctx.new_float(v).into(),
         Scalar::Str(v) => vm.ctx.new_str(v).into(),
     }
+}
+
+/// Convert a Python object to a Scalar matching the target array dtype.
+fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyResult<Scalar> {
+    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
+        return Ok(match dtype {
+            DType::Float64 => Scalar::Float64(f),
+            DType::Float32 => Scalar::Float32(f as f32),
+            DType::Int64 => Scalar::Int64(f as i64),
+            DType::Int32 => Scalar::Int32(f as i32),
+            DType::Bool => Scalar::Bool(f != 0.0),
+            DType::Str => Scalar::Str(f.to_string()),
+        });
+    }
+    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(match dtype {
+            DType::Float64 => Scalar::Float64(i as f64),
+            DType::Float32 => Scalar::Float32(i as f32),
+            DType::Int64 => Scalar::Int64(i),
+            DType::Int32 => Scalar::Int32(i as i32),
+            DType::Bool => Scalar::Bool(i != 0),
+            DType::Str => Scalar::Str(i.to_string()),
+        });
+    }
+    Err(vm.new_type_error("cannot convert value to array scalar".to_owned()))
 }
 
 /// Convert an NdArray result to PyObjectRef, returning a scalar for 0-D arrays.
@@ -104,14 +135,14 @@ pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usi
     }
 }
 
-#[vm::pyclass(flags(BASETYPE), with(AsNumber, AsMapping, AsSequence))]
+#[vm::pyclass(flags(BASETYPE), with(AsNumber, AsMapping, AsSequence, Representable))]
 impl PyNdArray {
     // --- Properties ---
 
     #[pygetset]
     fn shape(&self, vm: &VirtualMachine) -> PyObjectRef {
-        let shape: Vec<PyObjectRef> = self
-            .data
+        let data = self.data.read().unwrap();
+        let shape: Vec<PyObjectRef> = data
             .shape()
             .iter()
             .map(|&s| vm.ctx.new_int(s).into())
@@ -121,22 +152,22 @@ impl PyNdArray {
 
     #[pygetset]
     fn ndim(&self) -> usize {
-        self.data.ndim()
+        self.data.read().unwrap().ndim()
     }
 
     #[pygetset]
     fn size(&self) -> usize {
-        self.data.size()
+        self.data.read().unwrap().size()
     }
 
     #[pygetset]
     fn dtype(&self) -> String {
-        self.data.dtype().to_string()
+        self.data.read().unwrap().dtype().to_string()
     }
 
     #[pygetset(name = "T")]
     fn transpose_prop(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.transpose())
+        PyNdArray::from_core(self.data.read().unwrap().transpose())
     }
 
     // --- Methods ---
@@ -145,6 +176,8 @@ impl PyNdArray {
     fn reshape(&self, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         self.data
+            .read()
+            .unwrap()
             .reshape(&sh)
             .map(PyNdArray::from_core)
             .map_err(|e| numpy_err(e, vm))
@@ -152,23 +185,23 @@ impl PyNdArray {
 
     #[pymethod]
     fn flatten(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.flatten())
+        PyNdArray::from_core(self.data.read().unwrap().flatten())
     }
 
     #[pymethod]
     fn ravel(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.ravel())
+        PyNdArray::from_core(self.data.read().unwrap().ravel())
     }
 
     #[pymethod]
     fn copy(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.copy())
+        PyNdArray::from_core(self.data.read().unwrap().copy())
     }
 
     #[pymethod]
     fn astype(&self, dtype: PyRef<PyStr>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let dt = parse_dtype(dtype.as_str(), vm)?;
-        Ok(PyNdArray::from_core(self.data.astype(dt)))
+        Ok(PyNdArray::from_core(self.data.read().unwrap().astype(dt)))
     }
 
     #[pymethod]
@@ -179,6 +212,8 @@ impl PyNdArray {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
+            .read()
+            .unwrap()
             .sum(ax)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
@@ -192,6 +227,8 @@ impl PyNdArray {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
+            .read()
+            .unwrap()
             .mean(ax)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
@@ -205,6 +242,8 @@ impl PyNdArray {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
+            .read()
+            .unwrap()
             .min(ax)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
@@ -218,6 +257,8 @@ impl PyNdArray {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
+            .read()
+            .unwrap()
             .max(ax)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
@@ -231,6 +272,8 @@ impl PyNdArray {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
+            .read()
+            .unwrap()
             .std(ax)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
@@ -244,6 +287,8 @@ impl PyNdArray {
     ) -> PyResult<PyObjectRef> {
         let ax = parse_optional_axis(axis, vm)?;
         self.data
+            .read()
+            .unwrap()
             .var(ax)
             .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
@@ -251,48 +296,56 @@ impl PyNdArray {
 
     #[pymethod]
     fn argmin(&self, vm: &VirtualMachine) -> PyResult<usize> {
-        self.data.argmin().map_err(|e| numpy_err(e, vm))
+        self.data
+            .read()
+            .unwrap()
+            .argmin()
+            .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
     fn argmax(&self, vm: &VirtualMachine) -> PyResult<usize> {
-        self.data.argmax().map_err(|e| numpy_err(e, vm))
+        self.data
+            .read()
+            .unwrap()
+            .argmax()
+            .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
     fn all(&self) -> bool {
-        self.data.all()
+        self.data.read().unwrap().all()
     }
 
     #[pymethod]
     fn any(&self) -> bool {
-        self.data.any()
+        self.data.read().unwrap().any()
     }
 
     // --- Unary math ---
 
     #[pymethod]
     fn abs(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.abs())
+        PyNdArray::from_core(self.data.read().unwrap().abs())
     }
 
     #[pymethod]
     fn sqrt(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.sqrt())
+        PyNdArray::from_core(self.data.read().unwrap().sqrt())
     }
 
     // --- Scalar conversion ---
 
     #[pymethod]
     fn float(&self, vm: &VirtualMachine) -> PyResult<f64> {
-        if self.data.size() != 1 {
+        let data = self.data.read().unwrap();
+        if data.size() != 1 {
             return Err(vm.new_type_error(
                 "only size-1 arrays can be converted to Python scalars".to_owned(),
             ));
         }
-        let s = self
-            .data
-            .get(&vec![0; self.data.ndim()])
+        let s = data
+            .get(&vec![0; data.ndim()])
             .map_err(|e| numpy_err(e, vm))?;
         Ok(match s {
             Scalar::Bool(v) => {
@@ -314,14 +367,14 @@ impl PyNdArray {
 
     #[pymethod]
     fn int(&self, vm: &VirtualMachine) -> PyResult<i64> {
-        if self.data.size() != 1 {
+        let data = self.data.read().unwrap();
+        if data.size() != 1 {
             return Err(vm.new_type_error(
                 "only size-1 arrays can be converted to Python scalars".to_owned(),
             ));
         }
-        let s = self
-            .data
-            .get(&vec![0; self.data.ndim()])
+        let s = data
+            .get(&vec![0; data.ndim()])
             .map_err(|e| numpy_err(e, vm))?;
         Ok(match s {
             Scalar::Bool(v) => {
@@ -343,14 +396,14 @@ impl PyNdArray {
 
     #[pymethod]
     fn bool(&self, vm: &VirtualMachine) -> PyResult<bool> {
-        if self.data.size() != 1 {
+        let data = self.data.read().unwrap();
+        if data.size() != 1 {
             return Err(vm.new_value_error(
                 "The truth value of an array with more than one element is ambiguous".to_owned(),
             ));
         }
-        let s = self
-            .data
-            .get(&vec![0; self.data.ndim()])
+        let s = data
+            .get(&vec![0; data.ndim()])
             .map_err(|e| numpy_err(e, vm))?;
         Ok(match s {
             Scalar::Bool(v) => v,
@@ -373,20 +426,21 @@ impl PyNdArray {
 
     #[pymethod]
     fn __getitem__(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let data = self.data.read().unwrap();
+
         // Integer index -> scalar or sub-array
         if let Ok(idx) = key.clone().try_into_value::<i64>(vm) {
             let resolved = if idx < 0 {
-                (self.data.shape()[0] as i64 + idx) as usize
+                (data.shape()[0] as i64 + idx) as usize
             } else {
                 idx as usize
             };
 
-            if self.data.ndim() == 1 {
-                let s = self.data.get(&[resolved]).map_err(|e| numpy_err(e, vm))?;
+            if data.ndim() == 1 {
+                let s = data.get(&[resolved]).map_err(|e| numpy_err(e, vm))?;
                 return Ok(scalar_to_py(s, vm));
             } else {
-                let result = self
-                    .data
+                let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
                     .map_err(|e| numpy_err(e, vm))?;
                 return Ok(PyNdArray::from_core(result).to_py(vm));
@@ -396,7 +450,7 @@ impl PyNdArray {
         // Single slice -> e.g. a[0:3], a[::2], a[:]
         if let Some(slice) = key.downcast_ref::<PySlice>() {
             let arg = py_slice_to_slice_arg(slice, vm)?;
-            let result = self.data.slice(&[arg]).map_err(|e| numpy_err(e, vm))?;
+            let result = data.slice(&[arg]).map_err(|e| numpy_err(e, vm))?;
             return Ok(PyNdArray::from_core(result).to_py(vm));
         }
 
@@ -408,12 +462,11 @@ impl PyNdArray {
                 .any(|item| item.downcast_ref::<PySlice>().is_some());
 
             if has_slice {
-                // Mixed integers and slices — use SliceArg for each element
                 let args: Vec<SliceArg> = items
                     .iter()
                     .map(|item| py_obj_to_slice_arg(item, vm))
                     .collect::<PyResult<Vec<_>>>()?;
-                let result = self.data.slice(&args).map_err(|e| numpy_err(e, vm))?;
+                let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
                 return Ok(ndarray_or_scalar(result, vm));
             }
 
@@ -423,36 +476,32 @@ impl PyNdArray {
                 let i: i64 = item.clone().try_into_value(vm)?;
                 indices.push(i as isize);
             }
-            if indices.len() == self.data.ndim() {
+            if indices.len() == data.ndim() {
+                let shape = data.shape();
                 let usize_indices: Vec<usize> = indices
                     .iter()
                     .enumerate()
                     .map(|(axis, &i)| {
                         if i < 0 {
-                            (self.data.shape()[axis] as isize + i) as usize
+                            (shape[axis] as isize + i) as usize
                         } else {
                             i as usize
                         }
                     })
                     .collect();
-                let s = self
-                    .data
-                    .get(&usize_indices)
-                    .map_err(|e| numpy_err(e, vm))?;
+                let s = data.get(&usize_indices).map_err(|e| numpy_err(e, vm))?;
                 return Ok(scalar_to_py(s, vm));
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
-            let result = self.data.slice(&args).map_err(|e| numpy_err(e, vm))?;
+            let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
             return Ok(PyNdArray::from_core(result).to_py(vm));
         }
 
         // Boolean mask
         if let Some(mask) = key.downcast_ref::<PyNdArray>() {
-            if mask.data.dtype() == DType::Bool {
-                let result = self
-                    .data
-                    .mask_select(&mask.data)
-                    .map_err(|e| numpy_err(e, vm))?;
+            let mask_data = mask.data.read().unwrap();
+            if mask_data.dtype() == DType::Bool {
+                let result = data.mask_select(&mask_data).map_err(|e| numpy_err(e, vm))?;
                 return Ok(PyNdArray::from_core(result).to_py(vm));
             }
         }
@@ -480,13 +529,14 @@ impl PyNdArray {
                 ))
             }
         };
+        let data = zelf.data.read().unwrap();
         let result = match op {
-            vm::types::PyComparisonOp::Eq => zelf.data.eq(&other),
-            vm::types::PyComparisonOp::Ne => zelf.data.ne(&other),
-            vm::types::PyComparisonOp::Lt => zelf.data.lt(&other),
-            vm::types::PyComparisonOp::Le => zelf.data.le(&other),
-            vm::types::PyComparisonOp::Gt => zelf.data.gt(&other),
-            vm::types::PyComparisonOp::Ge => zelf.data.ge(&other),
+            vm::types::PyComparisonOp::Eq => data.eq(&other),
+            vm::types::PyComparisonOp::Ne => data.ne(&other),
+            vm::types::PyComparisonOp::Lt => data.lt(&other),
+            vm::types::PyComparisonOp::Le => data.le(&other),
+            vm::types::PyComparisonOp::Gt => data.gt(&other),
+            vm::types::PyComparisonOp::Ge => data.ge(&other),
         };
         match result {
             Ok(arr) => Ok(vm::function::Either::A(
@@ -496,32 +546,49 @@ impl PyNdArray {
         }
     }
 
+    // --- New methods: tolist, item ---
+
+    #[pymethod]
+    fn tolist(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let data = self.data.read().unwrap();
+        Ok(ndarray_to_pylist(&data, vm))
+    }
+
+    #[pymethod]
+    fn item(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let data = self.data.read().unwrap();
+        if data.size() != 1 {
+            return Err(vm.new_value_error(
+                "can only convert an array of size 1 to a Python scalar".to_owned(),
+            ));
+        }
+        let s = data
+            .get(&vec![0; data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?;
+        Ok(scalar_to_py(s, vm))
+    }
+
     // --- String representations ---
 
     #[pymethod]
     fn __repr__(&self) -> String {
-        format!(
-            "ndarray(shape={:?}, dtype={})",
-            self.data.shape(),
-            self.data.dtype()
-        )
+        let data = self.data.read().unwrap();
+        format_array(&data, true)
     }
 
     #[pymethod]
     fn __str__(&self) -> String {
-        format!(
-            "ndarray(shape={:?}, dtype={})",
-            self.data.shape(),
-            self.data.dtype()
-        )
+        let data = self.data.read().unwrap();
+        format_array(&data, false)
     }
 
     #[pymethod]
     fn __len__(&self) -> usize {
-        if self.data.ndim() == 0 {
+        let data = self.data.read().unwrap();
+        if data.ndim() == 0 {
             0
         } else {
-            self.data.shape()[0]
+            data.shape()[0]
         }
     }
 }
@@ -529,7 +596,7 @@ impl PyNdArray {
 /// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).
 fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
     if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
-        return Ok(arr.data.clone());
+        return Ok(arr.data.read().unwrap().clone());
     }
     // Try float (PyFloat)
     if let Some(f) = obj.downcast_ref::<vm::builtins::PyFloat>() {
@@ -566,21 +633,21 @@ fn number_neg(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .downcast_ref::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-    Ok(PyNdArray::from_core(a.data.neg()).into_pyobject(vm))
+    Ok(PyNdArray::from_core(a.data.read().unwrap().neg()).into_pyobject(vm))
 }
 
 fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .downcast_ref::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-    if a.data.size() != 1 {
+    let data = a.data.read().unwrap();
+    if data.size() != 1 {
         return Err(
             vm.new_type_error("only size-1 arrays can be converted to Python scalars".to_owned())
         );
     }
-    let s = a
-        .data
-        .get(&vec![0; a.data.ndim()])
+    let s = data
+        .get(&vec![0; data.ndim()])
         .map_err(|e| numpy_err(e, vm))?;
     let v = match s {
         Scalar::Bool(v) => {
@@ -605,14 +672,14 @@ fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .downcast_ref::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-    if a.data.size() != 1 {
+    let data = a.data.read().unwrap();
+    if data.size() != 1 {
         return Err(
             vm.new_type_error("only size-1 arrays can be converted to Python scalars".to_owned())
         );
     }
-    let s = a
-        .data
-        .get(&vec![0; a.data.ndim()])
+    let s = data
+        .get(&vec![0; data.ndim()])
         .map_err(|e| numpy_err(e, vm))?;
     let v = match s {
         Scalar::Bool(v) => {
@@ -659,19 +726,31 @@ impl AsMapping for PyNdArray {
         static AS_MAPPING: Lazy<PyMappingMethods> = Lazy::new(|| PyMappingMethods {
             length: atomic_func!(|mapping, _vm| {
                 let zelf = PyNdArray::mapping_downcast(mapping);
-                Ok(if zelf.data.ndim() == 0 {
-                    0
-                } else {
-                    zelf.data.shape()[0]
-                })
+                let data = zelf.data.read().unwrap();
+                Ok(if data.ndim() == 0 { 0 } else { data.shape()[0] })
             }),
             subscript: atomic_func!(|mapping, needle: &vm::PyObject, vm| {
                 let zelf = PyNdArray::mapping_downcast(mapping);
                 zelf.__getitem__(needle.to_owned(), vm)
             }),
-            ..PyMappingMethods::NOT_IMPLEMENTED
+            ass_subscript: atomic_func!(|mapping, needle: &vm::PyObject, value, vm| {
+                let zelf = PyNdArray::mapping_downcast(mapping);
+                match value {
+                    Some(value) => setitem_impl(zelf, needle.to_owned(), value.to_owned(), vm),
+                    None => {
+                        Err(vm.new_type_error("ndarray does not support item deletion".to_owned()))
+                    }
+                }
+            }),
         });
         &AS_MAPPING
+    }
+}
+
+impl Representable for PyNdArray {
+    fn repr_str(zelf: &vm::Py<Self>, _vm: &VirtualMachine) -> PyResult<String> {
+        let data = zelf.data.read().unwrap();
+        Ok(format_array(&data, true))
     }
 }
 
@@ -681,11 +760,8 @@ impl AsSequence for PyNdArray {
         static AS_SEQUENCE: Lazy<PySequenceMethods> = Lazy::new(|| PySequenceMethods {
             length: atomic_func!(|seq, _vm| {
                 let zelf = PyNdArray::sequence_downcast(seq);
-                Ok(if zelf.data.ndim() == 0 {
-                    0
-                } else {
-                    zelf.data.shape()[0]
-                })
+                let data = zelf.data.read().unwrap();
+                Ok(if data.ndim() == 0 { 0 } else { data.shape()[0] })
             }),
             ..PySequenceMethods::NOT_IMPLEMENTED
         });
@@ -745,4 +821,289 @@ fn parse_optional_axis(
             }
         }
     }
+}
+
+// --- __setitem__ implementation ---
+
+fn setitem_impl(
+    zelf: &PyNdArray,
+    key: PyObjectRef,
+    value: PyObjectRef,
+    vm: &VirtualMachine,
+) -> PyResult<()> {
+    // Integer key → set single element or row
+    if let Ok(idx) = key.clone().try_into_value::<i64>(vm) {
+        let data = zelf.data.read().unwrap();
+        let shape = data.shape().to_vec();
+        let ndim = data.ndim();
+        let dtype = data.dtype();
+        drop(data);
+
+        let resolved = if idx < 0 {
+            (shape[0] as i64 + idx) as usize
+        } else {
+            idx as usize
+        };
+
+        if ndim == 1 {
+            // Scalar assignment: a[i] = value
+            let scalar = py_obj_to_scalar(&value, dtype, vm)?;
+            zelf.data
+                .write()
+                .unwrap()
+                .set(&[resolved], scalar)
+                .map_err(|e| numpy_err(e, vm))?;
+        } else {
+            // Row assignment: a[i] = array_value
+            let value_arr = obj_to_ndarray(&value, vm)?;
+            zelf.data
+                .write()
+                .unwrap()
+                .set_slice(&[SliceArg::Index(idx as isize)], &value_arr)
+                .map_err(|e| numpy_err(e, vm))?;
+        }
+        return Ok(());
+    }
+
+    // Slice key → a[start:stop:step] = values
+    if let Some(slice) = key.downcast_ref::<PySlice>() {
+        let arg = py_slice_to_slice_arg(slice, vm)?;
+        let value_arr = obj_to_ndarray(&value, vm)?;
+        zelf.data
+            .write()
+            .unwrap()
+            .set_slice(&[arg], &value_arr)
+            .map_err(|e| numpy_err(e, vm))?;
+        return Ok(());
+    }
+
+    // Tuple key → multi-dimensional assignment
+    if let Some(tuple) = key.downcast_ref::<PyTuple>() {
+        let items = tuple.as_slice();
+        let has_slice = items
+            .iter()
+            .any(|item| item.downcast_ref::<PySlice>().is_some());
+
+        if has_slice {
+            let args: Vec<SliceArg> = items
+                .iter()
+                .map(|item| py_obj_to_slice_arg(item, vm))
+                .collect::<PyResult<Vec<_>>>()?;
+            let value_arr = obj_to_ndarray(&value, vm)?;
+            zelf.data
+                .write()
+                .unwrap()
+                .set_slice(&args, &value_arr)
+                .map_err(|e| numpy_err(e, vm))?;
+            return Ok(());
+        }
+
+        // All integers → scalar assignment at multi-dim index
+        let mut indices = Vec::new();
+        for item in items {
+            let i: i64 = item.clone().try_into_value(vm)?;
+            indices.push(i as isize);
+        }
+        let data = zelf.data.read().unwrap();
+        let shape = data.shape().to_vec();
+        let dtype = data.dtype();
+        drop(data);
+
+        let usize_indices: Vec<usize> = indices
+            .iter()
+            .enumerate()
+            .map(|(axis, &i)| {
+                if i < 0 {
+                    (shape[axis] as isize + i) as usize
+                } else {
+                    i as usize
+                }
+            })
+            .collect();
+        let scalar = py_obj_to_scalar(&value, dtype, vm)?;
+        zelf.data
+            .write()
+            .unwrap()
+            .set(&usize_indices, scalar)
+            .map_err(|e| numpy_err(e, vm))?;
+        return Ok(());
+    }
+
+    // Boolean mask
+    if let Some(mask) = key.downcast_ref::<PyNdArray>() {
+        let mask_data = mask.data.read().unwrap();
+        if mask_data.dtype() == DType::Bool {
+            let value_arr = obj_to_ndarray(&value, vm)?;
+            let mask_owned = mask_data.clone();
+            drop(mask_data);
+            zelf.data
+                .write()
+                .unwrap()
+                .mask_set(&mask_owned, &value_arr)
+                .map_err(|e| numpy_err(e, vm))?;
+            return Ok(());
+        }
+    }
+
+    Err(vm.new_type_error("unsupported index type for assignment".to_owned()))
+}
+
+// --- tolist helper ---
+
+fn ndarray_to_pylist(data: &NdArray, vm: &VirtualMachine) -> PyObjectRef {
+    let ndim = data.ndim();
+    let shape = data.shape();
+
+    if ndim == 0 {
+        // 0-D: return plain scalar
+        let s = data.get(&[]).unwrap();
+        return scalar_to_py(s, vm);
+    }
+
+    if ndim == 1 {
+        // 1-D: build flat list
+        let items: Vec<PyObjectRef> = (0..shape[0])
+            .map(|i| {
+                let s = data.get(&[i]).unwrap();
+                scalar_to_py(s, vm)
+            })
+            .collect();
+        return PyList::from(items).into_ref(&vm.ctx).into();
+    }
+
+    // N-D: recursively slice along first axis
+    let items: Vec<PyObjectRef> = (0..shape[0])
+        .map(|i| {
+            let sub = data.slice(&[SliceArg::Index(i as isize)]).unwrap();
+            ndarray_to_pylist(&sub, vm)
+        })
+        .collect();
+    PyList::from(items).into_ref(&vm.ctx).into()
+}
+
+// --- repr/str formatting ---
+
+/// Format a scalar value for repr output.
+fn format_scalar(s: &Scalar) -> String {
+    match s {
+        Scalar::Bool(v) => {
+            if *v {
+                " True".to_owned()
+            } else {
+                "False".to_owned()
+            }
+        }
+        Scalar::Int32(v) => v.to_string(),
+        Scalar::Int64(v) => v.to_string(),
+        Scalar::Float32(v) => format_float(*v as f64),
+        Scalar::Float64(v) => format_float(*v),
+        Scalar::Str(v) => format!("'{v}'"),
+    }
+}
+
+/// Format a float like NumPy: use "." suffix for integer-valued floats.
+fn format_float(v: f64) -> String {
+    if v.is_nan() {
+        "nan".to_owned()
+    } else if v.is_infinite() {
+        if v > 0.0 {
+            "inf".to_owned()
+        } else {
+            "-inf".to_owned()
+        }
+    } else if v == v.trunc() && v.abs() < 1e16 {
+        // Integer-valued float: show as "5." not "5.0"
+        format!("{v:.1}")
+    } else {
+        // Use default float formatting, trim trailing zeros
+        let s = format!("{v}");
+        s
+    }
+}
+
+/// Max elements to show per axis edge before truncating.
+const EDGE_ITEMS: usize = 3;
+/// Threshold for total elements to trigger truncation.
+const THRESHOLD: usize = 1000;
+
+fn format_array(data: &NdArray, with_array_prefix: bool) -> String {
+    let ndim = data.ndim();
+
+    if ndim == 0 {
+        let s = data.get(&[]).unwrap();
+        let val = format_scalar(&s);
+        return if with_array_prefix {
+            format!("array({val})")
+        } else {
+            val
+        };
+    }
+
+    let body = format_array_inner(data, 0);
+
+    if with_array_prefix {
+        format!("array({body})")
+    } else {
+        body
+    }
+}
+
+fn format_array_inner(data: &NdArray, depth: usize) -> String {
+    let ndim = data.ndim();
+    let shape = data.shape();
+
+    if ndim == 1 {
+        // 1-D array
+        let n = shape[0];
+        let truncate = data.size() > THRESHOLD && n > EDGE_ITEMS * 2;
+
+        let mut parts = Vec::new();
+        if truncate {
+            for i in 0..EDGE_ITEMS {
+                let s = data.get(&[i]).unwrap();
+                parts.push(format_scalar(&s));
+            }
+            parts.push("...".to_owned());
+            for i in (n - EDGE_ITEMS)..n {
+                let s = data.get(&[i]).unwrap();
+                parts.push(format_scalar(&s));
+            }
+        } else {
+            for i in 0..n {
+                let s = data.get(&[i]).unwrap();
+                parts.push(format_scalar(&s));
+            }
+        }
+        return format!("[{}]", parts.join(", "));
+    }
+
+    // N-D: recurse along first axis
+    let n = shape[0];
+    let total_size = data.size();
+    let truncate = total_size > THRESHOLD && n > EDGE_ITEMS * 2;
+
+    let indent = " ".repeat(depth + 1);
+    let mut parts = Vec::new();
+
+    let indices: Vec<usize> = if truncate {
+        let mut v: Vec<usize> = (0..EDGE_ITEMS).collect();
+        v.push(usize::MAX); // sentinel for "..."
+        v.extend((n - EDGE_ITEMS)..n);
+        v
+    } else {
+        (0..n).collect()
+    };
+
+    for &i in &indices {
+        if i == usize::MAX {
+            parts.push(format!("{indent}..."));
+            continue;
+        }
+        let sub = data.slice(&[SliceArg::Index(i as isize)]).unwrap();
+        let sub_str = format_array_inner(&sub, depth + 1);
+        parts.push(format!("{indent}{sub_str}"));
+    }
+
+    let sep = if ndim == 2 { ",\n" } else { ",\n\n" };
+    format!("[{}]", parts.join(sep))
 }
