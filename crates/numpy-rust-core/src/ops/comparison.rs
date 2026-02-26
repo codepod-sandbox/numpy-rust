@@ -3,7 +3,7 @@ use ndarray::ArrayD;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
-use crate::error::Result;
+use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
 /// Prepare two NdArrays for comparison: promote types and broadcast shapes.
@@ -33,7 +33,8 @@ fn prepare_cmp(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
     Ok((a, b))
 }
 
-macro_rules! impl_cmp {
+/// Implement equality / inequality for complex (they support == and !=).
+macro_rules! impl_eq_cmp {
     ($name:ident, $op:tt) => {
         impl NdArray {
             pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
@@ -54,6 +55,12 @@ macro_rules! impl_cmp {
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => {
                         ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
                     }
+                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
+                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
                     (ArrayData::Str(a), ArrayData::Str(b)) => {
                         ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y)
                     }
@@ -65,16 +72,56 @@ macro_rules! impl_cmp {
     };
 }
 
-impl_cmp!(eq, ==);
-impl_cmp!(ne, !=);
-impl_cmp!(lt, <);
-impl_cmp!(gt, >);
-impl_cmp!(le, <=);
-impl_cmp!(ge, >=);
+impl_eq_cmp!(eq, ==);
+impl_eq_cmp!(ne, !=);
+
+/// Implement ordering comparisons that do NOT work on complex.
+macro_rules! impl_ord_cmp {
+    ($name:ident, $op:tt) => {
+        impl NdArray {
+            pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
+                if self.dtype().is_complex() || other.dtype().is_complex() {
+                    return Err(NumpyError::TypeError(
+                        concat!(stringify!($name), " not supported for complex arrays").into(),
+                    ));
+                }
+                let (a, b) = prepare_cmp(self, other)?;
+                let result: ArrayD<bool> = match (a, b) {
+                    (ArrayData::Bool(a), ArrayData::Bool(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
+                    (ArrayData::Int32(a), ArrayData::Int32(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
+                    (ArrayData::Int64(a), ArrayData::Int64(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
+                    (ArrayData::Float32(a), ArrayData::Float32(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
+                    (ArrayData::Float64(a), ArrayData::Float64(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                    }
+                    (ArrayData::Str(a), ArrayData::Str(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y)
+                    }
+                    _ => unreachable!("promotion ensures matching types (complex rejected above)"),
+                };
+                Ok(NdArray::from_data(ArrayData::Bool(result)))
+            }
+        }
+    };
+}
+
+impl_ord_cmp!(lt, <);
+impl_ord_cmp!(gt, >);
+impl_ord_cmp!(le, <=);
+impl_ord_cmp!(ge, >=);
 
 #[cfg(test)]
 mod tests {
     use crate::{DType, NdArray};
+    use num_complex::Complex;
 
     #[test]
     fn test_eq_same_shape() {
@@ -131,5 +178,27 @@ mod tests {
         let a = NdArray::zeros(&[3], DType::Float64);
         let b = NdArray::zeros(&[4], DType::Float64);
         assert!(a.eq(&b).is_err());
+    }
+
+    #[test]
+    fn test_eq_complex() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0), Complex::new(3.0, 4.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0), Complex::new(0.0, 0.0)]);
+        let c = a.eq(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
+    }
+
+    #[test]
+    fn test_lt_complex_fails() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(3.0f64, 4.0)]);
+        assert!(a.lt(&b).is_err());
+    }
+
+    #[test]
+    fn test_gt_complex_fails() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(3.0f64, 4.0)]);
+        assert!(a.gt(&b).is_err());
     }
 }

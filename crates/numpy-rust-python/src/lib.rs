@@ -157,18 +157,27 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
-    fn floor(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
-        PyNdArray::from_core(a.inner().floor())
+    fn floor(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .floor()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     #[pyfunction]
-    fn ceil(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
-        PyNdArray::from_core(a.inner().ceil())
+    fn ceil(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .ceil()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     #[pyfunction]
-    fn round(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
-        PyNdArray::from_core(a.inner().round())
+    fn round(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .round()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     // --- Module-level reduction functions ---

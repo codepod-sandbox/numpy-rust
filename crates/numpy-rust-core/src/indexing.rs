@@ -1,4 +1,5 @@
 use ndarray::{IxDyn, SliceInfoElem};
+use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
@@ -27,6 +28,8 @@ pub enum Scalar {
     Int64(i64),
     Float32(f32),
     Float64(f64),
+    Complex64(Complex<f32>),
+    Complex128(Complex<f64>),
     Str(String),
 }
 
@@ -54,6 +57,14 @@ impl NdArray {
             ArrayData::Float64(a) => a
                 .get(idx)
                 .map(|&v| Scalar::Float64(v))
+                .ok_or_else(|| NumpyError::ValueError("index out of bounds".into())),
+            ArrayData::Complex64(a) => a
+                .get(idx)
+                .map(|&v| Scalar::Complex64(v))
+                .ok_or_else(|| NumpyError::ValueError("index out of bounds".into())),
+            ArrayData::Complex128(a) => a
+                .get(idx)
+                .map(|&v| Scalar::Complex128(v))
                 .ok_or_else(|| NumpyError::ValueError("index out of bounds".into())),
             ArrayData::Str(a) => a
                 .get(idx)
@@ -118,6 +129,8 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(do_slice!(a)),
             ArrayData::Float32(a) => ArrayData::Float32(do_slice!(a)),
             ArrayData::Float64(a) => ArrayData::Float64(do_slice!(a)),
+            ArrayData::Complex64(a) => ArrayData::Complex64(do_slice!(a)),
+            ArrayData::Complex128(a) => ArrayData::Complex128(do_slice!(a)),
             ArrayData::Str(a) => ArrayData::Str(do_slice!(a)),
         };
 
@@ -150,6 +163,8 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(do_select!(a)),
             ArrayData::Float32(a) => ArrayData::Float32(do_select!(a)),
             ArrayData::Float64(a) => ArrayData::Float64(do_select!(a)),
+            ArrayData::Complex64(a) => ArrayData::Complex64(do_select!(a)),
+            ArrayData::Complex128(a) => ArrayData::Complex128(do_select!(a)),
             ArrayData::Str(a) => ArrayData::Str(do_select!(a)),
         };
 
@@ -189,6 +204,8 @@ impl NdArray {
             (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_set!(dst, src),
             (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_set!(dst, src),
             (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_set!(dst, src),
+            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_set!(dst, src),
+            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_set!(dst, src),
             (ArrayData::Str(dst), ArrayData::Str(src)) => do_set!(dst, src),
             _ => {
                 return Err(NumpyError::TypeError(
@@ -233,6 +250,18 @@ impl NdArray {
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
             }
+            (ArrayData::Complex64(a), Scalar::Complex64(v)) => {
+                let elem = a
+                    .get_mut(idx)
+                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
+                *elem = v;
+            }
+            (ArrayData::Complex128(a), Scalar::Complex128(v)) => {
+                let elem = a
+                    .get_mut(idx)
+                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
+                *elem = v;
+            }
             // Allow cross-type numeric assignment (cast to target dtype)
             (ArrayData::Float64(a), Scalar::Int64(v)) => {
                 let elem = a
@@ -257,6 +286,18 @@ impl NdArray {
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v as i64;
+            }
+            (ArrayData::Complex128(a), Scalar::Float64(v)) => {
+                let elem = a
+                    .get_mut(idx)
+                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
+                *elem = Complex::new(v, 0.0);
+            }
+            (ArrayData::Complex128(a), Scalar::Complex64(v)) => {
+                let elem = a
+                    .get_mut(idx)
+                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
+                *elem = Complex::new(v.re as f64, v.im as f64);
             }
             (ArrayData::Str(a), Scalar::Str(v)) => {
                 let elem = a
@@ -332,11 +373,20 @@ impl NdArray {
             (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_set_slice!(dst, src),
             (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_set_slice!(dst, src),
             (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_set_slice!(dst, src),
+            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_set_slice!(dst, src),
+            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_set_slice!(dst, src),
             (ArrayData::Str(dst), ArrayData::Str(src)) => do_set_slice!(dst, src),
             // Allow float64 array to accept cast from other numeric types
             (ArrayData::Float64(dst), _) => {
                 let cast = values.astype(crate::DType::Float64);
                 if let ArrayData::Float64(src) = &cast.data {
+                    do_set_slice!(dst, src);
+                }
+            }
+            // Allow complex128 array to accept cast from other numeric types
+            (ArrayData::Complex128(dst), _) => {
+                let cast = values.astype(crate::DType::Complex128);
+                if let ArrayData::Complex128(src) = &cast.data {
                     do_set_slice!(dst, src);
                 }
             }
@@ -399,6 +449,8 @@ impl NdArray {
             (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_mask_set!(dst, src),
             (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_mask_set!(dst, src),
             (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_mask_set!(dst, src),
+            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_mask_set!(dst, src),
+            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_mask_set!(dst, src),
             (ArrayData::Float64(dst), _) => {
                 let cast = values.astype(crate::DType::Float64);
                 if let ArrayData::Float64(src) = &cast.data {
@@ -456,6 +508,8 @@ impl NdArray {
             ArrayData::Int64(a) => do_mask!(a, Int64),
             ArrayData::Float32(a) => do_mask!(a, Float32),
             ArrayData::Float64(a) => do_mask!(a, Float64),
+            ArrayData::Complex64(a) => do_mask!(a, Complex64),
+            ArrayData::Complex128(a) => do_mask!(a, Complex128),
             ArrayData::Str(a) => {
                 let flat: Vec<_> = a.iter().cloned().collect();
                 let selected: Vec<_> = flat

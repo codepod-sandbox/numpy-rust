@@ -1,4 +1,5 @@
 use ndarray::{ArrayD, IxDyn};
+use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
@@ -43,9 +44,9 @@ pub fn linspace(start: f64, stop: f64, num: usize) -> NdArray {
 
 /// Create a 2-D array with ones on the k-th diagonal and zeros elsewhere.
 ///
-/// - `n` — number of rows
-/// - `m` — number of columns (defaults to `n` when `None`)
-/// - `k` — diagonal offset: 0 = main, positive = superdiagonal, negative = subdiagonal
+/// - `n` -- number of rows
+/// - `m` -- number of columns (defaults to `n` when `None`)
+/// - `k` -- diagonal offset: 0 = main, positive = superdiagonal, negative = subdiagonal
 pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> NdArray {
     if dtype.is_string() {
         panic!("eye() not supported for string dtype");
@@ -93,6 +94,22 @@ pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> NdArray {
                 }
             }
         }
+        ArrayData::Complex64(a) => {
+            for i in 0..n {
+                let j = i as isize + k;
+                if j >= 0 && (j as usize) < cols {
+                    a[[i, j as usize]] = Complex::new(1.0f32, 0.0);
+                }
+            }
+        }
+        ArrayData::Complex128(a) => {
+            for i in 0..n {
+                let j = i as isize + k;
+                if j >= 0 && (j as usize) < cols {
+                    a[[i, j as usize]] = Complex::new(1.0f64, 0.0);
+                }
+            }
+        }
         ArrayData::Str(_) => unreachable!(),
     }
     arr
@@ -107,6 +124,10 @@ pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
         DType::Int64 => ArrayData::Int64(ArrayD::from_elem(sh, value as i64)),
         DType::Float32 => ArrayData::Float32(ArrayD::from_elem(sh, value as f32)),
         DType::Float64 => ArrayData::Float64(ArrayD::from_elem(sh, value)),
+        DType::Complex64 => {
+            ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(value as f32, 0.0)))
+        }
+        DType::Complex128 => ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(value, 0.0))),
         DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string())),
     };
     NdArray::from_data(data)
@@ -210,6 +231,13 @@ mod tests {
     }
 
     #[test]
+    fn test_eye_complex() {
+        let a = eye(3, None, 0, DType::Complex128);
+        assert_eq!(a.shape(), &[3, 3]);
+        assert_eq!(a.dtype(), DType::Complex128);
+    }
+
+    #[test]
     fn test_full() {
         let a = full(&[2, 3], 7.0, DType::Float64);
         assert_eq!(a.shape(), &[2, 3]);
@@ -221,6 +249,13 @@ mod tests {
         let a = full(&[4], 5.0, DType::Int32);
         assert_eq!(a.shape(), &[4]);
         assert_eq!(a.dtype(), DType::Int32);
+    }
+
+    #[test]
+    fn test_full_complex() {
+        let a = full(&[3], 2.0, DType::Complex128);
+        assert_eq!(a.shape(), &[3]);
+        assert_eq!(a.dtype(), DType::Complex128);
     }
 
     #[test]

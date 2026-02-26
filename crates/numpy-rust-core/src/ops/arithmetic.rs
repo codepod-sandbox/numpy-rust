@@ -40,6 +40,8 @@ macro_rules! impl_binary_op {
                     (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
                     (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(a $op b),
                     (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(a $op b),
+                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => ArrayData::Complex64(a $op b),
+                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ArrayData::Complex128(a $op b),
                     _ => unreachable!("promotion ensures matching types"),
                 };
                 Ok(NdArray::from_data(data))
@@ -56,11 +58,28 @@ impl_binary_op!(Div, div, /);
 impl NdArray {
     /// Element-wise power: self ** rhs.
     /// Integer types are cast to Float64 first (matching NumPy behavior).
+    /// Complex types use Complex::powc.
     pub fn pow(&self, rhs: &NdArray) -> Result<NdArray> {
         if self.dtype().is_string() || rhs.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "power not supported for string arrays".into(),
             ));
+        }
+        // If either is complex, work in complex domain
+        if self.dtype().is_complex() || rhs.dtype().is_complex() {
+            let lhs_c = self.astype(DType::Complex128);
+            let rhs_c = rhs.astype(DType::Complex128);
+            let (a, b) = prepare_binary(&lhs_c, &rhs_c)?;
+            return match (a, b) {
+                (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
+                    let mut out = a.clone();
+                    Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                        *o = o.powc(r);
+                    });
+                    Ok(NdArray::from_data(ArrayData::Complex128(out)))
+                }
+                _ => unreachable!("both cast to Complex128"),
+            };
         }
         // Cast both to Float64 for uniform powf handling
         let lhs_f = self.astype(DType::Float64);
@@ -80,6 +99,11 @@ impl NdArray {
 
     /// Element-wise floor division: self // rhs (toward -inf, matching NumPy).
     pub fn floor_div(&self, rhs: &NdArray) -> Result<NdArray> {
+        if self.dtype().is_complex() || rhs.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "floor division not supported for complex arrays".into(),
+            ));
+        }
         let (a, b) = prepare_binary(self, rhs)?;
         let data = match (a, b) {
             (ArrayData::Float64(a), ArrayData::Float64(b)) => {
@@ -121,6 +145,11 @@ impl NdArray {
 
     /// Element-wise remainder: self % rhs (sign of divisor, matching NumPy).
     pub fn remainder(&self, rhs: &NdArray) -> Result<NdArray> {
+        if self.dtype().is_complex() || rhs.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "remainder not supported for complex arrays".into(),
+            ));
+        }
         let (a, b) = prepare_binary(self, rhs)?;
         let data = match (a, b) {
             (ArrayData::Float64(a), ArrayData::Float64(b)) => {
@@ -170,6 +199,7 @@ impl NdArray {
 #[cfg(test)]
 mod tests {
     use crate::{DType, NdArray};
+    use num_complex::Complex;
 
     #[test]
     fn test_add_same_shape() {
@@ -239,5 +269,36 @@ mod tests {
         let b = NdArray::full_f64(&[], 2.0); // scalar
         let c = (&a * &b).unwrap();
         assert_eq!(c.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_add_complex() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0), Complex::new(3.0, 4.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(5.0f64, 6.0), Complex::new(7.0, 8.0)]);
+        let c = (&a + &b).unwrap();
+        assert_eq!(c.dtype(), DType::Complex128);
+        assert_eq!(c.shape(), &[2]);
+    }
+
+    #[test]
+    fn test_mul_complex() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 1.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(1.0f64, -1.0)]);
+        let c = (&a * &b).unwrap();
+        assert_eq!(c.dtype(), DType::Complex128);
+    }
+
+    #[test]
+    fn test_floor_div_complex_fails() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(1.0f64, 0.0)]);
+        assert!(a.floor_div(&b).is_err());
+    }
+
+    #[test]
+    fn test_remainder_complex_fails() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(1.0f64, 0.0)]);
+        assert!(a.remainder(&b).is_err());
     }
 }

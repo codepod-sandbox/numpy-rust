@@ -6,23 +6,44 @@ pub enum DType {
     Int64,
     Float32,
     Float64,
+    Complex64,  // Complex<f32>
+    Complex128, // Complex<f64>
     Str,
 }
 
 impl DType {
     /// Returns the common type that both `self` and `other` can be promoted to,
-    /// following NumPy's type promotion rules (simplified for 5 types).
+    /// following NumPy's type promotion rules.
     ///
     /// Promotion lattice:
     ///   Bool -> Int32 -> Int64 -> Float64
     ///                    Float32 -> Float64
     ///   i64 + f32 -> f64 (to avoid precision loss)
+    ///   Complex64 / Complex128 follow float promotion lifted to complex
     pub fn promote(self, other: DType) -> DType {
         if self == other {
             return self;
         }
         if self == DType::Str || other == DType::Str {
             panic!("cannot promote string dtype with numeric dtype");
+        }
+        // If either is complex, result is complex
+        if self.is_complex() || other.is_complex() {
+            if self.is_complex() && other.is_complex() {
+                return if self.rank() >= other.rank() {
+                    self
+                } else {
+                    other
+                };
+            }
+            let real_type = if self.is_complex() { other } else { self };
+            let complex_type = if self.is_complex() { self } else { other };
+            return match (complex_type, real_type) {
+                (DType::Complex64, DType::Float64 | DType::Int64) => DType::Complex128,
+                (DType::Complex128, _) => DType::Complex128,
+                (DType::Complex64, _) => DType::Complex64,
+                _ => DType::Complex128,
+            };
         }
         let (hi, lo) = if self.rank() >= other.rank() {
             (self, other)
@@ -46,6 +67,8 @@ impl DType {
             DType::Int64 => 2,
             DType::Float32 => 3,
             DType::Float64 => 4,
+            DType::Complex64 => 5,
+            DType::Complex128 => 6,
             DType::Str => 255,
         }
     }
@@ -55,7 +78,8 @@ impl DType {
         match self {
             DType::Bool => 1,
             DType::Int32 | DType::Float32 => 4,
-            DType::Int64 | DType::Float64 => 8,
+            DType::Int64 | DType::Float64 | DType::Complex64 => 8,
+            DType::Complex128 => 16,
             DType::Str => 0, // variable-length
         }
     }
@@ -68,6 +92,11 @@ impl DType {
     /// Returns true if this is an integer type.
     pub fn is_integer(self) -> bool {
         matches!(self, DType::Int32 | DType::Int64)
+    }
+
+    /// Returns true if this is a complex type.
+    pub fn is_complex(self) -> bool {
+        matches!(self, DType::Complex64 | DType::Complex128)
     }
 
     /// Returns true if this is a string type.
@@ -84,6 +113,8 @@ impl std::fmt::Display for DType {
             DType::Int64 => write!(f, "int64"),
             DType::Float32 => write!(f, "float32"),
             DType::Float64 => write!(f, "float64"),
+            DType::Complex64 => write!(f, "complex64"),
+            DType::Complex128 => write!(f, "complex128"),
             DType::Str => write!(f, "str"),
         }
     }
@@ -97,6 +128,11 @@ mod tests {
     fn test_promote_same_type() {
         assert_eq!(DType::Float64.promote(DType::Float64), DType::Float64);
         assert_eq!(DType::Int32.promote(DType::Int32), DType::Int32);
+        assert_eq!(DType::Complex64.promote(DType::Complex64), DType::Complex64);
+        assert_eq!(
+            DType::Complex128.promote(DType::Complex128),
+            DType::Complex128
+        );
     }
 
     #[test]
@@ -129,6 +165,9 @@ mod tests {
             (DType::Bool, DType::Int64),
             (DType::Float32, DType::Int32),
             (DType::Int64, DType::Float32),
+            (DType::Float32, DType::Complex64),
+            (DType::Float64, DType::Complex128),
+            (DType::Int32, DType::Complex64),
         ];
         for (a, b) in pairs {
             assert_eq!(
@@ -140,10 +179,33 @@ mod tests {
     }
 
     #[test]
+    fn test_promote_complex() {
+        // Float32 + Complex64 -> Complex64
+        assert_eq!(DType::Float32.promote(DType::Complex64), DType::Complex64);
+        // Float64 + Complex64 -> Complex128
+        assert_eq!(DType::Float64.promote(DType::Complex64), DType::Complex128);
+        // Int64 + Complex64 -> Complex128
+        assert_eq!(DType::Int64.promote(DType::Complex64), DType::Complex128);
+        // Int32 + Complex64 -> Complex64
+        assert_eq!(DType::Int32.promote(DType::Complex64), DType::Complex64);
+        // Complex64 + Complex128 -> Complex128
+        assert_eq!(
+            DType::Complex64.promote(DType::Complex128),
+            DType::Complex128
+        );
+        // Bool + Complex64 -> Complex64
+        assert_eq!(DType::Bool.promote(DType::Complex64), DType::Complex64);
+        // Float64 + Complex128 -> Complex128
+        assert_eq!(DType::Float64.promote(DType::Complex128), DType::Complex128);
+    }
+
+    #[test]
     fn test_itemsize() {
         assert_eq!(DType::Bool.itemsize(), 1);
         assert_eq!(DType::Int32.itemsize(), 4);
         assert_eq!(DType::Float64.itemsize(), 8);
+        assert_eq!(DType::Complex64.itemsize(), 8);
+        assert_eq!(DType::Complex128.itemsize(), 16);
     }
 
     #[test]
@@ -152,11 +214,23 @@ mod tests {
         assert!(DType::Float64.is_float());
         assert!(!DType::Int32.is_float());
         assert!(!DType::Bool.is_float());
+        assert!(!DType::Complex64.is_float());
+        assert!(!DType::Complex128.is_float());
+    }
+
+    #[test]
+    fn test_is_complex() {
+        assert!(DType::Complex64.is_complex());
+        assert!(DType::Complex128.is_complex());
+        assert!(!DType::Float64.is_complex());
+        assert!(!DType::Int32.is_complex());
     }
 
     #[test]
     fn test_display() {
         assert_eq!(format!("{}", DType::Float64), "float64");
         assert_eq!(format!("{}", DType::Bool), "bool");
+        assert_eq!(format!("{}", DType::Complex64), "complex64");
+        assert_eq!(format!("{}", DType::Complex128), "complex128");
     }
 }

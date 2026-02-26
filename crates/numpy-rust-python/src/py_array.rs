@@ -96,6 +96,20 @@ fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
         Scalar::Int64(v) => vm.ctx.new_int(v).into(),
         Scalar::Float32(v) => vm.ctx.new_float(v as f64).into(),
         Scalar::Float64(v) => vm.ctx.new_float(v).into(),
+        Scalar::Complex64(v) => {
+            let tup = vm.ctx.new_tuple(vec![
+                vm.ctx.new_float(v.re as f64).into(),
+                vm.ctx.new_float(v.im as f64).into(),
+            ]);
+            tup.into()
+        }
+        Scalar::Complex128(v) => {
+            let tup = vm.ctx.new_tuple(vec![
+                vm.ctx.new_float(v.re).into(),
+                vm.ctx.new_float(v.im).into(),
+            ]);
+            tup.into()
+        }
         Scalar::Str(v) => vm.ctx.new_str(v).into(),
     }
 }
@@ -109,6 +123,8 @@ fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyR
             DType::Int64 => Scalar::Int64(f as i64),
             DType::Int32 => Scalar::Int32(f as i32),
             DType::Bool => Scalar::Bool(f != 0.0),
+            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(f as f32, 0.0)),
+            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(f, 0.0)),
             DType::Str => Scalar::Str(f.to_string()),
         });
     }
@@ -119,6 +135,8 @@ fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyR
             DType::Int64 => Scalar::Int64(i),
             DType::Int32 => Scalar::Int32(i as i32),
             DType::Bool => Scalar::Bool(i != 0),
+            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(i as f32, 0.0)),
+            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(i as f64, 0.0)),
             DType::Str => Scalar::Str(i.to_string()),
         });
     }
@@ -453,18 +471,36 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn floor(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.read().unwrap().floor())
+    fn floor(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let result = self
+            .data
+            .read()
+            .unwrap()
+            .floor()
+            .map_err(|e| numpy_err(e, vm))?;
+        Ok(PyNdArray::from_core(result))
     }
 
     #[pymethod]
-    fn ceil(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.read().unwrap().ceil())
+    fn ceil(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let result = self
+            .data
+            .read()
+            .unwrap()
+            .ceil()
+            .map_err(|e| numpy_err(e, vm))?;
+        Ok(PyNdArray::from_core(result))
     }
 
     #[pymethod]
-    fn round(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.read().unwrap().round())
+    fn round(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let result = self
+            .data
+            .read()
+            .unwrap()
+            .round()
+            .map_err(|e| numpy_err(e, vm))?;
+        Ok(PyNdArray::from_core(result))
     }
 
     // --- Scalar conversion ---
@@ -492,6 +528,8 @@ impl PyNdArray {
             Scalar::Int64(v) => v as f64,
             Scalar::Float32(v) => v as f64,
             Scalar::Float64(v) => v,
+            Scalar::Complex64(v) => v.re as f64,
+            Scalar::Complex128(v) => v.re,
             Scalar::Str(v) => v.parse::<f64>().map_err(|_| {
                 vm.new_value_error(format!("could not convert string to float: '{v}'"))
             })?,
@@ -521,6 +559,8 @@ impl PyNdArray {
             Scalar::Int64(v) => v,
             Scalar::Float32(v) => v as i64,
             Scalar::Float64(v) => v as i64,
+            Scalar::Complex64(v) => v.re as i64,
+            Scalar::Complex128(v) => v.re as i64,
             Scalar::Str(v) => v.parse::<i64>().map_err(|_| {
                 vm.new_value_error(format!("could not convert string to int: '{v}'"))
             })?,
@@ -544,6 +584,8 @@ impl PyNdArray {
             Scalar::Int64(v) => v != 0,
             Scalar::Float32(v) => v != 0.0,
             Scalar::Float64(v) => v != 0.0,
+            Scalar::Complex64(v) => v.re != 0.0 || v.im != 0.0,
+            Scalar::Complex128(v) => v.re != 0.0 || v.im != 0.0,
             Scalar::Str(v) => !v.is_empty(),
         })
     }
@@ -831,7 +873,13 @@ fn number_invert(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     let a = num
         .downcast_ref::<PyNdArray>()
         .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-    Ok(PyNdArray::from_core(a.data.read().unwrap().bitwise_not()).into_pyobject(vm))
+    let result = a
+        .data
+        .read()
+        .unwrap()
+        .bitwise_not()
+        .map_err(|e| numpy_err(e, vm))?;
+    Ok(PyNdArray::from_core(result).into_pyobject(vm))
 }
 
 fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
@@ -859,6 +907,8 @@ fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
         Scalar::Int64(v) => v as f64,
         Scalar::Float32(v) => v as f64,
         Scalar::Float64(v) => v,
+        Scalar::Complex64(v) => v.re as f64,
+        Scalar::Complex128(v) => v.re,
         Scalar::Str(v) => v
             .parse::<f64>()
             .map_err(|_| vm.new_value_error(format!("could not convert string to float: '{v}'")))?,
@@ -891,6 +941,8 @@ fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
         Scalar::Int64(v) => v,
         Scalar::Float32(v) => v as i64,
         Scalar::Float64(v) => v as i64,
+        Scalar::Complex64(v) => v.re as i64,
+        Scalar::Complex128(v) => v.re as i64,
         Scalar::Str(v) => v
             .parse::<i64>()
             .map_err(|_| vm.new_value_error(format!("could not convert string to int: '{v}'")))?,
@@ -1349,6 +1401,8 @@ fn format_scalar(s: &Scalar) -> String {
         Scalar::Int64(v) => v.to_string(),
         Scalar::Float32(v) => format_float(*v as f64),
         Scalar::Float64(v) => format_float(*v),
+        Scalar::Complex64(v) => format!("({}+{}j)", v.re, v.im),
+        Scalar::Complex128(v) => format!("({}+{}j)", v.re, v.im),
         Scalar::Str(v) => format!("'{v}'"),
     }
 }

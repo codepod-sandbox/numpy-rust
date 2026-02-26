@@ -20,6 +20,11 @@ impl NdArray {
                 "sort not supported for string arrays".into(),
             ));
         }
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "sort not supported for complex arrays".into(),
+            ));
+        }
         let f = self.astype(DType::Float64);
         match axis {
             None => {
@@ -62,6 +67,11 @@ impl NdArray {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "argsort not supported for string arrays".into(),
+            ));
+        }
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "argsort not supported for complex arrays".into(),
             ));
         }
         let f = self.astype(DType::Float64);

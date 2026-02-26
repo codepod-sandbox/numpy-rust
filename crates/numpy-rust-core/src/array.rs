@@ -1,4 +1,5 @@
 use ndarray::{ArrayD, IxDyn};
+use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
@@ -26,6 +27,12 @@ impl NdArray {
             DType::Int64 => ArrayData::Int64(ArrayD::zeros(sh)),
             DType::Float32 => ArrayData::Float32(ArrayD::zeros(sh)),
             DType::Float64 => ArrayData::Float64(ArrayD::zeros(sh)),
+            DType::Complex64 => {
+                ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(0.0f32, 0.0)))
+            }
+            DType::Complex128 => {
+                ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(0.0f64, 0.0)))
+            }
             DType::Str => ArrayData::Str(ArrayD::from_elem(sh, String::new())),
         };
         Self { data }
@@ -43,6 +50,12 @@ impl NdArray {
             DType::Int64 => ArrayData::Int64(ArrayD::ones(sh)),
             DType::Float32 => ArrayData::Float32(ArrayD::ones(sh)),
             DType::Float64 => ArrayData::Float64(ArrayD::ones(sh)),
+            DType::Complex64 => {
+                ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(1.0f32, 0.0)))
+            }
+            DType::Complex128 => {
+                ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(1.0f64, 0.0)))
+            }
             DType::Str => unreachable!(),
         };
         Self { data }
@@ -143,6 +156,20 @@ impl IntoArrayData for Vec<String> {
     }
 }
 
+impl IntoArrayData for Vec<Complex<f32>> {
+    fn into_array_data(self) -> ArrayData {
+        let len = self.len();
+        ArrayData::Complex64(ArrayD::from_shape_vec(IxDyn(&[len]), self).unwrap())
+    }
+}
+
+impl IntoArrayData for Vec<Complex<f64>> {
+    fn into_array_data(self) -> ArrayData {
+        let len = self.len();
+        ArrayData::Complex128(ArrayD::from_shape_vec(IxDyn(&[len]), self).unwrap())
+    }
+}
+
 impl NdArray {
     pub fn from_vec<V: IntoArrayData>(vec: V) -> Self {
         Self {
@@ -187,10 +214,24 @@ mod tests {
     }
 
     #[test]
+    fn test_zeros_complex() {
+        let a = NdArray::zeros(&[2, 3], DType::Complex128);
+        assert_eq!(a.shape(), &[2, 3]);
+        assert_eq!(a.dtype(), DType::Complex128);
+    }
+
+    #[test]
     fn test_ones() {
         let a = NdArray::ones(&[3], DType::Int32);
         assert_eq!(a.shape(), &[3]);
         assert_eq!(a.dtype(), DType::Int32);
+    }
+
+    #[test]
+    fn test_ones_complex() {
+        let a = NdArray::ones(&[3], DType::Complex128);
+        assert_eq!(a.shape(), &[3]);
+        assert_eq!(a.dtype(), DType::Complex128);
     }
 
     #[test]
@@ -207,5 +248,12 @@ mod tests {
         let a = NdArray::from_data(data);
         assert_eq!(a.shape(), &[5]);
         assert_eq!(a.dtype(), DType::Float32);
+    }
+
+    #[test]
+    fn test_from_complex_vec() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0), Complex::new(3.0, 4.0)]);
+        assert_eq!(a.dtype(), DType::Complex128);
+        assert_eq!(a.size(), 2);
     }
 }

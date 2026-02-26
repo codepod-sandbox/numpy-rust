@@ -58,6 +58,12 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
         (ArrayData::Int64(xa), ArrayData::Int64(ya)) => do_where!(&xa, &ya, Int64),
         (ArrayData::Int32(xa), ArrayData::Int32(ya)) => do_where!(&xa, &ya, Int32),
         (ArrayData::Bool(xa), ArrayData::Bool(ya)) => do_where!(&xa, &ya, Bool),
+        (ArrayData::Complex64(xa), ArrayData::Complex64(ya)) => {
+            do_where!(&xa, &ya, Complex64)
+        }
+        (ArrayData::Complex128(xa), ArrayData::Complex128(ya)) => {
+            do_where!(&xa, &ya, Complex128)
+        }
         (ArrayData::Str(xa), ArrayData::Str(ya)) => {
             let result = ndarray::Zip::from(&cond_arr)
                 .and(&xa)
@@ -74,10 +80,13 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
 impl NdArray {
     /// Returns a Bool array: true where elements are NaN.
     /// For integer/bool types, always returns all-false.
+    /// For complex types, true if either component is NaN.
     pub fn isnan(&self) -> NdArray {
         let data = match &self.data {
             ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_nan())),
             ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_nan())),
+            ArrayData::Complex64(a) => ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan())),
+            ArrayData::Complex128(a) => ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan())),
             _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false)),
         };
         NdArray::from_data(data)
@@ -85,10 +94,17 @@ impl NdArray {
 
     /// Returns a Bool array: true where elements are finite (not NaN or Inf).
     /// For integer/bool types, always returns all-true.
+    /// For complex types, true if both components are finite.
     pub fn isfinite(&self) -> NdArray {
         let data = match &self.data {
             ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_finite())),
             ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_finite())),
+            ArrayData::Complex64(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re.is_finite() && x.im.is_finite()))
+            }
+            ArrayData::Complex128(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re.is_finite() && x.im.is_finite()))
+            }
             _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), true)),
         };
         NdArray::from_data(data)
@@ -134,6 +150,8 @@ fn dot_1d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
         (ArrayData::Float32(a), ArrayData::Float32(b)) => do_dot!(a, b, Float32),
         (ArrayData::Int64(a), ArrayData::Int64(b)) => do_dot!(a, b, Int64),
         (ArrayData::Int32(a), ArrayData::Int32(b)) => do_dot!(a, b, Int32),
+        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_dot!(a, b, Complex64),
+        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_dot!(a, b, Complex128),
         _ => unreachable!(),
     };
     Ok(NdArray::from_data(data))
@@ -154,6 +172,8 @@ fn matmul_2d_2d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
         (ArrayData::Float32(a), ArrayData::Float32(b)) => do_matmul!(a, b, Float32),
         (ArrayData::Int64(a), ArrayData::Int64(b)) => do_matmul!(a, b, Int64),
         (ArrayData::Int32(a), ArrayData::Int32(b)) => do_matmul!(a, b, Int32),
+        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_matmul!(a, b, Complex64),
+        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_matmul!(a, b, Complex128),
         _ => unreachable!(),
     };
     Ok(NdArray::from_data(data))
@@ -174,6 +194,8 @@ fn matmul_2d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
         (ArrayData::Float32(a), ArrayData::Float32(b)) => do_matvec!(a, b, Float32),
         (ArrayData::Int64(a), ArrayData::Int64(b)) => do_matvec!(a, b, Int64),
         (ArrayData::Int32(a), ArrayData::Int32(b)) => do_matvec!(a, b, Int32),
+        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_matvec!(a, b, Complex64),
+        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_matvec!(a, b, Complex128),
         _ => unreachable!(),
     };
     Ok(NdArray::from_data(data))

@@ -1,4 +1,5 @@
 use ndarray::{ArrayD, Axis, IxDyn};
+use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
@@ -45,14 +46,19 @@ impl NdArray {
         Ok(maybe_keepdims(result, axis, keepdims))
     }
 
-    /// Mean of array elements. Always returns Float64.
+    /// Mean of array elements. Returns Float64, or Complex128 for complex inputs.
     pub fn mean(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "mean not supported for string arrays".into(),
             ));
         }
-        let sum = self.astype(DType::Float64).sum(axis, false)?;
+        let target_dtype = if self.dtype().is_complex() {
+            DType::Complex128
+        } else {
+            DType::Float64
+        };
+        let sum = self.astype(target_dtype).sum(axis, false)?;
         let count = match axis {
             None => self.size(),
             Some(ax) => {
@@ -67,6 +73,11 @@ impl NdArray {
 
     /// Minimum element over a given axis, or global minimum.
     pub fn min(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "min not supported for complex arrays".into(),
+            ));
+        }
         let result = match axis {
             None => self.reduce_all_min(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Min),
@@ -76,6 +87,11 @@ impl NdArray {
 
     /// Maximum element over a given axis, or global maximum.
     pub fn max(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "max not supported for complex arrays".into(),
+            ));
+        }
         let result = match axis {
             None => self.reduce_all_max(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Max),
@@ -136,6 +152,11 @@ impl NdArray {
                 "argmin not supported for string arrays".into(),
             ));
         }
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "argmin not supported for complex arrays".into(),
+            ));
+        }
         match axis {
             None => {
                 let idx = self.reduce_all_argmin()?;
@@ -154,6 +175,11 @@ impl NdArray {
         if self.dtype().is_string() {
             return Err(NumpyError::TypeError(
                 "argmax not supported for string arrays".into(),
+            ));
+        }
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "argmax not supported for complex arrays".into(),
             ));
         }
         match axis {
@@ -176,6 +202,8 @@ impl NdArray {
             ArrayData::Int64(a) => a.iter().all(|&x| x != 0),
             ArrayData::Float32(a) => a.iter().all(|&x| x != 0.0),
             ArrayData::Float64(a) => a.iter().all(|&x| x != 0.0),
+            ArrayData::Complex64(a) => a.iter().all(|x| x.re != 0.0 || x.im != 0.0),
+            ArrayData::Complex128(a) => a.iter().all(|x| x.re != 0.0 || x.im != 0.0),
             ArrayData::Str(a) => a.iter().all(|x| !x.is_empty()),
         }
     }
@@ -188,6 +216,8 @@ impl NdArray {
             ArrayData::Int64(a) => a.iter().any(|&x| x != 0),
             ArrayData::Float32(a) => a.iter().any(|&x| x != 0.0),
             ArrayData::Float64(a) => a.iter().any(|&x| x != 0.0),
+            ArrayData::Complex64(a) => a.iter().any(|x| x.re != 0.0 || x.im != 0.0),
+            ArrayData::Complex128(a) => a.iter().any(|x| x.re != 0.0 || x.im != 0.0),
             ArrayData::Str(a) => a.iter().any(|x| !x.is_empty()),
         }
     }
@@ -221,6 +251,14 @@ impl NdArray {
                 let s: f64 = a.iter().sum();
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), s))
             }
+            ArrayData::Complex64(a) => {
+                let s: Complex<f32> = a.iter().copied().sum();
+                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), s))
+            }
+            ArrayData::Complex128(a) => {
+                let s: Complex<f64> = a.iter().copied().sum();
+                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), s))
+            }
             ArrayData::Str(_) => unreachable!(),
         };
         Ok(NdArray::from_data(data))
@@ -243,12 +281,19 @@ impl NdArray {
             ArrayData::Int64(a) => ArrayData::Int64(a.sum_axis(ax)),
             ArrayData::Float32(a) => ArrayData::Float32(a.sum_axis(ax)),
             ArrayData::Float64(a) => ArrayData::Float64(a.sum_axis(ax)),
+            ArrayData::Complex64(a) => ArrayData::Complex64(a.sum_axis(ax)),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.sum_axis(ax)),
             ArrayData::Str(_) => unreachable!(),
         };
         Ok(NdArray::from_data(data))
     }
 
     fn reduce_all_min(&self) -> Result<NdArray> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "min not supported for complex arrays".into(),
+            ));
+        }
         let data = match &self.data {
             ArrayData::Bool(a) => {
                 let v = *a
@@ -287,6 +332,9 @@ impl NdArray {
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
             }
+            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
+                unreachable!("complex rejected above")
+            }
             ArrayData::Str(a) => {
                 let v = a
                     .iter()
@@ -300,6 +348,11 @@ impl NdArray {
     }
 
     fn reduce_all_max(&self) -> Result<NdArray> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "max not supported for complex arrays".into(),
+            ));
+        }
         let data = match &self.data {
             ArrayData::Bool(a) => {
                 let v = *a
@@ -337,6 +390,9 @@ impl NdArray {
                     .reduce(f64::max)
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
+            }
+            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
+                unreachable!("complex rejected above")
             }
             ArrayData::Str(a) => {
                 let v = a
@@ -507,6 +563,9 @@ impl NdArray {
                     }
                 });
                 ArrayData::Str(result)
+            }
+            (ArrayData::Complex64(_) | ArrayData::Complex128(_), _) => {
+                unreachable!("complex rejected in min/max before reaching reduce_axis_fold")
             }
         };
         Ok(NdArray::from_data(data))

@@ -19,6 +19,11 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
             "bitwise operations not supported for float arrays".into(),
         ));
     }
+    if lhs.dtype().is_complex() || rhs.dtype().is_complex() {
+        return Err(NumpyError::TypeError(
+            "bitwise operations not supported for complex arrays".into(),
+        ));
+    }
 
     let common_dtype = lhs.dtype().promote(rhs.dtype());
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
@@ -72,17 +77,33 @@ impl NdArray {
     }
 
     /// Element-wise bitwise NOT. For Bool arrays: logical NOT. For integers: bitwise !.
-    pub fn bitwise_not(&self) -> NdArray {
+    pub fn bitwise_not(&self) -> Result<NdArray> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "bitwise NOT not supported for complex arrays".into(),
+            ));
+        }
         let result = match &self.data {
             ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x)),
             ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| !x)),
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| !x)),
             ArrayData::Float32(_) | ArrayData::Float64(_) => {
-                panic!("bitwise NOT not supported for float arrays")
+                return Err(NumpyError::TypeError(
+                    "bitwise NOT not supported for float arrays".into(),
+                ));
             }
-            ArrayData::Str(_) => panic!("bitwise NOT not supported for string arrays"),
+            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
+                return Err(NumpyError::TypeError(
+                    "bitwise NOT not supported for complex arrays".into(),
+                ));
+            }
+            ArrayData::Str(_) => {
+                return Err(NumpyError::TypeError(
+                    "bitwise NOT not supported for string arrays".into(),
+                ));
+            }
         };
-        NdArray::from_data(result)
+        Ok(NdArray::from_data(result))
     }
 }
 
@@ -110,7 +131,7 @@ mod tests {
     #[test]
     fn test_bitwise_not_bool() {
         let a = NdArray::from_vec(vec![true, false]);
-        let b = a.bitwise_not();
+        let b = a.bitwise_not().unwrap();
         assert_eq!(b.dtype(), DType::Bool);
     }
 
@@ -127,5 +148,14 @@ mod tests {
         let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
         let b = NdArray::from_vec(vec![1.0_f64, 2.0]);
         assert!(a.bitwise_and(&b).is_err());
+    }
+
+    #[test]
+    fn test_bitwise_complex_fails() {
+        let a = NdArray::zeros(&[2], DType::Complex128);
+        let b = NdArray::zeros(&[2], DType::Complex128);
+        assert!(a.bitwise_and(&b).is_err());
+        assert!(a.bitwise_or(&b).is_err());
+        assert!(a.bitwise_not().is_err());
     }
 }
