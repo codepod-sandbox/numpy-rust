@@ -495,6 +495,38 @@ impl PyNdArray {
         })
     }
 
+    // --- Sort / Argsort ---
+
+    #[pymethod]
+    fn sort(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let ax = parse_optional_axis(axis, vm)?;
+        self.data
+            .read()
+            .unwrap()
+            .sort(ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn argsort(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        self.data
+            .read()
+            .unwrap()
+            .argsort(ax)
+            .map(|arr| ndarray_or_scalar(arr, vm))
+            .map_err(|e| numpy_err(e, vm))
+    }
+
     // --- Operators ---
 
     // Arithmetic operators are implemented via AsNumber below.
@@ -577,13 +609,39 @@ impl PyNdArray {
             return Ok(PyNdArray::from_core(result).to_py(vm));
         }
 
-        // Boolean mask
-        if let Some(mask) = key.downcast_ref::<PyNdArray>() {
-            let mask_data = mask.data.read().unwrap();
-            if mask_data.dtype() == DType::Bool {
-                let result = data.mask_select(&mask_data).map_err(|e| numpy_err(e, vm))?;
+        // NdArray index: boolean mask or integer fancy indexing
+        if let Some(arr) = key.downcast_ref::<PyNdArray>() {
+            let arr_data = arr.data.read().unwrap();
+            if arr_data.dtype() == DType::Bool {
+                let result = data.mask_select(&arr_data).map_err(|e| numpy_err(e, vm))?;
+                return Ok(PyNdArray::from_core(result).to_py(vm));
+            } else if arr_data.dtype().is_integer() || arr_data.dtype().is_float() {
+                let indices = extract_int_indices(&arr_data, data.shape()[0], vm)?;
+                let result = data
+                    .index_select(0, &indices)
+                    .map_err(|e| numpy_err(e, vm))?;
                 return Ok(PyNdArray::from_core(result).to_py(vm));
             }
+        }
+
+        // List of integers -> fancy indexing: a[[0, 2, 4]]
+        if let Some(list) = key.downcast_ref::<PyList>() {
+            let items = list.borrow_vec();
+            let dim_size = data.shape()[0];
+            let mut indices = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                let i: i64 = item.clone().try_into_value(vm)?;
+                let resolved = if i < 0 {
+                    (dim_size as i64 + i) as usize
+                } else {
+                    i as usize
+                };
+                indices.push(resolved);
+            }
+            let result = data
+                .index_select(0, &indices)
+                .map_err(|e| numpy_err(e, vm))?;
+            return Ok(PyNdArray::from_core(result).to_py(vm));
         }
 
         Err(vm.new_type_error("unsupported index type".to_owned()))
@@ -787,12 +845,38 @@ fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_int(v).into())
 }
 
+fn number_inplace_bin_op(
+    a: &vm::PyObject,
+    b: &vm::PyObject,
+    op: fn(&NdArray, &NdArray) -> numpy_rust_core::Result<NdArray>,
+    vm: &VirtualMachine,
+) -> PyResult {
+    let a_py = a
+        .downcast_ref::<PyNdArray>()
+        .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+    let b_arr = obj_to_ndarray(b, vm)?;
+    let a_inner = a_py.data.read().unwrap().clone();
+    let result = op(&a_inner, &b_arr).map_err(|e| vm.new_value_error(e.to_string()))?;
+    *a_py.data.write().unwrap() = result;
+    Ok(a.to_owned())
+}
+
 impl PyNdArray {
     const AS_NUMBER: PyNumberMethods = PyNumberMethods {
         add: Some(|a, b, vm| number_bin_op(a, b, |x, y| x + y, vm)),
         subtract: Some(|a, b, vm| number_bin_op(a, b, |x, y| x - y, vm)),
         multiply: Some(|a, b, vm| number_bin_op(a, b, |x, y| x * y, vm)),
         true_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x / y, vm)),
+        floor_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.floor_div(y), vm)),
+        remainder: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.remainder(y), vm)),
+        power: Some(|a, b, _modulo, vm| {
+            let a_arr = obj_to_ndarray(a, vm)?;
+            let b_arr = obj_to_ndarray(b, vm)?;
+            a_arr
+                .pow(&b_arr)
+                .map(|r| PyNdArray::from_core(r).into_pyobject(vm))
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        }),
         negative: Some(number_neg),
         int: Some(number_int),
         float: Some(number_float),
@@ -806,6 +890,39 @@ impl PyNdArray {
                 .map(|r| ndarray_or_scalar(r, vm))
                 .map_err(|e| vm.new_value_error(e.to_string()))
         }),
+        inplace_add: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x + y, vm)),
+        inplace_subtract: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x - y, vm)),
+        inplace_multiply: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x * y, vm)),
+        inplace_true_divide: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x / y, vm)),
+        inplace_floor_divide: Some(|a, b, vm| {
+            number_inplace_bin_op(a, b, |x, y| x.floor_div(y), vm)
+        }),
+        inplace_remainder: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.remainder(y), vm)),
+        inplace_power: Some(|a, b, _modulo, vm| {
+            let a_py = a
+                .downcast_ref::<PyNdArray>()
+                .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+            let b_arr = obj_to_ndarray(b, vm)?;
+            let a_inner = a_py.data.read().unwrap().clone();
+            let result = a_inner
+                .pow(&b_arr)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            *a_py.data.write().unwrap() = result;
+            Ok(a.to_owned())
+        }),
+        inplace_matrix_multiply: Some(|a, b, vm| {
+            let a_py = a
+                .downcast_ref::<PyNdArray>()
+                .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+            let b_arr = obj_to_ndarray(b, vm)?;
+            let a_inner = a_py.data.read().unwrap().clone();
+            let result = numpy_rust_core::dot(&a_inner, &b_arr)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            *a_py.data.write().unwrap() = result;
+            Ok(a.to_owned())
+        }),
+        inplace_and: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.bitwise_and(y), vm)),
+        inplace_or: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.bitwise_or(y), vm)),
         ..PyNumberMethods::NOT_IMPLEMENTED
     };
 }
@@ -882,6 +999,39 @@ impl Iterable for PyNdArray {
         }
         .into_pyobject(vm))
     }
+}
+
+/// Extract integer indices from an NdArray, resolving negative indices.
+fn extract_int_indices(
+    idx_arr: &NdArray,
+    dim_size: usize,
+    vm: &VirtualMachine,
+) -> PyResult<Vec<usize>> {
+    let flat = idx_arr.flatten();
+    let mut out = Vec::with_capacity(flat.size());
+    for i in 0..flat.size() {
+        let s = flat.get(&[i]).map_err(|e| numpy_err(e, vm))?;
+        let v: i64 = match s {
+            Scalar::Int32(v) => v as i64,
+            Scalar::Int64(v) => v,
+            Scalar::Float32(v) => v as i64,
+            Scalar::Float64(v) => v as i64,
+            Scalar::Bool(v) => v as i64,
+            _ => return Err(vm.new_type_error("expected integer index".to_owned())),
+        };
+        let resolved = if v < 0 {
+            (dim_size as i64 + v) as usize
+        } else {
+            v as usize
+        };
+        if resolved >= dim_size {
+            return Err(vm.new_value_error(format!(
+                "index {v} is out of bounds for axis with size {dim_size}"
+            )));
+        }
+        out.push(resolved);
+    }
+    Ok(out)
 }
 
 /// Convert a RustPython `PySlice` to a core `SliceArg`.
@@ -1044,20 +1194,54 @@ fn setitem_impl(
         return Ok(());
     }
 
-    // Boolean mask
-    if let Some(mask) = key.downcast_ref::<PyNdArray>() {
-        let mask_data = mask.data.read().unwrap();
-        if mask_data.dtype() == DType::Bool {
+    // NdArray key: boolean mask or integer fancy indexing
+    if let Some(arr) = key.downcast_ref::<PyNdArray>() {
+        let arr_data = arr.data.read().unwrap();
+        if arr_data.dtype() == DType::Bool {
             let value_arr = obj_to_ndarray(&value, vm)?;
-            let mask_owned = mask_data.clone();
-            drop(mask_data);
+            let mask_owned = arr_data.clone();
+            drop(arr_data);
             zelf.data
                 .write()
                 .unwrap()
                 .mask_set(&mask_owned, &value_arr)
                 .map_err(|e| numpy_err(e, vm))?;
             return Ok(());
+        } else if arr_data.dtype().is_integer() || arr_data.dtype().is_float() {
+            let dim_size = zelf.data.read().unwrap().shape()[0];
+            let indices = extract_int_indices(&arr_data, dim_size, vm)?;
+            drop(arr_data);
+            let value_arr = obj_to_ndarray(&value, vm)?;
+            zelf.data
+                .write()
+                .unwrap()
+                .index_set(0, &indices, &value_arr)
+                .map_err(|e| numpy_err(e, vm))?;
+            return Ok(());
         }
+    }
+
+    // List of integers -> fancy indexing assignment: a[[0, 2]] = values
+    if let Some(list) = key.downcast_ref::<PyList>() {
+        let items = list.borrow_vec();
+        let dim_size = zelf.data.read().unwrap().shape()[0];
+        let mut indices = Vec::with_capacity(items.len());
+        for item in items.iter() {
+            let i: i64 = item.clone().try_into_value(vm)?;
+            let resolved = if i < 0 {
+                (dim_size as i64 + i) as usize
+            } else {
+                i as usize
+            };
+            indices.push(resolved);
+        }
+        let value_arr = obj_to_ndarray(&value, vm)?;
+        zelf.data
+            .write()
+            .unwrap()
+            .index_set(0, &indices, &value_arr)
+            .map_err(|e| numpy_err(e, vm))?;
+        return Ok(());
     }
 
     Err(vm.new_type_error("unsupported index type for assignment".to_owned()))

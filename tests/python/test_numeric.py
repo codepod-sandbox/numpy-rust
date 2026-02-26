@@ -296,6 +296,184 @@ def test_int_conversion():
     assert_eq(int(a), 42)
 
 
+# --- Power operator ---
+
+def test_pow_operator():
+    a = np.array([2.0, 3.0, 4.0])
+    b = a ** 2
+    assert_close(b[0], 4.0)
+    assert_close(b[1], 9.0)
+    assert_close(b[2], 16.0)
+
+def test_pow_fractional():
+    a = np.array([4.0, 9.0, 16.0])
+    b = a ** 0.5
+    assert_close(b[0], 2.0)
+    assert_close(b[1], 3.0)
+    assert_close(b[2], 4.0)
+
+def test_pow_broadcast():
+    a = np.array([2.0, 3.0, 4.0])
+    b = a ** np.array([2.0])
+    assert_close(b[0], 4.0)
+    assert_close(b[1], 9.0)
+    assert_close(b[2], 16.0)
+
+
+# --- Floor divide / Modulo ---
+
+def test_floor_div():
+    a = np.array([7.0, 8.0, 9.0])
+    b = np.array([2.0, 3.0, 4.0])
+    c = a // b
+    assert_close(c[0], 3.0)
+    assert_close(c[1], 2.0)
+    assert_close(c[2], 2.0)
+
+def test_floor_div_negative():
+    a = np.array([-7.0])
+    b = np.array([2.0])
+    c = a // b
+    assert_close(c[0], -4.0)
+
+def test_modulo():
+    a = np.array([7.0, 8.0, 9.0])
+    b = np.array([2.0, 3.0, 4.0])
+    c = a % b
+    assert_close(c[0], 1.0)
+    assert_close(c[1], 2.0)
+    assert_close(c[2], 1.0)
+
+def test_modulo_negative():
+    a = np.array([-7.0])
+    b = np.array([2.0])
+    c = a % b
+    assert_close(c[0], 1.0)
+
+
+# --- Fancy indexing ---
+
+def test_fancy_index_list():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    b = a[[0, 2, 4]]
+    assert_eq(b.shape, (3,))
+    assert_close(b[0], 10.0)
+    assert_close(b[1], 30.0)
+    assert_close(b[2], 50.0)
+
+def test_fancy_index_array():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    idx = np.array([1.0, 3.0])
+    b = a[idx]
+    assert_eq(b.shape, (2,))
+    assert_close(b[0], 20.0)
+    assert_close(b[1], 40.0)
+
+def test_fancy_index_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    b = a[[0, 2]]
+    assert_eq(b.shape, (2, 2))
+    assert_close(b[0, 0], 1.0)
+    assert_close(b[1, 0], 5.0)
+
+def test_fancy_index_set():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    a[[0, 2]] = np.array([99.0, 88.0])
+    assert_close(a[0], 99.0)
+    assert_close(a[2], 88.0)
+    assert_close(a[1], 20.0)
+
+
+# --- In-place operators ---
+
+def test_iadd():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([10.0, 20.0, 30.0])
+    a += b
+    assert_close(a[0], 11.0)
+    assert_close(a[1], 22.0)
+    assert_close(a[2], 33.0)
+
+def test_isub():
+    a = np.array([10.0, 20.0, 30.0])
+    b = np.array([1.0, 2.0, 3.0])
+    a -= b
+    assert_close(a[0], 9.0)
+    assert_close(a[1], 18.0)
+    assert_close(a[2], 27.0)
+
+def test_imul():
+    a = np.array([1.0, 2.0, 3.0])
+    a *= 2
+    assert_close(a[0], 2.0)
+    assert_close(a[1], 4.0)
+    assert_close(a[2], 6.0)
+
+def test_idiv():
+    a = np.array([10.0, 20.0, 30.0])
+    a /= 2
+    assert_close(a[0], 5.0)
+    assert_close(a[1], 10.0)
+    assert_close(a[2], 15.0)
+
+def test_ipow():
+    a = np.array([2.0, 3.0, 4.0])
+    a **= 2
+    assert_close(a[0], 4.0)
+    assert_close(a[1], 9.0)
+    assert_close(a[2], 16.0)
+
+def test_ifloor_div():
+    a = np.array([7.0, 8.0, 9.0])
+    b = np.array([2.0, 3.0, 4.0])
+    a //= b
+    assert_close(a[0], 3.0)
+    assert_close(a[1], 2.0)
+    assert_close(a[2], 2.0)
+
+def test_imod():
+    a = np.array([7.0, 8.0, 9.0])
+    b = np.array([2.0, 3.0, 4.0])
+    a %= b
+    assert_close(a[0], 1.0)
+    assert_close(a[1], 2.0)
+    assert_close(a[2], 1.0)
+
+
+# --- Sort / Argsort ---
+
+def test_sort_1d():
+    a = np.array([3.0, 1.0, 2.0])
+    b = np.sort(a)
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 2.0)
+    assert_close(b[2], 3.0)
+
+def test_sort_2d_axis():
+    a = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
+    b = np.sort(a, axis=1)
+    assert_close(b[0, 0], 1.0)
+    assert_close(b[0, 1], 2.0)
+    assert_close(b[0, 2], 3.0)
+    assert_close(b[1, 0], 4.0)
+    assert_close(b[1, 1], 5.0)
+    assert_close(b[1, 2], 6.0)
+
+def test_argsort_1d():
+    a = np.array([3.0, 1.0, 2.0])
+    idx = np.argsort(a)
+    assert_eq(int(idx[0]), 1)
+    assert_eq(int(idx[1]), 2)
+    assert_eq(int(idx[2]), 0)
+
+def test_sort_method():
+    a = np.array([3.0, 1.0, 2.0])
+    b = a.sort()
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 2.0)
+    assert_close(b[2], 3.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

@@ -788,7 +788,18 @@ def base_repr(number, base=2, padding=0):
         digits.append("-")
     return "0" * padding + "".join(reversed(digits))
 
+def sort(a, axis=-1, kind=None, order=None):
+    if isinstance(a, ndarray):
+        if axis is not None and axis < 0:
+            axis = a.ndim + axis
+        return a.sort(axis)
+    return array(sorted(a))
+
 def argsort(a, axis=-1, kind=None, order=None):
+    if isinstance(a, ndarray):
+        if axis is not None and axis < 0:
+            axis = a.ndim + axis
+        return a.argsort(axis)
     flat = a.flatten()
     vals = [float(flat[i]) for i in range(flat.size)]
     indices = sorted(range(len(vals)), key=lambda i: vals[i])

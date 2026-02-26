@@ -156,6 +156,49 @@ impl NdArray {
         Ok(NdArray::from_data(data))
     }
 
+    /// Set elements along an axis by integer indices from a values array.
+    /// Like `a[[0, 2]] = values` in NumPy.
+    pub fn index_set(&mut self, axis: usize, indices: &[usize], values: &NdArray) -> Result<()> {
+        if axis >= self.ndim() {
+            return Err(NumpyError::InvalidAxis {
+                axis,
+                ndim: self.ndim(),
+            });
+        }
+
+        macro_rules! do_set {
+            ($dst:expr, $src:expr) => {{
+                for (pos, &idx) in indices.iter().enumerate() {
+                    let src_view = $src.index_axis(ndarray::Axis(axis), pos);
+                    let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
+                    dst_view.assign(&src_view);
+                }
+            }};
+        }
+
+        // Cast values to match self dtype if needed
+        let cast_values = if values.dtype() != self.dtype() {
+            values.astype(self.dtype())
+        } else {
+            values.clone()
+        };
+
+        match (&mut self.data, &cast_values.data) {
+            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_set!(dst, src),
+            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_set!(dst, src),
+            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_set!(dst, src),
+            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_set!(dst, src),
+            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_set!(dst, src),
+            (ArrayData::Str(dst), ArrayData::Str(src)) => do_set!(dst, src),
+            _ => {
+                return Err(NumpyError::TypeError(
+                    "cannot assign array of incompatible dtype".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Set a single element by multi-dimensional index.
     pub fn set(&mut self, index: &[usize], value: Scalar) -> Result<()> {
         let idx = IxDyn(index);

@@ -1,9 +1,12 @@
 use std::ops;
 
+use ndarray::Zip;
+
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
-use crate::error::Result;
+use crate::dtype::DType;
+use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
 /// Prepare two NdArrays for a binary operation: promote types and broadcast shapes.
@@ -49,6 +52,120 @@ impl_binary_op!(Add, add, +);
 impl_binary_op!(Sub, sub, -);
 impl_binary_op!(Mul, mul, *);
 impl_binary_op!(Div, div, /);
+
+impl NdArray {
+    /// Element-wise power: self ** rhs.
+    /// Integer types are cast to Float64 first (matching NumPy behavior).
+    pub fn pow(&self, rhs: &NdArray) -> Result<NdArray> {
+        if self.dtype().is_string() || rhs.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "power not supported for string arrays".into(),
+            ));
+        }
+        // Cast both to Float64 for uniform powf handling
+        let lhs_f = self.astype(DType::Float64);
+        let rhs_f = rhs.astype(DType::Float64);
+        let (a, b) = prepare_binary(&lhs_f, &rhs_f)?;
+        match (a, b) {
+            (ArrayData::Float64(a), ArrayData::Float64(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    *o = o.powf(r);
+                });
+                Ok(NdArray::from_data(ArrayData::Float64(out)))
+            }
+            _ => unreachable!("both cast to Float64"),
+        }
+    }
+
+    /// Element-wise floor division: self // rhs (toward -inf, matching NumPy).
+    pub fn floor_div(&self, rhs: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_binary(self, rhs)?;
+        let data = match (a, b) {
+            (ArrayData::Float64(a), ArrayData::Float64(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    *o = (*o / r).floor();
+                });
+                ArrayData::Float64(out)
+            }
+            (ArrayData::Float32(a), ArrayData::Float32(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    *o = (*o / r).floor();
+                });
+                ArrayData::Float32(out)
+            }
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    let d = *o / r;
+                    let rem = *o % r;
+                    *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
+                });
+                ArrayData::Int64(out)
+            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    let d = *o / r;
+                    let rem = *o % r;
+                    *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
+                });
+                ArrayData::Int32(out)
+            }
+            _ => unreachable!("promotion ensures matching types"),
+        };
+        Ok(NdArray::from_data(data))
+    }
+
+    /// Element-wise remainder: self % rhs (sign of divisor, matching NumPy).
+    pub fn remainder(&self, rhs: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_binary(self, rhs)?;
+        let data = match (a, b) {
+            (ArrayData::Float64(a), ArrayData::Float64(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    *o = *o - (*o / r).floor() * r;
+                });
+                ArrayData::Float64(out)
+            }
+            (ArrayData::Float32(a), ArrayData::Float32(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    *o = *o - (*o / r).floor() * r;
+                });
+                ArrayData::Float32(out)
+            }
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    let rem = *o % r;
+                    *o = if rem != 0 && (rem ^ r) < 0 {
+                        rem + r
+                    } else {
+                        rem
+                    };
+                });
+                ArrayData::Int64(out)
+            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
+                let mut out = a.clone();
+                Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                    let rem = *o % r;
+                    *o = if rem != 0 && (rem ^ r) < 0 {
+                        rem + r
+                    } else {
+                        rem
+                    };
+                });
+                ArrayData::Int32(out)
+            }
+            _ => unreachable!("promotion ensures matching types"),
+        };
+        Ok(NdArray::from_data(data))
+    }
+}
 
 #[cfg(test)]
 mod tests {

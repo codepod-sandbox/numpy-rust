@@ -242,6 +242,34 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Sort / Argsort ---
+
+    #[pyfunction]
+    fn sort(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .sort(ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn argsort(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .argsort(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Submodules (registered as attributes, feature-gated) ---
 
     #[cfg(feature = "linalg")]
