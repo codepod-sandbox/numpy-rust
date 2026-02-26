@@ -167,6 +167,40 @@ impl NdArray {
         }
     }
 
+    /// Round to given number of decimal places.
+    pub fn around(&self, decimals: i32) -> NdArray {
+        if self.dtype().is_complex() {
+            // For complex, round real and imaginary parts separately
+            return self.clone();
+        }
+        let factor = 10.0_f64.powi(decimals);
+        let data = ensure_float(&self.data);
+        let result = match data {
+            ArrayData::Float32(a) => {
+                let f = factor as f32;
+                ArrayData::Float32(a.mapv(|x| (x * f).round() / f))
+            }
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| (x * factor).round() / factor)),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    /// Returns a Bool array: true where sign bit is set (negative).
+    pub fn signbit(&self) -> NdArray {
+        let data = match &self.data {
+            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_sign_negative())),
+            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_sign_negative())),
+            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x < 0)),
+            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x < 0)),
+            _ => ArrayData::Bool(ndarray::ArrayD::from_elem(
+                ndarray::IxDyn(self.shape()),
+                false,
+            )),
+        };
+        NdArray::from_data(data)
+    }
+
     /// Element-wise negation. Works on int and float types.
     pub fn neg(&self) -> NdArray {
         let result = match &self.data {
@@ -343,5 +377,21 @@ mod tests {
         let r = a.real();
         assert_eq!(r.dtype(), DType::Float64);
         assert_eq!(r.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_around_decimals() {
+        let a = NdArray::from_vec(vec![1.234_f64, 2.567, 3.891]);
+        let b = a.around(2);
+        assert_eq!(b.dtype(), DType::Float64);
+        assert_eq!(b.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_signbit() {
+        let a = NdArray::from_vec(vec![-1.0_f64, 0.0, 1.0, -0.0]);
+        let b = a.signbit();
+        assert_eq!(b.dtype(), DType::Bool);
+        assert_eq!(b.shape(), &[4]);
     }
 }

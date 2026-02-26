@@ -530,6 +530,29 @@ impl PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().angle())
     }
 
+    // --- Element-wise checks ---
+
+    #[pymethod]
+    fn isnan(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().isnan())
+    }
+
+    #[pymethod]
+    fn isinf(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().isinf())
+    }
+
+    #[pymethod]
+    fn isfinite(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().isfinite())
+    }
+
+    #[pymethod]
+    fn around(&self, decimals: vm::function::OptionalArg<i32>) -> PyNdArray {
+        let d = decimals.unwrap_or(0);
+        PyNdArray::from_core(self.data.read().unwrap().around(d))
+    }
+
     // --- Scalar conversion ---
 
     #[pymethod]
@@ -905,7 +928,7 @@ impl PyNdArray {
 }
 
 /// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).
-fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
+pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
     if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
         return Ok(arr.data.read().unwrap().clone());
     }

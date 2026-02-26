@@ -21,4 +21,4 @@ pub use error::{NumpyError, Result};
 pub use manipulation::{concatenate, hsplit, hstack, split, stack, vsplit, vstack, SplitSpec};
 pub use ops::einsum::einsum;
 pub use ops::selection::choose;
-pub use utility::{argwhere, dot, where_cond};
+pub use utility::{argwhere, count_nonzero, dot, nonzero, where_cond};

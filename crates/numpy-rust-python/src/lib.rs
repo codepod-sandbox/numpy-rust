@@ -17,7 +17,7 @@ pub fn numpy_module_def(ctx: &vm::Context) -> &'static vm::builtins::PyModuleDef
 #[vm::pymodule]
 pub mod _numpy_native {
     use super::*;
-    use crate::py_array::{parse_optional_axis, PyNdArray, PyNdArrayIter};
+    use crate::py_array::{obj_to_ndarray, parse_optional_axis, PyNdArray, PyNdArrayIter};
     use vm::class::PyClassImpl;
     use vm::{PyObjectRef, PyPayload, PyResult, VirtualMachine};
 
@@ -253,6 +253,67 @@ pub mod _numpy_native {
             .round()
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    // --- Element-wise check functions ---
+
+    #[pyfunction]
+    fn isnan(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().isnan())
+    }
+
+    #[pyfunction]
+    fn isinf(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().isinf())
+    }
+
+    #[pyfunction]
+    fn isfinite(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().isfinite())
+    }
+
+    #[pyfunction]
+    fn around(
+        a: vm::PyRef<PyNdArray>,
+        decimals: vm::function::OptionalArg<i32>,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        let d = decimals.unwrap_or(0);
+        PyNdArray::from_core(a.inner().around(d))
+    }
+
+    #[pyfunction]
+    fn signbit(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().signbit())
+    }
+
+    #[pyfunction]
+    fn logical_not(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().logical_not())
+    }
+
+    #[pyfunction]
+    fn power(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.pow(&b)
+            .map(|r| PyNdArray::from_core(r).into_pyobject(vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nonzero(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult {
+        let result = numpy_rust_core::nonzero(&a.inner());
+        let py_arrays: Vec<PyObjectRef> = result
+            .into_iter()
+            .map(|r| PyNdArray::from_core(r).into_pyobject(vm))
+            .collect();
+        Ok(vm.ctx.new_tuple(py_arrays).into())
+    }
+
+    #[pyfunction]
+    fn count_nonzero(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> usize {
+        numpy_rust_core::count_nonzero(&a.inner())
     }
 
     // --- Module-level reduction functions ---

@@ -155,6 +155,21 @@ impl NdArray {
         Ok(NdArray::from_data(result))
     }
 
+    /// Element-wise logical NOT. Returns Bool array (true where element is falsy).
+    pub fn logical_not(&self) -> NdArray {
+        let data = match &self.data {
+            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x)),
+            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x == 0)),
+            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x == 0)),
+            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x == 0.0)),
+            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x == 0.0)),
+            ArrayData::Complex64(a) => ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0)),
+            ArrayData::Complex128(a) => ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0)),
+            ArrayData::Str(a) => ArrayData::Bool(a.mapv(|ref x| x.is_empty())),
+        };
+        NdArray::from_data(data)
+    }
+
     /// Element-wise bitwise NOT. For Bool arrays: logical NOT. For integers: bitwise !.
     pub fn bitwise_not(&self) -> Result<NdArray> {
         if self.dtype().is_complex() {
@@ -280,5 +295,23 @@ mod tests {
         let b = NdArray::from_vec(vec![1.0_f64, 2.0]);
         assert!(a.left_shift(&b).is_err());
         assert!(a.right_shift(&b).is_err());
+    }
+
+    #[test]
+    fn test_logical_not() {
+        let a = NdArray::from_vec(vec![true, false, true]);
+        let b = a.logical_not();
+        assert_eq!(b.dtype(), DType::Bool);
+        assert_eq!(b.shape(), &[3]);
+
+        let c = NdArray::from_vec(vec![0_i32, 1, 2]);
+        let d = c.logical_not();
+        assert_eq!(d.dtype(), DType::Bool);
+        assert_eq!(d.shape(), &[3]);
+
+        let e = NdArray::from_vec(vec![0.0_f64, 1.0, 0.0]);
+        let f = e.logical_not();
+        assert_eq!(f.dtype(), DType::Bool);
+        assert_eq!(f.shape(), &[3]);
     }
 }

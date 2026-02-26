@@ -308,21 +308,17 @@ def ones_like(a, dtype=None, order="K", subok=True, shape=None):
 def isnan(x):
     """Check for NaN element-wise."""
     if isinstance(x, ndarray):
-        # Compare: NaN != NaN
-        return array([1.0 if _math.isnan(float(x.flatten()[i])) else 0.0
-                       for i in range(x.size)]).reshape(x.shape)
+        return _native.isnan(x)
     return _math.isnan(x)
 
 def isfinite(x):
     if isinstance(x, ndarray):
-        return array([1.0 if _math.isfinite(float(x.flatten()[i])) else 0.0
-                       for i in range(x.size)]).reshape(x.shape)
+        return _native.isfinite(x)
     return _math.isfinite(x)
 
 def isinf(x):
     if isinstance(x, ndarray):
-        return array([1.0 if _math.isinf(float(x.flatten()[i])) else 0.0
-                       for i in range(x.size)]).reshape(x.shape)
+        return _native.isinf(x)
     return _math.isinf(x)
 
 def isscalar(x):
@@ -397,11 +393,9 @@ def ceil(x):
     return _math.ceil(x)
 
 def around(a, decimals=0, out=None):
-    factor = 10 ** decimals
     if isinstance(a, ndarray):
-        flat = a.flatten()
-        result = array([round(float(flat[i]) * factor) / factor for i in range(flat.size)])
-        return result.reshape(a.shape)
+        return _native.around(a, decimals)
+    factor = 10 ** decimals
     return round(a * factor) / factor
 
 round_ = around
@@ -684,15 +678,12 @@ def argwhere(a):
 
 def nonzero(a):
     if isinstance(a, ndarray):
-        flat = a.flatten()
-        indices = [i for i in range(flat.size) if float(flat[i]) != 0.0]
-        return (array([float(i) for i in indices]),)
+        return _native.nonzero(a)
     return (array([]),)
 
 def count_nonzero(a, axis=None):
     if isinstance(a, ndarray):
-        flat = a.flatten()
-        return _builtin_sum(1 for i in range(flat.size) if float(flat[i]) != 0.0)
+        return _native.count_nonzero(a)
     return 0
 
 # Keep builtin sum reference
@@ -902,18 +893,11 @@ def shares_memory(a, b, max_work=None):
 
 def signbit(x):
     if isinstance(x, ndarray):
-        flat = x.flatten()
-        return array([1.0 if float(flat[i]) < 0 or (float(flat[i]) == 0 and _math.copysign(1, float(flat[i])) < 0) else 0.0 for i in range(flat.size)]).reshape(x.shape)
+        return _native.signbit(x)
     return x < 0
 
 def power(x1, x2):
-    if isinstance(x1, ndarray):
-        flat1 = x1.flatten()
-        if isinstance(x2, ndarray):
-            flat2 = x2.flatten()
-            return array([float(flat1[i]) ** float(flat2[i]) for i in range(flat1.size)]).reshape(x1.shape)
-        return array([float(flat1[i]) ** float(x2) for i in range(flat1.size)]).reshape(x1.shape)
-    return x1 ** x2
+    return asarray(x1) ** asarray(x2)
 
 def add(x1, x2, out=None):
     return asarray(x1) + asarray(x2)
@@ -945,8 +929,7 @@ def logical_or(x1, x2):
 
 def logical_not(x):
     if isinstance(x, ndarray):
-        flat = x.flatten()
-        return array([0.0 if float(flat[i]) else 1.0 for i in range(flat.size)]).reshape(x.shape)
+        return _native.logical_not(x)
     return not x
 
 def logical_xor(x1, x2):

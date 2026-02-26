@@ -110,6 +110,23 @@ impl NdArray {
         NdArray::from_data(data)
     }
 
+    /// Returns a Bool array: true where elements are infinite.
+    /// For integer/bool types, always returns all-false.
+    pub fn isinf(&self) -> NdArray {
+        let data = match &self.data {
+            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite())),
+            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite())),
+            ArrayData::Complex64(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re.is_infinite() || x.im.is_infinite()))
+            }
+            ArrayData::Complex128(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re.is_infinite() || x.im.is_infinite()))
+            }
+            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false)),
+        };
+        NdArray::from_data(data)
+    }
+
     /// Deep copy of the array.
     pub fn copy(&self) -> NdArray {
         self.clone()
@@ -149,6 +166,47 @@ pub fn argwhere(a: &NdArray) -> NdArray {
     NdArray::from_data(ArrayData::Int64(
         ArrayD::from_shape_vec(IxDyn(&result_shape), coords).expect("coords match result shape"),
     ))
+}
+
+/// Return the indices of non-zero elements as a tuple of arrays, one per dimension.
+/// This matches NumPy's convention: `nonzero(a)` returns `(idx_dim0, idx_dim1, ...)`.
+pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
+    let shape = a.shape().to_vec();
+    let ndim = a.ndim().max(1); // at least 1-D
+    let flat = a.astype(crate::DType::Float64);
+    let ArrayData::Float64(arr) = &flat.data else {
+        unreachable!()
+    };
+
+    let mut indices: Vec<Vec<i64>> = vec![Vec::new(); ndim];
+    for (linear_idx, &val) in arr.iter().enumerate() {
+        if val != 0.0 {
+            let mut remaining = linear_idx;
+            for d in (0..ndim).rev() {
+                let dim_size = if d < shape.len() { shape[d] } else { 1 };
+                indices[d].push((remaining % dim_size) as i64);
+                remaining /= dim_size;
+            }
+        }
+    }
+
+    indices
+        .into_iter()
+        .map(|idx| {
+            NdArray::from_data(ArrayData::Int64(
+                ArrayD::from_shape_vec(IxDyn(&[idx.len()]), idx).unwrap(),
+            ))
+        })
+        .collect()
+}
+
+/// Count the number of non-zero elements.
+pub fn count_nonzero(a: &NdArray) -> usize {
+    let flat = a.astype(crate::DType::Float64);
+    let ArrayData::Float64(arr) = &flat.data else {
+        unreachable!()
+    };
+    arr.iter().filter(|&&x| x != 0.0).count()
 }
 
 /// Dot product of two arrays.
@@ -362,5 +420,50 @@ mod tests {
         let a = NdArray::from_vec(vec![0.0_f64, 0.0, 0.0]);
         let result = argwhere(&a);
         assert_eq!(result.shape(), &[0, 1]);
+    }
+
+    #[test]
+    fn test_isinf() {
+        let a = NdArray::from_vec(vec![1.0_f64, f64::INFINITY, f64::NEG_INFINITY, f64::NAN]);
+        let b = a.isinf();
+        assert_eq!(b.dtype(), DType::Bool);
+        assert_eq!(b.shape(), &[4]);
+    }
+
+    #[test]
+    fn test_isinf_int() {
+        let a = NdArray::from_vec(vec![1_i32, 2, 3]);
+        let b = a.isinf();
+        assert_eq!(b.dtype(), DType::Bool);
+        // All false for integers
+        assert!(!b.any());
+    }
+
+    #[test]
+    fn test_nonzero_1d() {
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0, 0.0, 3.0, 0.0]);
+        let result = nonzero(&a);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].shape(), &[2]);
+        assert_eq!(result[0].dtype(), DType::Int64);
+    }
+
+    #[test]
+    fn test_nonzero_2d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 0.0, 0.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let result = nonzero(&a);
+        assert_eq!(result.len(), 2);
+        // Two non-zero elements: (0,0) and (1,1)
+        assert_eq!(result[0].shape(), &[2]);
+        assert_eq!(result[1].shape(), &[2]);
+    }
+
+    #[test]
+    fn test_count_nonzero() {
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0, 0.0, 3.0, 0.0]);
+        let count = count_nonzero(&a);
+        assert_eq!(count, 2);
     }
 }
