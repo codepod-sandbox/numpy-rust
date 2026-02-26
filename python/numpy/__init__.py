@@ -722,7 +722,7 @@ def trace(a, offset=0, axis1=0, axis2=1):
 
 def ptp(a, axis=None):
     if isinstance(a, ndarray):
-        return float(a.max()) - float(a.min())
+        return a.max(axis) - a.min(axis)
     return 0
 
 def repeat(a, repeats, axis=None):

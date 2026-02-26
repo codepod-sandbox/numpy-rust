@@ -916,6 +916,26 @@ def test_quantile_axis():
     assert result.shape == (2,)
 
 
+# --- ptp ---
+
+def test_ptp_1d():
+    a = np.array([3.0, 1.0, 7.0, 2.0])
+    result = float(np.ptp(a))
+    assert result == 6.0
+
+def test_ptp_2d_axis():
+    a = np.array([[3.0, 1.0], [7.0, 2.0]])
+    result = np.ptp(a, axis=0)
+    expected = np.array([4.0, 1.0])
+    assert np.allclose(result, expected)
+
+def test_ptp_2d_axis1():
+    a = np.array([[3.0, 1.0], [7.0, 2.0]])
+    result = np.ptp(a, axis=1)
+    expected = np.array([2.0, 5.0])
+    assert np.allclose(result, expected)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
