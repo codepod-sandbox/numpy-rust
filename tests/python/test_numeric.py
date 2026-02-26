@@ -893,6 +893,29 @@ def test_argwhere_all_zero():
     assert result.shape == (0, 1)
 
 
+# --- quantile / percentile / median ---
+
+def test_quantile_median():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    result = float(np.quantile(a, 0.5))
+    assert result == 3.0
+
+def test_percentile_25():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    result = float(np.percentile(a, 25))
+    assert_close(result, 1.75)
+
+def test_median():
+    a = np.array([3.0, 1.0, 2.0])
+    result = float(np.median(a))
+    assert result == 2.0
+
+def test_quantile_axis():
+    a = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
+    result = np.quantile(a, 0.5, axis=1)
+    assert result.shape == (2,)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

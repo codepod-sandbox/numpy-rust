@@ -491,6 +491,36 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Quantile / Percentile ---
+
+    #[pyfunction]
+    fn quantile(
+        a: vm::PyRef<PyNdArray>,
+        q: f64,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let axis = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .quantile(q, axis)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn percentile(
+        a: vm::PyRef<PyNdArray>,
+        q: f64,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let axis = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .percentile(q, axis)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- String (char) operations ---
 
     #[pyfunction]

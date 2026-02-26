@@ -476,6 +476,21 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
         return a.var(None, ddof, keepdims)
     return 0.0
 
+def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.quantile(a, float(q), axis)
+
+def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.percentile(a, float(q), axis)
+
+def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.quantile(a, 0.5, axis)
+
 def max(a, axis=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
         if axis is not None:

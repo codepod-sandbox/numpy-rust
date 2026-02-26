@@ -7,4 +7,5 @@ pub mod math;
 pub mod reduction;
 pub mod selection;
 pub mod sorting;
+pub mod statistics;
 pub mod string_ops;
