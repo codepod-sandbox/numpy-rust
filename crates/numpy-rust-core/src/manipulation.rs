@@ -243,6 +243,84 @@ pub fn hstack(arrays: &[&NdArray]) -> Result<NdArray> {
     }
 }
 
+/// Specification for how to split an array.
+pub enum SplitSpec {
+    /// Split into N equal sections.
+    NSections(usize),
+    /// Split at the given indices.
+    Indices(Vec<usize>),
+}
+
+/// Split array along an axis.
+pub fn split(a: &NdArray, spec: &SplitSpec, axis: usize) -> Result<Vec<NdArray>> {
+    if axis >= a.ndim() {
+        return Err(NumpyError::InvalidAxis {
+            axis,
+            ndim: a.ndim(),
+        });
+    }
+    let axis_len = a.shape()[axis];
+
+    let indices = match spec {
+        SplitSpec::NSections(n) => {
+            if *n == 0 {
+                return Err(NumpyError::ValueError(
+                    "number of sections must be > 0".into(),
+                ));
+            }
+            if !axis_len.is_multiple_of(*n) {
+                return Err(NumpyError::ValueError(format!(
+                    "array split does not result in an equal division: {} into {}",
+                    axis_len, n
+                )));
+            }
+            let section_size = axis_len / n;
+            (1..*n).map(|i| i * section_size).collect::<Vec<_>>()
+        }
+        SplitSpec::Indices(idx) => idx.clone(),
+    };
+
+    let mut boundaries = Vec::with_capacity(indices.len() + 2);
+    boundaries.push(0usize);
+    boundaries.extend_from_slice(&indices);
+    boundaries.push(axis_len);
+
+    let mut result = Vec::with_capacity(boundaries.len() - 1);
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        let mut args = Vec::with_capacity(a.ndim());
+        for i in 0..a.ndim() {
+            if i == axis {
+                args.push(crate::indexing::SliceArg::Range {
+                    start: Some(start as isize),
+                    stop: Some(end as isize),
+                    step: 1,
+                });
+            } else {
+                args.push(crate::indexing::SliceArg::Full);
+            }
+        }
+        result.push(a.slice(&args)?);
+    }
+
+    Ok(result)
+}
+
+/// Split along axis 0.
+pub fn vsplit(a: &NdArray, spec: &SplitSpec) -> Result<Vec<NdArray>> {
+    split(a, spec, 0)
+}
+
+/// Split along axis 1 (or axis 0 for 1-D arrays).
+pub fn hsplit(a: &NdArray, spec: &SplitSpec) -> Result<Vec<NdArray>> {
+    if a.ndim() == 1 {
+        split(a, spec, 0)
+    } else {
+        split(a, spec, 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +465,36 @@ mod tests {
     fn test_squeeze_non_unit_axis_fails() {
         let a = NdArray::zeros(&[2, 3], DType::Float64);
         assert!(a.squeeze(Some(0)).is_err());
+    }
+
+    #[test]
+    fn test_split_equal() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let parts = super::split(&a, &super::SplitSpec::NSections(3), 0).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].shape(), &[2]);
+        assert_eq!(parts[1].shape(), &[2]);
+        assert_eq!(parts[2].shape(), &[2]);
+    }
+
+    #[test]
+    fn test_split_indices() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+        let parts = super::split(&a, &super::SplitSpec::Indices(vec![2, 4]), 0).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].shape(), &[2]);
+        assert_eq!(parts[1].shape(), &[2]);
+        assert_eq!(parts[2].shape(), &[1]);
+    }
+
+    #[test]
+    fn test_split_2d_axis1() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+            .reshape(&[2, 4])
+            .unwrap();
+        let parts = super::split(&a, &super::SplitSpec::NSections(2), 1).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].shape(), &[2, 2]);
+        assert_eq!(parts[1].shape(), &[2, 2]);
     }
 }

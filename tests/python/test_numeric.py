@@ -818,6 +818,54 @@ def test_prod_keepdims():
     assert result.shape == (2, 1)
 
 
+# --- split / vsplit / hsplit ---
+
+def test_split_equal():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    parts = np.split(a, 3)
+    assert len(parts) == 3
+    assert parts[0].shape == (2,)
+    assert np.allclose(parts[0], np.array([1.0, 2.0]))
+
+def test_split_indices():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    parts = np.split(a, [2, 4])
+    assert len(parts) == 3
+    assert parts[0].shape == (2,)
+    assert parts[1].shape == (2,)
+    assert parts[2].shape == (1,)
+
+def test_hsplit():
+    a = np.array([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]])
+    parts = np.hsplit(a, 2)
+    assert len(parts) == 2
+    assert parts[0].shape == (2, 2)
+
+def test_vsplit():
+    a = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
+    parts = np.vsplit(a, 2)
+    assert len(parts) == 2
+    assert parts[0].shape == (2, 2)
+
+
+# --- argwhere ---
+
+def test_argwhere_1d():
+    a = np.array([0.0, 1.0, 0.0, 3.0, 0.0])
+    result = np.argwhere(a)
+    assert result.shape == (2, 1)
+
+def test_argwhere_2d():
+    a = np.array([[1.0, 0.0], [0.0, 4.0]])
+    result = np.argwhere(a)
+    assert result.shape == (2, 2)
+
+def test_argwhere_all_zero():
+    a = np.array([0.0, 0.0, 0.0])
+    result = np.argwhere(a)
+    assert result.shape == (0, 1)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

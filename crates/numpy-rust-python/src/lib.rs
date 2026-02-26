@@ -19,7 +19,7 @@ pub mod _numpy_native {
     use super::*;
     use crate::py_array::{parse_optional_axis, PyNdArray, PyNdArrayIter};
     use vm::class::PyClassImpl;
-    use vm::{PyObjectRef, PyResult, VirtualMachine};
+    use vm::{PyObjectRef, PyPayload, PyResult, VirtualMachine};
 
     // Register the ndarray class type
     #[pyattr]
@@ -111,12 +111,46 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn argwhere(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(numpy_rust_core::argwhere(&a.inner()))
+    }
+
+    #[pyfunction]
     fn concatenate(
         arrays: PyObjectRef,
         axis: vm::function::OptionalArg<usize>,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         py_creation::py_concatenate(arrays, axis.unwrap_or(0), vm)
+    }
+
+    #[pyfunction]
+    fn split(
+        a: vm::PyRef<PyNdArray>,
+        indices_or_sections: PyObjectRef,
+        axis: vm::function::OptionalArg<usize>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let axis = axis.unwrap_or(0);
+        let spec = if let Ok(n) = indices_or_sections.clone().try_into_value::<usize>(vm) {
+            numpy_rust_core::SplitSpec::NSections(n)
+        } else if let Some(list) = indices_or_sections.downcast_ref::<vm::builtins::PyList>() {
+            let items = list.borrow_vec();
+            let indices: Vec<usize> = items
+                .iter()
+                .map(|item| item.clone().try_into_value::<usize>(vm))
+                .collect::<PyResult<Vec<_>>>()?;
+            numpy_rust_core::SplitSpec::Indices(indices)
+        } else {
+            return Err(vm.new_type_error("indices_or_sections must be int or list".to_owned()));
+        };
+        let parts = numpy_rust_core::split(&a.inner(), &spec, axis)
+            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        let py_parts: Vec<PyObjectRef> = parts
+            .into_iter()
+            .map(|p| PyNdArray::from_core(p).into_pyobject(vm))
+            .collect();
+        Ok(vm.ctx.new_list(py_parts).into())
     }
 
     // --- Module-level math functions ---

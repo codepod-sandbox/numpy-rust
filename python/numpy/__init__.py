@@ -539,6 +539,17 @@ def hstack(tup):
 
 row_stack = vstack
 
+def split(a, indices_or_sections, axis=0):
+    return _native.split(a, indices_or_sections, axis)
+
+def vsplit(a, indices_or_sections):
+    return split(a, indices_or_sections, 0)
+
+def hsplit(a, indices_or_sections):
+    if a.ndim == 1:
+        return split(a, indices_or_sections, 0)
+    return split(a, indices_or_sections, 1)
+
 def can_cast(from_, to, casting="safe"):
     return True  # stub
 
@@ -652,6 +663,9 @@ class broadcast:
         self.size = 1
         for s in self.shape:
             self.size *= s
+
+def argwhere(a):
+    return _native.argwhere(a)
 
 def nonzero(a):
     if isinstance(a, ndarray):

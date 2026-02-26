@@ -116,6 +116,41 @@ impl NdArray {
     }
 }
 
+/// Return the indices of non-zero elements as an (N, ndim) Int64 array.
+pub fn argwhere(a: &NdArray) -> NdArray {
+    let shape = a.shape().to_vec();
+    let ndim = a.ndim();
+    let flat = a.astype(crate::DType::Float64);
+    let ArrayData::Float64(arr) = &flat.data else {
+        unreachable!()
+    };
+
+    let mut coords: Vec<i64> = Vec::new();
+    let mut count = 0usize;
+
+    for (linear_idx, &val) in arr.iter().enumerate() {
+        if val != 0.0 {
+            let mut remaining = linear_idx;
+            let mut coord = vec![0i64; ndim];
+            for d in (0..ndim).rev() {
+                coord[d] = (remaining % shape[d]) as i64;
+                remaining /= shape[d];
+            }
+            coords.extend_from_slice(&coord);
+            count += 1;
+        }
+    }
+
+    let result_shape = if ndim == 0 {
+        vec![count, 0]
+    } else {
+        vec![count, ndim]
+    };
+    NdArray::from_data(ArrayData::Int64(
+        ArrayD::from_shape_vec(IxDyn(&result_shape), coords).expect("coords match result shape"),
+    ))
+}
+
 /// Dot product of two arrays.
 /// - 1-D x 1-D: inner product (scalar result)
 /// - 2-D x 2-D: matrix multiply
@@ -304,5 +339,28 @@ mod tests {
         let b = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
         let c = dot(&a, &b).unwrap();
         assert_eq!(c.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_argwhere_1d() {
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0, 0.0, 3.0, 0.0]);
+        let result = argwhere(&a);
+        assert_eq!(result.shape(), &[2, 1]);
+    }
+
+    #[test]
+    fn test_argwhere_2d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 0.0, 0.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let result = argwhere(&a);
+        assert_eq!(result.shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_argwhere_all_zero() {
+        let a = NdArray::from_vec(vec![0.0_f64, 0.0, 0.0]);
+        let result = argwhere(&a);
+        assert_eq!(result.shape(), &[0, 1]);
     }
 }
