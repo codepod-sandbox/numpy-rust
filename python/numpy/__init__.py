@@ -435,12 +435,8 @@ def sum(a, axis=None, dtype=None, out=None, keepdims=False):
 
 def prod(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
-        flat = a.flatten()
-        result = 1.0
-        for i in range(flat.size):
-            result *= float(flat[i])
-        return result
-    return a
+        return a.prod(axis, keepdims)
+    return _native.prod(array(a), axis, keepdims)
 
 def cumsum(a, axis=None, dtype=None, out=None):
     if isinstance(a, ndarray):

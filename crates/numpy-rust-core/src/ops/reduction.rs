@@ -108,6 +108,32 @@ impl NdArray {
         Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
+    /// Product of array elements over a given axis, or all elements if axis is None.
+    pub fn prod(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "prod not supported for string arrays".into(),
+            ));
+        }
+        let f = self.astype(DType::Float64);
+        let ArrayData::Float64(arr) = &f.data else {
+            unreachable!()
+        };
+
+        let result = match axis {
+            None => {
+                let p: f64 = arr.iter().product();
+                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), p)))
+            }
+            Some(ax) => {
+                validate_axis(ax, self.ndim())?;
+                let prod_arr = arr.fold_axis(Axis(ax), 1.0, |&acc, &x| acc * x);
+                NdArray::from_data(ArrayData::Float64(prod_arr))
+            }
+        };
+        Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
+    }
+
     /// Standard deviation. Always returns Float64.
     pub fn std(&self, axis: Option<usize>, ddof: usize, keepdims: bool) -> Result<NdArray> {
         if self.dtype().is_string() {
@@ -725,6 +751,27 @@ mod tests {
         let a = NdArray::from_vec(vec![true, false, true]);
         let s = a.sum(None, false).unwrap();
         assert_eq!(s.dtype(), DType::Int32);
+    }
+
+    #[test]
+    fn test_prod_all() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0]);
+        let p = a.prod(None, false).unwrap();
+        assert_eq!(p.shape(), &[]);
+    }
+
+    #[test]
+    fn test_prod_axis() {
+        let a = NdArray::ones(&[2, 3], DType::Float64);
+        let p = a.prod(Some(0), false).unwrap();
+        assert_eq!(p.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_prod_keepdims() {
+        let a = NdArray::ones(&[2, 3], DType::Float64);
+        let p = a.prod(Some(1), true).unwrap();
+        assert_eq!(p.shape(), &[2, 1]);
     }
 
     #[test]

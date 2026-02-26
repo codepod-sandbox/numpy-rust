@@ -319,6 +319,23 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Product reduction ---
+
+    #[pyfunction]
+    fn prod(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let axis = parse_optional_axis(axis, vm)?;
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .prod(axis, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Sort / Argsort ---
 
     #[pyfunction]

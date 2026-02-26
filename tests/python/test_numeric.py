@@ -800,6 +800,24 @@ def test_diff_n2():
     assert np.allclose(result, expected)
 
 
+# --- prod ---
+
+def test_prod_1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    assert float(np.prod(a)) == 24.0
+
+def test_prod_2d_axis():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.prod(a, axis=0)
+    expected = np.array([3.0, 8.0])
+    assert np.allclose(result, expected)
+
+def test_prod_keepdims():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.prod(a, axis=1, keepdims=True)
+    assert result.shape == (2, 1)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

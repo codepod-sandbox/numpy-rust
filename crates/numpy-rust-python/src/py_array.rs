@@ -681,6 +681,25 @@ impl PyNdArray {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Product reduction ---
+
+    #[pymethod]
+    fn prod(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let axis = parse_optional_axis(axis, vm)?;
+        let keepdims = keepdims.unwrap_or(false);
+        self.data
+            .read()
+            .unwrap()
+            .prod(axis, keepdims)
+            .map(|arr| ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Operators ---
 
     // Arithmetic operators are implemented via AsNumber below.
