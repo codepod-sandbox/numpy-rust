@@ -1,5 +1,6 @@
 pub mod arithmetic;
 pub mod comparison;
+pub mod cumulative;
 pub mod einsum;
 pub mod logical;
 pub mod math;
