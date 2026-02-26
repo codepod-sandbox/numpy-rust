@@ -936,6 +936,153 @@ def test_ptp_2d_axis1():
     assert np.allclose(result, expected)
 
 
+# ── Tier 5: Operator Gaps & Element-wise Rust Migrations ──────────────────
+
+def test_bitwise_xor():
+    a = np.array([1, 1, 0, 0]).astype("bool")
+    b = np.array([1, 0, 1, 0]).astype("bool")
+    result = a ^ b
+    assert result.tolist() == [False, True, True, False]
+
+def test_bitwise_xor_int():
+    a = np.array([12, 10]).astype("int32")
+    b = np.array([10, 12]).astype("int32")
+    result = a ^ b
+    assert result.tolist() == [6, 6]
+
+def test_left_shift():
+    a = np.array([1, 2, 4]).astype("int32")
+    b = np.array([2, 2, 2]).astype("int32")
+    result = a << b
+    assert result.tolist() == [4, 8, 16]
+
+def test_right_shift():
+    a = np.array([4, 8, 16]).astype("int32")
+    b = np.array([2, 2, 2]).astype("int32")
+    result = a >> b
+    assert result.tolist() == [1, 2, 4]
+
+def test_inplace_xor():
+    a = np.array([1, 0]).astype("bool")
+    b = np.array([1, 1]).astype("bool")
+    a ^= b
+    assert a.tolist() == [False, True]
+
+def test_inplace_lshift():
+    a = np.array([1, 2, 4]).astype("int32")
+    b = np.array([1, 1, 1]).astype("int32")
+    a <<= b
+    assert a.tolist() == [2, 4, 8]
+
+def test_inplace_rshift():
+    a = np.array([4, 8, 16]).astype("int32")
+    b = np.array([1, 1, 1]).astype("int32")
+    a >>= b
+    assert a.tolist() == [2, 4, 8]
+
+def test_abs_operator():
+    a = np.array([-1.0, 2.0, -3.0])
+    result = abs(a)
+    assert result.tolist() == [1.0, 2.0, 3.0]
+
+def test_bool_scalar_true():
+    a = np.array([1.0])
+    assert bool(a) == True
+
+def test_bool_scalar_false():
+    a = np.array([0.0])
+    assert bool(a) == False
+
+def test_bool_multi_raises():
+    a = np.array([1.0, 2.0])
+    try:
+        bool(a)
+        assert False, "Should have raised"
+    except ValueError:
+        pass
+
+def test_isnan():
+    a = np.array([1.0, float('nan'), 3.0])
+    result = np.isnan(a)
+    assert result.tolist() == [False, True, False]
+
+def test_isinf():
+    a = np.array([1.0, float('inf'), float('-inf')])
+    result = np.isinf(a)
+    assert result.tolist() == [False, True, True]
+
+def test_isfinite():
+    a = np.array([1.0, float('inf'), float('nan')])
+    result = np.isfinite(a)
+    assert result.tolist() == [True, False, False]
+
+def test_around():
+    a = np.array([1.234, 5.678, 9.012])
+    result = np.around(a, 2)
+    expected = np.array([1.23, 5.68, 9.01])
+    assert np.allclose(result, expected)
+
+def test_around_zero_decimals():
+    a = np.array([1.5, 2.3, 3.7])
+    result = np.around(a)
+    expected = np.array([2.0, 2.0, 4.0])
+    assert np.allclose(result, expected)
+
+def test_signbit():
+    a = np.array([-1.0, 0.0, 1.0])
+    result = np.signbit(a)
+    assert result.tolist() == [True, False, False]
+
+def test_signbit_neg_zero():
+    a = np.array([-0.0])
+    result = np.signbit(a)
+    assert result.tolist() == [True]
+
+def test_logical_not():
+    a = np.array([True, False, True])
+    result = np.logical_not(a)
+    assert result.tolist() == [False, True, False]
+
+def test_logical_not_numeric():
+    a = np.array([0.0, 1.0, 0.0, 5.0])
+    result = np.logical_not(a)
+    assert result.tolist() == [True, False, True, False]
+
+def test_power_func():
+    a = np.array([2.0, 3.0, 4.0])
+    result = np.power(a, 2.0)
+    assert result.tolist() == [4.0, 9.0, 16.0]
+
+def test_power_array():
+    a = np.array([2.0, 3.0])
+    b = np.array([3.0, 2.0])
+    result = np.power(a, b)
+    assert result.tolist() == [8.0, 9.0]
+
+def test_nonzero_1d():
+    a = np.array([0.0, 1.0, 0.0, 3.0, 0.0])
+    result = np.nonzero(a)
+    assert isinstance(result, tuple)
+    assert len(result) == 1
+    assert result[0].tolist() == [1, 3]
+
+def test_nonzero_2d():
+    a = np.array([[1.0, 0.0], [0.0, 4.0]])
+    result = np.nonzero(a)
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    assert result[0].tolist() == [0, 1]
+    assert result[1].tolist() == [0, 1]
+
+def test_count_nonzero():
+    a = np.array([0.0, 1.0, 0.0, 3.0, 0.0])
+    assert np.count_nonzero(a) == 2
+
+def test_count_nonzero_all():
+    a = np.array([1.0, 2.0, 3.0])
+    assert np.count_nonzero(a) == 3
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
