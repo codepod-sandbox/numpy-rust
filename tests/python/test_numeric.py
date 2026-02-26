@@ -538,6 +538,48 @@ def test_squeeze_axis():
     assert b.shape == (3, 1), f"expected (3, 1), got {b.shape}"
 
 
+# --- Edge cases ---
+
+def test_sum_empty_array():
+    a = np.array([])
+    s = np.sum(a)
+    assert float(s) == 0.0, f"sum of empty array should be 0.0, got {s}"
+
+def test_dtype_preservation_int32():
+    a = np.array([1, 2, 3]).astype("int32")
+    b = np.array([4, 5, 6]).astype("int32")
+    c = a + b
+    assert c.dtype == "int32", f"expected int32, got {c.dtype}"
+
+def test_inf_max():
+    a = np.array([1.0, float("inf"), 3.0])
+    mx = float(np.max(a))
+    assert mx == float("inf"), f"expected inf, got {mx}"
+
+def test_sort_already_sorted():
+    a = np.array([1.0, 2.0, 3.0])
+    s = np.sort(a)
+    for i in range(3):
+        assert float(s[i]) == float(a[i])
+
+def test_argmin_axis():
+    a = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
+    idx = np.argmin(a, axis=1)
+    assert idx.shape == (2,), f"expected (2,), got {idx.shape}"
+
+def test_argmax_axis():
+    a = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
+    idx = np.argmax(a, axis=0)
+    assert idx.shape == (3,), f"expected (3,), got {idx.shape}"
+
+def test_argsort_duplicates():
+    a = np.array([3.0, 1.0, 1.0, 2.0])
+    idx = np.argsort(a)
+    # First two indices should be 1 and 2 (both have value 1.0)
+    assert int(idx[0]) in [1, 2]
+    assert int(idx[1]) in [1, 2]
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

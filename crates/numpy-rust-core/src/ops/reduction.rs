@@ -128,14 +128,44 @@ impl NdArray {
         Ok(maybe_keepdims(result, axis, keepdims))
     }
 
-    /// Index of minimum element (flattened).
-    pub fn argmin(&self) -> Result<usize> {
-        self.reduce_all_argmin()
+    /// Index of minimum element.
+    /// axis=None: flatten then find argmin (scalar Int64). axis=Some(ax): argmin along that axis.
+    pub fn argmin(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "argmin not supported for string arrays".into(),
+            ));
+        }
+        match axis {
+            None => {
+                let idx = self.reduce_all_argmin()?;
+                Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
+                    IxDyn(&[]),
+                    idx as i64,
+                ))))
+            }
+            Some(ax) => self.reduce_axis_argmin(ax),
+        }
     }
 
-    /// Index of maximum element (flattened).
-    pub fn argmax(&self) -> Result<usize> {
-        self.reduce_all_argmax()
+    /// Index of maximum element.
+    /// axis=None: flatten then find argmax (scalar Int64). axis=Some(ax): argmax along that axis.
+    pub fn argmax(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "argmax not supported for string arrays".into(),
+            ));
+        }
+        match axis {
+            None => {
+                let idx = self.reduce_all_argmax()?;
+                Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
+                    IxDyn(&[]),
+                    idx as i64,
+                ))))
+            }
+            Some(ax) => self.reduce_axis_argmax(ax),
+        }
     }
 
     /// True if all elements are truthy.
@@ -360,6 +390,64 @@ impl NdArray {
         }
     }
 
+    fn reduce_axis_argmin(&self, axis: usize) -> Result<NdArray> {
+        validate_axis(axis, self.ndim())?;
+        let f = self.astype(DType::Float64);
+        let ArrayData::Float64(arr) = &f.data else {
+            unreachable!()
+        };
+        let ax = Axis(axis);
+        let mut result_shape = arr.shape().to_vec();
+        result_shape.remove(axis);
+        let result_dim = if result_shape.is_empty() {
+            IxDyn(&[])
+        } else {
+            IxDyn(&result_shape)
+        };
+        let mut result = ArrayD::<i64>::zeros(result_dim);
+        for (lane_in, result_elem) in arr.lanes(ax).into_iter().zip(result.iter_mut()) {
+            let mut min_idx: usize = 0;
+            let mut min_val = f64::INFINITY;
+            for (i, &v) in lane_in.iter().enumerate() {
+                if v < min_val {
+                    min_val = v;
+                    min_idx = i;
+                }
+            }
+            *result_elem = min_idx as i64;
+        }
+        Ok(NdArray::from_data(ArrayData::Int64(result)))
+    }
+
+    fn reduce_axis_argmax(&self, axis: usize) -> Result<NdArray> {
+        validate_axis(axis, self.ndim())?;
+        let f = self.astype(DType::Float64);
+        let ArrayData::Float64(arr) = &f.data else {
+            unreachable!()
+        };
+        let ax = Axis(axis);
+        let mut result_shape = arr.shape().to_vec();
+        result_shape.remove(axis);
+        let result_dim = if result_shape.is_empty() {
+            IxDyn(&[])
+        } else {
+            IxDyn(&result_shape)
+        };
+        let mut result = ArrayD::<i64>::zeros(result_dim);
+        for (lane_in, result_elem) in arr.lanes(ax).into_iter().zip(result.iter_mut()) {
+            let mut max_idx: usize = 0;
+            let mut max_val = f64::NEG_INFINITY;
+            for (i, &v) in lane_in.iter().enumerate() {
+                if v > max_val {
+                    max_val = v;
+                    max_idx = i;
+                }
+            }
+            *result_elem = max_idx as i64;
+        }
+        Ok(NdArray::from_data(ArrayData::Int64(result)))
+    }
+
     fn reduce_axis_fold(&self, axis: usize, op: ReduceOp) -> Result<NdArray> {
         validate_axis(axis, self.ndim())?;
         let ax = Axis(axis);
@@ -507,8 +595,28 @@ mod tests {
     #[test]
     fn test_argmin_argmax() {
         let a = NdArray::from_vec(vec![3.0_f64, 1.0, 2.0]);
-        assert_eq!(a.argmin().unwrap(), 1);
-        assert_eq!(a.argmax().unwrap(), 0);
+        let mn = a.argmin(None).unwrap();
+        assert_eq!(mn.shape(), &[]);
+        let mx = a.argmax(None).unwrap();
+        assert_eq!(mx.shape(), &[]);
+    }
+
+    #[test]
+    fn test_argmin_axis() {
+        let a = NdArray::from_vec(vec![3.0_f64, 1.0, 2.0, 6.0, 4.0, 5.0])
+            .reshape(&[2, 3])
+            .unwrap();
+        let idx = a.argmin(Some(1)).unwrap();
+        assert_eq!(idx.shape(), &[2]);
+    }
+
+    #[test]
+    fn test_argmax_axis() {
+        let a = NdArray::from_vec(vec![3.0_f64, 1.0, 2.0, 6.0, 4.0, 5.0])
+            .reshape(&[2, 3])
+            .unwrap();
+        let idx = a.argmax(Some(0)).unwrap();
+        assert_eq!(idx.shape(), &[3]);
     }
 
     #[test]

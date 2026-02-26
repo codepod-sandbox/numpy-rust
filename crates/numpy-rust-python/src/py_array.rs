@@ -376,20 +376,32 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn argmin(&self, vm: &VirtualMachine) -> PyResult<usize> {
+    fn argmin(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
         self.data
             .read()
             .unwrap()
-            .argmin()
+            .argmin(ax)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
-    fn argmax(&self, vm: &VirtualMachine) -> PyResult<usize> {
+    fn argmax(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
         self.data
             .read()
             .unwrap()
-            .argmax()
+            .argmax(ax)
+            .map(|arr| ndarray_or_scalar(arr, vm))
             .map_err(|e| numpy_err(e, vm))
     }
 

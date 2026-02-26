@@ -475,12 +475,12 @@ amin = min
 
 def argmax(a, axis=None, out=None):
     if isinstance(a, ndarray):
-        return a.argmax()
+        return a.argmax(axis)
     return 0
 
 def argmin(a, axis=None, out=None):
     if isinstance(a, ndarray):
-        return a.argmin()
+        return a.argmin(axis)
     return 0
 
 def reshape(a, newshape, order="C"):
