@@ -2898,6 +2898,120 @@ def test_take_along_axis():
     assert_close(r[0][1], 10.0)
     assert_close(r[1][0], 50.0)
 
+# --- Linalg extensions (Tier 19 Group A) ---
+
+def test_linalg_pinv():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    p = np.linalg.pinv(a)
+    # pinv(A) @ A should be close to identity
+    result = np.dot(p, a)
+    assert_close(result[0][0], 1.0)
+    assert_close(result[1][1], 1.0)
+    assert_close(result[0][1], 0.0, tol=1e-10)
+
+def test_linalg_matrix_rank():
+    a = np.array([[1.0, 2.0], [2.0, 4.0]])  # rank 1
+    assert_eq(np.linalg.matrix_rank(a), 1)
+
+def test_linalg_matrix_power():
+    a = np.array([[1.0, 1.0], [0.0, 1.0]])
+    r = np.linalg.matrix_power(a, 3)
+    # [[1,1],[0,1]]^3 = [[1,3],[0,1]]
+    assert_close(r[0][0], 1.0)
+    assert_close(r[0][1], 3.0)
+    assert_close(r[1][1], 1.0)
+
+def test_linalg_cond():
+    a = np.eye(3)
+    c = np.linalg.cond(a)
+    assert_close(c, 1.0)
+
+def test_linalg_eigvals():
+    a = np.array([[2.0, 0.0], [0.0, 3.0]])
+    vals = np.linalg.eigvals(a)
+    v = sorted([vals[0], vals[1]])
+    assert_close(v[0], 2.0)
+    assert_close(v[1], 3.0)
+
+def test_linalg_multi_dot():
+    a = np.array([[1.0, 0.0], [0.0, 1.0]])
+    b = np.array([[2.0, 3.0], [4.0, 5.0]])
+    r = np.linalg.multi_dot([a, b])
+    assert_close(r[0][0], 2.0)
+    assert_close(r[1][1], 5.0)
+
+# --- FFT extension tests (Tier 19 Group B) ---
+
+def test_fft_rfftfreq():
+    f = np.fft.rfftfreq(8)
+    assert_eq(f.size, 5)  # n//2 + 1
+    assert_close(f[0], 0.0)
+
+def test_fft_fftshift():
+    a = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+    s = np.fft.fftshift(a)
+    assert_close(s[0], 3.0)
+    assert_close(s[3], 0.0)
+
+def test_fft_ifftshift():
+    a = np.array([3.0, 4.0, 5.0, 0.0, 1.0, 2.0])
+    s = np.fft.ifftshift(a)
+    assert_close(s[0], 0.0)
+    assert_close(s[1], 1.0)
+
+def test_fft2_shape():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.fft2(a)
+    # Complex representation: (rows, cols, 2) where last dim is [real, imag]
+    assert_eq(r.shape, (2, 2, 2))
+
+# --- Random extension tests (Tier 19 Group C) ---
+
+def test_random_permutation():
+    np.random.seed(42)
+    p = np.random.permutation(5)
+    assert_eq(p.size, 5)
+    # Check it contains 0-4 (as floats)
+    vals = sorted([p[i] for i in range(5)])
+    assert_close(vals[0], 0.0)
+    assert_close(vals[4], 4.0)
+
+def test_random_standard_normal():
+    np.random.seed(42)
+    s = np.random.standard_normal(100)
+    assert_eq(s.size, 100)
+
+def test_random_exponential():
+    np.random.seed(42)
+    e = np.random.exponential(1.0, (10,))
+    assert_eq(e.size, 10)
+    # All values should be positive
+    for i in range(10):
+        assert_eq(e[i] > 0, True)
+
+def test_random_poisson():
+    np.random.seed(42)
+    p = np.random.poisson(5.0, (10,))
+    assert_eq(p.size, 10)
+    # All values should be non-negative
+    for i in range(10):
+        assert_eq(p[i] >= 0, True)
+
+def test_random_binomial():
+    np.random.seed(42)
+    b = np.random.binomial(10, 0.5, (10,))
+    assert_eq(b.size, 10)
+    for i in range(10):
+        assert_eq(b[i] >= 0, True)
+        assert_eq(b[i] <= 10, True)
+
+def test_default_rng():
+    rng = np.random.default_rng(42)
+    r = rng.random(5)
+    assert_eq(r.size, 5)
+    n = rng.normal(0.0, 1.0, (3,))
+    assert_eq(n.size, 3)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

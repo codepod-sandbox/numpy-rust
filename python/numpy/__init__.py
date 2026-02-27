@@ -3426,6 +3426,454 @@ def put_along_axis(arr, indices, values, axis):
         return array(rows)
     raise NotImplementedError("put_along_axis only supports 1D and 2D axis=1")
 
+# --- linalg extensions (built on existing primitives) -----------------------
+
+def _linalg_pinv(a):
+    """Compute the (Moore-Penrose) pseudo-inverse of a matrix using SVD."""
+    a = asarray(a)
+    U, s, Vt = linalg.svd(a)
+    # Build pseudo-inverse: V @ diag(1/s) @ U^T
+    # s is 1D singular values
+    n = s.size
+    s_inv_vals = []
+    tol = 1e-15 * s[0] if n > 0 else 0
+    for i in range(n):
+        v = s[i]
+        if v > tol:
+            s_inv_vals.append(1.0 / v)
+        else:
+            s_inv_vals.append(0.0)
+    s_inv = diag(array(s_inv_vals))
+    # pinv = Vt.T @ s_inv @ U.T
+    return dot(dot(Vt.T, s_inv), U.T)
+
+def _linalg_matrix_rank(M, tol=None):
+    """Return matrix rank using SVD."""
+    M = asarray(M)
+    U, s, Vt = linalg.svd(M)
+    n = s.size
+    if tol is None:
+        tol = s[0] * 1e-15 * max(M.shape[0], M.shape[1]) if n > 0 else 0
+    rank = 0
+    for i in range(n):
+        if s[i] > tol:
+            rank += 1
+    return rank
+
+def _linalg_matrix_power(M, n):
+    """Raise a square matrix to the (integer) power n."""
+    M = asarray(M)
+    if n == 0:
+        return eye(M.shape[0])
+    if n < 0:
+        M = linalg.inv(M)
+        n = -n
+    result = eye(M.shape[0])
+    for _ in range(n):
+        result = dot(result, M)
+    return result
+
+def _linalg_slogdet(a):
+    """Compute sign and log of the determinant."""
+    a = asarray(a)
+    d = linalg.det(a)
+    import math as _m
+    if d > 0:
+        return 1.0, _m.log(d)
+    elif d < 0:
+        return -1.0, _m.log(-d)
+    else:
+        return 0.0, float('-inf')
+
+def _linalg_cond(x, p=None):
+    """Compute the condition number of a matrix."""
+    x = asarray(x)
+    U, s, Vt = linalg.svd(x)
+    n = s.size
+    if n == 0:
+        return float('inf')
+    s_max = s[0]
+    s_min = s[n - 1]
+    if s_min == 0:
+        return float('inf')
+    return s_max / s_min
+
+def _linalg_eigh(a):
+    """Eigenvalues and eigenvectors of a symmetric matrix.
+    Falls back to eig (our eig handles symmetric matrices fine)."""
+    return linalg.eig(asarray(a))
+
+def _linalg_eigvals(a):
+    """Compute eigenvalues only."""
+    vals, vecs = linalg.eig(asarray(a))
+    return vals
+
+def _linalg_multi_dot(arrays):
+    """Compute the dot product of two or more arrays in a single call."""
+    result = asarray(arrays[0])
+    for i in range(1, len(arrays)):
+        result = dot(result, asarray(arrays[i]))
+    return result
+
+# Monkey-patch linalg module
+linalg.pinv = _linalg_pinv
+linalg.matrix_rank = _linalg_matrix_rank
+linalg.matrix_power = _linalg_matrix_power
+linalg.slogdet = _linalg_slogdet
+linalg.cond = _linalg_cond
+linalg.eigh = _linalg_eigh
+linalg.eigvals = _linalg_eigvals
+linalg.multi_dot = _linalg_multi_dot
+
+# --- FFT module extensions (Tier 19 Group B) --------------------------------
+
+def _fft_rfftfreq(n, d=1.0):
+    """Return the Discrete Fourier Transform sample frequencies for rfft."""
+    val = 1.0 / (n * d)
+    N = n // 2 + 1
+    results = []
+    for i in range(N):
+        results.append(float(i) * val)
+    return array(results)
+
+def _fft_fftshift(x, axes=None):
+    """Shift the zero-frequency component to the center of the spectrum."""
+    x = asarray(x)
+    if x.ndim == 1:
+        n = x.size
+        p = n // 2
+        # Concatenate second half and first half
+        second = array([x[i] for i in range(p, n)])
+        first = array([x[i] for i in range(p)])
+        return concatenate([second, first])
+    raise NotImplementedError("fftshift only supports 1D arrays")
+
+def _fft_ifftshift(x, axes=None):
+    """The inverse of fftshift."""
+    x = asarray(x)
+    if x.ndim == 1:
+        n = x.size
+        p = (n + 1) // 2
+        second = array([x[i] for i in range(p, n)])
+        first = array([x[i] for i in range(p)])
+        return concatenate([second, first])
+    raise NotImplementedError("ifftshift only supports 1D arrays")
+
+def _fft_complex_column_fft(row_ffts, rows, cols, inverse=False):
+    """Apply FFT/IFFT along columns of a complex (rows, cols, 2) representation.
+
+    row_ffts is a list of (cols, 2) arrays from fft.fft applied to each row.
+    Returns a (rows, cols, 2) shaped array representing the 2D FFT result.
+    The complex representation uses [real, imag] pairs.
+    """
+    fft_fn = fft.ifft if inverse else fft.fft
+    # For each column j, extract real and imaginary parts across all rows,
+    # apply FFT to each separately, then combine using:
+    #   DFT(xr + j*xi) = DFT(xr) + j*DFT(xi)
+    #   result_real = DFT(xr)_real - DFT(xi)_imag
+    #   result_imag = DFT(xr)_imag + DFT(xi)_real
+    col_results = []  # col_results[j] is a list of (real, imag) for each row i
+    for j in range(cols):
+        col_real = array([row_ffts[i][j][0] for i in range(rows)])
+        col_imag = array([row_ffts[i][j][1] for i in range(rows)])
+        fft_of_real = fft_fn(col_real)   # (rows, 2)
+        fft_of_imag = fft_fn(col_imag)   # (rows, 2)
+        # Combine: for each row i
+        col_ri = []
+        for i in range(rows):
+            r = fft_of_real[i][0] - fft_of_imag[i][1]
+            im = fft_of_real[i][1] + fft_of_imag[i][0]
+            col_ri.append((r, im))
+        col_results.append(col_ri)
+    # Reconstruct as (rows, cols, 2) using stack
+    final_rows = []
+    for i in range(rows):
+        row_data = []
+        for j in range(cols):
+            row_data.append([col_results[j][i][0], col_results[j][i][1]])
+        final_rows.append(array(row_data))
+    return stack(final_rows)
+
+def _fft_fft2(a, s=None, axes=(-2, -1), norm=None):
+    """Compute the 2-D discrete Fourier Transform."""
+    a = asarray(a)
+    if a.ndim != 2:
+        raise ValueError("fft2 requires a 2-D array")
+    rows = a.shape[0]
+    cols = a.shape[1]
+    # FFT each row -> list of (cols, 2) complex arrays
+    row_ffts = [fft.fft(a[i]) for i in range(rows)]
+    return _fft_complex_column_fft(row_ffts, rows, cols, inverse=False)
+
+def _fft_ifft2(a, s=None, axes=(-2, -1), norm=None):
+    """Compute the 2-D inverse discrete Fourier Transform."""
+    a = asarray(a)
+    if a.ndim != 2:
+        raise ValueError("ifft2 requires a 2-D array")
+    rows = a.shape[0]
+    cols = a.shape[1]
+    # IFFT each row -> list of (cols, 2) complex arrays
+    row_iffts = [fft.ifft(a[i]) for i in range(rows)]
+    return _fft_complex_column_fft(row_iffts, rows, cols, inverse=True)
+
+# Monkey-patch fft module with extension functions
+fft.rfftfreq = _fft_rfftfreq
+fft.fftshift = _fft_fftshift
+fft.ifftshift = _fft_ifftshift
+fft.fft2 = _fft_fft2
+fft.ifft2 = _fft_ifft2
+
+# --- random extension functions (Tier 19 Group C) ---------------------------
+
+def _random_shuffle(x):
+    """Modify a sequence in-place by shuffling its contents. Returns new array."""
+    x = asarray(x)
+    n = x.size
+    flat = x.flatten()
+    # Fisher-Yates shuffle using random.randint
+    vals = [flat[i] for i in range(n)]
+    for i in range(n - 1, 0, -1):
+        # Get a random index from 0 to i
+        j_arr = random.randint(0, i + 1, (1,))
+        j = int(j_arr[0])
+        vals[i], vals[j] = vals[j], vals[i]
+    result = array(vals)
+    if x.ndim > 1:
+        result = result.reshape(x.shape)
+    return result
+
+def _random_permutation(x):
+    """Randomly permute a sequence, or return a permuted range."""
+    if isinstance(x, (int, float)):
+        x = arange(0, int(x))
+    return _random_shuffle(asarray(x))
+
+def _random_standard_normal(size=None):
+    """Draw samples from a standard Normal distribution (mean=0, stdev=1)."""
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    return random.normal(0.0, 1.0, size)
+
+def _random_exponential(scale=1.0, size=None):
+    """Draw samples from an exponential distribution."""
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    # Generate uniform [0,1) then transform: -scale * ln(1 - U)
+    u = random.uniform(0.0, 1.0, size)
+    flat = u.flatten()
+    n = flat.size
+    result = []
+    for i in range(n):
+        v = float(flat[i])
+        if v >= 1.0:
+            v = 0.9999999999
+        import math as _m
+        result.append(-scale * _m.log(1.0 - v))
+    r = array(result)
+    if u.ndim > 1:
+        r = r.reshape(u.shape)
+    return r
+
+def _random_poisson(lam=1.0, size=None):
+    """Draw samples from a Poisson distribution."""
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    import math as _m
+    total = 1
+    for s in size:
+        total *= s
+    result = []
+    for _ in range(total):
+        # Knuth algorithm
+        L = _m.exp(-lam)
+        k = 0
+        p = 1.0
+        while True:
+            k += 1
+            u = random.uniform(0.0, 1.0, (1,))
+            p *= float(u[0])
+            if p <= L:
+                break
+        result.append(float(k - 1))
+    r = array(result)
+    if len(size) > 1:
+        r = r.reshape(size)
+    return r
+
+def _random_binomial(n, p, size=None):
+    """Draw samples from a binomial distribution."""
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    total = 1
+    for s in size:
+        total *= s
+    result = []
+    for _ in range(total):
+        successes = 0
+        for _ in range(int(n)):
+            u = random.uniform(0.0, 1.0, (1,))
+            if float(u[0]) < p:
+                successes += 1
+        result.append(float(successes))
+    r = array(result)
+    if len(size) > 1:
+        r = r.reshape(size)
+    return r
+
+def _random_beta(a, b, size=None):
+    """Draw samples from a Beta distribution.
+    Uses the relationship: if X~Gamma(a,1) and Y~Gamma(b,1), then X/(X+Y)~Beta(a,b)."""
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    total = 1
+    for s in size:
+        total *= s
+    result = []
+    for _ in range(total):
+        # Use Johnk's algorithm for Beta
+        import math as _m
+        while True:
+            u1 = float(random.uniform(0.0, 1.0, (1,))[0])
+            u2 = float(random.uniform(0.0, 1.0, (1,))[0])
+            x = u1 ** (1.0 / a)
+            y = u2 ** (1.0 / b)
+            if x + y <= 1.0:
+                result.append(x / (x + y))
+                break
+    r = array(result)
+    if len(size) > 1:
+        r = r.reshape(size)
+    return r
+
+def _random_gamma(shape_param, scale=1.0, size=None):
+    """Draw samples from a Gamma distribution using Marsaglia-Tsang method."""
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    import math as _m
+    total = 1
+    for s in size:
+        total *= s
+    result = []
+    for _ in range(total):
+        # For shape >= 1, use Marsaglia-Tsang
+        alpha = shape_param
+        if alpha < 1:
+            # Boost: X = Y * U^(1/alpha) where Y ~ Gamma(alpha+1)
+            u = float(random.uniform(0.0, 1.0, (1,))[0])
+            alpha = alpha + 1
+            boost = u ** (1.0 / shape_param)
+        else:
+            boost = 1.0
+        d = alpha - 1.0/3.0
+        c = 1.0 / _m.sqrt(9.0 * d)
+        while True:
+            x = float(random.randn((1,))[0])
+            v = (1.0 + c * x) ** 3
+            if v <= 0:
+                continue
+            u = float(random.uniform(0.0, 1.0, (1,))[0])
+            if u < 1 - 0.0331 * x**4:
+                result.append(d * v * scale * boost)
+                break
+            if _m.log(u) < 0.5 * x**2 + d * (1 - v + _m.log(v)):
+                result.append(d * v * scale * boost)
+                break
+    r = array(result)
+    if len(size) > 1:
+        r = r.reshape(size)
+    return r
+
+class _Generator:
+    """Random number generator (simplified)."""
+    def __init__(self, seed_val=None):
+        if seed_val is not None:
+            random.seed(int(seed_val))
+
+    def random(self, size=None):
+        if size is None:
+            return float(random.rand((1,))[0])
+        if isinstance(size, int):
+            size = (size,)
+        return random.rand(size)
+
+    def standard_normal(self, size=None):
+        return _random_standard_normal(size)
+
+    def integers(self, low, high=None, size=None, endpoint=False):
+        if high is None:
+            high = low
+            low = 0
+        if not endpoint:
+            high = high
+        else:
+            high = high + 1
+        if size is None:
+            size = (1,)
+        if isinstance(size, int):
+            size = (size,)
+        return random.randint(low, high, size)
+
+    def choice(self, a, size=None, replace=True, p=None):
+        if size is None:
+            size = 1
+        return random.choice(asarray(a), size, replace)
+
+    def normal(self, loc=0.0, scale=1.0, size=None):
+        if size is None:
+            size = (1,)
+        if isinstance(size, int):
+            size = (size,)
+        return random.normal(loc, scale, size)
+
+    def uniform(self, low=0.0, high=1.0, size=None):
+        if size is None:
+            size = (1,)
+        if isinstance(size, int):
+            size = (size,)
+        return random.uniform(low, high, size)
+
+    def shuffle(self, x):
+        return _random_shuffle(x)
+
+    def permutation(self, x):
+        return _random_permutation(x)
+
+    def exponential(self, scale=1.0, size=None):
+        return _random_exponential(scale, size)
+
+    def poisson(self, lam=1.0, size=None):
+        return _random_poisson(lam, size)
+
+    def binomial(self, n, p, size=None):
+        return _random_binomial(n, p, size)
+
+def _default_rng(seed=None):
+    return _Generator(seed)
+
+# Monkey-patch random module with extension functions
+random.shuffle = _random_shuffle
+random.permutation = _random_permutation
+random.standard_normal = _random_standard_normal
+random.exponential = _random_exponential
+random.poisson = _random_poisson
+random.binomial = _random_binomial
+random.beta = _random_beta
+random.gamma = _random_gamma
+random.default_rng = _default_rng
+random.Generator = _Generator
+
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:
     pass
