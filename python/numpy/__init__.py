@@ -760,18 +760,9 @@ _builtin_sum = __builtins__["sum"] if isinstance(__builtins__, dict) else __impo
 
 def diagonal(a, offset=0, axis1=0, axis2=1):
     """Extract diagonal from 2D array."""
-    if a.ndim != 2:
-        raise ValueError("diagonal requires 2-d array")
-    rows, cols = a.shape
-    n = _builtin_min(rows, cols - offset) if offset >= 0 else _builtin_min(rows + offset, cols)
-    if n <= 0:
-        return array([])
-    result = []
-    for i in range(n):
-        r = i - offset if offset < 0 else i
-        c = i + offset if offset >= 0 else i
-        result.append(float(a[r, c]))
-    return array(result)
+    if isinstance(a, ndarray):
+        return _native.diagonal(a, offset)
+    raise ValueError("diagonal requires ndarray")
 
 _builtin_min = __builtins__["min"] if isinstance(__builtins__, dict) else __import__("builtins").min
 _builtin_max = __builtins__["max"] if isinstance(__builtins__, dict) else __import__("builtins").max
@@ -826,13 +817,11 @@ def searchsorted(a, v, side="left", sorter=None):
 
 def outer(a, b, out=None):
     """Compute outer product."""
-    a_flat = a.flatten() if isinstance(a, ndarray) else array([float(a)])
-    b_flat = b.flatten() if isinstance(b, ndarray) else array([float(b)])
-    result = []
-    for i in range(a_flat.size):
-        for j in range(b_flat.size):
-            result.append(float(a_flat[i]) * float(b_flat[j]))
-    return array(result).reshape((a_flat.size, b_flat.size))
+    if isinstance(a, ndarray) or isinstance(b, ndarray):
+        return _native.outer(a, b)
+    a_flat = array([float(a)])
+    b_flat = array([float(b)])
+    return _native.outer(a_flat, b_flat)
 
 def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
     """Cross product stub (3D only)."""
@@ -848,15 +837,9 @@ def tensordot(a, b, axes=2):
     return dot(a, b)  # simplified stub
 
 def roll(a, shift, axis=None):
-    flat = a.flatten()
-    n = flat.size
-    if n == 0:
-        return a.copy()
-    shift = shift % n
-    result = []
-    for i in range(n):
-        result.append(float(flat[(i - shift) % n]))
-    return array(result).reshape(a.shape)
+    if isinstance(a, ndarray):
+        return _native.roll(a, shift, axis)
+    return array(a)
 
 def rollaxis(a, axis, start=0):
     return a  # stub
@@ -937,12 +920,44 @@ def size(a, axis=None):
     return 1
 
 def take(a, indices, axis=None, out=None, mode="raise"):
-    flat = a.flatten()
+    if isinstance(a, ndarray):
+        return _native.take(a, indices, axis)
+    flat = array(a).flatten()
     if isinstance(indices, ndarray):
         idx = [int(float(indices.flatten()[i])) for i in range(indices.size)]
     else:
         idx = list(indices) if hasattr(indices, '__iter__') else [indices]
     return array([float(flat[i]) for i in idx])
+
+def flip(a, axis=None):
+    """Reverse the order of elements along the given axis."""
+    if isinstance(a, ndarray):
+        return _native.flip(a, axis)
+    return array(list(reversed(a))) if axis is None else a
+
+def flipud(a):
+    """Flip array upside down (reverse along axis 0)."""
+    if isinstance(a, ndarray):
+        return _native.flipud(a)
+    return flip(a, 0)
+
+def fliplr(a):
+    """Flip array left-right (reverse along axis 1)."""
+    if isinstance(a, ndarray):
+        return _native.fliplr(a)
+    return flip(a, 1)
+
+def rot90(a, k=1, axes=(0, 1)):
+    """Rotate array 90 degrees in the plane of the first two axes."""
+    if isinstance(a, ndarray):
+        return _native.rot90(a, k)
+    return a
+
+def unique(a):
+    """Return sorted unique elements of an array."""
+    if isinstance(a, ndarray):
+        return _native.unique(a)
+    return array(sorted(set(a)))
 
 def all(a, axis=None, out=None, keepdims=False):
     if isinstance(a, ndarray):

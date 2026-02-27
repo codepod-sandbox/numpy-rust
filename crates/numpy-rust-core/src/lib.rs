@@ -18,7 +18,9 @@ pub use array_data::ArrayData;
 pub use creation::{arange, eye, full, linspace, linspace_with_step, ones_like, zeros_like};
 pub use dtype::DType;
 pub use error::{NumpyError, Result};
-pub use manipulation::{concatenate, hsplit, hstack, split, stack, vsplit, vstack, SplitSpec};
+pub use manipulation::{
+    concatenate, hsplit, hstack, split, stack, unique, vsplit, vstack, SplitSpec,
+};
 pub use ops::einsum::einsum;
 pub use ops::selection::choose;
-pub use utility::{argwhere, count_nonzero, dot, nonzero, where_cond};
+pub use utility::{argwhere, count_nonzero, diagonal, dot, nonzero, outer, where_cond};

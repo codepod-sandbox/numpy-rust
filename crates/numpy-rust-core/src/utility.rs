@@ -294,6 +294,68 @@ fn matmul_2d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
     Ok(NdArray::from_data(data))
 }
 
+/// Extract diagonal from a 2D array.
+pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
+    if a.ndim() != 2 {
+        return Err(NumpyError::ValueError("diagonal requires 2-d array".into()));
+    }
+    let rows = a.shape()[0];
+    let cols = a.shape()[1];
+    let (start_r, start_c) = if offset >= 0 {
+        (0, offset as usize)
+    } else {
+        ((-offset) as usize, 0)
+    };
+
+    let n = if offset >= 0 {
+        std::cmp::min(rows, cols.saturating_sub(offset as usize))
+    } else {
+        std::cmp::min(rows.saturating_sub((-offset) as usize), cols)
+    };
+
+    if n == 0 {
+        return Ok(NdArray::from_data(ArrayData::Float64(
+            ArrayD::from_shape_vec(IxDyn(&[0]), vec![]).unwrap(),
+        )));
+    }
+
+    // Extract elements along diagonal
+    let flat = a.astype(crate::DType::Float64);
+    let ArrayData::Float64(arr) = &flat.data else {
+        unreachable!()
+    };
+    let arr2 = arr.view().into_dimensionality::<ndarray::Ix2>().unwrap();
+    let vals: Vec<f64> = (0..n).map(|i| arr2[[start_r + i, start_c + i]]).collect();
+
+    Ok(NdArray::from_data(ArrayData::Float64(
+        ArrayD::from_shape_vec(IxDyn(&[n]), vals).unwrap(),
+    )))
+}
+
+/// Compute outer product of two arrays (flattened).
+pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
+    let a_flat = a.flatten().astype(crate::DType::Float64);
+    let b_flat = b.flatten().astype(crate::DType::Float64);
+    let ArrayData::Float64(aa) = &a_flat.data else {
+        unreachable!()
+    };
+    let ArrayData::Float64(bb) = &b_flat.data else {
+        unreachable!()
+    };
+
+    let m = aa.len();
+    let n = bb.len();
+    let mut result = Vec::with_capacity(m * n);
+    for &ai in aa.iter() {
+        for &bi in bb.iter() {
+            result.push(ai * bi);
+        }
+    }
+    NdArray::from_data(ArrayData::Float64(
+        ArrayD::from_shape_vec(IxDyn(&[m, n]), result).unwrap(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,5 +527,84 @@ mod tests {
         let a = NdArray::from_vec(vec![0.0_f64, 1.0, 0.0, 3.0, 0.0]);
         let count = count_nonzero(&a);
         assert_eq!(count, 2);
+    }
+
+    // --- diagonal tests ---
+
+    #[test]
+    fn test_diagonal_main() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let d = diagonal(&a, 0).unwrap();
+        assert_eq!(d.shape(), &[2]);
+        use crate::indexing::Scalar;
+        assert_eq!(d.get(&[0]).unwrap(), Scalar::Float64(1.0));
+        assert_eq!(d.get(&[1]).unwrap(), Scalar::Float64(4.0));
+    }
+
+    #[test]
+    fn test_diagonal_positive_offset() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .reshape(&[2, 3])
+            .unwrap();
+        let d = diagonal(&a, 1).unwrap();
+        assert_eq!(d.shape(), &[2]);
+        use crate::indexing::Scalar;
+        assert_eq!(d.get(&[0]).unwrap(), Scalar::Float64(2.0));
+        assert_eq!(d.get(&[1]).unwrap(), Scalar::Float64(6.0));
+    }
+
+    #[test]
+    fn test_diagonal_negative_offset() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .reshape(&[3, 2])
+            .unwrap();
+        let d = diagonal(&a, -1).unwrap();
+        assert_eq!(d.shape(), &[2]);
+        use crate::indexing::Scalar;
+        assert_eq!(d.get(&[0]).unwrap(), Scalar::Float64(3.0));
+        assert_eq!(d.get(&[1]).unwrap(), Scalar::Float64(6.0));
+    }
+
+    #[test]
+    fn test_diagonal_1d_fails() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        assert!(diagonal(&a, 0).is_err());
+    }
+
+    #[test]
+    fn test_diagonal_large_offset_empty() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let d = diagonal(&a, 5).unwrap();
+        assert_eq!(d.shape(), &[0]);
+    }
+
+    // --- outer tests ---
+
+    #[test]
+    fn test_outer() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let b = NdArray::from_vec(vec![4.0_f64, 5.0]);
+        let c = outer(&a, &b);
+        assert_eq!(c.shape(), &[3, 2]);
+        use crate::indexing::Scalar;
+        assert_eq!(c.get(&[0, 0]).unwrap(), Scalar::Float64(4.0));
+        assert_eq!(c.get(&[0, 1]).unwrap(), Scalar::Float64(5.0));
+        assert_eq!(c.get(&[1, 0]).unwrap(), Scalar::Float64(8.0));
+        assert_eq!(c.get(&[2, 1]).unwrap(), Scalar::Float64(15.0));
+    }
+
+    #[test]
+    fn test_outer_scalar() {
+        let a = NdArray::from_vec(vec![2.0_f64]);
+        let b = NdArray::from_vec(vec![3.0_f64, 4.0]);
+        let c = outer(&a, &b);
+        assert_eq!(c.shape(), &[1, 2]);
+        use crate::indexing::Scalar;
+        assert_eq!(c.get(&[0, 0]).unwrap(), Scalar::Float64(6.0));
+        assert_eq!(c.get(&[0, 1]).unwrap(), Scalar::Float64(8.0));
     }
 }

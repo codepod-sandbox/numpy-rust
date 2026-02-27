@@ -1,4 +1,4 @@
-use ndarray::{Axis, IxDyn};
+use ndarray::{Axis, IxDyn, Slice};
 
 use crate::array_data::ArrayData;
 use crate::casting::cast_array_data;
@@ -98,6 +98,126 @@ impl NdArray {
         let mut new_shape = self.shape().to_vec();
         new_shape.insert(axis, 1);
         self.reshape(&new_shape)
+    }
+
+    /// Reverse elements along the given axis. If axis is None, flip the flattened array.
+    pub fn flip(&self, axis: Option<usize>) -> Result<NdArray> {
+        match axis {
+            None => {
+                let flat = self.flatten();
+                flat.flip(Some(0))
+            }
+            Some(ax) => {
+                if ax >= self.ndim() {
+                    return Err(NumpyError::ValueError(format!(
+                        "axis {} out of bounds for array of dimension {}",
+                        ax,
+                        self.ndim()
+                    )));
+                }
+
+                macro_rules! do_flip {
+                    ($arr:expr) => {
+                        $arr.slice_axis(Axis(ax), Slice::new(0, None, -1))
+                            .to_owned()
+                    };
+                }
+
+                let data = match &self.data {
+                    ArrayData::Bool(a) => ArrayData::Bool(do_flip!(a)),
+                    ArrayData::Int32(a) => ArrayData::Int32(do_flip!(a)),
+                    ArrayData::Int64(a) => ArrayData::Int64(do_flip!(a)),
+                    ArrayData::Float32(a) => ArrayData::Float32(do_flip!(a)),
+                    ArrayData::Float64(a) => ArrayData::Float64(do_flip!(a)),
+                    ArrayData::Complex64(a) => ArrayData::Complex64(do_flip!(a)),
+                    ArrayData::Complex128(a) => ArrayData::Complex128(do_flip!(a)),
+                    ArrayData::Str(a) => ArrayData::Str(do_flip!(a)),
+                };
+                Ok(NdArray::from_data(data))
+            }
+        }
+    }
+
+    /// Rotate array 90 degrees in the plane of the first two axes.
+    /// k=1: transpose then flip axis 1
+    /// k=2: flip both axes
+    /// k=3: transpose then flip axis 0
+    pub fn rot90(&self, k: i32) -> Result<NdArray> {
+        if self.ndim() < 2 {
+            return Err(NumpyError::ValueError(
+                "rot90 requires at least 2-D array".into(),
+            ));
+        }
+        let k = k.rem_euclid(4);
+        match k {
+            0 => Ok(self.clone()),
+            1 => {
+                // rot90 k=1: transpose then flip axis 1
+                self.transpose().flip(Some(0))
+            }
+            2 => {
+                // flip both axes
+                self.flip(Some(0))?.flip(Some(1))
+            }
+            3 => {
+                // flip axis 0 then transpose
+                self.flip(Some(0))?.transpose().flip(Some(1))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Circular shift of elements. If axis is None, flatten first then reshape back.
+    pub fn roll(&self, shift: i64, axis: Option<usize>) -> Result<NdArray> {
+        match axis {
+            None => {
+                let flat = self.flatten();
+                let rolled = flat.roll(shift, Some(0))?;
+                rolled.reshape(self.shape())
+            }
+            Some(ax) => {
+                if ax >= self.ndim() {
+                    return Err(NumpyError::ValueError(format!(
+                        "axis {} out of bounds for array of dimension {}",
+                        ax,
+                        self.ndim()
+                    )));
+                }
+                let n = self.shape()[ax] as i64;
+                if n == 0 {
+                    return Ok(self.clone());
+                }
+                let shift = ((shift % n) + n) % n;
+                if shift == 0 {
+                    return Ok(self.clone());
+                }
+                // Build rolled indices
+                let indices: Vec<usize> = (0..n as usize)
+                    .map(|i| (i + (n as usize - shift as usize)) % n as usize)
+                    .collect();
+                self.index_select(ax, &indices)
+            }
+        }
+    }
+
+    /// Select elements by indices. If axis is None, flatten first.
+    pub fn take(&self, indices: &[usize], axis: Option<usize>) -> Result<NdArray> {
+        match axis {
+            None => {
+                let flat = self.flatten();
+                flat.index_select(0, indices)
+            }
+            Some(ax) => {
+                if ax >= self.ndim() {
+                    return Err(NumpyError::ValueError(format!(
+                        "axis {} out of bounds for array of dimension {}",
+                        ax,
+                        self.ndim()
+                    )));
+                }
+                self.index_select(ax, indices)
+            }
+        }
     }
 
     /// Remove dimensions of size 1.
@@ -386,6 +506,20 @@ pub fn tile(a: &NdArray, reps: &[usize]) -> Result<NdArray> {
     Ok(arr)
 }
 
+/// Return sorted unique values of the flattened array.
+pub fn unique(a: &NdArray) -> NdArray {
+    let flat = a.flatten().astype(crate::DType::Float64);
+    let ArrayData::Float64(arr) = &flat.data else {
+        unreachable!()
+    };
+    let mut vals: Vec<f64> = arr.iter().copied().collect();
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    vals.dedup();
+    NdArray::from_data(ArrayData::Float64(
+        ndarray::ArrayD::from_shape_vec(IxDyn(&[vals.len()]), vals).unwrap(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,5 +727,207 @@ mod tests {
             .unwrap();
         let t = super::tile(&a, &[2, 3]).unwrap();
         assert_eq!(t.shape(), &[4, 6]);
+    }
+
+    // --- flip tests ---
+
+    #[test]
+    fn test_flip_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+        let b = a.flip(Some(0)).unwrap();
+        assert_eq!(b.shape(), &[5]);
+        // Check values are reversed
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0]).unwrap(), Scalar::Float64(5.0));
+        assert_eq!(b.get(&[4]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_flip_2d_axis0() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .reshape(&[2, 3])
+            .unwrap();
+        let b = a.flip(Some(0)).unwrap();
+        assert_eq!(b.shape(), &[2, 3]);
+        // First row should become last row
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0, 0]).unwrap(), Scalar::Float64(4.0));
+        assert_eq!(b.get(&[1, 0]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_flip_2d_axis1() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .reshape(&[2, 3])
+            .unwrap();
+        let b = a.flip(Some(1)).unwrap();
+        assert_eq!(b.shape(), &[2, 3]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0, 0]).unwrap(), Scalar::Float64(3.0));
+        assert_eq!(b.get(&[0, 2]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_flip_none_axis() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let b = a.flip(None).unwrap();
+        assert_eq!(b.shape(), &[3]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0]).unwrap(), Scalar::Float64(3.0));
+    }
+
+    #[test]
+    fn test_flip_invalid_axis() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        assert!(a.flip(Some(5)).is_err());
+    }
+
+    // --- rot90 tests ---
+
+    #[test]
+    fn test_rot90_k1() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let b = a.rot90(1).unwrap();
+        assert_eq!(b.shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_rot90_k0() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let b = a.rot90(0).unwrap();
+        assert_eq!(b.shape(), &[2, 2]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0, 0]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_rot90_k2() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let b = a.rot90(2).unwrap();
+        assert_eq!(b.shape(), &[2, 2]);
+        // k=2 reverses both axes: [[4,3],[2,1]]
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0, 0]).unwrap(), Scalar::Float64(4.0));
+        assert_eq!(b.get(&[1, 1]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_rot90_k4_identity() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let b = a.rot90(4).unwrap();
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0, 0]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_rot90_1d_fails() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        assert!(a.rot90(1).is_err());
+    }
+
+    // --- unique tests ---
+
+    #[test]
+    fn test_unique() {
+        let a = NdArray::from_vec(vec![3.0_f64, 1.0, 2.0, 1.0, 3.0, 2.0]);
+        let b = super::unique(&a);
+        assert_eq!(b.shape(), &[3]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0]).unwrap(), Scalar::Float64(1.0));
+        assert_eq!(b.get(&[1]).unwrap(), Scalar::Float64(2.0));
+        assert_eq!(b.get(&[2]).unwrap(), Scalar::Float64(3.0));
+    }
+
+    #[test]
+    fn test_unique_already_unique() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let b = super::unique(&a);
+        assert_eq!(b.shape(), &[3]);
+    }
+
+    // --- roll tests ---
+
+    #[test]
+    fn test_roll_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+        let b = a.roll(2, Some(0)).unwrap();
+        assert_eq!(b.shape(), &[5]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0]).unwrap(), Scalar::Float64(4.0));
+        assert_eq!(b.get(&[1]).unwrap(), Scalar::Float64(5.0));
+        assert_eq!(b.get(&[2]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_roll_negative() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+        let b = a.roll(-1, Some(0)).unwrap();
+        assert_eq!(b.shape(), &[5]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0]).unwrap(), Scalar::Float64(2.0));
+        assert_eq!(b.get(&[4]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_roll_none_axis() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let b = a.roll(1, None).unwrap();
+        assert_eq!(b.shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_roll_invalid_axis() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        assert!(a.roll(1, Some(5)).is_err());
+    }
+
+    // --- take tests ---
+
+    #[test]
+    fn test_take_1d() {
+        let a = NdArray::from_vec(vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
+        let b = a.take(&[0, 2, 4], Some(0)).unwrap();
+        assert_eq!(b.shape(), &[3]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0]).unwrap(), Scalar::Float64(10.0));
+        assert_eq!(b.get(&[1]).unwrap(), Scalar::Float64(30.0));
+        assert_eq!(b.get(&[2]).unwrap(), Scalar::Float64(50.0));
+    }
+
+    #[test]
+    fn test_take_none_axis() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let b = a.take(&[0, 3], None).unwrap();
+        assert_eq!(b.shape(), &[2]);
+        use crate::indexing::Scalar;
+        assert_eq!(b.get(&[0]).unwrap(), Scalar::Float64(1.0));
+        assert_eq!(b.get(&[1]).unwrap(), Scalar::Float64(4.0));
+    }
+
+    #[test]
+    fn test_take_2d_axis0() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .reshape(&[3, 2])
+            .unwrap();
+        let b = a.take(&[0, 2], Some(0)).unwrap();
+        assert_eq!(b.shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_take_invalid_axis() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        assert!(a.take(&[0], Some(5)).is_err());
     }
 }

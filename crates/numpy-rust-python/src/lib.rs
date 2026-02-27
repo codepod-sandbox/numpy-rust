@@ -738,6 +738,133 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_type_error(e.to_string()))
     }
 
+    // --- Array manipulation: flip, flipud, fliplr, rot90, unique, roll, take, diagonal, outer ---
+
+    #[pyfunction]
+    fn flip(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let data = a.inner();
+        let ax = parse_optional_axis(axis, vm)?;
+        data.flip(ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn flipud(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let data = a.inner();
+        data.flip(Some(0))
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn fliplr(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let data = a.inner();
+        data.flip(Some(1))
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn rot90(
+        a: vm::PyRef<PyNdArray>,
+        k: vm::function::OptionalArg<i32>,
+        _vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let data = a.inner();
+        let k_val = k.unwrap_or(1);
+        data.rot90(k_val)
+            .map(PyNdArray::from_core)
+            .map_err(|e| _vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn unique(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        let data = a.inner();
+        PyNdArray::from_core(numpy_rust_core::unique(&data))
+    }
+
+    #[pyfunction]
+    fn diagonal(
+        a: vm::PyRef<PyNdArray>,
+        offset: vm::function::OptionalArg<i64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let data = a.inner();
+        let off = offset.unwrap_or(0);
+        numpy_rust_core::diagonal(&data, off)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn outer(a: PyObjectRef, b: PyObjectRef, vm: &VirtualMachine) -> PyResult {
+        let a_arr = obj_to_ndarray(&a, vm)?;
+        let b_arr = obj_to_ndarray(&b, vm)?;
+        Ok(PyNdArray::from_core(numpy_rust_core::outer(&a_arr, &b_arr)).into_pyobject(vm))
+    }
+
+    #[pyfunction]
+    fn roll(
+        a: vm::PyRef<PyNdArray>,
+        shift: i64,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let data = a.inner();
+        let ax = parse_optional_axis(axis, vm)?;
+        data.roll(shift, ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn take(
+        a: vm::PyRef<PyNdArray>,
+        indices: PyObjectRef,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        // Parse indices from list, tuple, or ndarray
+        let idx: Vec<usize> = if let Some(arr) = indices.downcast_ref::<PyNdArray>() {
+            // Extract from ndarray
+            let inner = arr.inner();
+            let flat = inner.flatten().astype(numpy_rust_core::DType::Int64);
+            let numpy_rust_core::ArrayData::Int64(data) = flat.data() else {
+                return Err(vm.new_type_error("indices must be integer type".to_owned()));
+            };
+            data.iter().map(|&v| v as usize).collect()
+        } else if let Some(list) = indices.downcast_ref::<vm::builtins::PyList>() {
+            let items = list.borrow_vec();
+            items
+                .iter()
+                .map(|item| item.clone().try_into_value::<usize>(vm))
+                .collect::<PyResult<Vec<_>>>()?
+        } else if let Some(tuple) = indices.downcast_ref::<vm::builtins::PyTuple>() {
+            tuple
+                .as_slice()
+                .iter()
+                .map(|item| item.clone().try_into_value::<usize>(vm))
+                .collect::<PyResult<Vec<_>>>()?
+        } else if let Ok(single) = indices.clone().try_into_value::<usize>(vm) {
+            vec![single]
+        } else {
+            return Err(
+                vm.new_type_error("indices must be list, tuple, ndarray, or int".to_owned())
+            );
+        };
+
+        let data = a.inner();
+        let ax = parse_optional_axis(axis, vm)?;
+        data.take(&idx, ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Submodules (registered as attributes, feature-gated) ---
 
     #[cfg(feature = "linalg")]
