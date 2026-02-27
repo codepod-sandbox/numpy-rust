@@ -1665,6 +1665,41 @@ def test_pad_constant_value():
     assert_close(float(p[4]), 9.0)
 
 
+# --- interp ---
+
+def test_interp_basic():
+    x = np.array([1.5, 2.5])
+    xp = np.array([1.0, 2.0, 3.0])
+    fp = np.array([10.0, 20.0, 30.0])
+    r = np.interp(x, xp, fp)
+    assert_close(float(r[0]), 15.0)
+    assert_close(float(r[1]), 25.0)
+
+def test_interp_clamp():
+    x = np.array([0.0, 10.0])
+    xp = np.array([1.0, 3.0])
+    fp = np.array([5.0, 15.0])
+    r = np.interp(x, xp, fp)
+    assert_close(float(r[0]), 5.0)
+    assert_close(float(r[1]), 15.0)
+
+
+# --- gradient ---
+
+def test_gradient_1d():
+    f = np.array([1.0, 2.0, 4.0, 7.0, 11.0])
+    g = np.gradient(f)
+    assert_close(float(g[0]), 1.0)
+    assert_close(float(g[1]), 1.5)
+    assert_close(float(g[4]), 4.0)
+
+def test_gradient_spacing():
+    f = np.array([0.0, 2.0, 4.0])
+    g = np.gradient(f, 0.5)
+    assert_close(float(g[0]), 4.0)
+    assert_close(float(g[1]), 4.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

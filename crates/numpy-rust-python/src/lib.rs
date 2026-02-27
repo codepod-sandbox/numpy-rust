@@ -1392,6 +1392,43 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Interpolation & gradient ---
+
+    #[pyfunction]
+    fn interp(
+        x: vm::PyRef<PyNdArray>,
+        xp: vm::PyRef<PyNdArray>,
+        fp: vm::PyRef<PyNdArray>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        numpy_rust_core::ops::numerical::interp(&x.inner(), &xp.inner(), &fp.inner())
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn gradient(
+        f: vm::PyRef<PyNdArray>,
+        spacing: vm::function::OptionalArg<f64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let sp = spacing.unwrap_or(1.0);
+        let data = f.inner();
+        if data.ndim() <= 1 {
+            numpy_rust_core::ops::numerical::gradient_1d(&data, sp)
+                .map(|arr| PyNdArray::from_core(arr).into_pyobject(vm))
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        } else {
+            let grads = numpy_rust_core::ops::numerical::gradient_nd(&data, sp)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            let py_arrays: Vec<PyObjectRef> = grads
+                .into_iter()
+                .map(|a| PyNdArray::from_core(a).into_pyobject(vm))
+                .collect();
+            Ok(vm.ctx.new_list(py_arrays).into())
+        }
+    }
+
     // --- Submodules (registered as attributes, feature-gated) ---
 
     #[cfg(feature = "linalg")]

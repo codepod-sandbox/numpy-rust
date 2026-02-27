@@ -1293,6 +1293,21 @@ def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
     arrays = tuple(array([a]) if isinstance(a, (int, float)) else (a if isinstance(a, ndarray) else array(a)) for a in multi_index)
     return _native.ravel_multi_index(arrays, dims)
 
+def interp(x, xp, fp, left=None, right=None, period=None):
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if not isinstance(xp, ndarray):
+        xp = array(xp)
+    if not isinstance(fp, ndarray):
+        fp = array(fp)
+    return _native.interp(x, xp, fp)
+
+def gradient(f, *varargs, axis=None, edge_order=1):
+    if not isinstance(f, ndarray):
+        f = array(f)
+    spacing = float(varargs[0]) if varargs else 1.0
+    return _native.gradient(f, spacing)
+
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:
     pass
