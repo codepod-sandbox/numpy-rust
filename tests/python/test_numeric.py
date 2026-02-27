@@ -2666,6 +2666,132 @@ def test_modf():
     assert_close(frac[0], 0.5)
     assert_close(frac[1], -0.7)
 
+def test_fill_diagonal():
+    a = np.zeros((3, 3))
+    r = np.fill_diagonal(a, 5.0)
+    assert_close(r[0][0], 5.0)
+    assert_close(r[1][1], 5.0)
+    assert_close(r[2][2], 5.0)
+    assert_close(r[0][1], 0.0)
+
+def test_diag_indices():
+    ri, ci = np.diag_indices(3)
+    assert_eq(ri.size, 3)
+    assert_close(ri[0], 0.0)
+    assert_close(ri[1], 1.0)
+    assert_close(ri[2], 2.0)
+
+def test_tril_indices():
+    r, c = np.tril_indices(3)
+    # Lower triangle of 3x3: (0,0),(1,0),(1,1),(2,0),(2,1),(2,2)
+    assert_eq(r.size, 6)
+
+def test_triu_indices():
+    r, c = np.triu_indices(3)
+    # Upper triangle of 3x3: (0,0),(0,1),(0,2),(1,1),(1,2),(2,2)
+    assert_eq(r.size, 6)
+
+def test_ndenumerate():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    items = list(np.ndenumerate(a))
+    assert_eq(len(items), 4)
+    idx0, val0 = items[0]
+    assert_eq(idx0, (0, 0))
+    assert_close(val0, 1.0)
+    idx3, val3 = items[3]
+    assert_eq(idx3, (1, 1))
+    assert_close(val3, 4.0)
+
+def test_ndindex():
+    idxs = list(np.ndindex(2, 3))
+    assert_eq(len(idxs), 6)
+    assert_eq(idxs[0], (0, 0))
+    assert_eq(idxs[1], (0, 1))
+    assert_eq(idxs[5], (1, 2))
+
+def test_bartlett():
+    w = np.bartlett(5)
+    assert_eq(w.size, 5)
+    assert_close(w[0], 0.0)
+    assert_close(w[2], 1.0)  # peak at center
+    assert_close(w[4], 0.0)
+
+def test_blackman():
+    w = np.blackman(5)
+    assert_eq(w.size, 5)
+    # Blackman window: first and last should be close to 0
+    assert_close(w[0], 0.0, tol=1e-4)
+
+def test_hamming():
+    w = np.hamming(5)
+    assert_eq(w.size, 5)
+    assert_close(w[0], 0.08)
+    assert_close(w[2], 1.0)  # peak at center
+
+def test_hanning():
+    w = np.hanning(5)
+    assert_eq(w.size, 5)
+    assert_close(w[0], 0.0)
+    assert_close(w[2], 1.0)
+
+def test_kaiser():
+    w = np.kaiser(5, 14.0)
+    assert_eq(w.size, 5)
+    # Kaiser window peak at center
+    assert_close(w[2], 1.0)
+
+def test_poly1d_basic():
+    # p(x) = x^2 + 2x + 3
+    p = np.poly1d([1.0, 2.0, 3.0])
+    assert_close(p(0.0), 3.0)
+    assert_close(p(1.0), 6.0)  # 1 + 2 + 3
+    assert_close(p(2.0), 11.0) # 4 + 4 + 3
+
+def test_poly1d_add():
+    p1 = np.poly1d([1.0, 2.0])    # x + 2
+    p2 = np.poly1d([1.0, 0.0, 1.0]) # x^2 + 1
+    p3 = p1 + p2
+    assert_close(p3(1.0), 5.0)  # (1+2) + (1+1) = 3 + 2 = 5
+
+def test_poly1d_mul():
+    p1 = np.poly1d([1.0, 0.0])  # x
+    p2 = np.poly1d([1.0, 1.0])  # x + 1
+    p3 = p1 * p2
+    assert_close(p3(2.0), 6.0)  # 2*(2+1) = 6
+
+def test_polyder():
+    # d/dx(x^2 + 2x + 3) = 2x + 2
+    d = np.polyder(np.array([1.0, 2.0, 3.0]))
+    assert_close(d[0], 2.0)
+    assert_close(d[1], 2.0)
+
+def test_polyint():
+    # integral of [2, 2] (2x+2) = [1, 2, 0] (x^2+2x+0)
+    i = np.polyint(np.array([2.0, 2.0]))
+    assert_close(i[0], 1.0)
+    assert_close(i[1], 2.0)
+    assert_close(i[2], 0.0)
+
+def test_polyadd():
+    r = np.polyadd(np.array([1.0, 2.0]), np.array([3.0, 4.0]))
+    assert_close(r[0], 4.0)
+    assert_close(r[1], 6.0)
+
+def test_polymul():
+    # (x+1)(x-1) = x^2 - 1
+    r = np.polymul(np.array([1.0, 1.0]), np.array([1.0, -1.0]))
+    assert_close(r[0], 1.0)
+    assert_close(r[1], 0.0)
+    assert_close(r[2], -1.0)
+
+def test_roots_quadratic():
+    # x^2 - 3x + 2 = 0 => roots at 1, 2
+    r = np.roots(np.array([1.0, -3.0, 2.0]))
+    # Sort for comparison
+    vals = sorted([r[0], r[1]])
+    assert_close(vals[0], 1.0)
+    assert_close(vals[1], 2.0)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

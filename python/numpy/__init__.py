@@ -1773,6 +1773,270 @@ def polyval(p, x):
         x = array(x)
     return _native.polyval(p, x)
 
+# --- Polynomial utilities ---------------------------------------------------
+
+def roots(p):
+    """Return the roots of a polynomial with coefficients given in p."""
+    if isinstance(p, poly1d):
+        coeffs = list(p._coeffs)
+    elif isinstance(p, ndarray):
+        coeffs = [p[i] for i in range(p.size)]
+    else:
+        coeffs = [float(c) for c in p]
+    # Remove leading zeros
+    while len(coeffs) > 1 and coeffs[0] == 0:
+        coeffs = coeffs[1:]
+    n = len(coeffs) - 1  # degree
+    if n == 0:
+        return array([])
+    if n == 1:
+        return array([-coeffs[1] / coeffs[0]])
+    if n == 2:
+        a, b, c = coeffs[0], coeffs[1], coeffs[2]
+        disc = b * b - 4 * a * c
+        if disc >= 0:
+            sq = disc ** 0.5
+            return array([(-b + sq) / (2 * a), (-b - sq) / (2 * a)])
+        else:
+            sq = (-disc) ** 0.5
+            return array([(-b) / (2 * a), (-b) / (2 * a)])  # real part only
+    raise NotImplementedError("roots for degree > 2 requires eigenvalue decomposition")
+
+
+def polyadd(a1, a2):
+    """Add two polynomials (coefficient arrays, highest degree first)."""
+    if isinstance(a1, poly1d):
+        a1 = list(a1._coeffs)
+    elif isinstance(a1, ndarray):
+        a1 = [a1[i] for i in range(a1.size)]
+    else:
+        a1 = [float(c) for c in a1]
+    if isinstance(a2, poly1d):
+        a2 = list(a2._coeffs)
+    elif isinstance(a2, ndarray):
+        a2 = [a2[i] for i in range(a2.size)]
+    else:
+        a2 = [float(c) for c in a2]
+    while len(a1) < len(a2):
+        a1.insert(0, 0.0)
+    while len(a2) < len(a1):
+        a2.insert(0, 0.0)
+    return array([a1[i] + a2[i] for i in range(len(a1))])
+
+
+def polysub(a1, a2):
+    """Subtract two polynomials."""
+    if isinstance(a1, poly1d):
+        a1 = list(a1._coeffs)
+    elif isinstance(a1, ndarray):
+        a1 = [a1[i] for i in range(a1.size)]
+    else:
+        a1 = [float(c) for c in a1]
+    if isinstance(a2, poly1d):
+        a2 = list(a2._coeffs)
+    elif isinstance(a2, ndarray):
+        a2 = [a2[i] for i in range(a2.size)]
+    else:
+        a2 = [float(c) for c in a2]
+    while len(a1) < len(a2):
+        a1.insert(0, 0.0)
+    while len(a2) < len(a1):
+        a2.insert(0, 0.0)
+    return array([a1[i] - a2[i] for i in range(len(a1))])
+
+
+def polymul(a1, a2):
+    """Multiply two polynomials."""
+    if isinstance(a1, poly1d):
+        a1 = list(a1._coeffs)
+    elif isinstance(a1, ndarray):
+        a1 = [a1[i] for i in range(a1.size)]
+    else:
+        a1 = [float(c) for c in a1]
+    if isinstance(a2, poly1d):
+        a2 = list(a2._coeffs)
+    elif isinstance(a2, ndarray):
+        a2 = [a2[i] for i in range(a2.size)]
+    else:
+        a2 = [float(c) for c in a2]
+    n = len(a1) + len(a2) - 1
+    result = [0.0] * n
+    for i, c1 in enumerate(a1):
+        for j, c2 in enumerate(a2):
+            result[i + j] += c1 * c2
+    return array(result)
+
+
+def polyder(p, m=1):
+    """Return the derivative of the specified order of a polynomial."""
+    if isinstance(p, poly1d):
+        return p.deriv(m)
+    if isinstance(p, ndarray):
+        coeffs = [p[i] for i in range(p.size)]
+    else:
+        coeffs = [float(c) for c in p]
+    for _ in range(m):
+        n = len(coeffs) - 1
+        if n <= 0:
+            coeffs = [0.0]
+            break
+        new_coeffs = []
+        for i in range(n):
+            new_coeffs.append(coeffs[i] * (n - i))
+        coeffs = new_coeffs
+    return array(coeffs)
+
+
+def polyint(p, m=1, k=0):
+    """Return the integral of a polynomial."""
+    if isinstance(p, poly1d):
+        return p.integ(m, k)
+    if isinstance(p, ndarray):
+        coeffs = [p[i] for i in range(p.size)]
+    else:
+        coeffs = [float(c) for c in p]
+    for _ in range(m):
+        n = len(coeffs)
+        new_coeffs = []
+        for i in range(n):
+            new_coeffs.append(coeffs[i] / (n - i))
+        new_coeffs.append(float(k))
+        coeffs = new_coeffs
+    return array(coeffs)
+
+
+class poly1d:
+    """A one-dimensional polynomial class."""
+    def __init__(self, c_or_r, r=False, variable=None):
+        if isinstance(c_or_r, poly1d):
+            self._coeffs = list(c_or_r._coeffs)
+        elif r:
+            # c_or_r are roots, convert to coefficients
+            self._coeffs = [1.0]
+            if isinstance(c_or_r, ndarray):
+                roots_list = [c_or_r[i] for i in range(c_or_r.size)]
+            else:
+                roots_list = list(c_or_r)
+            for root in roots_list:
+                new_coeffs = [0.0] * (len(self._coeffs) + 1)
+                for i, c in enumerate(self._coeffs):
+                    new_coeffs[i] += c
+                    new_coeffs[i + 1] -= c * float(root)
+                self._coeffs = new_coeffs
+        else:
+            if isinstance(c_or_r, ndarray):
+                self._coeffs = [c_or_r[i] for i in range(c_or_r.size)]
+            else:
+                self._coeffs = [float(c) for c in c_or_r]
+        self._variable = variable or 'x'
+
+    @property
+    def coeffs(self):
+        return array(self._coeffs)
+
+    @property
+    def c(self):
+        return self.coeffs
+
+    @property
+    def order(self):
+        return len(self._coeffs) - 1
+
+    @property
+    def roots(self):
+        return _poly1d_roots(self._coeffs)
+
+    @property
+    def o(self):
+        return self.order
+
+    def __call__(self, val):
+        return polyval(self._coeffs, val)
+
+    def __add__(self, other):
+        if isinstance(other, poly1d):
+            oc = other._coeffs
+        elif isinstance(other, (int, float)):
+            oc = [float(other)]
+        else:
+            oc = list(other)
+        return poly1d(polyadd(self._coeffs, oc))
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        if isinstance(other, poly1d):
+            oc = other._coeffs
+        elif isinstance(other, (int, float)):
+            oc = [float(other)]
+        else:
+            oc = list(other)
+        return poly1d(polysub(self._coeffs, oc))
+
+    def __mul__(self, other):
+        if isinstance(other, poly1d):
+            oc = other._coeffs
+        elif isinstance(other, (int, float)):
+            return poly1d([c * float(other) for c in self._coeffs])
+        else:
+            oc = list(other)
+        return poly1d(polymul(self._coeffs, oc))
+
+    def __rmul__(self, other):
+        if isinstance(other, (int, float)):
+            return poly1d([c * float(other) for c in self._coeffs])
+        return self.__mul__(other)
+
+    def __neg__(self):
+        return poly1d([-c for c in self._coeffs])
+
+    def __len__(self):
+        return self.order
+
+    def __getitem__(self, idx):
+        # poly1d[i] returns coefficient of x^i (reverse indexing)
+        if idx > self.order:
+            return 0.0
+        return self._coeffs[self.order - idx]
+
+    def deriv(self, m=1):
+        """Return the derivative of this polynomial."""
+        coeffs = list(self._coeffs)
+        for _ in range(m):
+            n = len(coeffs) - 1
+            if n <= 0:
+                coeffs = [0.0]
+                break
+            new_coeffs = []
+            for i in range(n):
+                new_coeffs.append(coeffs[i] * (n - i))
+            coeffs = new_coeffs
+        return poly1d(coeffs)
+
+    def integ(self, m=1, k=0):
+        """Return the integral of this polynomial."""
+        coeffs = list(self._coeffs)
+        for _ in range(m):
+            n = len(coeffs)
+            new_coeffs = []
+            for i in range(n):
+                new_coeffs.append(coeffs[i] / (n - i))
+            new_coeffs.append(float(k))
+            coeffs = new_coeffs
+        return poly1d(coeffs)
+
+    def __repr__(self):
+        return "poly1d(" + repr(self._coeffs) + ")"
+
+    def __str__(self):
+        return "poly1d(" + repr(self._coeffs) + ")"
+
+
+# Alias so poly1d.roots can call without name clash with the module-level roots()
+_poly1d_roots = roots
+
+
 # --- I/O: loadtxt / savetxt / genfromtxt ------------------------------------
 
 def loadtxt(fname, dtype=None, comments='#', delimiter=None, skiprows=0, usecols=None, unpack=False, ndmin=0, encoding='bytes', max_rows=None, **kwargs):
@@ -2664,6 +2928,217 @@ def modf(x):
     integer_part = trunc(x)
     fractional_part = x - integer_part
     return fractional_part, integer_part
+
+
+# --- fill_diagonal — fill main diagonal of 2-d array -----------------------
+def fill_diagonal(a, val, wrap=False):
+    """Fill the main diagonal of the given array. Returns new array (our arrays are immutable)."""
+    a = asarray(a)
+    if a.ndim != 2:
+        raise ValueError("array must be 2-d")
+    n = a.shape[0]
+    m = a.shape[1]
+    rows = []
+    for i in range(n):
+        row = []
+        for j in range(m):
+            if i == j:
+                row.append(float(val) if not isinstance(val, (list, tuple)) else float(val[i % len(val)]))
+            else:
+                row.append(a[i][j])
+        rows.append(row)
+    return array(rows)
+
+
+# --- diag_indices / diag_indices_from — diagonal index helpers --------------
+def diag_indices(n, ndim=2):
+    """Return the indices to access the main diagonal of an array."""
+    idx = arange(0, n)
+    return tuple([idx] * ndim)
+
+def diag_indices_from(arr):
+    """Return the indices to access the main diagonal of an n-dimensional array."""
+    arr = asarray(arr)
+    if arr.ndim != 2:
+        raise ValueError("array must be 2-d")
+    n = arr.shape[0]
+    if arr.shape[0] != arr.shape[1]:
+        raise ValueError("array must be square")
+    return diag_indices(n, 2)
+
+
+# --- tril_indices / triu_indices — triangle index helpers -------------------
+def tril_indices(n, k=0, m=None):
+    """Return the indices for the lower-triangle of an (n, m) array."""
+    if m is None:
+        m = n
+    rows = []
+    cols = []
+    for i in range(n):
+        for j in range(m):
+            if j <= i + k:
+                rows.append(float(i))
+                cols.append(float(j))
+    return array(rows), array(cols)
+
+def triu_indices(n, k=0, m=None):
+    """Return the indices for the upper-triangle of an (n, m) array."""
+    if m is None:
+        m = n
+    rows = []
+    cols = []
+    for i in range(n):
+        for j in range(m):
+            if j >= i + k:
+                rows.append(float(i))
+                cols.append(float(j))
+    return array(rows), array(cols)
+
+def tril_indices_from(arr, k=0):
+    """Return the indices for the lower-triangle of arr."""
+    arr = asarray(arr)
+    if arr.ndim != 2:
+        raise ValueError("array must be 2-d")
+    return tril_indices(arr.shape[0], k=k, m=arr.shape[1])
+
+def triu_indices_from(arr, k=0):
+    """Return the indices for the upper-triangle of arr."""
+    arr = asarray(arr)
+    if arr.ndim != 2:
+        raise ValueError("array must be 2-d")
+    return triu_indices(arr.shape[0], k=k, m=arr.shape[1])
+
+
+# --- ndenumerate — multidimensional index iterator --------------------------
+class ndenumerate:
+    """Multidimensional index iterator."""
+    def __init__(self, arr):
+        self._arr = asarray(arr)
+        self._flat = self._arr.flatten()
+        self._shape = self._arr.shape
+        self._size = self._flat.size
+        self._idx = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._idx >= self._size:
+            raise StopIteration
+        # Convert flat index to multi-dim index
+        idx = self._idx
+        multi = []
+        for s in reversed(self._shape):
+            multi.append(idx % s)
+            idx //= s
+        multi.reverse()
+        val = self._flat[self._idx]
+        self._idx += 1
+        return tuple(multi), val
+
+
+# --- ndindex — N-dimensional index iterator ---------------------------------
+class ndindex:
+    """An N-dimensional iterator object to index arrays."""
+    def __init__(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], tuple):
+            shape = shape[0]
+        self._shape = shape
+        self._size = 1
+        for s in shape:
+            self._size *= s
+        self._idx = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._idx >= self._size:
+            raise StopIteration
+        idx = self._idx
+        multi = []
+        for s in reversed(self._shape):
+            multi.append(idx % s)
+            idx //= s
+        multi.reverse()
+        self._idx += 1
+        return tuple(multi)
+
+
+# --- Signal window functions ------------------------------------------------
+def bartlett(M):
+    """Return the Bartlett window."""
+    if M < 1:
+        return array([])
+    if M == 1:
+        return array([1.0])
+    n = arange(0, M)
+    mid = (M - 1) / 2.0
+    vals = []
+    for i in range(M):
+        v = float(n[i])
+        if v <= mid:
+            vals.append(2.0 * v / (M - 1))
+        else:
+            vals.append(2.0 - 2.0 * v / (M - 1))
+    return array(vals)
+
+def blackman(M):
+    """Return the Blackman window."""
+    if M < 1:
+        return array([])
+    if M == 1:
+        return array([1.0])
+    vals = []
+    for i in range(M):
+        vals.append(0.42 - 0.5 * _math.cos(2.0 * pi * i / (M - 1)) + 0.08 * _math.cos(4.0 * pi * i / (M - 1)))
+    return array(vals)
+
+def hamming(M):
+    """Return the Hamming window."""
+    if M < 1:
+        return array([])
+    if M == 1:
+        return array([1.0])
+    vals = []
+    for i in range(M):
+        vals.append(0.54 - 0.46 * _math.cos(2.0 * pi * i / (M - 1)))
+    return array(vals)
+
+def hanning(M):
+    """Return the Hanning window."""
+    if M < 1:
+        return array([])
+    if M == 1:
+        return array([1.0])
+    vals = []
+    for i in range(M):
+        vals.append(0.5 - 0.5 * _math.cos(2.0 * pi * i / (M - 1)))
+    return array(vals)
+
+def kaiser(M, beta):
+    """Return the Kaiser window."""
+    if M < 1:
+        return array([])
+    if M == 1:
+        return array([1.0])
+    # I0 is modified Bessel function of first kind, order 0
+    # Use series approximation
+    def _i0(x):
+        """Modified Bessel function I0 via series."""
+        val = 1.0
+        term = 1.0
+        for k in range(1, 25):
+            term *= (x / 2.0) ** 2 / (k * k)
+            val += term
+        return val
+
+    alpha = (M - 1) / 2.0
+    vals = []
+    for i in range(M):
+        arg = beta * _math.sqrt(1.0 - ((i - alpha) / alpha) ** 2)
+        vals.append(_i0(arg) / _i0(beta))
+    return array(vals)
 
 
 # --- dtypes module stub -----------------------------------------------------
