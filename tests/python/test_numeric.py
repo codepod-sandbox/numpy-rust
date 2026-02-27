@@ -2293,6 +2293,155 @@ def test_geomspace():
     assert_close(r[2], 100.0)
     assert_close(r[3], 1000.0)
 
+def test_tri():
+    t = np.tri(3)
+    assert_eq(t.shape, (3, 3))
+    assert_close(t[0][0], 1.0)
+    assert_close(t[0][1], 0.0)
+    assert_close(t[1][0], 1.0)
+    assert_close(t[1][1], 1.0)
+    assert_close(t[2][2], 1.0)
+
+def test_tril():
+    a = np.ones((3, 3))
+    t = np.tril(a)
+    assert_close(t[0][0], 1.0)
+    assert_close(t[0][1], 0.0)
+    assert_close(t[0][2], 0.0)
+    assert_close(t[1][0], 1.0)
+    assert_close(t[1][1], 1.0)
+
+def test_triu():
+    a = np.ones((3, 3))
+    t = np.triu(a)
+    assert_close(t[0][0], 1.0)
+    assert_close(t[0][1], 1.0)
+    assert_close(t[0][2], 1.0)
+    assert_close(t[1][0], 0.0)
+    assert_close(t[1][1], 1.0)
+
+def test_vander():
+    x = np.array([1.0, 2.0, 3.0])
+    v = np.vander(x, 3)
+    # Default decreasing: [[1,1,1],[4,2,1],[9,3,1]]
+    assert_close(v[0][0], 1.0)
+    assert_close(v[1][0], 4.0)
+    assert_close(v[2][0], 9.0)
+    assert_close(v[0][2], 1.0)
+    assert_close(v[1][2], 1.0)
+
+def test_kron():
+    a = np.array([[1.0, 0.0], [0.0, 1.0]])
+    b = np.array([[1.0, 2.0], [3.0, 4.0]])
+    k = np.kron(a, b)
+    assert_eq(k.shape, (4, 4))
+    assert_close(k[0][0], 1.0)
+    assert_close(k[0][1], 2.0)
+    assert_close(k[2][2], 1.0)
+    assert_close(k[2][3], 2.0)
+
+# --- Group B Tier 15: average, nanmedian, nanpercentile, nanquantile, ediff1d, fmax, fmin ---
+
+def test_average_simple():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    assert_close(np.average(a), 2.5)
+
+def test_average_weighted():
+    a = np.array([1.0, 2.0, 3.0])
+    w = np.array([3.0, 2.0, 1.0])
+    # weighted avg = (3+4+3)/(3+2+1) = 10/6 ≈ 1.6667
+    assert_close(np.average(a, weights=w), 10.0 / 6.0)
+
+def test_nanmedian():
+    a = np.array([1.0, float('nan'), 3.0, 2.0])
+    assert_close(np.nanmedian(a), 2.0)
+
+def test_nanpercentile():
+    a = np.array([1.0, float('nan'), 3.0, 5.0])
+    # After removing NaN: [1, 3, 5], 50th percentile = 3.0
+    assert_close(np.nanpercentile(a, 50.0), 3.0)
+
+def test_nanquantile():
+    a = np.array([1.0, float('nan'), 3.0, 5.0])
+    assert_close(np.nanquantile(a, 0.5), 3.0)
+
+def test_ediff1d():
+    a = np.array([1.0, 3.0, 6.0, 10.0])
+    d = np.ediff1d(a)
+    assert_close(d[0], 2.0)
+    assert_close(d[1], 3.0)
+    assert_close(d[2], 4.0)
+
+def test_ediff1d_boundaries():
+    a = np.array([1.0, 3.0, 6.0])
+    d = np.ediff1d(a, to_begin=-1.0, to_end=99.0)
+    assert_close(d[0], -1.0)
+    assert_close(d[1], 2.0)
+    assert_close(d[2], 3.0)
+    assert_close(d[3], 99.0)
+
+def test_fmax():
+    a = np.array([1.0, float('nan'), 3.0])
+    b = np.array([2.0, 2.0, float('nan')])
+    r = np.fmax(a, b)
+    assert_close(r[0], 2.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 3.0)
+
+def test_fmin():
+    a = np.array([1.0, float('nan'), 3.0])
+    b = np.array([2.0, 2.0, float('nan')])
+    r = np.fmin(a, b)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 3.0)
+
+# --- Group C Tier 15: apply_along_axis, vectorize, put, putmask, broadcast_arrays ---
+
+def test_apply_along_axis():
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    r = np.apply_along_axis(np.sum, 1, a)
+    assert_close(r[0], 6.0)
+    assert_close(r[1], 15.0)
+
+def test_vectorize():
+    def myfunc(a, b):
+        if a > b:
+            return a - b
+        return a + b
+    vfunc = np.vectorize(myfunc)
+    r = vfunc(np.array([1.0, 4.0, 3.0]), np.array([2.0, 3.0, 3.0]))
+    assert_close(r[0], 3.0)   # 1+2
+    assert_close(r[1], 1.0)   # 4-3
+    assert_close(r[2], 6.0)   # 3+3
+
+def test_put():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    r = np.put(a, np.array([0, 2]), np.array([10.0, 30.0]))
+    assert_close(r[0], 10.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 30.0)
+
+def test_putmask():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    mask = np.array([True, False, True, False])
+    r = np.putmask(a, mask, np.array([10.0, 20.0]))
+    assert_close(r[0], 10.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 20.0)
+    assert_close(r[3], 4.0)
+
+def test_broadcast_arrays():
+    a = np.array([[1.0], [2.0], [3.0]])
+    b = np.array([4.0, 5.0])
+    ra, rb = np.broadcast_arrays(a, b)
+    assert_eq(ra.shape, (3, 2))
+    assert_eq(rb.shape, (3, 2))
+    assert_close(ra[0][0], 1.0)
+    assert_close(ra[0][1], 1.0)
+    assert_close(rb[0][0], 4.0)
+    assert_close(rb[2][1], 5.0)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

@@ -733,6 +733,136 @@ def corrcoef(x, y=None, rowvar=True):
         return _native.corrcoef(x, y, rowvar)
     return _native.corrcoef(x, None, rowvar)
 
+def average(a, axis=None, weights=None, returned=False, keepdims=False):
+    """Compute the weighted average along the specified axis."""
+    a = asarray(a)
+    if weights is None:
+        avg = mean(a, axis=axis)
+        if returned:
+            if axis is None:
+                return avg, float(a.size)
+            return avg, full(avg.shape, float(a.shape[axis]))
+        return avg
+    weights = asarray(weights)
+    wsum = sum(a * weights, axis=axis)
+    wt = sum(weights, axis=axis)
+    avg = wsum / wt
+    if returned:
+        return avg, wt
+    return avg
+
+def _nan_quantile_impl(a, q, axis):
+    """Helper for nanmedian/nanpercentile/nanquantile with axis support."""
+    a = asarray(a)
+    if axis is None:
+        flat = a.flatten()
+        n = flat.size
+        vals = []
+        for i in range(n):
+            v = flat[i]
+            if v == v:
+                vals.append(v)
+        if len(vals) == 0:
+            return float('nan')
+        vals.sort()
+        idx = q * (len(vals) - 1)
+        lo = int(idx)
+        hi = lo + 1
+        if hi >= len(vals):
+            return vals[lo]
+        frac = idx - lo
+        return vals[lo] * (1 - frac) + vals[hi] * frac
+    # With axis: apply along axis manually
+    # Move target axis to last, then iterate over other dims
+    # Simplified: just handle 2D case
+    if a.ndim == 1:
+        return _nan_quantile_impl(a, q, None)
+    results = []
+    if axis == 0:
+        for j in range(a.shape[1]):
+            col = array([a[i][j] for i in range(a.shape[0])])
+            results.append(_nan_quantile_impl(col, q, None))
+    else:
+        for i in range(a.shape[0]):
+            results.append(_nan_quantile_impl(a[i], q, None))
+    return array(results)
+
+def nanmedian(a, axis=None, out=None, overwrite_input=False, keepdims=False):
+    """Compute the median along the specified axis, ignoring NaNs."""
+    a = asarray(a)
+    if axis is not None:
+        # For axis support, fall back to sorting approach
+        return _nan_quantile_impl(a, 0.5, axis)
+    # Flatten, filter NaNs, compute median of remaining
+    flat = a.flatten()
+    n = flat.size
+    vals = []
+    for i in range(n):
+        v = flat[i]
+        if v == v:  # not NaN
+            vals.append(v)
+    if len(vals) == 0:
+        return float('nan')
+    vals.sort()
+    mid = len(vals) // 2
+    if len(vals) % 2 == 0:
+        return (vals[mid - 1] + vals[mid]) / 2.0
+    return vals[mid]
+
+def nanpercentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+    """Compute the qth percentile, ignoring NaNs."""
+    return _nan_quantile_impl(asarray(a), q / 100.0, axis)
+
+def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+    """Compute the qth quantile, ignoring NaNs."""
+    return _nan_quantile_impl(asarray(a), q, axis)
+
+def ediff1d(ary, to_end=None, to_begin=None):
+    """The differences between consecutive elements of an array."""
+    ary = asarray(ary).flatten()
+    n = ary.size
+    diffs = []
+    if to_begin is not None:
+        if isinstance(to_begin, (int, float)):
+            diffs.append(float(to_begin))
+        else:
+            tb = asarray(to_begin).flatten()
+            for i in range(tb.size):
+                diffs.append(tb[i])
+    for i in range(1, n):
+        diffs.append(ary[i] - ary[i - 1])
+    if to_end is not None:
+        if isinstance(to_end, (int, float)):
+            diffs.append(float(to_end))
+        else:
+            te = asarray(to_end).flatten()
+            for i in range(te.size):
+                diffs.append(te[i])
+    return array(diffs)
+
+def fmax(x1, x2):
+    """Element-wise maximum, ignoring NaNs."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    # where x1 is nan, use x2; where x2 is nan, use x1; otherwise max
+    x1_nan = isnan(x1)
+    x2_nan = isnan(x2)
+    result = where(x1 > x2, x1, x2)
+    result = where(x1_nan, x2, result)
+    result = where(x2_nan, x1, result)
+    return result
+
+def fmin(x1, x2):
+    """Element-wise minimum, ignoring NaNs."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    x1_nan = isnan(x1)
+    x2_nan = isnan(x2)
+    result = where(x1 < x2, x1, x2)
+    result = where(x1_nan, x2, result)
+    result = where(x2_nan, x1, result)
+    return result
+
 def max(a, axis=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
         if axis is not None:
@@ -1636,6 +1766,72 @@ def diag(v, k=0):
     else:
         raise ValueError("Input must be 1-D or 2-D")
 
+def tri(N, M=None, k=0, dtype=None):
+    """An array with ones at and below the given diagonal and zeros elsewhere."""
+    if M is None:
+        M = N
+    rows = []
+    for i in range(N):
+        row = []
+        for j in range(M):
+            row.append(1.0 if j <= i + k else 0.0)
+        rows.append(row)
+    return array(rows)
+
+def tril(m, k=0):
+    """Lower triangle of an array. Return a copy with elements above the k-th diagonal zeroed."""
+    m = asarray(m)
+    mask = tri(m.shape[0], m.shape[1], k=k)
+    return m * mask
+
+def triu(m, k=0):
+    """Upper triangle of an array. Return a copy with elements below the k-th diagonal zeroed."""
+    m = asarray(m)
+    mask = tri(m.shape[0], m.shape[1], k=k - 1)
+    return m * (ones(m.shape) - mask)
+
+def vander(x, N=None, increasing=False):
+    """Generate a Vandermonde matrix."""
+    x = asarray(x).flatten()
+    n = x.size
+    if N is None:
+        N = n
+    if increasing:
+        cols = []
+        for j in range(N):
+            col = []
+            for i in range(n):
+                col.append(x[i] ** j)
+            cols.append(array(col))
+    else:
+        cols = []
+        for j in range(N):
+            col = []
+            for i in range(n):
+                col.append(x[i] ** (N - 1 - j))
+            cols.append(array(col))
+    return stack(cols, axis=1)
+
+def kron(a, b):
+    """Kronecker product of two arrays."""
+    a = asarray(a)
+    b = asarray(b)
+    if a.ndim == 1:
+        a = a.reshape((1, a.size))
+    if b.ndim == 1:
+        b = b.reshape((1, b.size))
+    ar, ac = a.shape[0], a.shape[1]
+    br, bc = b.shape[0], b.shape[1]
+    rows = []
+    for i in range(ar):
+        for bi in range(br):
+            row = []
+            for j in range(ac):
+                for bj in range(bc):
+                    row.append(a[i][j] * b[bi][bj])
+            rows.append(row)
+    return array(rows)
+
 def inner(a, b):
     """Inner product of two arrays.
 
@@ -2039,6 +2235,147 @@ def correlate(a, v, mode='valid'):
     # Reverse v for correlation (correlation = convolution with reversed kernel)
     v_rev = array([v[nv - 1 - i] for i in range(nv)])
     return convolve(a, v_rev, mode=mode)
+
+
+# --- Tier 15 Group C: apply_along_axis, vectorize, put, putmask, broadcast_arrays ---
+
+def apply_along_axis(func1d, axis, arr, *args, **kwargs):
+    """Apply a function to 1-D slices of an array along the given axis."""
+    arr = asarray(arr)
+    if arr.ndim == 1:
+        return asarray(func1d(arr, *args, **kwargs))
+    nd = arr.ndim
+    if axis < 0:
+        axis = nd + axis
+    # For 2D arrays (most common case)
+    if nd == 2:
+        results = []
+        if axis == 0:
+            for j in range(arr.shape[1]):
+                col = array([arr[i][j] for i in range(arr.shape[0])])
+                results.append(func1d(col, *args, **kwargs))
+        else:
+            for i in range(arr.shape[0]):
+                results.append(func1d(arr[i], *args, **kwargs))
+        return asarray(results)
+    # For higher dimensions, raise error for now
+    raise NotImplementedError("apply_along_axis only supports 1D and 2D arrays")
+
+
+class vectorize:
+    """Generalized function class.
+
+    Takes a nested sequence of objects or numpy arrays as inputs and returns
+    a single numpy array or a tuple of numpy arrays by applying the function
+    element-by-element.
+    """
+    def __init__(self, pyfunc, otypes=None, doc=None, excluded=None, cache=False, signature=None):
+        self.pyfunc = pyfunc
+        self.otypes = otypes
+        if doc is not None:
+            self.__doc__ = doc
+        elif pyfunc.__doc__:
+            self.__doc__ = pyfunc.__doc__
+
+    def __call__(self, *args, **kwargs):
+        # Convert all args to arrays
+        arr_args = [asarray(a) for a in args]
+        if len(arr_args) == 0:
+            return array([])
+        # Get the size from first arg
+        first = arr_args[0].flatten()
+        n = first.size
+        results = []
+        for i in range(n):
+            elem_args = []
+            for a in arr_args:
+                flat = a.flatten()
+                if flat.size == 1:
+                    elem_args.append(flat[0])
+                else:
+                    elem_args.append(flat[i])
+            results.append(self.pyfunc(*elem_args, **kwargs))
+        result = array(results)
+        # Try to reshape to the shape of first arg
+        if arr_args[0].ndim > 1:
+            result = result.reshape(arr_args[0].shape)
+        return result
+
+
+def put(a, ind, v, mode='raise'):
+    """Replaces specified elements of an array with given values."""
+    a = asarray(a)
+    flat = a.flatten()
+    n = flat.size
+    ind_arr = asarray(ind).flatten()
+    v_arr = asarray(v).flatten()
+    vals = [flat[i] for i in range(n)]
+    ni = ind_arr.size
+    nv = v_arr.size
+    for idx in range(ni):
+        i = int(ind_arr[idx])
+        if mode == 'wrap':
+            i = i % n
+        elif mode == 'clip':
+            if i < 0:
+                i = 0
+            elif i >= n:
+                i = n - 1
+        vals[i] = v_arr[idx % nv]
+    result = array(vals)
+    if a.ndim > 1:
+        result = result.reshape(a.shape)
+    return result
+
+
+def putmask(a, mask, values):
+    """Changes elements of an array based on conditional and input values."""
+    a = asarray(a)
+    mask = asarray(mask)
+    values = asarray(values)
+    flat_a = a.flatten()
+    flat_m = mask.flatten()
+    flat_v = values.flatten()
+    n = flat_a.size
+    nv = flat_v.size
+    vals = [flat_a[i] for i in range(n)]
+    vi = 0
+    for i in range(n):
+        if flat_m[i]:
+            vals[i] = flat_v[vi % nv]
+            vi += 1
+    result = array(vals)
+    if a.ndim > 1:
+        result = result.reshape(a.shape)
+    return result
+
+
+def broadcast_arrays(*args):
+    """Broadcast any number of arrays against each other."""
+    arrays = [asarray(a) for a in args]
+    if len(arrays) == 0:
+        return []
+    # Find common shape
+    shape = list(arrays[0].shape)
+    for a in arrays[1:]:
+        ashape = list(a.shape)
+        # Pad shorter shape with 1s on left
+        while len(shape) < len(ashape):
+            shape.insert(0, 1)
+        while len(ashape) < len(shape):
+            ashape.insert(0, 1)
+        new_shape = []
+        for s1, s2 in zip(shape, ashape):
+            if s1 == s2:
+                new_shape.append(s1)
+            elif s1 == 1:
+                new_shape.append(s2)
+            elif s2 == 1:
+                new_shape.append(s1)
+            else:
+                raise ValueError("shape mismatch: objects cannot be broadcast to a single shape")
+        shape = new_shape
+    return [broadcast_to(a, tuple(shape)) for a in arrays]
 
 
 # --- dtypes module stub -----------------------------------------------------
