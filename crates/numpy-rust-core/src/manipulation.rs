@@ -1,7 +1,8 @@
-use ndarray::{Axis, IxDyn, Slice};
+use ndarray::{ArrayD, Axis, IxDyn, Slice};
 
 use crate::array_data::ArrayData;
 use crate::casting::cast_array_data;
+use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
@@ -581,6 +582,128 @@ pub fn unique(a: &NdArray) -> NdArray {
     ))
 }
 
+/// Create coordinate matrices from coordinate vectors.
+/// indexing="xy" (default): first output has shape (len(y), len(x)) -- x varies along columns
+/// indexing="ij": first output has shape (len(x), len(y)) -- standard matrix indexing
+pub fn meshgrid(arrays: &[&NdArray], indexing: &str) -> Result<Vec<NdArray>> {
+    if arrays.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let ndim = arrays.len();
+    let shapes: Vec<usize> = arrays.iter().map(|a| a.size()).collect();
+
+    // For xy indexing, swap first two dimensions
+    let mut output_shape = shapes.clone();
+    if indexing == "xy" && ndim >= 2 {
+        output_shape.swap(0, 1);
+    }
+
+    let mut result = Vec::with_capacity(ndim);
+
+    for (i, arr) in arrays.iter().enumerate() {
+        let flat = arr.astype(DType::Float64).flatten();
+        let ArrayData::Float64(data) = &flat.data else {
+            unreachable!()
+        };
+        let values: Vec<f64> = data.iter().copied().collect();
+
+        // Determine which axis this array varies along
+        let vary_axis = if indexing == "xy" && ndim >= 2 {
+            if i == 0 {
+                1
+            } else if i == 1 {
+                0
+            } else {
+                i
+            }
+        } else {
+            i
+        };
+
+        // Build the output array
+        let total: usize = output_shape.iter().product();
+        let mut out = vec![0.0_f64; total];
+
+        // Compute strides for the output shape
+        let mut strides = vec![1_usize; ndim];
+        for d in (0..ndim - 1).rev() {
+            strides[d] = strides[d + 1] * output_shape[d + 1];
+        }
+
+        // Fill: for each position in the output, use the coordinate along vary_axis
+        for (idx, val) in out.iter_mut().enumerate() {
+            let coord = (idx / strides[vary_axis]) % output_shape[vary_axis];
+            *val = values[coord];
+        }
+
+        let grid = NdArray::from_data(ArrayData::Float64(
+            ArrayD::from_shape_vec(IxDyn(&output_shape), out).expect("shape matches"),
+        ));
+        result.push(grid);
+    }
+
+    Ok(result)
+}
+
+/// Pad an array with constant values.
+/// pad_width is a Vec of (before, after) tuples, one per axis.
+pub fn pad_constant(
+    arr: &NdArray,
+    pad_width: &[(usize, usize)],
+    constant_value: f64,
+) -> Result<NdArray> {
+    let ndim = arr.ndim();
+    if pad_width.len() != ndim {
+        return Err(NumpyError::ValueError(format!(
+            "pad_width has {} entries but array has {} dimensions",
+            pad_width.len(),
+            ndim
+        )));
+    }
+
+    let f = arr.astype(DType::Float64);
+    let ArrayData::Float64(data) = &f.data else {
+        unreachable!()
+    };
+
+    // Compute new shape
+    let new_shape: Vec<usize> = data
+        .shape()
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| s + pad_width[i].0 + pad_width[i].1)
+        .collect();
+
+    // Create output filled with constant
+    let mut out = ArrayD::<f64>::from_elem(IxDyn(&new_shape), constant_value);
+
+    // Copy original data into the right position using flat iteration
+    let old_shape = data.shape().to_vec();
+    let total: usize = old_shape.iter().product();
+
+    for flat_idx in 0..total {
+        // Convert flat index to multi-index in old shape
+        let mut remaining = flat_idx;
+        let mut old_coords = vec![0_usize; ndim];
+        for d in (0..ndim).rev() {
+            old_coords[d] = remaining % old_shape[d];
+            remaining /= old_shape[d];
+        }
+
+        // Offset by pad_width
+        let new_coords: Vec<usize> = old_coords
+            .iter()
+            .enumerate()
+            .map(|(d, &c)| c + pad_width[d].0)
+            .collect();
+
+        out[IxDyn(&new_coords)] = data[IxDyn(&old_coords)];
+    }
+
+    Ok(NdArray::from_data(ArrayData::Float64(out)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1026,5 +1149,44 @@ mod tests {
         let b = NdArray::ones(&[2, 3], DType::Float64);
         let r = dstack(&[&a, &b]).unwrap();
         assert_eq!(r.shape(), &[2, 3, 2]);
+    }
+
+    // --- meshgrid tests ---
+
+    #[test]
+    fn test_meshgrid_2d_xy() {
+        let x = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let y = NdArray::from_vec(vec![4.0_f64, 5.0]);
+        let grids = meshgrid(&[&x, &y], "xy").unwrap();
+        assert_eq!(grids.len(), 2);
+        assert_eq!(grids[0].shape(), &[2, 3]); // x varies along columns
+        assert_eq!(grids[1].shape(), &[2, 3]); // y varies along rows
+    }
+
+    #[test]
+    fn test_meshgrid_2d_ij() {
+        let x = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let y = NdArray::from_vec(vec![4.0_f64, 5.0]);
+        let grids = meshgrid(&[&x, &y], "ij").unwrap();
+        assert_eq!(grids[0].shape(), &[3, 2]);
+        assert_eq!(grids[1].shape(), &[3, 2]);
+    }
+
+    // --- pad tests ---
+
+    #[test]
+    fn test_pad_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let padded = pad_constant(&a, &[(2, 1)], 0.0).unwrap();
+        assert_eq!(padded.shape(), &[6]); // 2+3+1
+    }
+
+    #[test]
+    fn test_pad_2d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0])
+            .reshape(&[2, 2])
+            .unwrap();
+        let padded = pad_constant(&a, &[(1, 1), (1, 1)], 0.0).unwrap();
+        assert_eq!(padded.shape(), &[4, 4]);
     }
 }

@@ -979,6 +979,19 @@ def swapaxes(a, axis1, axis2):
         return a.T
     return a
 
+def meshgrid(*xi, indexing='xy'):
+    arrays = [a if isinstance(a, ndarray) else array(a) for a in xi]
+    return _native.meshgrid(arrays, indexing)
+
+def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    if mode != 'constant':
+        raise NotImplementedError("only mode='constant' is supported")
+    if isinstance(constant_values, (list, tuple)):
+        constant_values = constant_values[0] if isinstance(constant_values[0], (int, float)) else constant_values[0][0]
+    return _native.pad(a, pad_width, float(constant_values))
+
 def indices(dimensions, dtype=int64, sparse=False):
     return zeros(dimensions)  # stub
 

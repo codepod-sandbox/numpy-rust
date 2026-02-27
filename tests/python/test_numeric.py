@@ -1627,6 +1627,44 @@ def test_empty_dtype():
     assert_eq(str(a.dtype), "int32")
 
 
+# ── Tier 10: Meshgrid & Pad ──────────────────────────────────────────
+
+def test_meshgrid_2d():
+    x = np.array([1.0, 2.0, 3.0])
+    y = np.array([4.0, 5.0])
+    X, Y = np.meshgrid(x, y)
+    assert_eq(X.shape, (2, 3))
+    assert_eq(Y.shape, (2, 3))
+    assert_close(float(X[0][0]), 1.0)
+    assert_close(float(X[0][2]), 3.0)
+    assert_close(float(Y[0][0]), 4.0)
+    assert_close(float(Y[1][0]), 5.0)
+
+def test_meshgrid_ij():
+    x = np.array([1.0, 2.0, 3.0])
+    y = np.array([4.0, 5.0])
+    X, Y = np.meshgrid(x, y, indexing='ij')
+    assert_eq(X.shape, (3, 2))
+
+def test_pad_1d():
+    a = np.array([1.0, 2.0, 3.0])
+    p = np.pad(a, 2)
+    assert_eq(p.shape, (7,))
+    assert_close(float(p[0]), 0.0)
+    assert_close(float(p[2]), 1.0)
+
+def test_pad_2d():
+    a = np.array([1.0, 2.0, 3.0, 4.0]).reshape((2, 2))
+    p = np.pad(a, 1)
+    assert_eq(p.shape, (4, 4))
+
+def test_pad_constant_value():
+    a = np.array([1.0, 2.0, 3.0])
+    p = np.pad(a, 1, constant_values=9.0)
+    assert_close(float(p[0]), 9.0)
+    assert_close(float(p[4]), 9.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

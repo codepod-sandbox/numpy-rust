@@ -1311,6 +1311,87 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- meshgrid / pad ---
+
+    #[pyfunction]
+    fn meshgrid(
+        arrays: PyObjectRef,
+        indexing: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let idx = indexing.as_ref().map(|s| s.as_str()).unwrap_or("xy");
+        let arr_list = extract_ndarray_list(&arrays, vm)?;
+        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
+            arr_list.iter().map(|a| a.inner()).collect();
+        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let result =
+            numpy_rust_core::meshgrid(&refs, idx).map_err(|e| vm.new_value_error(e.to_string()))?;
+        let py_arrays: Vec<PyObjectRef> = result
+            .into_iter()
+            .map(|a| PyNdArray::from_core(a).into_pyobject(vm))
+            .collect();
+        Ok(vm.ctx.new_tuple(py_arrays).into())
+    }
+
+    fn parse_pad_width(
+        obj: &PyObjectRef,
+        ndim: usize,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<(usize, usize)>> {
+        // Single int: apply to all axes, both sides
+        if let Ok(n) = obj.clone().try_into_value::<usize>(vm) {
+            return Ok(vec![(n, n); ndim]);
+        }
+        // Tuple of two ints: (before, after) for all axes
+        if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
+            let items = tuple.as_slice();
+            if items.len() == 2 {
+                if let (Ok(a), Ok(b)) = (
+                    items[0].clone().try_into_value::<usize>(vm),
+                    items[1].clone().try_into_value::<usize>(vm),
+                ) {
+                    return Ok(vec![(a, b); ndim]);
+                }
+            }
+            // List of tuples
+            let mut result = Vec::with_capacity(items.len());
+            for item in items {
+                if let Some(inner) = item.downcast_ref::<vm::builtins::PyTuple>() {
+                    let inner_items = inner.as_slice();
+                    if inner_items.len() == 2 {
+                        let a: usize = inner_items[0].clone().try_into_value(vm)?;
+                        let b: usize = inner_items[1].clone().try_into_value(vm)?;
+                        result.push((a, b));
+                    } else {
+                        return Err(
+                            vm.new_value_error("pad_width tuples must have 2 elements".to_owned())
+                        );
+                    }
+                } else {
+                    return Err(vm.new_type_error(
+                        "pad_width must be int, (int, int), or tuple of (int, int)".to_owned(),
+                    ));
+                }
+            }
+            return Ok(result);
+        }
+        Err(vm.new_type_error("pad_width must be int, tuple, or list".to_owned()))
+    }
+
+    #[pyfunction]
+    fn pad(
+        a: vm::PyRef<PyNdArray>,
+        pad_width: PyObjectRef,
+        constant_values: vm::function::OptionalArg<f64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let cv = constant_values.unwrap_or(0.0);
+        let pw = parse_pad_width(&pad_width, a.inner().ndim(), vm)?;
+        numpy_rust_core::pad_constant(&a.inner(), &pw, cv)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Submodules (registered as attributes, feature-gated) ---
 
     #[cfg(feature = "linalg")]

@@ -20,8 +20,8 @@ pub use dtype::DType;
 pub use error::{NumpyError, Result};
 pub use indexing::{ravel_multi_index, unravel_index};
 pub use manipulation::{
-    column_stack, concatenate, dstack, hsplit, hstack, split, stack, unique, vsplit, vstack,
-    SplitSpec,
+    column_stack, concatenate, dstack, hsplit, hstack, meshgrid, pad_constant, split, stack,
+    unique, vsplit, vstack, SplitSpec,
 };
 pub use ops::einsum::einsum;
 pub use ops::selection::{choose, intersect1d, isin, setdiff1d, union1d};
