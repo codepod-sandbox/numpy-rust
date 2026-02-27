@@ -154,7 +154,7 @@ pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
 }
 
 /// Parse a Python dtype string to DType.
-fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
+pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
     match s {
         "bool" => Ok(DType::Bool),
         "int32" | "i32" => Ok(DType::Int32),

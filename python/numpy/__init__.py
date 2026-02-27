@@ -65,26 +65,46 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     if isinstance(data, _ObjectArray):
         return data.copy() if copy else data
     if isinstance(data, ndarray):
-        return data.copy() if copy else data
+        result = data.copy() if copy else data
+        if dtype is not None:
+            dt = str(dtype)
+            if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                result = result.astype(dt)
+        return result
     if isinstance(data, (int, float)):
-        return _native.array([float(data)])
+        result = _native.array([float(data)])
+        if dtype is not None:
+            dt = str(dtype)
+            if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                result = result.astype(dt)
+        return result
     if isinstance(data, str):
-        # Single string → string array
+        # Single string -> string array
         return _native.array([data])
     if isinstance(data, list) and len(data) > 0 and isinstance(data[0], str):
-        # List of strings → string array
+        # List of strings -> string array
         return _native.array(data)
     if isinstance(data, list) and len(data) > 0 and isinstance(data[0], (int, float)):
-        return _native.array([float(x) for x in data])
+        result = _native.array([float(x) for x in data])
+        if dtype is not None:
+            dt = str(dtype)
+            if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                result = result.astype(dt)
+        return result
     # Try the native array constructor
     try:
-        return _native.array(data)
+        result = _native.array(data)
     except (TypeError, ValueError):
         try:
-            return _native.array(_to_float_list(data))
+            result = _native.array(_to_float_list(data))
         except (TypeError, ValueError):
             # Final fallback for non-numeric data
             return _ObjectArray(data if isinstance(data, (list, tuple)) else [data])
+    if dtype is not None and isinstance(result, ndarray):
+        dt = str(dtype)
+        if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+            result = result.astype(dt)
+    return result
 
 
 def _to_float_list(data):
@@ -104,13 +124,22 @@ def _to_float_list(data):
     return [float(data)]
 
 def zeros(shape, dtype=None, order="C", like=None):
+    if dtype is not None:
+        return _native.zeros(shape, str(dtype))
     return _native.zeros(shape)
 
 def ones(shape, dtype=None, order="C", like=None):
+    if dtype is not None:
+        return _native.ones(shape, str(dtype))
     return _native.ones(shape)
 
 def arange(*args, dtype=None, like=None, **kwargs):
     float_args = [float(a) for a in args]
+    if dtype is not None:
+        # Ensure step is provided so dtype goes in 4th position
+        if len(float_args) == 2:
+            float_args.append(1.0)
+        return _native.arange(float_args[0], float_args[1], float_args[2], str(dtype))
     return _native.arange(*float_args, **kwargs)
 
 def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis=0):
@@ -124,6 +153,10 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
     return result
 
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
+    if dtype is not None:
+        if M is not None:
+            return _native.eye(N, M, k, str(dtype))
+        return _native.eye(N, N, k, str(dtype))
     if M is not None:
         return _native.eye(N, M, k)
     if k != 0:
@@ -281,29 +314,36 @@ class finfo:
 # --- Missing functions (stubs) ----------------------------------------------
 def empty(shape, dtype=None, order="C"):
     """Stub: returns zeros instead of uninitialized."""
-    return zeros(shape)
+    return zeros(shape, dtype=dtype)
 
 def empty_like(a, dtype=None, order="K", subok=True, shape=None):
     s = shape if shape is not None else a.shape
-    return zeros(s)
+    dt = dtype if dtype is not None else (str(a.dtype) if hasattr(a, 'dtype') else None)
+    return zeros(s, dtype=dt)
 
 def full(shape, fill_value, dtype=None, order="C"):
-    a = ones(shape)
-    fill_arr = ones(shape) * array([float(fill_value)]) if not isinstance(fill_value, ndarray) else fill_value
-    # element-wise multiply: ones * scalar_array
-    return a * fill_arr if isinstance(fill_arr, ndarray) else a
+    if dtype is not None:
+        return _native.full(shape, float(fill_value), str(dtype))
+    return _native.full(shape, float(fill_value))
 
 def full_like(a, fill_value, dtype=None, order="K", subok=True, shape=None):
     s = shape if shape is not None else a.shape
-    return ones(s) * fill_value
+    dt = str(dtype) if dtype is not None else None
+    if dt is not None:
+        return _native.full(s, float(fill_value), dt)
+    return _native.full(s, float(fill_value))
 
 def zeros_like(a, dtype=None, order="K", subok=True, shape=None):
     s = shape if shape is not None else a.shape
-    return zeros(s)
+    if dtype is not None:
+        return _native.zeros(s, str(dtype))
+    return _native.zeros(s, str(a.dtype))
 
 def ones_like(a, dtype=None, order="K", subok=True, shape=None):
     s = shape if shape is not None else a.shape
-    return ones(s)
+    if dtype is not None:
+        return _native.ones(s, str(dtype))
+    return _native.ones(s, str(a.dtype))
 
 def isnan(x):
     """Check for NaN element-wise."""
@@ -702,10 +742,27 @@ def can_cast(from_, to, casting="safe"):
     return True  # stub
 
 def result_type(*arrays_and_dtypes):
-    return float64  # stub
+    if len(arrays_and_dtypes) == 0:
+        return float64
+    dtypes = []
+    for a in arrays_and_dtypes:
+        if isinstance(a, ndarray):
+            dtypes.append(str(a.dtype))
+        elif isinstance(a, _ScalarType):
+            dtypes.append(str(a))
+        elif isinstance(a, str):
+            dtypes.append(a)
+        else:
+            dtypes.append("float64")
+    if len(dtypes) == 1:
+        return _ScalarType(dtypes[0])
+    result = dtypes[0]
+    for d in dtypes[1:]:
+        result = _native.promote_types(result, d)
+    return _ScalarType(result)
 
 def promote_types(type1, type2):
-    return float64  # stub
+    return _ScalarType(_native.promote_types(str(type1), str(type2)))
 
 def seterr(**kwargs):
     """Stub for floating point error handling."""

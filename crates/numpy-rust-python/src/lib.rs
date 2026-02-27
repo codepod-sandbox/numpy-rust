@@ -40,13 +40,29 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
-    fn zeros(shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        py_creation::py_zeros(&shape, vm)
+    fn zeros(
+        shape: PyObjectRef,
+        dtype: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let dt = match dtype.into_option() {
+            Some(s) => Some(py_array::parse_dtype(s.as_str(), vm)?),
+            None => None,
+        };
+        py_creation::py_zeros(&shape, dt, vm)
     }
 
     #[pyfunction]
-    fn ones(shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        py_creation::py_ones(&shape, vm)
+    fn ones(
+        shape: PyObjectRef,
+        dtype: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let dt = match dtype.into_option() {
+            Some(s) => Some(py_array::parse_dtype(s.as_str(), vm)?),
+            None => None,
+        };
+        py_creation::py_ones(&shape, dt, vm)
     }
 
     #[pyfunction]
@@ -54,10 +70,17 @@ pub mod _numpy_native {
         start: f64,
         stop: f64,
         step: vm::function::OptionalArg<f64>,
-        _vm: &VirtualMachine,
-    ) -> PyNdArray {
+        dtype: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let step = step.unwrap_or(1.0);
-        PyNdArray::from_core(numpy_rust_core::creation::arange(start, stop, step, None))
+        let dt = match dtype.into_option() {
+            Some(s) => Some(py_array::parse_dtype(s.as_str(), vm)?),
+            None => None,
+        };
+        Ok(PyNdArray::from_core(numpy_rust_core::creation::arange(
+            start, stop, step, dt,
+        )))
     }
 
     #[pyfunction]
@@ -70,16 +93,46 @@ pub mod _numpy_native {
         n: usize,
         m: vm::function::OptionalArg<usize>,
         k: vm::function::OptionalArg<isize>,
-        _vm: &VirtualMachine,
-    ) -> PyNdArray {
+        dtype: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let m_val = m.into_option();
         let k_val = k.unwrap_or(0);
-        PyNdArray::from_core(numpy_rust_core::creation::eye(
-            n,
-            m_val,
-            k_val,
-            numpy_rust_core::DType::Float64,
-        ))
+        let dt = match dtype.into_option() {
+            Some(s) => py_array::parse_dtype(s.as_str(), vm)?,
+            None => numpy_rust_core::DType::Float64,
+        };
+        Ok(PyNdArray::from_core(numpy_rust_core::creation::eye(
+            n, m_val, k_val, dt,
+        )))
+    }
+
+    #[pyfunction]
+    fn full(
+        shape: PyObjectRef,
+        fill_value: f64,
+        dtype: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let shape_vec = py_array::extract_shape(&shape, vm)?;
+        let dt = match dtype.into_option() {
+            Some(s) => py_array::parse_dtype(s.as_str(), vm)?,
+            None => numpy_rust_core::DType::Float64,
+        };
+        Ok(PyNdArray::from_core(numpy_rust_core::creation::full(
+            &shape_vec, fill_value, dt,
+        )))
+    }
+
+    #[pyfunction]
+    fn promote_types(
+        type1: vm::PyRef<vm::builtins::PyStr>,
+        type2: vm::PyRef<vm::builtins::PyStr>,
+        vm: &VirtualMachine,
+    ) -> PyResult<String> {
+        let dt1 = py_array::parse_dtype(type1.as_str(), vm)?;
+        let dt2 = py_array::parse_dtype(type2.as_str(), vm)?;
+        Ok(dt1.promote(dt2).to_string())
     }
 
     #[pyfunction]

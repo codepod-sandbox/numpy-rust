@@ -73,17 +73,28 @@ fn parse_nested_list(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<PyN
     Ok(PyNdArray::from_core(arr))
 }
 
-/// numpy.zeros(shape)
-pub fn py_zeros(shape_obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+/// numpy.zeros(shape, dtype)
+pub fn py_zeros(
+    shape_obj: &PyObjectRef,
+    dtype: Option<DType>,
+    vm: &VirtualMachine,
+) -> PyResult<PyNdArray> {
     let shape = extract_shape(shape_obj, vm)?;
-    Ok(PyNdArray::from_core(NdArray::zeros(&shape, DType::Float64)))
+    Ok(PyNdArray::from_core(NdArray::zeros(
+        &shape,
+        dtype.unwrap_or(DType::Float64),
+    )))
 }
 
-/// numpy.ones(shape)
-pub fn py_ones(shape_obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+/// numpy.ones(shape, dtype)
+pub fn py_ones(
+    shape_obj: &PyObjectRef,
+    dtype: Option<DType>,
+    vm: &VirtualMachine,
+) -> PyResult<PyNdArray> {
     Ok(PyNdArray::from_core(NdArray::ones(
         &extract_shape(shape_obj, vm)?,
-        DType::Float64,
+        dtype.unwrap_or(DType::Float64),
     )))
 }
 

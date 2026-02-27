@@ -1542,6 +1542,91 @@ def test_ravel_multi_index_ints():
     assert_eq(int(idx), 5)
 
 
+# --- Tier 9: Dtype correctness ---
+
+def test_zeros_dtype_int32():
+    a = np.zeros((3,), dtype="int32")
+    assert_eq(str(a.dtype), "int32")
+
+def test_zeros_dtype_float32():
+    a = np.zeros((3,), dtype="float32")
+    assert_eq(str(a.dtype), "float32")
+
+def test_ones_dtype_int64():
+    a = np.ones((2, 3), dtype="int64")
+    assert_eq(str(a.dtype), "int64")
+
+def test_full_native():
+    a = np.full((3,), 7.0)
+    assert_close(float(a[0]), 7.0)
+    assert_close(float(a[1]), 7.0)
+    assert_close(float(a[2]), 7.0)
+
+def test_full_dtype():
+    a = np.full((3,), 5, dtype="int32")
+    assert_eq(str(a.dtype), "int32")
+
+def test_eye_dtype():
+    a = np.eye(3, dtype="int32")
+    assert_eq(str(a.dtype), "int32")
+
+def test_arange_dtype():
+    a = np.arange(0, 5, 1, dtype="int32")
+    assert_eq(str(a.dtype), "int32")
+
+def test_array_dtype():
+    a = np.array([1.0, 2.0, 3.0], dtype="int32")
+    assert_eq(str(a.dtype), "int32")
+
+def test_zeros_like_preserves_dtype():
+    a = np.zeros((3,), dtype="int32")
+    b = np.zeros_like(a)
+    assert_eq(str(b.dtype), "int32")
+
+def test_ones_like_preserves_dtype():
+    a = np.ones((3,), dtype="float32")
+    b = np.ones_like(a)
+    assert_eq(str(b.dtype), "float32")
+
+def test_full_like_basic():
+    a = np.ones((3,))
+    b = np.full_like(a, 42.0)
+    assert_close(float(b[0]), 42.0)
+    assert_close(float(b[1]), 42.0)
+
+def test_promote_types():
+    r = np.promote_types("int32", "float32")
+    assert_eq(str(r), "float32")
+
+def test_promote_types_same():
+    r = np.promote_types("float64", "float64")
+    assert_eq(str(r), "float64")
+
+def test_promote_types_int_float():
+    r = np.promote_types("int64", "float32")
+    assert_eq(str(r), "float64")
+
+def test_zeros_default_dtype():
+    a = np.zeros((3,))
+    assert_eq(str(a.dtype), "float64")
+
+def test_ones_default_dtype():
+    a = np.ones((3,))
+    assert_eq(str(a.dtype), "float64")
+
+def test_eye_default_dtype():
+    a = np.eye(3)
+    assert_eq(str(a.dtype), "float64")
+
+def test_zeros_dtype_bool():
+    a = np.zeros((3,), dtype="bool")
+    assert_eq(str(a.dtype), "bool")
+
+def test_empty_dtype():
+    a = np.empty((3,), dtype="int32")
+    assert_eq(str(a.dtype), "int32")
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
