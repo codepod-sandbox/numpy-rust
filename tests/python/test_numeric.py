@@ -3012,6 +3012,390 @@ def test_default_rng():
     n = rng.normal(0.0, 1.0, (3,))
     assert_eq(n.size, 3)
 
+# --- Tier 20C: Numerical Utilities + String Ops ---
+
+def test_packbits():
+    a = np.array([1, 0, 1, 0, 0, 0, 1, 1])
+    p = np.packbits(a)
+    # big endian: 10100011 = 163
+    assert_eq(int(p[0]), 163)
+    # Less than 8 bits: pad with zeros
+    a2 = np.array([1, 0, 1])
+    p2 = np.packbits(a2)
+    # big endian: 10100000 = 160
+    assert_eq(int(p2[0]), 160)
+    # Little endian
+    a3 = np.array([1, 0, 1, 0, 0, 0, 1, 1])
+    p3 = np.packbits(a3, bitorder='little')
+    # little endian: bits 0,2,6,7 set = 1+4+64+128 = 197
+    assert_eq(int(p3[0]), 197)
+
+def test_unpackbits():
+    a = np.array([163])
+    u = np.unpackbits(a)
+    # 163 = 10100011
+    expected = [1, 0, 1, 0, 0, 0, 1, 1]
+    for i in range(8):
+        assert_eq(int(u[i]), expected[i])
+    # With count
+    u2 = np.unpackbits(a, count=4)
+    assert_eq(u2.size, 4)
+    for i in range(4):
+        assert_eq(int(u2[i]), expected[i])
+    # Little endian
+    u3 = np.unpackbits(np.array([197]), bitorder='little')
+    expected3 = [1, 0, 1, 0, 0, 0, 1, 1]
+    for i in range(8):
+        assert_eq(int(u3[i]), expected3[i])
+
+def test_asfortranarray():
+    a = np.array([1.0, 2.0, 3.0])
+    f = np.asfortranarray(a)
+    assert_eq(f.size, 3)
+    assert_close(f[0], 1.0)
+    assert_close(f[1], 2.0)
+    assert_close(f[2], 3.0)
+
+def test_asarray_chkfinite():
+    a = np.asarray_chkfinite([1.0, 2.0, 3.0])
+    assert_eq(a.size, 3)
+    assert_close(a[0], 1.0)
+    # Should raise on inf
+    try:
+        np.asarray_chkfinite([1.0, float('inf')])
+        raise AssertionError("Should have raised ValueError")
+    except ValueError:
+        pass
+    # Should raise on nan
+    try:
+        np.asarray_chkfinite([1.0, float('nan')])
+        raise AssertionError("Should have raised ValueError")
+    except ValueError:
+        pass
+
+def test_nextafter():
+    import math
+    # Scalar
+    n = np.nextafter(0.0, 1.0)
+    assert_eq(n > 0.0, True)
+    assert_eq(n < 1e-300, True)
+    # Array
+    a = np.array([0.0, 1.0])
+    b = np.array([1.0, 0.0])
+    r = np.nextafter(a, b)
+    assert_eq(r[0] > 0.0, True)
+    assert_eq(r[1] < 1.0, True)
+
+def test_spacing():
+    import math
+    # Scalar
+    s = np.spacing(1.0)
+    assert_eq(s > 0.0, True)
+    # Should be machine epsilon for 1.0
+    assert_close(s, math.ulp(1.0), tol=1e-20)
+    # Array
+    a = np.array([1.0, 100.0])
+    r = np.spacing(a)
+    assert_eq(r[0] > 0.0, True)
+    assert_eq(r[1] > 0.0, True)
+    assert_eq(r[1] > r[0], True)  # spacing increases with magnitude
+
+def test_char_split():
+    a = np.array(["hello world", "foo bar baz"])
+    r = np.char.split(a)
+    assert_eq(len(r), 2)
+    assert_eq(r[0], ["hello", "world"])
+    assert_eq(r[1], ["foo", "bar", "baz"])
+    # Single string
+    r2 = np.char.split(np.array(["a-b-c"]), sep="-")
+    assert_eq(r2, ["a", "b", "c"])
+
+def test_char_join():
+    r = np.char.join("-", ["hello", "world"])
+    assert_eq(r, "hello-world")
+
+def test_char_find():
+    a = np.array(["hello", "world", "help"])
+    r = np.char.find(a, "lo")
+    assert_eq(int(r[0]), 3)   # "hello".find("lo") = 3
+    assert_eq(int(r[1]), -1)  # "world".find("lo") = -1
+    assert_eq(int(r[2]), -1)  # "help".find("lo") = -1
+
+def test_char_count():
+    a = np.array(["abcabc", "abc", "aaa"])
+    r = np.char.count(a, "a")
+    assert_eq(int(r[0]), 2)  # "abcabc".count("a") = 2
+    assert_eq(int(r[1]), 1)  # "abc".count("a") = 1
+    assert_eq(int(r[2]), 3)  # "aaa".count("a") = 3
+
+def test_char_add():
+    a = np.array(["hello", "foo"])
+    b = np.array([" world", " bar"])
+    r = np.char.add(a, b)
+    r_list = r.tolist()
+    assert_eq(r_list[0], "hello world")
+    assert_eq(r_list[1], "foo bar")
+
+def test_char_multiply():
+    a = np.array(["ab", "cd"])
+    r = np.char.multiply(a, 3)
+    r_list = r.tolist()
+    assert_eq(r_list[0], "ababab")
+    assert_eq(r_list[1], "cdcdcd")
+
+# --- Tier 20B: Bitwise Operations + Set Completion + histogram2d ---
+
+def test_bitwise_and_func():
+    a = np.array([0b1100, 0b1010, 0b1111])
+    b = np.array([0b1010, 0b1100, 0b0011])
+    r = np.bitwise_and(a, b)
+    vals = r.tolist()
+    assert_eq(int(vals[0]), 0b1000)   # 12 & 10 = 8
+    assert_eq(int(vals[1]), 0b1000)   # 10 & 12 = 8
+    assert_eq(int(vals[2]), 0b0011)   # 15 & 3 = 3
+
+def test_bitwise_or_func():
+    a = np.array([0b1100, 0b1010, 0b0000])
+    b = np.array([0b1010, 0b1100, 0b0011])
+    r = np.bitwise_or(a, b)
+    vals = r.tolist()
+    assert_eq(int(vals[0]), 0b1110)   # 12 | 10 = 14
+    assert_eq(int(vals[1]), 0b1110)   # 10 | 12 = 14
+    assert_eq(int(vals[2]), 0b0011)   # 0 | 3 = 3
+
+def test_bitwise_xor_func():
+    a = np.array([0b1100, 0b1010, 0b1111])
+    b = np.array([0b1010, 0b1100, 0b1111])
+    r = np.bitwise_xor(a, b)
+    vals = r.tolist()
+    assert_eq(int(vals[0]), 0b0110)   # 12 ^ 10 = 6
+    assert_eq(int(vals[1]), 0b0110)   # 10 ^ 12 = 6
+    assert_eq(int(vals[2]), 0b0000)   # 15 ^ 15 = 0
+
+def test_bitwise_not_func():
+    a = np.array([0, 1, -1])
+    r = np.bitwise_not(a)
+    vals = r.tolist()
+    assert_eq(int(vals[0]), ~0)      # ~0 = -1
+    assert_eq(int(vals[1]), ~1)      # ~1 = -2
+    assert_eq(int(vals[2]), ~(-1))   # ~(-1) = 0
+    # Also test invert alias
+    r2 = np.invert(a)
+    vals2 = r2.tolist()
+    assert_eq(int(vals2[0]), -1)
+    assert_eq(int(vals2[1]), -2)
+    assert_eq(int(vals2[2]), 0)
+
+def test_left_shift_func():
+    a = np.array([1, 2, 3])
+    b = np.array([1, 2, 3])
+    r = np.left_shift(a, b)
+    vals = r.tolist()
+    assert_eq(int(vals[0]), 2)    # 1 << 1 = 2
+    assert_eq(int(vals[1]), 8)    # 2 << 2 = 8
+    assert_eq(int(vals[2]), 24)   # 3 << 3 = 24
+
+def test_right_shift_func():
+    a = np.array([8, 16, 24])
+    b = np.array([1, 2, 3])
+    r = np.right_shift(a, b)
+    vals = r.tolist()
+    assert_eq(int(vals[0]), 4)    # 8 >> 1 = 4
+    assert_eq(int(vals[1]), 4)    # 16 >> 2 = 4
+    assert_eq(int(vals[2]), 3)    # 24 >> 3 = 3
+
+def test_setxor1d():
+    a = np.array([1, 2, 3, 4])
+    b = np.array([3, 4, 5, 6])
+    r = np.setxor1d(a, b)
+    vals = r.tolist()
+    # Symmetric difference: elements in either but not both -> [1, 2, 5, 6]
+    assert_eq(len(vals), 4)
+    assert_close(vals[0], 1.0)
+    assert_close(vals[1], 2.0)
+    assert_close(vals[2], 5.0)
+    assert_close(vals[3], 6.0)
+    # With duplicates in input
+    a2 = np.array([1, 1, 2, 3])
+    b2 = np.array([2, 2, 3, 4])
+    r2 = np.setxor1d(a2, b2)
+    vals2 = r2.tolist()
+    assert_eq(len(vals2), 2)
+    assert_close(vals2[0], 1.0)
+    assert_close(vals2[1], 4.0)
+
+def test_histogram2d():
+    x = np.array([0.5, 1.5, 2.5, 0.5, 1.5])
+    y = np.array([0.5, 0.5, 0.5, 1.5, 1.5])
+    hist, xedges, yedges = np.histogram2d(x, y, bins=3, range=[[0.0, 3.0], [0.0, 3.0]])
+    # hist should be 3x3
+    assert_eq(hist.shape, (3, 3))
+    # xedges should have 4 elements, yedges should have 4 elements
+    assert_eq(xedges.size, 4)
+    assert_eq(yedges.size, 4)
+    # Check total count equals number of points
+    assert_close(hist.sum(), 5.0)
+    # Point (0.5, 0.5) -> bin (0,0)
+    assert_close(float(hist[0][0]), 1.0)
+    # Point (0.5, 1.5) -> bin (0,1)
+    assert_close(float(hist[0][1]), 1.0)
+    # Point (1.5, 0.5) -> bin (1,0)
+    assert_close(float(hist[1][0]), 1.0)
+    # Point (1.5, 1.5) -> bin (1,1)
+    assert_close(float(hist[1][1]), 1.0)
+    # Point (2.5, 0.5) -> bin (2,0)
+    assert_close(float(hist[2][0]), 1.0)
+
+# --- Tier 20A: tensordot, moveaxis, rollaxis, unique, pad, hypot, swapaxes ---
+
+def test_tensordot_basic():
+    """tensordot of 2D arrays with default axes=2 (full contraction)."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    # axes=2 contracts both axes -> scalar-like result
+    r = np.tensordot(a, b, axes=2)
+    # 1*5 + 2*6 + 3*7 + 4*8 = 5+12+21+32 = 70
+    expected = 70.0
+    r_flat = r.flatten()
+    assert_close(float(r_flat[0]), expected)
+
+def test_tensordot_axes():
+    """tensordot with axes=1 (matrix multiply equivalent)."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    r = np.tensordot(a, b, axes=1)
+    # Same as matrix multiply: [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]]
+    # = [[19, 22], [43, 50]]
+    assert_eq(r.shape, (2, 2))
+    assert_close(float(r[0][0]), 19.0)
+    assert_close(float(r[0][1]), 22.0)
+    assert_close(float(r[1][0]), 43.0)
+    assert_close(float(r[1][1]), 50.0)
+
+def test_tensordot_axes_tuple():
+    """tensordot with specific axes as tuple."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    r = np.tensordot(a, b, axes=([1], [0]))
+    # Contract axis 1 of a with axis 0 of b = matrix multiply
+    assert_eq(r.shape, (2, 2))
+    assert_close(float(r[0][0]), 19.0)
+    assert_close(float(r[1][1]), 50.0)
+
+def test_moveaxis():
+    """Move axis 0 to the end, verify shape."""
+    a = np.zeros((2, 3, 4))
+    r = np.moveaxis(a, 0, -1)
+    assert_eq(r.shape, (3, 4, 2))
+
+def test_moveaxis_multi():
+    """Move multiple axes."""
+    a = np.zeros((2, 3, 4))
+    r = np.moveaxis(a, [0, 1], [2, 0])
+    assert_eq(r.shape, (3, 4, 2))
+
+def test_rollaxis():
+    """Roll axis to position."""
+    a = np.zeros((2, 3, 4))
+    r = np.rollaxis(a, 2, 0)
+    assert_eq(r.shape, (4, 2, 3))
+
+def test_rollaxis_back():
+    """Roll axis backwards."""
+    a = np.zeros((2, 3, 4))
+    r = np.rollaxis(a, 0, 3)
+    # axis 0 rolled to before position 3 -> end
+    assert_eq(r.shape, (3, 4, 2))
+
+def test_unique_return_index():
+    a = np.array([3.0, 1.0, 2.0, 1.0, 3.0])
+    vals, idx = np.unique(a, return_index=True)
+    # unique sorted: [1, 2, 3], first occurrences at [1, 2, 0]
+    assert_close(float(vals[0]), 1.0)
+    assert_close(float(vals[1]), 2.0)
+    assert_close(float(vals[2]), 3.0)
+    assert_close(float(idx[0]), 1.0)
+    assert_close(float(idx[1]), 2.0)
+    assert_close(float(idx[2]), 0.0)
+
+def test_unique_return_inverse():
+    a = np.array([3.0, 1.0, 2.0, 1.0, 3.0])
+    vals, inv = np.unique(a, return_inverse=True)
+    # unique sorted: [1, 2, 3]
+    # original: [3,1,2,1,3] -> inverse indices: [2, 0, 1, 0, 2]
+    assert_close(float(inv[0]), 2.0)
+    assert_close(float(inv[1]), 0.0)
+    assert_close(float(inv[2]), 1.0)
+    assert_close(float(inv[3]), 0.0)
+    assert_close(float(inv[4]), 2.0)
+
+def test_unique_return_counts():
+    a = np.array([3.0, 1.0, 2.0, 1.0, 3.0])
+    vals, counts = np.unique(a, return_counts=True)
+    # unique sorted: [1, 2, 3], counts: [2, 1, 2]
+    assert_close(float(counts[0]), 2.0)
+    assert_close(float(counts[1]), 1.0)
+    assert_close(float(counts[2]), 2.0)
+
+def test_pad_edge():
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.pad(a, 2, mode='edge')
+    # [1,1, 1,2,3, 3,3]
+    assert_eq(r.shape, (7,))
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 1.0)
+    assert_close(float(r[2]), 1.0)
+    assert_close(float(r[4]), 3.0)
+    assert_close(float(r[5]), 3.0)
+    assert_close(float(r[6]), 3.0)
+
+def test_pad_reflect():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    r = np.pad(a, 2, mode='reflect')
+    # reflect: [3,2, 1,2,3,4,5, 4,3]
+    assert_eq(r.shape, (9,))
+    assert_close(float(r[0]), 3.0)
+    assert_close(float(r[1]), 2.0)
+    assert_close(float(r[7]), 4.0)
+    assert_close(float(r[8]), 3.0)
+
+def test_pad_wrap():
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.pad(a, 2, mode='wrap')
+    # wrap: [2,3, 1,2,3, 1,2]
+    assert_eq(r.shape, (7,))
+    assert_close(float(r[0]), 2.0)
+    assert_close(float(r[1]), 3.0)
+    assert_close(float(r[5]), 1.0)
+    assert_close(float(r[6]), 2.0)
+
+def test_hypot():
+    a = np.array([3.0, 5.0, 0.0])
+    b = np.array([4.0, 12.0, 0.0])
+    r = np.hypot(a, b)
+    assert_close(float(r[0]), 5.0)
+    assert_close(float(r[1]), 13.0)
+    assert_close(float(r[2]), 0.0)
+
+def test_hypot_scalar():
+    r = np.hypot(np.array([3.0]), np.array([4.0]))
+    assert_close(float(r[0]), 5.0)
+
+def test_swapaxes():
+    """Swap axes on a 3D array."""
+    a = np.zeros((2, 3, 4))
+    r = np.swapaxes(a, 0, 2)
+    assert_eq(r.shape, (4, 3, 2))
+
+def test_swapaxes_2d():
+    """Swap axes on a 2D array = transpose."""
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    r = np.swapaxes(a, 0, 1)
+    assert_eq(r.shape, (3, 2))
+    assert_close(float(r[0][0]), 1.0)
+    assert_close(float(r[1][0]), 2.0)
+    assert_close(float(r[0][1]), 4.0)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

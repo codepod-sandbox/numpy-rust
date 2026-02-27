@@ -553,6 +553,12 @@ def arctanh(x):
         x = array(x)
     return _native.arctanh(x)
 
+def hypot(x1, x2):
+    """Element-wise sqrt(x1**2 + x2**2)."""
+    x1 = asarray(x1) if not isinstance(x1, ndarray) else x1
+    x2 = asarray(x2) if not isinstance(x2, ndarray) else x2
+    return sqrt(x1 * x1 + x2 * x2)
+
 def trunc(x):
     if isinstance(x, ndarray):
         return _native.trunc(x)
@@ -975,7 +981,62 @@ def argmin(a, axis=None, out=None):
 def reshape(a, newshape, order="C"):
     return a.reshape(newshape)
 
+def _transpose_with_axes(a, axes):
+    """Transpose ndarray with an arbitrary axis permutation (pure Python).
+
+    Parameters
+    ----------
+    a : ndarray
+    axes : list/tuple of int - the desired permutation of axes.
+
+    Returns an ndarray with axes reordered according to *axes*.
+    """
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    shape = a.shape
+    ndim_a = len(shape)
+    if axes is None:
+        return a.T
+    axes = list(axes)
+    if len(axes) != ndim_a:
+        raise ValueError("axes don't match array")
+    # Fast-paths
+    if axes == list(range(ndim_a)):
+        return a.copy() if hasattr(a, 'copy') else array(a.tolist())
+    if ndim_a == 2 and axes == [1, 0]:
+        return a.T
+    # Generic: walk every index of the output and pick from source
+    new_shape = tuple(shape[ax] for ax in axes)
+    size = 1
+    for s in new_shape:
+        size *= s
+    flat_data = a.flatten()
+    # Build strides of original array (row-major)
+    src_strides = [0] * ndim_a
+    s = 1
+    for i in range(ndim_a - 1, -1, -1):
+        src_strides[i] = s
+        s *= shape[i]
+    result = [0.0] * size
+    # Iterate over every multi-index of the *output*
+    out_idx = [0] * ndim_a
+    for flat_i in range(size):
+        # Map output index -> source index
+        src_flat = 0
+        for d in range(ndim_a):
+            src_flat += out_idx[d] * src_strides[axes[d]]
+        result[flat_i] = float(flat_data[src_flat])
+        # Increment out_idx (rightmost first)
+        for d in range(ndim_a - 1, -1, -1):
+            out_idx[d] += 1
+            if out_idx[d] < new_shape[d]:
+                break
+            out_idx[d] = 0
+    return array(result).reshape(list(new_shape))
+
 def transpose(a, axes=None):
+    if axes is not None:
+        return _transpose_with_axes(a, axes)
     return a.T
 
 def flatten(a, order="C"):
@@ -1329,6 +1390,7 @@ def diagonal(a, offset=0, axis1=0, axis2=1):
 
 _builtin_min = __builtins__["min"] if isinstance(__builtins__, dict) else __import__("builtins").min
 _builtin_max = __builtins__["max"] if isinstance(__builtins__, dict) else __import__("builtins").max
+_builtin_range = __builtins__["range"] if isinstance(__builtins__, dict) else __import__("builtins").range
 
 def trace(a, offset=0, axis1=0, axis2=1):
     d = diagonal(a, offset=offset, axis1=axis1, axis2=axis2)
@@ -1397,23 +1459,109 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
     ])
 
 def tensordot(a, b, axes=2):
-    return dot(a, b)  # simplified stub
+    """Compute tensor dot product along specified axes.
+
+    Parameters
+    ----------
+    a, b : array_like
+    axes : int or (2,) list of lists
+        If int N, contract last N axes of *a* with first N axes of *b*.
+        If a tuple of two sequences, contract the specified axes.
+    """
+    a = asarray(a) if not isinstance(a, ndarray) else a
+    b = asarray(b) if not isinstance(b, ndarray) else b
+    if isinstance(axes, int):
+        axes_a = list(range(a.ndim - axes, a.ndim))
+        axes_b = list(range(0, axes))
+    else:
+        axes_a = list(axes[0]) if not isinstance(axes[0], int) else [axes[0]]
+        axes_b = list(axes[1]) if not isinstance(axes[1], int) else [axes[1]]
+    na = a.ndim
+    nb = b.ndim
+    # Normalise negative axes
+    axes_a = [ax if ax >= 0 else ax + na for ax in axes_a]
+    axes_b = [ax if ax >= 0 else ax + nb for ax in axes_b]
+    # Free axes (those not being contracted)
+    free_a = [i for i in range(na) if i not in axes_a]
+    free_b = [i for i in range(nb) if i not in axes_b]
+    # Transpose a so free axes come first, contracted axes last
+    perm_a = free_a + axes_a
+    # Transpose b so contracted axes come first, free axes last
+    perm_b = axes_b + free_b
+    at = _transpose_with_axes(a, perm_a)
+    bt = _transpose_with_axes(b, perm_b)
+    # Compute shapes for reshape into 2D
+    free_a_shape = [a.shape[i] for i in free_a]
+    free_b_shape = [b.shape[i] for i in free_b]
+    contract_size = 1
+    for ax in axes_a:
+        contract_size *= a.shape[ax]
+    rows = 1
+    for s in free_a_shape:
+        rows *= s
+    cols = 1
+    for s in free_b_shape:
+        cols *= s
+    at2 = at.reshape([rows, contract_size])
+    bt2 = bt.reshape([contract_size, cols])
+    result = dot(at2, bt2)
+    out_shape = free_a_shape + free_b_shape
+    if len(out_shape) == 0:
+        return result
+    return result.reshape(out_shape)
 
 def roll(a, shift, axis=None):
     if isinstance(a, ndarray):
         return _native.roll(a, shift, axis)
     return array(a)
 
-def rollaxis(a, axis, start=0):
-    return a  # stub
-
 def moveaxis(a, source, destination):
-    return a  # stub
+    """Move axes of an array to new positions.
+
+    Other axes remain in their original order.
+    """
+    a = asarray(a) if not isinstance(a, ndarray) else a
+    ndim_a = a.ndim
+    # Normalise to lists
+    if isinstance(source, int):
+        source = [source]
+    if isinstance(destination, int):
+        destination = [destination]
+    source = [s if s >= 0 else s + ndim_a for s in source]
+    destination = [d if d >= 0 else d + ndim_a for d in destination]
+    # Build permutation: start with axes not in source, in order
+    order = [i for i in range(ndim_a) if i not in source]
+    # Insert source axes at destination positions (must insert in sorted dest order)
+    pairs = sorted(zip(destination, source))
+    for dst, src in pairs:
+        order.insert(dst, src)
+    return _transpose_with_axes(a, order)
+
+def rollaxis(a, axis, start=0):
+    """Roll the specified axis backwards, until it lies in position *start*."""
+    a = asarray(a) if not isinstance(a, ndarray) else a
+    ndim_a = a.ndim
+    if axis < 0:
+        axis += ndim_a
+    if start < 0:
+        start += ndim_a
+    if start > axis:
+        start -= 1
+    return moveaxis(a, axis, start)
 
 def swapaxes(a, axis1, axis2):
-    if a.ndim == 2 and axis1 != axis2:
-        return a.T
-    return a
+    """Interchange two axes of an array."""
+    a = asarray(a) if not isinstance(a, ndarray) else a
+    ndim_a = a.ndim
+    if axis1 < 0:
+        axis1 += ndim_a
+    if axis2 < 0:
+        axis2 += ndim_a
+    if axis1 == axis2:
+        return a
+    order = list(range(ndim_a))
+    order[axis1], order[axis2] = order[axis2], order[axis1]
+    return _transpose_with_axes(a, order)
 
 def meshgrid(*xi, indexing='xy'):
     arrays = [a if isinstance(a, ndarray) else array(a) for a in xi]
@@ -1422,11 +1570,83 @@ def meshgrid(*xi, indexing='xy'):
 def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
     if not isinstance(a, ndarray):
         a = array(a)
-    if mode != 'constant':
-        raise NotImplementedError("only mode='constant' is supported")
-    if isinstance(constant_values, (list, tuple)):
-        constant_values = constant_values[0] if isinstance(constant_values[0], (int, float)) else constant_values[0][0]
-    return _native.pad(a, pad_width, float(constant_values))
+    # Normalise pad_width to list of (before, after) per axis
+    if isinstance(pad_width, int):
+        pw = [(pad_width, pad_width)] * a.ndim
+    elif isinstance(pad_width, (list, tuple)):
+        if isinstance(pad_width[0], int):
+            if len(pad_width) == 2:
+                pw = [(pad_width[0], pad_width[1])] * a.ndim
+            else:
+                pw = [(pad_width[0], pad_width[0])] * a.ndim
+        else:
+            pw = [(p[0], p[1]) for p in pad_width]
+    else:
+        pw = [(pad_width, pad_width)] * a.ndim
+
+    if mode == 'constant':
+        if isinstance(constant_values, (list, tuple)):
+            constant_values = constant_values[0] if isinstance(constant_values[0], (int, float)) else constant_values[0][0]
+        return _native.pad(a, pad_width, float(constant_values))
+
+    # Pure-Python implementation for 'edge', 'reflect', 'wrap'
+    def _pad_1d(data_list, before, after, mode_str):
+        """Pad a 1D Python list with the given mode."""
+        n = len(data_list)
+        result = []
+        if mode_str == 'edge':
+            result = [data_list[0]] * before + list(data_list) + [data_list[-1]] * after
+        elif mode_str == 'reflect':
+            left = []
+            for i in range(before):
+                idx = (i + 1) % (2 * (n - 1)) if n > 1 else 0
+                if idx >= n:
+                    idx = 2 * (n - 1) - idx
+                left.insert(0, data_list[idx])
+            right = []
+            for i in range(after):
+                idx = (i + 1) % (2 * (n - 1)) if n > 1 else 0
+                if idx >= n:
+                    idx = 2 * (n - 1) - idx
+                right.append(data_list[n - 1 - idx])
+            result = left + list(data_list) + right
+        elif mode_str == 'wrap':
+            left = []
+            for i in range(before):
+                left.insert(0, data_list[-(i + 1) % n])
+            right = []
+            for i in range(after):
+                right.append(data_list[i % n])
+            result = left + list(data_list) + right
+        else:
+            raise NotImplementedError("pad mode '{}' is not supported".format(mode_str))
+        return result
+
+    if a.ndim == 1:
+        data = [float(a[i]) for i in range(a.shape[0])]
+        padded = _pad_1d(data, pw[0][0], pw[0][1], mode)
+        return array(padded)
+
+    # nD: pad axis-by-axis, starting from the last axis
+    def _to_nested(arr):
+        """Convert ndarray to nested Python lists."""
+        if arr.ndim == 1:
+            return [float(arr[i]) for i in range(arr.shape[0])]
+        return [_to_nested(arr[i]) for i in range(arr.shape[0])]
+
+    def _pad_axis(nested, axis, before, after, mode_str, current_depth=0):
+        """Recursively pad along a specific axis of nested lists."""
+        if current_depth == axis:
+            return _pad_1d(nested, before, after, mode_str)
+        else:
+            return [_pad_axis(sub, axis, before, after, mode_str, current_depth + 1) for sub in nested]
+
+    nested = _to_nested(a)
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before > 0 or after > 0:
+            nested = _pad_axis(nested, ax, before, after, mode)
+    return array(nested)
 
 def indices(dimensions, dtype=None, sparse=False):
     """Return an array representing the indices of a grid."""
@@ -1561,11 +1781,67 @@ def rot90(a, k=1, axes=(0, 1)):
         return _native.rot90(a, k)
     return a
 
-def unique(a):
-    """Return sorted unique elements of an array."""
-    if isinstance(a, ndarray):
-        return _native.unique(a)
-    return array(sorted(set(a)))
+def unique(a, return_index=False, return_inverse=False, return_counts=False):
+    """Return sorted unique elements of an array.
+
+    Parameters
+    ----------
+    a : array_like
+    return_index : bool
+        If True, return indices of first occurrences.
+    return_inverse : bool
+        If True, return indices to reconstruct original from unique.
+    return_counts : bool
+        If True, return count of each unique value.
+
+    Returns
+    -------
+    unique : ndarray
+    unique_indices : ndarray (optional)
+    unique_inverse : ndarray (optional)
+    unique_counts : ndarray (optional)
+    """
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    flat = a.flatten()
+    n = flat.shape[0]
+    vals = [float(flat[i]) for i in range(n)]
+
+    # Build sorted unique with tracking info
+    indexed = sorted(enumerate(vals), key=lambda t: t[1])
+    unique_vals = []
+    first_indices = []
+    counts = []
+    prev = None
+    for orig_idx, v in indexed:
+        if prev is None or v != prev:
+            unique_vals.append(v)
+            first_indices.append(orig_idx)
+            counts.append(1)
+            prev = v
+        else:
+            counts[-1] += 1
+            # Keep the smallest original index
+            if orig_idx < first_indices[-1]:
+                first_indices[-1] = orig_idx
+
+    result_unique = array(unique_vals)
+    extras = return_index or return_inverse or return_counts
+    if not extras:
+        return result_unique
+    ret = (result_unique,)
+    if return_index:
+        ret = ret + (array([float(i) for i in first_indices]),)
+    if return_inverse:
+        # For each element in the original flat array, find its position in unique_vals
+        val_to_pos = {}
+        for i, v in enumerate(unique_vals):
+            val_to_pos[v] = i
+        inverse = [float(val_to_pos[v]) for v in vals]
+        ret = ret + (array(inverse),)
+    if return_counts:
+        ret = ret + (array([float(c) for c in counts]),)
+    return ret
 
 def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
     if not isinstance(ar1, ndarray):
@@ -1587,6 +1863,19 @@ def setdiff1d(ar1, ar2, assume_unique=False):
     if not isinstance(ar2, ndarray):
         ar2 = array(ar2)
     return _native.setdiff1d(ar1, ar2)
+
+def setxor1d(ar1, ar2, assume_unique=False):
+    """Return sorted, unique values that are in only one of the input arrays."""
+    if not isinstance(ar1, ndarray):
+        ar1 = array(ar1)
+    if not isinstance(ar2, ndarray):
+        ar2 = array(ar2)
+    u1 = unique(ar1)
+    u2 = unique(ar2)
+    # Elements in ar1 but not ar2, plus elements in ar2 but not ar1
+    diff1 = setdiff1d(u1, u2)
+    diff2 = setdiff1d(u2, u1)
+    return sort(concatenate([diff1, diff2]))
 
 def isin(element, test_elements, assume_unique=False, invert=False):
     if not isinstance(element, ndarray):
@@ -1672,6 +1961,73 @@ def logical_not(x):
 def logical_xor(x1, x2):
     return logical_and(logical_or(x1, x2), logical_not(logical_and(x1, x2)))
 
+# --- Bitwise operations ------------------------------------------------------
+
+def bitwise_and(x1, x2):
+    """Element-wise bitwise AND of integer arrays."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    a = x1.astype("int64")
+    b = x2.astype("int64")
+    a_list = a.flatten().tolist()
+    b_list = b.flatten().tolist()
+    result = [int(av) & int(bv) for av, bv in zip(a_list, b_list)]
+    return array([float(v) for v in result]).astype("int64")
+
+def bitwise_or(x1, x2):
+    """Element-wise bitwise OR of integer arrays."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    a = x1.astype("int64")
+    b = x2.astype("int64")
+    a_list = a.flatten().tolist()
+    b_list = b.flatten().tolist()
+    result = [int(av) | int(bv) for av, bv in zip(a_list, b_list)]
+    return array([float(v) for v in result]).astype("int64")
+
+def bitwise_xor(x1, x2):
+    """Element-wise bitwise XOR of integer arrays."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    a = x1.astype("int64")
+    b = x2.astype("int64")
+    a_list = a.flatten().tolist()
+    b_list = b.flatten().tolist()
+    result = [int(av) ^ int(bv) for av, bv in zip(a_list, b_list)]
+    return array([float(v) for v in result]).astype("int64")
+
+def bitwise_not(x):
+    """Element-wise bitwise NOT (invert) of integer array."""
+    x = asarray(x)
+    a = x.astype("int64")
+    a_list = a.flatten().tolist()
+    result = [~int(v) for v in a_list]
+    return array([float(v) for v in result]).astype("int64")
+
+invert = bitwise_not
+
+def left_shift(x1, x2):
+    """Element-wise left bit shift."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    a = x1.astype("int64")
+    b = x2.astype("int64")
+    a_list = a.flatten().tolist()
+    b_list = b.flatten().tolist()
+    result = [int(av) << int(bv) for av, bv in zip(a_list, b_list)]
+    return array([float(v) for v in result]).astype("int64")
+
+def right_shift(x1, x2):
+    """Element-wise right bit shift."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    a = x1.astype("int64")
+    b = x2.astype("int64")
+    a_list = a.flatten().tolist()
+    b_list = b.flatten().tolist()
+    result = [int(av) >> int(bv) for av, bv in zip(a_list, b_list)]
+    return array([float(v) for v in result]).astype("int64")
+
 def matrix_transpose(a):
     return a.T
 
@@ -1708,6 +2064,81 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
     return _native.histogram(a, bins)
+
+def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
+    """Compute the 2D histogram of two data samples."""
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if not isinstance(y, ndarray):
+        y = array(y)
+    x_flat = x.flatten()
+    y_flat = y.flatten()
+    n = x_flat.size
+    x_list = x_flat.tolist()
+    y_list = y_flat.tolist()
+    # Determine number of bins for x and y
+    if isinstance(bins, (list, tuple)):
+        nbins_x = int(bins[0])
+        nbins_y = int(bins[1])
+    else:
+        nbins_x = int(bins)
+        nbins_y = int(bins)
+    # Determine ranges
+    if range is not None:
+        xmin, xmax = float(range[0][0]), float(range[0][1])
+        ymin, ymax = float(range[1][0]), float(range[1][1])
+    else:
+        xmin = _builtin_min(x_list)
+        xmax = _builtin_max(x_list)
+        ymin = _builtin_min(y_list)
+        ymax = _builtin_max(y_list)
+    # Build bin edges
+    xedges_list = []
+    yedges_list = []
+    for i in _builtin_range(nbins_x + 1):
+        xedges_list.append(xmin + i * (xmax - xmin) / nbins_x)
+    for i in _builtin_range(nbins_y + 1):
+        yedges_list.append(ymin + i * (ymax - ymin) / nbins_y)
+    # Count into 2D bins
+    hist_data = []
+    for i in _builtin_range(nbins_x):
+        row = []
+        for j in _builtin_range(nbins_y):
+            row.append(0.0)
+        hist_data.append(row)
+    xspan = xmax - xmin
+    yspan = ymax - ymin
+    for k in _builtin_range(n):
+        xv = x_list[k]
+        yv = y_list[k]
+        # Find x bin
+        if xspan == 0.0:
+            xi = 0
+        else:
+            xi = int((xv - xmin) / (xspan / nbins_x))
+        if xi >= nbins_x:
+            xi = nbins_x - 1
+        if xi < 0:
+            xi = 0
+        # Find y bin
+        if yspan == 0.0:
+            yi = 0
+        else:
+            yi = int((yv - ymin) / (yspan / nbins_y))
+        if yi >= nbins_y:
+            yi = nbins_y - 1
+        if yi < 0:
+            yi = 0
+        hist_data[xi][yi] = hist_data[xi][yi] + 1.0
+    # Convert to arrays
+    flat_hist = []
+    for i in _builtin_range(nbins_x):
+        for j in _builtin_range(nbins_y):
+            flat_hist.append(hist_data[i][j])
+    hist = array(flat_hist).reshape((nbins_x, nbins_y))
+    xedges = array(xedges_list)
+    yedges = array(yedges_list)
+    return hist, xedges, yedges
 
 def bincount(x, weights=None, minlength=0):
     if not isinstance(x, ndarray):
@@ -1756,6 +2187,124 @@ class _char_mod:
     @staticmethod
     def replace(a, old, new):
         return _native.char_replace(a, old, new)
+
+    @staticmethod
+    def split(a, sep=None, maxsplit=-1):
+        """Split each element in a around sep."""
+        if isinstance(a, ndarray):
+            items = a.tolist()
+        elif isinstance(a, _ObjectArray):
+            items = a._data
+        elif isinstance(a, str):
+            items = [a]
+        else:
+            items = list(a)
+        result = []
+        for s in items:
+            result.append(str(s).split(sep, maxsplit))
+        if len(result) == 1:
+            return result[0]
+        return result
+
+    @staticmethod
+    def join(sep, a):
+        """Join strings in a with separator sep, element-wise."""
+        if isinstance(a, ndarray):
+            items = a.tolist()
+        elif isinstance(a, _ObjectArray):
+            items = a._data
+        elif isinstance(a, (list, tuple)):
+            items = a
+        else:
+            items = [a]
+        # If items is a list of lists, join each sublist
+        if len(items) > 0 and isinstance(items[0], (list, tuple)):
+            result = [str(sep).join(str(x) for x in sub) for sub in items]
+            return array(result)
+        # Otherwise join all items into a single string
+        return str(sep).join(str(x) for x in items)
+
+    @staticmethod
+    def find(a, sub, start=0, end=None):
+        """Find first occurrence of sub in each element of a."""
+        if isinstance(a, ndarray):
+            items = a.tolist()
+        elif isinstance(a, _ObjectArray):
+            items = a._data
+        elif isinstance(a, str):
+            items = [a]
+        else:
+            items = list(a)
+        result = []
+        for s in items:
+            s = str(s)
+            if end is None:
+                result.append(s.find(sub, start))
+            else:
+                result.append(s.find(sub, start, end))
+        return array(result)
+
+    @staticmethod
+    def count(a, sub, start=0, end=None):
+        """Count non-overlapping occurrences of sub in each element of a."""
+        if isinstance(a, ndarray):
+            items = a.tolist()
+        elif isinstance(a, _ObjectArray):
+            items = a._data
+        elif isinstance(a, str):
+            items = [a]
+        else:
+            items = list(a)
+        result = []
+        for s in items:
+            s = str(s)
+            if end is None:
+                result.append(s.count(sub, start))
+            else:
+                result.append(s.count(sub, start, end))
+        return array(result)
+
+    @staticmethod
+    def add(a, b):
+        """Element-wise string concatenation."""
+        if isinstance(a, ndarray):
+            items_a = a.tolist()
+        elif isinstance(a, _ObjectArray):
+            items_a = a._data
+        elif isinstance(a, str):
+            items_a = [a]
+        else:
+            items_a = list(a)
+        if isinstance(b, ndarray):
+            items_b = b.tolist()
+        elif isinstance(b, _ObjectArray):
+            items_b = b._data
+        elif isinstance(b, str):
+            items_b = [b]
+        else:
+            items_b = list(b)
+        # Broadcast if lengths differ
+        if len(items_a) == 1 and len(items_b) > 1:
+            items_a = items_a * len(items_b)
+        elif len(items_b) == 1 and len(items_a) > 1:
+            items_b = items_b * len(items_a)
+        result = [str(x) + str(y) for x, y in zip(items_a, items_b)]
+        return array(result)
+
+    @staticmethod
+    def multiply(a, i):
+        """Element-wise string repetition."""
+        if isinstance(a, ndarray):
+            items = a.tolist()
+        elif isinstance(a, _ObjectArray):
+            items = a._data
+        elif isinstance(a, str):
+            items = [a]
+        else:
+            items = list(a)
+        i = int(i)
+        result = [str(s) * i for s in items]
+        return array(result)
 
 char = _char_mod()
 
@@ -3873,6 +4422,108 @@ random.beta = _random_beta
 random.gamma = _random_gamma
 random.default_rng = _default_rng
 random.Generator = _Generator
+
+# --- Numerical Utilities (Tier 20C) -----------------------------------------
+
+def packbits(a, axis=None, bitorder='big'):
+    """Pack a binary-valued array into uint8 (int64 since we lack uint8 dtype)."""
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    # Flatten if axis is None
+    vals = a.flatten().tolist()
+    if bitorder == 'little':
+        # Reverse bit order within each byte
+        result = []
+        for i in range(0, len(vals), 8):
+            chunk = vals[i:i+8]
+            byte = 0
+            for j in range(len(chunk)):
+                if int(chunk[j]):
+                    byte |= (1 << j)
+            result.append(byte)
+        return array(result)
+    else:
+        # big endian (default)
+        result = []
+        for i in range(0, len(vals), 8):
+            chunk = vals[i:i+8]
+            byte = 0
+            for j in range(len(chunk)):
+                if int(chunk[j]):
+                    byte |= (1 << (7 - j))
+            result.append(byte)
+        return array(result)
+
+
+def unpackbits(a, axis=None, count=None, bitorder='big'):
+    """Unpack elements of a uint8 array into a binary-valued output array."""
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    vals = a.flatten().tolist()
+    result = []
+    for v in vals:
+        byte = int(v)
+        if bitorder == 'little':
+            for j in range(8):
+                result.append((byte >> j) & 1)
+        else:
+            for j in range(7, -1, -1):
+                result.append((byte >> j) & 1)
+    if count is not None:
+        count = int(count)
+        if count < len(result):
+            result = result[:count]
+        else:
+            result = result + [0] * (count - len(result))
+    return array(result)
+
+
+def asfortranarray(a):
+    """Return an array laid out in Fortran order (simplified: just copy)."""
+    return array(a, copy=True)
+
+
+def asarray_chkfinite(a):
+    """Convert to array, checking for NaN and Inf."""
+    a = asarray(a)
+    if isinstance(a, ndarray):
+        vals = a.flatten().tolist()
+        for v in vals:
+            if _math.isinf(v) or _math.isnan(v):
+                raise ValueError("array must not contain infs or NaNs")
+    return a
+
+
+def nextafter(x1, x2):
+    """Return the next floating-point value after x1 towards x2, element-wise."""
+    if isinstance(x1, (int, float)) and isinstance(x2, (int, float)):
+        return _math.nextafter(float(x1), float(x2))
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    v1 = x1.flatten().tolist()
+    v2 = x2.flatten().tolist()
+    # Broadcast: if one is scalar-like (len 1), expand
+    if len(v1) == 1 and len(v2) > 1:
+        v1 = v1 * len(v2)
+    elif len(v2) == 1 and len(v1) > 1:
+        v2 = v2 * len(v1)
+    result = [_math.nextafter(float(a), float(b)) for a, b in zip(v1, v2)]
+    return array(result)
+
+
+def spacing(x):
+    """Return the distance between x and the nearest adjacent number."""
+    if isinstance(x, (int, float)):
+        ax = abs(float(x))
+        return _math.nextafter(ax, _math.inf) - ax
+    x = asarray(x)
+    vals = x.flatten().tolist()
+    result = []
+    for v in vals:
+        ax = abs(float(v))
+        result.append(_math.nextafter(ax, _math.inf) - ax)
+    return array(result)
+
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:
