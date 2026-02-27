@@ -796,6 +796,56 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Correlation / Covariance ---
+
+    #[pyfunction]
+    fn cov(
+        m: vm::PyRef<PyNdArray>,
+        y: PyObjectRef,
+        rowvar: vm::function::OptionalArg<bool>,
+        ddof: vm::function::OptionalArg<usize>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let rowvar = rowvar.unwrap_or(true);
+        let ddof = ddof.unwrap_or(1);
+        if vm.is_none(&y) {
+            m.inner()
+                .cov(rowvar, ddof)
+                .map(PyNdArray::from_core)
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        } else {
+            let y_arr: vm::PyRef<PyNdArray> = y.try_into_value(vm)?;
+            let m_clone = m.inner().clone();
+            let y_clone = y_arr.inner().clone();
+            numpy_rust_core::ops::correlation::cov_xy(&m_clone, &y_clone, ddof)
+                .map(PyNdArray::from_core)
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        }
+    }
+
+    #[pyfunction]
+    fn corrcoef(
+        x: vm::PyRef<PyNdArray>,
+        y: PyObjectRef,
+        rowvar: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let rowvar = rowvar.unwrap_or(true);
+        if vm.is_none(&y) {
+            x.inner()
+                .corrcoef(rowvar)
+                .map(PyNdArray::from_core)
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        } else {
+            let y_arr: vm::PyRef<PyNdArray> = y.try_into_value(vm)?;
+            let x_clone = x.inner().clone();
+            let y_clone = y_arr.inner().clone();
+            numpy_rust_core::ops::correlation::corrcoef_xy(&x_clone, &y_clone)
+                .map(PyNdArray::from_core)
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        }
+    }
+
     // --- String (char) operations ---
 
     #[pyfunction]

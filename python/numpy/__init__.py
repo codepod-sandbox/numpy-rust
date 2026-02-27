@@ -599,6 +599,25 @@ def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
         a = array(a)
     return _native.quantile(a, 0.5, axis)
 
+def cov(m, y=None, rowvar=True, bias=False, ddof=None, fweights=None, aweights=None):
+    if not isinstance(m, ndarray):
+        m = array(m)
+    _ddof = ddof if ddof is not None else (0 if bias else 1)
+    if y is not None:
+        if not isinstance(y, ndarray):
+            y = array(y)
+        return _native.cov(m, y, rowvar, _ddof)
+    return _native.cov(m, None, rowvar, _ddof)
+
+def corrcoef(x, y=None, rowvar=True):
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if y is not None:
+        if not isinstance(y, ndarray):
+            y = array(y)
+        return _native.corrcoef(x, y, rowvar)
+    return _native.corrcoef(x, None, rowvar)
+
 def max(a, axis=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
         if axis is not None:

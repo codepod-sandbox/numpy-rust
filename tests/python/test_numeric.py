@@ -1336,6 +1336,46 @@ def test_nansum_2d_axis():
     assert_close(float(s[1]), 7.0)
 
 
+# --- Covariance / Correlation ---
+
+def test_cov_basic():
+    x = np.array([1.0, 2.0, 3.0])
+    y = np.array([4.0, 5.0, 6.0])
+    c = np.cov(x, y)
+    assert_eq(c.shape, (2, 2))
+    assert_close(float(c[0][0]), 1.0)
+    assert_close(float(c[0][1]), 1.0)
+    assert_close(float(c[1][0]), 1.0)
+    assert_close(float(c[1][1]), 1.0)
+
+def test_cov_single_variable():
+    x = np.array([1.0, 2.0, 3.0])
+    c = np.cov(x)
+    assert_eq(c.shape, (1, 1))
+    assert_close(float(c[0][0]), 1.0)
+
+def test_cov_bias():
+    x = np.array([1.0, 2.0, 3.0])
+    c = np.cov(x, bias=True)
+    # With bias=True, ddof=0, so var = 2/3
+    assert_close(float(c[0][0]), 2.0 / 3.0, tol=1e-6)
+
+def test_corrcoef_perfect():
+    x = np.array([1.0, 2.0, 3.0])
+    y = np.array([2.0, 4.0, 6.0])
+    c = np.corrcoef(x, y)
+    assert_close(float(c[0][1]), 1.0)
+    assert_close(float(c[1][0]), 1.0)
+    assert_close(float(c[0][0]), 1.0)
+    assert_close(float(c[1][1]), 1.0)
+
+def test_corrcoef_negative():
+    x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    y = np.array([5.0, 4.0, 3.0, 2.0, 1.0])
+    c = np.corrcoef(x, y)
+    assert_close(float(c[0][1]), -1.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
