@@ -362,7 +362,36 @@ def isinf(x):
     return _math.isinf(x)
 
 def isscalar(x):
-    return isinstance(x, (int, float, complex, bool))
+    """Return True if x is a scalar (not an array)."""
+    return isinstance(x, (int, float, complex, bool, str))
+
+def isrealobj(x):
+    """Return True if x is not a complex type."""
+    if isinstance(x, ndarray):
+        return x.dtype not in ("complex64", "complex128")
+    return not isinstance(x, complex)
+
+def iscomplexobj(x):
+    """Return True if x has a complex type."""
+    if isinstance(x, ndarray):
+        return x.dtype in ("complex64", "complex128")
+    return isinstance(x, complex)
+
+def isreal(x):
+    """Returns boolean array -- True where elements are real."""
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if x.dtype in ("complex64", "complex128"):
+        return zeros(x.shape, dtype="bool")
+    return ones(x.shape, dtype="bool")
+
+def iscomplex(x):
+    """Returns boolean array -- True where elements are complex."""
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if x.dtype in ("complex64", "complex128"):
+        return ones(x.shape, dtype="bool")
+    return zeros(x.shape, dtype="bool")
 
 def asarray(a, dtype=None, order=None):
     if isinstance(a, ndarray):
@@ -515,24 +544,25 @@ def around(a, decimals=0, out=None):
 round_ = around
 
 def allclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
-    a = asarray(a) if not isinstance(a, ndarray) else a
-    b = asarray(b) if not isinstance(b, ndarray) else b
-    try:
-        diff = a - b
-        abs_diff = diff.abs() if hasattr(diff, 'abs') else array([_math.fabs(float(diff))])
-        abs_b = b.abs() if hasattr(b, 'abs') else array([_math.fabs(float(b))])
-        threshold = full(abs_diff.shape, atol) + full(abs_b.shape, rtol) * abs_b
-        return (abs_diff < threshold).all() if hasattr((abs_diff < threshold), 'all') else abs_diff < threshold
-    except Exception:
-        return False
+    """Return True if two arrays are element-wise equal within a tolerance."""
+    if not isinstance(a, ndarray):
+        a = array(a)
+    if not isinstance(b, ndarray):
+        b = array(b)
+    diff = abs(a - b)
+    limit = full(diff.shape, atol) + full(diff.shape, rtol) * abs(b)
+    result = (diff <= limit)
+    return bool(result.all())
 
 def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
-    a = asarray(a) if not isinstance(a, ndarray) else a
-    b = asarray(b) if not isinstance(b, ndarray) else b
-    diff = (a - b).abs() if hasattr(a - b, 'abs') else array([_math.fabs(float(a) - float(b))])
-    abs_b = b.abs() if hasattr(b, 'abs') else array([_math.fabs(float(b))])
-    threshold = full(diff.shape, atol) + full(abs_b.shape, rtol) * abs_b
-    return diff < threshold
+    """Return boolean array where two arrays are element-wise equal within tolerance."""
+    if not isinstance(a, ndarray):
+        a = array(a)
+    if not isinstance(b, ndarray):
+        b = array(b)
+    diff = abs(a - b)
+    limit = full(diff.shape, atol) + full(diff.shape, rtol) * abs(b)
+    return (diff <= limit)
 
 def sum(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
@@ -714,6 +744,61 @@ def expand_dims(a, axis):
     if isinstance(a, ndarray):
         return a.expand_dims(axis)
     return a
+
+def append(arr, values, axis=None):
+    """Append values to the end of an array."""
+    if not isinstance(arr, ndarray):
+        arr = array(arr)
+    if not isinstance(values, ndarray):
+        values = array(values)
+    if axis is None:
+        return concatenate([arr.flatten(), values.flatten()])
+    return concatenate([arr, values], axis=axis)
+
+def atleast_1d(*arys):
+    """Convert inputs to arrays with at least one dimension."""
+    results = []
+    for a in arys:
+        if not isinstance(a, ndarray):
+            a = array(a)
+        if a.ndim == 0:
+            a = a.reshape([1])
+        results.append(a)
+    if len(results) == 1:
+        return results[0]
+    return results
+
+def atleast_2d(*arys):
+    """Convert inputs to arrays with at least two dimensions."""
+    results = []
+    for a in arys:
+        if not isinstance(a, ndarray):
+            a = array(a)
+        if a.ndim == 0:
+            a = a.reshape([1, 1])
+        elif a.ndim == 1:
+            a = a.reshape([1, len(a)])
+        results.append(a)
+    if len(results) == 1:
+        return results[0]
+    return results
+
+def atleast_3d(*arys):
+    """Convert inputs to arrays with at least three dimensions."""
+    results = []
+    for a in arys:
+        if not isinstance(a, ndarray):
+            a = array(a)
+        if a.ndim == 0:
+            a = a.reshape([1, 1, 1])
+        elif a.ndim == 1:
+            a = a.reshape([1, len(a), 1])
+        elif a.ndim == 2:
+            a = a.reshape(list(a.shape) + [1])
+        results.append(a)
+    if len(results) == 1:
+        return results[0]
+    return results
 
 def stack(arrays, axis=0, out=None):
     return _native.stack_native(list(arrays), axis)
@@ -1004,12 +1089,15 @@ def fromiter(iterable, dtype, count=-1):
     return array(list(iterable))
 
 def array_equal(a1, a2, equal_nan=False):
+    """True if two arrays have the same shape and elements."""
     try:
-        a1 = asarray(a1) if not isinstance(a1, ndarray) else a1
-        a2 = asarray(a2) if not isinstance(a2, ndarray) else a2
+        if not isinstance(a1, ndarray):
+            a1 = array(a1)
+        if not isinstance(a2, ndarray):
+            a2 = array(a2)
         if a1.shape != a2.shape:
             return False
-        return (a1 == a2).all() if hasattr(a1 == a2, 'all') else a1 == a2
+        return bool((a1 == a2).all())
     except Exception:
         return False
 
@@ -1326,6 +1414,91 @@ def polyval(p, x):
     if not isinstance(x, ndarray):
         x = array(x)
     return _native.polyval(p, x)
+
+# --- I/O: loadtxt / savetxt / genfromtxt ------------------------------------
+
+def loadtxt(fname, dtype=None, comments='#', delimiter=None, skiprows=0, usecols=None, unpack=False, ndmin=0, encoding='bytes', max_rows=None, **kwargs):
+    """Load data from a text file. Each row must have the same number of values."""
+    if isinstance(fname, str):
+        f = open(fname, 'r')
+        close_file = True
+    else:
+        f = fname
+        close_file = False
+    try:
+        rows = []
+        lines_read = 0
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            # Skip comment lines
+            if comments and line.startswith(comments):
+                continue
+            if lines_read < skiprows:
+                lines_read += 1
+                continue
+            if max_rows is not None and len(rows) >= max_rows:
+                break
+            # Split by delimiter
+            if delimiter is None:
+                parts = line.split()
+            else:
+                parts = line.split(delimiter)
+            # Select columns
+            if usecols is not None:
+                parts = [parts[i] for i in usecols]
+            row = [float(x.strip()) for x in parts]
+            rows.append(row)
+        if not rows:
+            return array([])
+        if len(rows) == 1 and ndmin < 2:
+            result = array(rows[0])
+        else:
+            result = array(rows)
+        if unpack:
+            return result.T
+        return result
+    finally:
+        if close_file:
+            f.close()
+
+def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None):
+    """Save an array to a text file."""
+    if not isinstance(X, ndarray):
+        X = array(X)
+    if X.ndim == 1:
+        X = X.reshape([1, len(X)])
+
+    if isinstance(fname, str):
+        f = open(fname, 'w')
+        close_file = True
+    else:
+        f = fname
+        close_file = False
+    try:
+        if header:
+            for hline in header.split('\n'):
+                f.write(comments + hline + newline)
+
+        rows = X.shape[0]
+        cols = X.shape[1]
+        for i in range(rows):
+            vals = []
+            for j in range(cols):
+                vals.append(fmt % float(X[i][j]))
+            f.write(delimiter.join(vals) + newline)
+
+        if footer:
+            for fline in footer.split('\n'):
+                f.write(comments + fline + newline)
+    finally:
+        if close_file:
+            f.close()
+
+def genfromtxt(fname, dtype=None, comments='#', delimiter=None, skip_header=0, usecols=None, names=None, missing_values=None, filling_values=None, **kwargs):
+    """Load data from a text file, with missing values handled."""
+    return loadtxt(fname, dtype=dtype, comments=comments, delimiter=delimiter, skiprows=skip_header, usecols=usecols)
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:

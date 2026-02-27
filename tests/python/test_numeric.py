@@ -1761,6 +1761,121 @@ def test_clip_native():
     assert_close(result[3], 0.0, tol=1e-10)
 
 
+# --- append / atleast_Nd ---
+
+def test_append_basic():
+    """append concatenates arrays"""
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0])
+    result = np.append(a, b)
+    assert_eq(len(result), 5)
+    assert_close(result[0], 1.0, tol=1e-10)
+    assert_close(result[4], 5.0, tol=1e-10)
+
+def test_atleast_1d():
+    """atleast_1d ensures at least 1 dimension"""
+    a = np.array(5.0)
+    result = np.atleast_1d(a)
+    assert_eq(result.ndim, 1)
+    assert_eq(len(result), 1)
+
+def test_atleast_2d():
+    """atleast_2d ensures at least 2 dimensions"""
+    a = np.array([1.0, 2.0, 3.0])
+    result = np.atleast_2d(a)
+    assert_eq(result.ndim, 2)
+    assert_eq(result.shape[0], 1)
+    assert_eq(result.shape[1], 3)
+
+def test_atleast_3d():
+    """atleast_3d ensures at least 3 dimensions"""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.atleast_3d(a)
+    assert_eq(result.ndim, 3)
+    assert_eq(result.shape[0], 2)
+    assert_eq(result.shape[1], 2)
+    assert_eq(result.shape[2], 1)
+
+
+# --- I/O: loadtxt / savetxt ---
+
+def test_loadtxt_savetxt():
+    """loadtxt and savetxt round-trip"""
+    import os, tempfile
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    tmpfile = tempfile.mktemp(suffix='.txt')
+    try:
+        np.savetxt(tmpfile, a, delimiter=',')
+        b = np.loadtxt(tmpfile, delimiter=',')
+        assert_eq(b.shape[0], 2)
+        assert_eq(b.shape[1], 3)
+        assert_close(b[0][0], 1.0, tol=1e-10)
+        assert_close(b[1][2], 6.0, tol=1e-10)
+    finally:
+        if os.path.exists(tmpfile):
+            os.remove(tmpfile)
+
+def test_loadtxt_comments():
+    """loadtxt skips comment lines"""
+    import os, tempfile
+    tmpfile = tempfile.mktemp(suffix='.txt')
+    try:
+        f = open(tmpfile, 'w')
+        f.write("# header comment\n")
+        f.write("1.0 2.0 3.0\n")
+        f.write("4.0 5.0 6.0\n")
+        f.close()
+        b = np.loadtxt(tmpfile)
+        assert_eq(b.shape[0], 2)
+        assert_eq(b.shape[1], 3)
+    finally:
+        if os.path.exists(tmpfile):
+            os.remove(tmpfile)
+
+
+# --- Type predicates and comparison utilities ---
+
+def test_isrealobj():
+    """isrealobj returns True for non-complex arrays"""
+    a = np.array([1.0, 2.0, 3.0])
+    assert_eq(np.isrealobj(a), True)
+
+def test_iscomplexobj():
+    """iscomplexobj returns False for float arrays"""
+    a = np.array([1.0, 2.0, 3.0])
+    assert_eq(np.iscomplexobj(a), False)
+
+def test_isscalar():
+    """isscalar identifies scalar types"""
+    assert_eq(np.isscalar(3.14), True)
+    assert_eq(np.isscalar(np.array([1.0])), False)
+
+def test_allclose():
+    """allclose checks element-wise approximate equality"""
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([1.0, 2.0000001, 3.0])
+    assert_eq(np.allclose(a, b), True)
+    c = np.array([1.0, 3.0, 3.0])
+    assert_eq(np.allclose(a, c), False)
+
+def test_array_equal():
+    """array_equal checks exact equality"""
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([1.0, 2.0, 3.0])
+    assert_eq(np.array_equal(a, b), True)
+    c = np.array([1.0, 2.0, 4.0])
+    assert_eq(np.array_equal(a, c), False)
+
+def test_isclose():
+    """isclose returns boolean array of element-wise closeness"""
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([1.0, 2.1, 3.0])
+    result = np.isclose(a, b)
+    assert_eq(bool(result[0]), True)
+    assert_eq(bool(result[1]), False)
+    assert_eq(bool(result[2]), True)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
