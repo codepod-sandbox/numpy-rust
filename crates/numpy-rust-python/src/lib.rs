@@ -1392,6 +1392,32 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- arctan2 & clip ---
+
+    #[pyfunction]
+    fn arctan2(
+        y: vm::PyRef<PyNdArray>,
+        x: vm::PyRef<PyNdArray>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        y.inner()
+            .arctan2(&x.inner())
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn clip(
+        a: vm::PyRef<PyNdArray>,
+        a_min: vm::function::OptionalArg<f64>,
+        a_max: vm::function::OptionalArg<f64>,
+        _vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        Ok(PyNdArray::from_core(
+            a.inner().clip(a_min.into_option(), a_max.into_option()),
+        ))
+    }
+
     // --- Interpolation & gradient ---
 
     #[pyfunction]
@@ -1427,6 +1453,32 @@ pub mod _numpy_native {
                 .collect();
             Ok(vm.ctx.new_list(py_arrays).into())
         }
+    }
+
+    // --- Polynomial ---
+
+    #[cfg(feature = "linalg")]
+    #[pyfunction]
+    fn polyfit(
+        x: vm::PyRef<PyNdArray>,
+        y: vm::PyRef<PyNdArray>,
+        deg: usize,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        numpy_rust_core::ops::polynomial::polyfit(&x.inner(), &y.inner(), deg)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn polyval(
+        p: vm::PyRef<PyNdArray>,
+        x: vm::PyRef<PyNdArray>,
+        _vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        Ok(PyNdArray::from_core(
+            numpy_rust_core::ops::polynomial::polyval(&p.inner(), &x.inner()),
+        ))
     }
 
     // --- Submodules (registered as attributes, feature-gated) ---

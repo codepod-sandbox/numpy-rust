@@ -380,10 +380,8 @@ def copy(a, order="K"):
 def clip(a, a_min, a_max, out=None):
     """Clip array values to [a_min, a_max]."""
     if not isinstance(a, ndarray):
-        a = array([a])
-    result = where(a < a_min, full(a.shape, a_min), a) if a_min is not None else a
-    result = where(result > a_max, full(result.shape, a_max), result) if a_max is not None else result
-    return result
+        a = array(a)
+    return _native.clip(a, a_min, a_max)
 
 def abs(x):
     if isinstance(x, ndarray):
@@ -490,6 +488,13 @@ def arctan(x):
     if isinstance(x, ndarray):
         return _native.arctan(x)
     return _math.atan(x)
+
+def arctan2(y, x, out=None, where=True, **kwargs):
+    if not isinstance(y, ndarray):
+        y = array(y)
+    if not isinstance(x, ndarray):
+        x = array(x)
+    return _native.arctan2(y, x)
 
 def floor(x):
     if isinstance(x, ndarray):
@@ -1307,6 +1312,20 @@ def gradient(f, *varargs, axis=None, edge_order=1):
         f = array(f)
     spacing = float(varargs[0]) if varargs else 1.0
     return _native.gradient(f, spacing)
+
+def polyfit(x, y, deg, rcond=None, full=False, w=None, cov=False):
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if not isinstance(y, ndarray):
+        y = array(y)
+    return _native.polyfit(x, y, int(deg))
+
+def polyval(p, x):
+    if not isinstance(p, ndarray):
+        p = array(p)
+    if not isinstance(x, ndarray):
+        x = array(x)
+    return _native.polyval(p, x)
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:

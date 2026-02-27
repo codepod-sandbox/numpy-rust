@@ -1,6 +1,7 @@
 use num_complex::Complex;
 
 use crate::array_data::ArrayData;
+use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
@@ -319,6 +320,81 @@ impl NdArray {
     }
 }
 
+impl NdArray {
+    /// Element-wise arctan2(self, other) — the angle of (other, self) from the positive x-axis.
+    /// self=y, other=x. Result is in [-pi, pi].
+    /// Not supported for complex arrays.
+    pub fn arctan2(&self, other: &NdArray) -> Result<NdArray> {
+        if self.dtype().is_complex() || other.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "arctan2 not supported for complex arrays".into(),
+            ));
+        }
+        let data_y = ensure_float(&self.data);
+        let data_x = ensure_float(&other.data);
+        // broadcast
+        let out_shape = broadcast_shape(self.shape(), other.shape())?;
+        let data_y = broadcast_array_data(&data_y, &out_shape);
+        let data_x = broadcast_array_data(&data_x, &out_shape);
+
+        let result = match (data_y, data_x) {
+            (ArrayData::Float32(y), ArrayData::Float32(x)) => {
+                let mut out = y.clone();
+                ndarray::Zip::from(&mut out)
+                    .and(&x)
+                    .for_each(|o, &xi| *o = o.atan2(xi));
+                ArrayData::Float32(out)
+            }
+            (ArrayData::Float64(y), ArrayData::Float64(x)) => {
+                let mut out = y.clone();
+                ndarray::Zip::from(&mut out)
+                    .and(&x)
+                    .for_each(|o, &xi| *o = o.atan2(xi));
+                ArrayData::Float64(out)
+            }
+            _ => unreachable!(),
+        };
+        Ok(NdArray::from_data(result))
+    }
+
+    /// Clip (limit) array values to [a_min, a_max].
+    pub fn clip(&self, a_min: Option<f64>, a_max: Option<f64>) -> NdArray {
+        let data = ensure_float(&self.data);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| {
+                let mut v = x;
+                if let Some(mn) = a_min {
+                    if v < mn as f32 {
+                        v = mn as f32;
+                    }
+                }
+                if let Some(mx) = a_max {
+                    if v > mx as f32 {
+                        v = mx as f32;
+                    }
+                }
+                v
+            })),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| {
+                let mut v = x;
+                if let Some(mn) = a_min {
+                    if v < mn {
+                        v = mn;
+                    }
+                }
+                if let Some(mx) = a_max {
+                    if v > mx {
+                        v = mx;
+                    }
+                }
+                v
+            })),
+            _ => data, // bool/int/string pass through
+        };
+        NdArray::from_data(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{DType, NdArray};
@@ -546,5 +622,33 @@ mod tests {
         let _ = a.arcsin();
         let _ = a.arccos();
         let _ = a.arctan();
+    }
+
+    #[test]
+    fn test_arctan2() {
+        use crate::array_data::ArrayData;
+        let y = NdArray::from_vec(vec![1.0_f64, 0.0, -1.0]);
+        let x = NdArray::from_vec(vec![0.0_f64, 1.0, 0.0]);
+        let result = y.arctan2(&x).unwrap();
+        let ArrayData::Float64(arr) = result.data() else {
+            panic!()
+        };
+        assert!((arr[[0]] - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
+        assert!((arr[[1]] - 0.0).abs() < 1e-10);
+        assert!((arr[[2]] - (-std::f64::consts::FRAC_PI_2)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_clip() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![1.0_f64, 5.0, 10.0, -3.0]);
+        let result = a.clip(Some(0.0), Some(7.0));
+        let ArrayData::Float64(arr) = result.data() else {
+            panic!()
+        };
+        assert!((arr[[0]] - 1.0).abs() < 1e-10);
+        assert!((arr[[1]] - 5.0).abs() < 1e-10);
+        assert!((arr[[2]] - 7.0).abs() < 1e-10);
+        assert!((arr[[3]] - 0.0).abs() < 1e-10);
     }
 }

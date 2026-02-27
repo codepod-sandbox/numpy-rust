@@ -158,6 +158,82 @@ mod inner {
         Ok(from_nalgebra(&l))
     }
 
+    /// Least-squares solution to ||Ax - b||.
+    /// Returns (solution, residuals, rank, singular_values).
+    /// a: (m, n) matrix, b: (m,) or (m, k) matrix
+    pub fn lstsq(a: &NdArray, b: &NdArray) -> Result<(NdArray, NdArray, usize, NdArray)> {
+        let am = to_nalgebra(&a.data)?;
+        // b might be 1-D — reshape to column vector
+        let b_2d = if b.ndim() == 1 {
+            b.reshape(&[b.size(), 1])?
+        } else {
+            b.clone()
+        };
+        let bm = to_nalgebra(&b_2d.data)?;
+
+        let (m, n) = (am.nrows(), am.ncols());
+        if bm.nrows() != m {
+            return Err(NumpyError::ShapeMismatch(format!(
+                "lstsq: a has {} rows but b has {} rows",
+                m,
+                bm.nrows()
+            )));
+        }
+
+        // SVD-based least squares
+        let decomp = am.clone().svd(true, true);
+        let u = decomp
+            .u
+            .ok_or_else(|| NumpyError::ValueError("SVD failed (U)".into()))?;
+        let v_t = decomp
+            .v_t
+            .ok_or_else(|| NumpyError::ValueError("SVD failed (Vt)".into()))?;
+        let sv = &decomp.singular_values;
+
+        // Determine rank using default rcond
+        let rcond = 1e-15 * (m.max(n) as f64);
+        let threshold = sv[0] * rcond;
+        let rank = sv.iter().filter(|&&s| s > threshold).count();
+
+        // Solve: x = V @ diag(1/s) @ U^T @ b (only for non-zero singular values)
+        let k = sv.len();
+        let ut_b = u.transpose() * &bm;
+        let mut scaled = DMatrix::zeros(k, bm.ncols());
+        for i in 0..k {
+            if sv[i] > threshold {
+                for j in 0..bm.ncols() {
+                    scaled[(i, j)] = ut_b[(i, j)] / sv[i];
+                }
+            }
+        }
+        let x = v_t.transpose() * scaled;
+        let solution = from_nalgebra(&x);
+
+        // Residuals: ||b - Ax||^2 for each column (only if m > n and rank == n)
+        let residuals = if m > n && rank == n {
+            let ax = &am * &x;
+            let diff = &bm - &ax;
+            let ncols = diff.ncols();
+            let mut res = Vec::with_capacity(ncols);
+            for j in 0..ncols {
+                let mut s = 0.0;
+                for i in 0..m {
+                    s += diff[(i, j)] * diff[(i, j)];
+                }
+                res.push(s);
+            }
+            NdArray::from_vec(res)
+        } else {
+            NdArray::from_vec(Vec::<f64>::new())
+        };
+
+        // Singular values as NdArray
+        let sv_arr = ArrayD::from_shape_fn(IxDyn(&[k]), |idx| sv[idx[0]]);
+        let sv_nd = NdArray::from_data(ArrayData::Float64(sv_arr));
+
+        Ok((solution, residuals, rank, sv_nd))
+    }
+
     fn check_square(m: &DMatrix<f64>) -> Result<()> {
         if m.nrows() != m.ncols() {
             return Err(NumpyError::ValueError(format!(
@@ -177,6 +253,7 @@ pub use inner::*;
 #[cfg(feature = "linalg")]
 mod tests {
     use super::*;
+    use crate::array_data::ArrayData;
     use crate::{DType, NdArray};
 
     fn eye_3x3() -> NdArray {
@@ -272,5 +349,39 @@ mod tests {
     fn test_inv_non_square() {
         let a = NdArray::ones(&[2, 3], DType::Float64);
         assert!(inv(&a).is_err());
+    }
+
+    #[test]
+    fn test_lstsq_overdetermined() {
+        // Simple overdetermined system: y = 2x + 1
+        // A = [[0,1],[1,1],[2,1],[3,1]], b = [[1],[3],[5],[7]]
+        let a = NdArray::from_vec(vec![0.0, 1.0, 1.0, 1.0, 2.0, 1.0, 3.0, 1.0])
+            .reshape(&[4, 2])
+            .unwrap();
+        let b = NdArray::from_vec(vec![1.0, 3.0, 5.0, 7.0])
+            .reshape(&[4, 1])
+            .unwrap();
+        let (x, _residuals, rank, _sv) = lstsq(&a, &b).unwrap();
+        assert_eq!(x.shape(), &[2, 1]);
+        assert_eq!(rank, 2);
+        // x should be approximately [2, 1]
+        let xdata = match x.data() {
+            ArrayData::Float64(a) => a.clone(),
+            _ => panic!(),
+        };
+        assert!((xdata[[0, 0]] - 2.0).abs() < 1e-10);
+        assert!((xdata[[1, 0]] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_lstsq_rank() {
+        let a = NdArray::from_vec(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+            .reshape(&[3, 2])
+            .unwrap();
+        let b = NdArray::from_vec(vec![1.0, 2.0, 0.0])
+            .reshape(&[3, 1])
+            .unwrap();
+        let (_, _, rank, _) = lstsq(&a, &b).unwrap();
+        assert_eq!(rank, 2);
     }
 }

@@ -1700,6 +1700,67 @@ def test_gradient_spacing():
     assert_close(float(g[1]), 4.0)
 
 
+# --- linalg.lstsq ---
+
+def test_lstsq_basic():
+    """linalg.lstsq solves overdetermined system"""
+    A = np.array([[0.0, 1.0], [1.0, 1.0], [2.0, 1.0], [3.0, 1.0]])
+    b = np.array([[1.0], [3.0], [5.0], [7.0]])
+    result = np.linalg.lstsq(A, b)
+    x = result[0]
+    assert_close(x[0][0], 2.0, tol=1e-8)
+    assert_close(x[1][0], 1.0, tol=1e-8)
+
+
+# --- polyfit / polyval ---
+
+def test_polyfit_polyval():
+    """polyfit fits a line through linear data, polyval evaluates it"""
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y = np.array([1.0, 3.0, 5.0, 7.0, 9.0])  # y = 2x + 1
+    p = np.polyfit(x, y, 1)
+    assert_close(p[0], 2.0, tol=1e-10)  # slope
+    assert_close(p[1], 1.0, tol=1e-10)  # intercept
+
+def test_polyval_evaluate():
+    """polyval evaluates polynomial at given points"""
+    p = np.array([1.0, -2.0, 3.0])  # x^2 - 2x + 3
+    x = np.array([0.0, 1.0, 2.0])
+    result = np.polyval(p, x)
+    assert_close(result[0], 3.0, tol=1e-10)   # 0 - 0 + 3
+    assert_close(result[1], 2.0, tol=1e-10)   # 1 - 2 + 3
+    assert_close(result[2], 3.0, tol=1e-10)   # 4 - 4 + 3
+
+def test_polyfit_quadratic():
+    """polyfit can fit a quadratic"""
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y = np.array([0.0, 1.0, 4.0, 9.0, 16.0])  # y = x^2
+    p = np.polyfit(x, y, 2)
+    assert_close(p[0], 1.0, tol=1e-8)   # x^2 coeff
+    assert_close(p[1], 0.0, tol=1e-8)   # x coeff
+    assert_close(p[2], 0.0, tol=1e-8)   # constant
+
+
+def test_arctan2():
+    """arctan2 computes angle from positive x-axis"""
+    y = np.array([1.0, 0.0, -1.0])
+    x = np.array([0.0, 1.0, 0.0])
+    result = np.arctan2(y, x)
+    import math
+    assert_close(result[0], math.pi / 2, tol=1e-10)
+    assert_close(result[1], 0.0, tol=1e-10)
+    assert_close(result[2], -math.pi / 2, tol=1e-10)
+
+def test_clip_native():
+    """clip limits values to given range"""
+    a = np.array([1.0, 5.0, 10.0, -3.0])
+    result = np.clip(a, 0.0, 7.0)
+    assert_close(result[0], 1.0, tol=1e-10)
+    assert_close(result[1], 5.0, tol=1e-10)
+    assert_close(result[2], 7.0, tol=1e-10)
+    assert_close(result[3], 0.0, tol=1e-10)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

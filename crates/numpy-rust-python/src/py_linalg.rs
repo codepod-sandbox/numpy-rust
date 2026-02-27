@@ -101,6 +101,25 @@ mod _linalg {
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
     }
+
+    #[pyfunction]
+    fn lstsq(
+        a: PyRef<PyNdArray>,
+        b: PyRef<PyNdArray>,
+        vm: &VirtualMachine,
+    ) -> PyResult<vm::builtins::PyTupleRef> {
+        let (solution, residuals, rank, sv) =
+            numpy_rust_core::linalg::lstsq(&a.inner(), &b.inner()).map_err(|e| err(e, vm))?;
+        Ok(vm::builtins::PyTuple::new_ref(
+            vec![
+                PyNdArray::from_core(solution).to_pyobject(vm),
+                PyNdArray::from_core(residuals).to_pyobject(vm),
+                vm.ctx.new_int(rank as i64).into(),
+                PyNdArray::from_core(sv).to_pyobject(vm),
+            ],
+            &vm.ctx,
+        ))
+    }
 }
 
 pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
