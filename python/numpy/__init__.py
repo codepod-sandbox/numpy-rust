@@ -539,6 +539,51 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
         return a.var(None, ddof, keepdims)
     return 0.0
 
+def nansum(a, axis=None, dtype=None, out=None, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nansum(a, axis, keepdims)
+
+def nanmean(a, axis=None, dtype=None, out=None, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanmean(a, axis, keepdims)
+
+def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanstd(a, axis, ddof, keepdims)
+
+def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanvar(a, axis, ddof, keepdims)
+
+def nanmin(a, axis=None, out=None, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanmin(a, axis, keepdims)
+
+def nanmax(a, axis=None, out=None, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanmax(a, axis, keepdims)
+
+def nanargmin(a, axis=None, out=None):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanargmin(a, axis)
+
+def nanargmax(a, axis=None, out=None):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanargmax(a, axis)
+
+def nanprod(a, axis=None, dtype=None, out=None, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nanprod(a, axis, keepdims)
+
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)

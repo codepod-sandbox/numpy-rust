@@ -473,6 +473,143 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- NaN-safe reduction functions ---
+
+    #[pyfunction]
+    fn nansum(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .nansum(ax, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanmean(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .nanmean(ax, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanstd(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        ddof: vm::function::OptionalArg<usize>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let ddof = ddof.unwrap_or(0);
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .nanstd(ax, ddof, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanvar(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        ddof: vm::function::OptionalArg<usize>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let ddof = ddof.unwrap_or(0);
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .nanvar(ax, ddof, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanmin(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .nanmin(ax, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanmax(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .nanmax(ax, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanargmin(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .nanargmin(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanargmax(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .nanargmax(ax)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nanprod(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        keepdims: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let keepdims = keepdims.unwrap_or(false);
+        a.inner()
+            .nanprod(ax, keepdims)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Einsum ---
 
     #[pyfunction]

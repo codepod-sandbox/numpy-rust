@@ -1286,6 +1286,56 @@ def test_trace():
     assert float(result) == 5.0
 
 
+# --- NaN-safe reductions ---
+
+def test_nansum():
+    a = np.array([1.0, float('nan'), 3.0])
+    assert_close(np.nansum(a), 4.0)
+
+def test_nanmean():
+    a = np.array([1.0, float('nan'), 3.0])
+    assert_close(np.nanmean(a), 2.0)
+
+def test_nanstd():
+    a = np.array([1.0, float('nan'), 3.0])
+    assert_close(np.nanstd(a), 1.0)
+
+def test_nanvar():
+    a = np.array([1.0, float('nan'), 3.0])
+    assert_close(np.nanvar(a), 1.0)
+
+def test_nanmin():
+    a = np.array([3.0, float('nan'), 1.0])
+    assert_close(np.nanmin(a), 1.0)
+
+def test_nanmax():
+    a = np.array([1.0, float('nan'), 3.0])
+    assert_close(np.nanmax(a), 3.0)
+
+def test_nanargmin():
+    a = np.array([3.0, float('nan'), 1.0])
+    assert_eq(np.nanargmin(a), 2)
+
+def test_nanargmax():
+    a = np.array([1.0, float('nan'), 3.0])
+    assert_eq(np.nanargmax(a), 2)
+
+def test_nanprod():
+    a = np.array([2.0, float('nan'), 3.0])
+    assert_close(np.nanprod(a), 6.0)
+
+def test_nansum_no_nan():
+    a = np.array([1.0, 2.0, 3.0])
+    assert_close(np.nansum(a), 6.0)
+    assert_close(np.nanmean(a), 2.0)
+
+def test_nansum_2d_axis():
+    a = np.array([1.0, float('nan'), 3.0, 4.0]).reshape((2, 2))
+    s = np.nansum(a, axis=1)
+    assert_close(float(s[0]), 1.0)
+    assert_close(float(s[1]), 7.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
