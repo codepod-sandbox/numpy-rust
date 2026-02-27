@@ -717,25 +717,25 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
     return _native.diff(a, n, axis)
 
 def mean(a, axis=None, dtype=None, out=None, keepdims=False):
-    if isinstance(a, ndarray):
-        if axis is not None:
-            return a.mean(axis, keepdims)
-        return a.mean(None, keepdims)
-    return a
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is not None:
+        return a.mean(axis, keepdims)
+    return a.mean(None, keepdims)
 
 def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
-    if isinstance(a, ndarray):
-        if axis is not None:
-            return a.std(axis, ddof, keepdims)
-        return a.std(None, ddof, keepdims)
-    return 0.0
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is not None:
+        return a.std(axis, ddof, keepdims)
+    return a.std(None, ddof, keepdims)
 
 def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
-    if isinstance(a, ndarray):
-        if axis is not None:
-            return a.var(axis, ddof, keepdims)
-        return a.var(None, ddof, keepdims)
-    return 0.0
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is not None:
+        return a.var(axis, ddof, keepdims)
+    return a.var(None, ddof, keepdims)
 
 def nansum(a, axis=None, dtype=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
@@ -957,20 +957,20 @@ def fmin(x1, x2):
     return result
 
 def max(a, axis=None, out=None, keepdims=False):
-    if isinstance(a, ndarray):
-        if axis is not None:
-            return a.max(axis, keepdims)
-        return a.max(None, keepdims)
-    return a
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is not None:
+        return a.max(axis, keepdims)
+    return a.max(None, keepdims)
 
 amax = max
 
 def min(a, axis=None, out=None, keepdims=False):
-    if isinstance(a, ndarray):
-        if axis is not None:
-            return a.min(axis, keepdims)
-        return a.min(None, keepdims)
-    return a
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is not None:
+        return a.min(axis, keepdims)
+    return a.min(None, keepdims)
 
 amin = min
 
@@ -1249,7 +1249,34 @@ def place(arr, mask, vals):
     return r
 
 def can_cast(from_, to, casting="safe"):
-    return True  # stub
+    _type_order = {
+        "bool": 0, "int32": 1, "int64": 2,
+        "float32": 3, "float64": 4,
+        "complex64": 5, "complex128": 6,
+    }
+    if isinstance(from_, ndarray):
+        from_name = str(from_.dtype)
+    elif isinstance(from_, str):
+        from_name = from_
+    else:
+        from_name = str(from_)
+    if isinstance(to, str):
+        to_name = to
+    else:
+        to_name = str(to)
+    f = _type_order.get(from_name, -1)
+    t = _type_order.get(to_name, -1)
+    if f < 0 or t < 0:
+        return False
+    if casting == "unsafe":
+        return True
+    if casting == "safe" or casting == "same_kind":
+        return f <= t
+    if casting == "equiv":
+        return f == t
+    if casting == "no":
+        return f == t
+    return f <= t
 
 def result_type(*arrays_and_dtypes):
     if len(arrays_and_dtypes) == 0:
@@ -1844,7 +1871,7 @@ def rot90(a, k=1, axes=(0, 1)):
         return _native.rot90(a, k)
     return a
 
-def unique(a, return_index=False, return_inverse=False, return_counts=False):
+def unique(a, return_index=False, return_inverse=False, return_counts=False, axis=None):
     """Return sorted unique elements of an array.
 
     Parameters
@@ -1856,6 +1883,8 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False):
         If True, return indices to reconstruct original from unique.
     return_counts : bool
         If True, return count of each unique value.
+    axis : int, optional
+        The axis along which to find unique slices. If None, flatten first.
 
     Returns
     -------
@@ -1866,6 +1895,91 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False):
     """
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if axis is not None:
+        # For axis=0: find unique rows (or slices along axis 0)
+        if axis < 0:
+            axis = a.ndim + axis
+        n_slices = a.shape[axis]
+        # Extract each slice as a tuple for hashing
+        seen = {}
+        unique_indices_list = []
+        for i in range(n_slices):
+            # Build index to extract slice along axis
+            if axis == 0:
+                sl = a[i]
+            else:
+                # General case: use swapaxes to bring target axis to front
+                tmp = swapaxes(a, 0, axis)
+                sl = tmp[i]
+            key = tuple(sl.flatten().tolist())
+            if key not in seen:
+                seen[key] = i
+                unique_indices_list.append(i)
+        # Build result array from unique indices
+        if axis == 0:
+            rows = [a[i] for i in unique_indices_list]
+        else:
+            tmp = swapaxes(a, 0, axis)
+            rows = [tmp[i] for i in unique_indices_list]
+        # Sort by the first element of each row for consistent ordering
+        pairs = list(zip(unique_indices_list, rows))
+        pairs.sort(key=lambda p: tuple(p[1].flatten().tolist()))
+        unique_indices_list = [p[0] for p in pairs]
+        rows = [p[1] for p in pairs]
+        result = stack(rows, axis=0)
+        if axis != 0:
+            result = swapaxes(result, 0, axis)
+        extras = return_index or return_inverse or return_counts
+        if not extras:
+            return result
+        ret = (result,)
+        if return_index:
+            ret = ret + (array([float(i) for i in unique_indices_list]),)
+        if return_inverse:
+            # Map each original slice index to its position in unique result
+            key_to_pos = {}
+            for pos, idx in enumerate(unique_indices_list):
+                if axis == 0:
+                    sl = a[idx]
+                else:
+                    tmp = swapaxes(a, 0, axis)
+                    sl = tmp[idx]
+                key = tuple(sl.flatten().tolist())
+                key_to_pos[key] = pos
+            inv = []
+            for i in range(n_slices):
+                if axis == 0:
+                    sl = a[i]
+                else:
+                    tmp = swapaxes(a, 0, axis)
+                    sl = tmp[i]
+                key = tuple(sl.flatten().tolist())
+                inv.append(float(key_to_pos[key]))
+            ret = ret + (array(inv),)
+        if return_counts:
+            # Count occurrences of each unique
+            count_map = {}
+            for i in range(n_slices):
+                if axis == 0:
+                    sl = a[i]
+                else:
+                    tmp = swapaxes(a, 0, axis)
+                    sl = tmp[i]
+                key = tuple(sl.flatten().tolist())
+                if key not in count_map:
+                    count_map[key] = 0
+                count_map[key] += 1
+            counts_list = []
+            for idx in unique_indices_list:
+                if axis == 0:
+                    sl = a[idx]
+                else:
+                    tmp = swapaxes(a, 0, axis)
+                    sl = tmp[idx]
+                key = tuple(sl.flatten().tolist())
+                counts_list.append(float(count_map[key]))
+            ret = ret + (array(counts_list),)
+        return ret
     flat = a.flatten()
     n = flat.shape[0]
     vals = [float(flat[i]) for i in range(n)]
@@ -2176,9 +2290,42 @@ def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
         out = out.reshape(p.shape)
     return out
 
+def histogram_bin_edges(a, bins=10, range=None, weights=None):
+    """Compute the bin edges for a histogram without computing the histogram itself."""
+    a = asarray(a)
+    if isinstance(bins, int):
+        flat = a.flatten().tolist()
+        if range is not None:
+            lo, hi = float(range[0]), float(range[1])
+        else:
+            lo, hi = _builtin_min(flat), _builtin_max(flat)
+        edges = linspace(lo, hi, bins + 1)
+        return edges
+    else:
+        return asarray(bins)
+
 def histogram(a, bins=10, range=None, density=None, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
+    if isinstance(bins, (list, tuple, ndarray)):
+        # Custom bin edges
+        edges = asarray(bins).flatten()
+        edge_list = edges.tolist()
+        flat = a.flatten().tolist()
+        n_bins = len(edge_list) - 1
+        counts = [0] * n_bins
+        for v in flat:
+            for j in _builtin_range(n_bins):
+                if j == n_bins - 1:
+                    if edge_list[j] <= v <= edge_list[j + 1]:
+                        counts[j] += 1
+                        break
+                else:
+                    if edge_list[j] <= v < edge_list[j + 1]:
+                        counts[j] += 1
+                        break
+        return array(counts), edges
+    # Default: use native (bins is an int)
     return _native.histogram(a, bins)
 
 def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
@@ -3182,7 +3329,47 @@ def insert(arr, obj, values, axis=None):
             for v in values:
                 result.append(float(v))
         return array(result)
-    return arr  # simplified for multi-dim
+    # Multi-dimensional: transpose target axis to front, insert along axis 0, transpose back
+    ndims = arr.ndim
+    if axis < 0:
+        axis = ndims + axis
+    # Build permutation to move target axis to position 0
+    perm = [axis] + [i for i in range(ndims) if i != axis]
+    inv_perm = [0] * ndims
+    for i, p in enumerate(perm):
+        inv_perm[p] = i
+    t = transpose(arr, perm)
+    # t now has target axis as axis 0; shape is (n, ...)
+    values = asarray(values)
+    # Build slices for before, inserted, and after
+    before_slices = []
+    for i in range(idx):
+        before_slices.append(t[i])
+    after_slices = []
+    for i in range(idx, t.shape[0]):
+        after_slices.append(t[i])
+    # Reshape values to match the sub-array shape if needed
+    sub_shape = t.shape[1:] if ndims > 1 else ()
+    if values.ndim == 0 or (values.ndim == 1 and len(sub_shape) == 1 and values.shape[0] == sub_shape[0]):
+        # values is a single row to insert
+        vals_row = values.reshape(list(sub_shape)) if sub_shape else values
+        inserted = [vals_row]
+    else:
+        inserted = [values[i] for i in range(values.shape[0])]
+    all_rows = before_slices + inserted + after_slices
+    # Stack rows manually: build flat list
+    row_size = 1
+    for s in sub_shape:
+        row_size = row_size * s
+    flat = []
+    for row in all_rows:
+        r = asarray(row).flatten()
+        for j in range(row_size):
+            flat.append(float(r[j]))
+    new_shape = list(t.shape)
+    new_shape[0] = len(all_rows)
+    result = array(flat).reshape(new_shape)
+    return transpose(result, inv_perm)
 
 def select(condlist, choicelist, default=0):
     """Return array drawn from elements in choicelist, depending on conditions."""
@@ -3403,19 +3590,56 @@ def apply_along_axis(func1d, axis, arr, *args, **kwargs):
     nd = arr.ndim
     if axis < 0:
         axis = nd + axis
-    # For 2D arrays (most common case)
-    if nd == 2:
-        results = []
-        if axis == 0:
-            for j in range(arr.shape[1]):
-                col = array([arr[i][j] for i in range(arr.shape[0])])
-                results.append(func1d(col, *args, **kwargs))
-        else:
-            for i in range(arr.shape[0]):
-                results.append(func1d(arr[i], *args, **kwargs))
-        return asarray(results)
-    # For higher dimensions, raise error for now
-    raise NotImplementedError("apply_along_axis only supports 1D and 2D arrays")
+    # General nD implementation
+    # Build the shape of the non-target axes (the "outer" iteration shape)
+    shape = arr.shape
+    out_shape = tuple(shape[i] for i in range(nd) if i != axis)
+    # Compute total number of outer iterations
+    n_outer = 1
+    for s in out_shape:
+        n_outer *= s
+    # For each combination of indices in the non-target axes, extract the 1D slice
+    results = []
+    for flat_idx in range(n_outer):
+        # Convert flat_idx to multi-index in out_shape
+        idx = []
+        rem = flat_idx
+        for s in reversed(out_shape):
+            idx.append(rem % s)
+            rem = rem // s
+        idx.reverse()
+        # Build the full index with a slice at the target axis position
+        # Extract the 1D slice along the target axis
+        # We need to index arr with idx inserted around the target axis
+        outer_idx_pos = 0
+        slice_vals = []
+        for k in range(shape[axis]):
+            # Build index tuple for element [idx[0], ..., k, ..., idx[-1]]
+            full_idx = []
+            oi = 0
+            for dim in range(nd):
+                if dim == axis:
+                    full_idx.append(k)
+                else:
+                    full_idx.append(idx[oi])
+                    oi += 1
+            # Navigate to element
+            elem = arr
+            for fi in full_idx:
+                elem = elem[fi]
+            slice_vals.append(float(elem))
+        slice_arr = array(slice_vals)
+        result = func1d(slice_arr, *args, **kwargs)
+        results.append(result)
+    # Reshape results back to out_shape
+    # If func1d returns scalar, result shape is out_shape
+    first_res = results[0]
+    if isinstance(first_res, ndarray):
+        # func returns array - more complex, but handle scalar reduction case
+        result_arr = asarray(results)
+        return result_arr.reshape(out_shape)
+    else:
+        return array([float(r) for r in results]).reshape(out_shape)
 
 
 class vectorize:
@@ -4169,7 +4393,8 @@ def _linalg_matrix_rank(M, tol=None):
     U, s, Vt = linalg.svd(M)
     n = s.size
     if tol is None:
-        tol = s[0] * 1e-15 * max(M.shape[0], M.shape[1]) if n > 0 else 0
+        s_max = float(s[0]) if n > 0 else 0.0
+        tol = s_max * 1e-15 * _builtin_max(M.shape[0], M.shape[1]) if n > 0 else 0
     rank = 0
     for i in range(n):
         if s[i] > tol:
@@ -4274,25 +4499,30 @@ def _fft_rfftfreq(n, d=1.0):
 def _fft_fftshift(x, axes=None):
     """Shift the zero-frequency component to the center of the spectrum."""
     x = asarray(x)
-    if x.ndim == 1:
-        n = x.size
-        p = n // 2
-        # Concatenate second half and first half
-        second = array([x[i] for i in range(p, n)])
-        first = array([x[i] for i in range(p)])
-        return concatenate([second, first])
-    raise NotImplementedError("fftshift only supports 1D arrays")
+    if axes is None:
+        axes = list(range(x.ndim))
+    elif isinstance(axes, int):
+        axes = [axes]
+    result = x
+    for ax in axes:
+        n = result.shape[ax]
+        shift = n // 2
+        result = roll(result, shift, axis=ax)
+    return result
 
 def _fft_ifftshift(x, axes=None):
     """The inverse of fftshift."""
     x = asarray(x)
-    if x.ndim == 1:
-        n = x.size
-        p = (n + 1) // 2
-        second = array([x[i] for i in range(p, n)])
-        first = array([x[i] for i in range(p)])
-        return concatenate([second, first])
-    raise NotImplementedError("ifftshift only supports 1D arrays")
+    if axes is None:
+        axes = list(range(x.ndim))
+    elif isinstance(axes, int):
+        axes = [axes]
+    result = x
+    for ax in axes:
+        n = result.shape[ax]
+        shift = -(n // 2)
+        result = roll(result, shift, axis=ax)
+    return result
 
 def _fft_complex_column_fft(row_ffts, rows, cols, inverse=False):
     """Apply FFT/IFFT along columns of a complex (rows, cols, 2) representation.

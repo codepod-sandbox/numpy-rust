@@ -143,6 +143,17 @@ fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyR
     Err(vm.new_type_error("cannot convert value to array scalar".to_owned()))
 }
 
+/// Convert a Python object (int or float) to f64.
+fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
+    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
+        return Ok(f);
+    }
+    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(i as f64);
+    }
+    Err(vm.new_type_error("expected a number".to_owned()))
+}
+
 /// Convert an NdArray result to PyObjectRef, returning a scalar for 0-D arrays.
 pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
     if arr.ndim() == 0 {
@@ -166,6 +177,70 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "str" | "U" => Ok(DType::Str),
         _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),
+    }
+}
+
+/// Extract a shape tuple from a Python object as raw i64 values (allows -1).
+fn extract_shape_i64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<i64>> {
+    if let Some(tuple) = obj.downcast_ref::<PyTuple>() {
+        let mut shape = Vec::new();
+        for item in tuple.as_slice() {
+            let n: i64 = item.clone().try_into_value(vm)?;
+            shape.push(n);
+        }
+        Ok(shape)
+    } else if let Some(list) = obj.downcast_ref::<PyList>() {
+        let mut shape = Vec::new();
+        for item in list.borrow_vec().iter() {
+            let n: i64 = item.clone().try_into_value(vm)?;
+            shape.push(n);
+        }
+        Ok(shape)
+    } else if let Ok(n) = obj.clone().try_into_value::<i64>(vm) {
+        Ok(vec![n])
+    } else {
+        Err(vm.new_type_error("shape must be a tuple, list, or integer".to_owned()))
+    }
+}
+
+/// Resolve a raw shape (which may contain one -1) given the total number of elements.
+fn resolve_shape(raw: &[i64], total: usize, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
+    let mut neg_idx: Option<usize> = None;
+    let mut product: usize = 1;
+    for (i, &dim) in raw.iter().enumerate() {
+        if dim == -1 {
+            if neg_idx.is_some() {
+                return Err(vm.new_value_error("can only specify one unknown dimension".to_owned()));
+            }
+            neg_idx = Some(i);
+        } else if dim < 0 {
+            return Err(vm.new_value_error("negative dimensions are not allowed".to_owned()));
+        } else {
+            product = product
+                .checked_mul(dim as usize)
+                .ok_or_else(|| vm.new_value_error("shape too large".to_owned()))?;
+        }
+    }
+    if let Some(idx) = neg_idx {
+        if product == 0 {
+            return Err(vm.new_value_error(
+                "cannot reshape array of size 0 into shape with unknown dimension".to_owned(),
+            ));
+        }
+        if !total.is_multiple_of(product) {
+            return Err(vm.new_value_error(format!(
+                "cannot reshape array of size {} into shape {:?}",
+                total, raw
+            )));
+        }
+        let inferred = total / product;
+        Ok(raw
+            .iter()
+            .enumerate()
+            .map(|(i, &d)| if i == idx { inferred } else { d as usize })
+            .collect())
+    } else {
+        Ok(raw.iter().map(|&d| d as usize).collect())
     }
 }
 
@@ -244,7 +319,9 @@ impl PyNdArray {
 
     #[pymethod]
     fn reshape(&self, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let sh = extract_shape(&shape, vm)?;
+        let raw = extract_shape_i64(&shape, vm)?;
+        let total = self.data.read().unwrap().size();
+        let sh = resolve_shape(&raw, total, vm)?;
         self.data
             .read()
             .unwrap()
@@ -985,6 +1062,86 @@ impl PyNdArray {
             .get(&vec![0; data.ndim()])
             .map_err(|e| numpy_err(e, vm))?;
         Ok(scalar_to_py(s, vm))
+    }
+
+    // --- clip / fill / nonzero methods ---
+
+    #[pymethod]
+    fn clip(
+        &self,
+        a_min: vm::function::OptionalArg<PyObjectRef>,
+        a_max: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let min_val = match a_min.into_option() {
+            None => None,
+            Some(ref obj) if vm.is_none(obj) => None,
+            Some(obj) => Some(py_obj_to_f64(&obj, vm)?),
+        };
+        let max_val = match a_max.into_option() {
+            None => None,
+            Some(ref obj) if vm.is_none(obj) => None,
+            Some(obj) => Some(py_obj_to_f64(&obj, vm)?),
+        };
+        Ok(PyNdArray::from_core(
+            self.data.read().unwrap().clip(min_val, max_val),
+        ))
+    }
+
+    #[pymethod]
+    fn fill(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+        let inner = self.data.read().unwrap();
+        let shape = inner.shape().to_vec();
+        let dtype = inner.dtype();
+        drop(inner);
+        let val = py_obj_to_f64(&value, vm)?;
+        *self.data.write().unwrap() = numpy_rust_core::full(&shape, val, dtype);
+        Ok(())
+    }
+
+    #[pymethod]
+    fn nonzero(&self, vm: &VirtualMachine) -> PyObjectRef {
+        let inner = self.data.read().unwrap();
+        let result = numpy_rust_core::nonzero(&inner);
+        let py_arrays: Vec<PyObjectRef> = result
+            .into_iter()
+            .map(|arr| PyNdArray::from_core(arr).into_pyobject(vm))
+            .collect();
+        PyTuple::new_ref(py_arrays, &vm.ctx).into()
+    }
+
+    // --- nbytes / strides / itemsize properties ---
+
+    #[pygetset]
+    fn itemsize(&self) -> usize {
+        self.data.read().unwrap().dtype().itemsize()
+    }
+
+    #[pygetset]
+    fn nbytes(&self) -> usize {
+        let inner = self.data.read().unwrap();
+        inner.size() * inner.dtype().itemsize()
+    }
+
+    #[pygetset]
+    fn strides(&self, vm: &VirtualMachine) -> PyObjectRef {
+        let inner = self.data.read().unwrap();
+        let shape = inner.shape();
+        let itemsize = inner.dtype().itemsize();
+        // Compute C-contiguous strides
+        let ndim = shape.len();
+        let mut strides_vec = vec![0usize; ndim];
+        if ndim > 0 {
+            strides_vec[ndim - 1] = itemsize;
+            for i in (0..ndim - 1).rev() {
+                strides_vec[i] = strides_vec[i + 1] * shape[i + 1];
+            }
+        }
+        let py_strides: Vec<PyObjectRef> = strides_vec
+            .iter()
+            .map(|&s| vm.ctx.new_int(s).into())
+            .collect();
+        PyTuple::new_ref(py_strides, &vm.ctx).into()
     }
 
     // --- String representations ---

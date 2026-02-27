@@ -3640,6 +3640,271 @@ def test_nan_to_num_all_nan():
     assert_close(float(r[1]), 0.0)
     assert_close(float(r[2]), 0.0)
 
+# --- Tier 22B: ndarray method tests (clip, fill, nonzero, nbytes, strides, itemsize) ---
+
+def test_ndarray_clip_method():
+    """Test ndarray.clip(a_min, a_max) method."""
+    a = np.array([1.0, 5.0, 10.0])
+    result = a.clip(2, 8)
+    assert_close(float(result[0]), 2.0, msg="clip lower bound")
+    assert_close(float(result[1]), 5.0, msg="clip middle unchanged")
+    assert_close(float(result[2]), 8.0, msg="clip upper bound")
+
+def test_ndarray_clip_method_min_only():
+    """Test ndarray.clip with only a_min."""
+    a = np.array([1.0, 5.0, 10.0])
+    result = a.clip(3, None)
+    assert_close(float(result[0]), 3.0, msg="clip min only: low val")
+    assert_close(float(result[1]), 5.0, msg="clip min only: mid val")
+    assert_close(float(result[2]), 10.0, msg="clip min only: high val")
+
+def test_ndarray_clip_method_max_only():
+    """Test ndarray.clip with only a_max."""
+    a = np.array([1.0, 5.0, 10.0])
+    result = a.clip(None, 7)
+    assert_close(float(result[0]), 1.0, msg="clip max only: low val")
+    assert_close(float(result[1]), 5.0, msg="clip max only: mid val")
+    assert_close(float(result[2]), 7.0, msg="clip max only: high val")
+
+def test_ndarray_fill_method():
+    """Test ndarray.fill(value) method — fills array in-place."""
+    a = np.zeros((5,))
+    a.fill(7.0)
+    for i in range(5):
+        assert_close(float(a[i]), 7.0, msg=f"fill: index {i}")
+
+def test_ndarray_fill_2d():
+    """Test ndarray.fill on 2D array."""
+    a = np.zeros((3, 4))
+    a.fill(3.0)
+    assert_close(float(a.sum()), 36.0, msg="fill 2D total")
+
+def test_ndarray_nonzero_method():
+    """Test ndarray.nonzero() method returns tuple of index arrays."""
+    a = np.array([0.0, 1.0, 0.0, 3.0])
+    result = a.nonzero()
+    # result should be a tuple with one element (1D array)
+    assert_eq(len(result), 1, "nonzero returns 1-tuple for 1D")
+    idx = result[0]
+    assert_eq(int(idx[0]), 1, "first nonzero index")
+    assert_eq(int(idx[1]), 3, "second nonzero index")
+
+def test_ndarray_nbytes():
+    """Test ndarray.nbytes property."""
+    a = np.array([1.0, 2.0, 3.0])  # float64 => 8 bytes each
+    assert_eq(a.nbytes, 24, "nbytes for 3 float64 elements")
+
+def test_ndarray_itemsize():
+    """Test ndarray.itemsize property."""
+    a = np.array([1.0, 2.0, 3.0])  # float64 => 8 bytes
+    assert_eq(a.itemsize, 8, "itemsize for float64")
+
+def test_ndarray_strides():
+    """Test ndarray.strides property."""
+    a = np.zeros((3, 4))  # float64 => strides (32, 8) for C-order
+    s = a.strides
+    assert_eq(len(s), 2, "strides tuple length for 2D")
+    assert_eq(s[1], 8, "strides: last dim = itemsize")
+    assert_eq(s[0], 32, "strides: first dim = 4*8")
+
+def test_ndarray_strides_1d():
+    """Test ndarray.strides for 1D array."""
+    a = np.array([1.0, 2.0, 3.0])
+    s = a.strides
+    assert_eq(len(s), 1, "strides tuple length for 1D")
+    assert_eq(s[0], 8, "strides: 1D = itemsize")
+
+
+# --- Tier 22 Group A: Critical Correctness Fixes ---
+
+def test_reshape_neg1():
+    """reshape with -1 infers the missing dimension."""
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    b = a.reshape((2, -1))
+    assert_eq(b.shape, (2, 3))
+    assert_close(float(b[0][0]), 1.0)
+    assert_close(float(b[1][2]), 6.0)
+
+def test_reshape_neg1_1d():
+    """reshape(-1,) keeps all elements in a flat array."""
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    b = a.reshape((-1,))
+    assert_eq(b.shape, (4,))
+    assert_close(float(b[3]), 4.0)
+
+def test_reshape_neg1_col():
+    """reshape(-1, 1) creates a column vector."""
+    a = np.array([1.0, 2.0, 3.0])
+    b = a.reshape((-1, 1))
+    assert_eq(b.shape, (3, 1))
+    assert_close(float(b[2][0]), 3.0)
+
+def test_reshape_neg1_first():
+    """reshape(-1, 2) with 6 elements gives (3, 2)."""
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    b = a.reshape((-1, 2))
+    assert_eq(b.shape, (3, 2))
+
+def test_mean_list():
+    """np.mean on a plain list should work."""
+    result = np.mean([1.0, 2.0, 3.0])
+    assert_close(float(result), 2.0)
+
+def test_max_list():
+    """np.max on a plain list should work."""
+    result = np.max([3.0, 1.0, 2.0])
+    assert_close(float(result), 3.0)
+
+def test_min_list():
+    """np.min on a plain list should work."""
+    result = np.min([3.0, 1.0, 2.0])
+    assert_close(float(result), 1.0)
+
+def test_std_list():
+    """np.std on a plain list should work."""
+    result = np.std([1.0, 2.0, 3.0])
+    # std of [1,2,3] = sqrt(2/3) ~ 0.8165
+    assert_close(float(result), 0.816496580927726, tol=1e-5)
+
+def test_var_list():
+    """np.var on a plain list should work."""
+    result = np.var([1.0, 2.0, 3.0])
+    # var of [1,2,3] = 2/3 ~ 0.6667
+    assert_close(float(result), 0.6666666666666666, tol=1e-5)
+
+def test_insert_2d():
+    """insert into a 2D array along axis=1."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.insert(a, 1, [5.0, 6.0], axis=1)
+    assert_eq(result.shape, (2, 3))
+    # Expected: [[1, 5, 2], [3, 6, 4]]
+    assert_close(float(result[0][0]), 1.0)
+    assert_close(float(result[0][1]), 5.0)
+    assert_close(float(result[0][2]), 2.0)
+    assert_close(float(result[1][0]), 3.0)
+    assert_close(float(result[1][1]), 6.0)
+    assert_close(float(result[1][2]), 4.0)
+
+def test_insert_2d_axis0():
+    """insert into a 2D array along axis=0."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.insert(a, 1, [5.0, 6.0], axis=0)
+    assert_eq(result.shape, (3, 2))
+    # Expected: [[1, 2], [5, 6], [3, 4]]
+    assert_close(float(result[0][0]), 1.0)
+    assert_close(float(result[1][0]), 5.0)
+    assert_close(float(result[1][1]), 6.0)
+    assert_close(float(result[2][0]), 3.0)
+
+def test_can_cast_safe():
+    """can_cast with safe casting: float32 -> float64 is ok."""
+    assert_eq(np.can_cast("float32", "float64"), True)
+
+def test_can_cast_safe_fail():
+    """can_cast with safe casting: float64 -> int32 is not ok."""
+    assert_eq(np.can_cast("float64", "int32"), False)
+
+def test_can_cast_unsafe():
+    """can_cast with unsafe casting always returns True."""
+    assert_eq(np.can_cast("float64", "int32", casting="unsafe"), True)
+
+def test_can_cast_same():
+    """can_cast: same type is always safe."""
+    assert_eq(np.can_cast("int64", "int64"), True)
+
+# --- Tier 22 Group C tests ---
+
+def test_fftshift_2d():
+    """fftshift should work on 2D arrays."""
+    a = np.arange(0, 16).reshape((4, 4))
+    r = np.fft.fftshift(a)
+    # fftshift rolls by n//2 along each axis
+    # For 4x4: roll by 2 along axis 0, then roll by 2 along axis 1
+    # Row shift: rows [2,3,0,1] -> [[8,9,10,11],[12,13,14,15],[0,1,2,3],[4,5,6,7]]
+    # Col shift of that: cols [2,3,0,1] -> [[10,11,8,9],[14,15,12,13],[2,3,0,1],[6,7,4,5]]
+    assert_eq(r.shape, (4, 4))
+    assert_close(float(r[0][0]), 10.0)
+    assert_close(float(r[0][1]), 11.0)
+    assert_close(float(r[0][2]), 8.0)
+    assert_close(float(r[0][3]), 9.0)
+    assert_close(float(r[1][0]), 14.0)
+    assert_close(float(r[2][0]), 2.0)
+    assert_close(float(r[3][0]), 6.0)
+
+def test_ifftshift_2d():
+    """ifftshift should invert fftshift on 2D arrays."""
+    a = np.arange(0, 16).reshape((4, 4))
+    shifted = np.fft.fftshift(a)
+    restored = np.fft.ifftshift(shifted)
+    for i in range(4):
+        for j in range(4):
+            assert_close(float(restored[i][j]), float(a[i][j]))
+
+def test_unique_axis0():
+    """unique with axis=0 finds unique rows."""
+    a = np.array([1, 2, 3, 4, 1, 2]).reshape((3, 2))
+    r = np.unique(a, axis=0)
+    assert_eq(r.shape, (2, 2))
+    # Sorted by first element: [1,2] then [3,4]
+    assert_close(float(r[0][0]), 1.0)
+    assert_close(float(r[0][1]), 2.0)
+    assert_close(float(r[1][0]), 3.0)
+    assert_close(float(r[1][1]), 4.0)
+
+def test_histogram_bin_edges():
+    """histogram_bin_edges returns correct edges."""
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    edges = np.histogram_bin_edges(a, bins=5)
+    # Should be linspace(1, 5, 6) = [1, 1.8, 2.6, 3.4, 4.2, 5.0]
+    assert_eq(edges.shape[0], 6)
+    assert_close(float(edges[0]), 1.0)
+    assert_close(float(edges[5]), 5.0)
+
+def test_histogram_custom_bins():
+    """histogram with array bins computes correctly."""
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    counts, edges = np.histogram(a, bins=[0, 2, 4, 6])
+    # Bins: [0,2) -> 1, [2,4) -> 2,3, [4,6] -> 4,5
+    assert_close(float(counts[0]), 1.0)
+    assert_close(float(counts[1]), 2.0)
+    assert_close(float(counts[2]), 2.0)
+    assert_close(float(edges[0]), 0.0)
+    assert_close(float(edges[3]), 6.0)
+
+def test_isin():
+    """isin checks element membership."""
+    r = np.isin(np.array([1, 2, 3, 4]), np.array([2, 4]))
+    # Should be [False, True, False, True] -> [0, 1, 0, 1]
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 1.0)
+    assert_close(float(r[2]), 0.0)
+    assert_close(float(r[3]), 1.0)
+
+def test_isin_invert():
+    """isin with invert=True inverts the result."""
+    r = np.isin(np.array([1, 2, 3]), np.array([2]), invert=True)
+    # Should be [True, False, True] -> [1, 0, 1]
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 0.0)
+    assert_close(float(r[2]), 1.0)
+
+def test_apply_along_axis_3d():
+    """apply_along_axis should work on 3D arrays."""
+    # Create a 2x3x4 array
+    a = np.arange(0, 24).reshape((2, 3, 4))
+    # Apply sum along axis=2 (last axis, length 4)
+    r = np.apply_along_axis(np.sum, 2, a)
+    # Result shape should be (2, 3)
+    assert_eq(r.shape, (2, 3))
+    # First row: sum([0,1,2,3])=6, sum([4,5,6,7])=22, sum([8,9,10,11])=38
+    assert_close(float(r[0][0]), 6.0)
+    assert_close(float(r[0][1]), 22.0)
+    assert_close(float(r[0][2]), 38.0)
+    # Second row: sum([12,13,14,15])=54, sum([16,17,18,19])=70, sum([20,21,22,23])=86
+    assert_close(float(r[1][0]), 54.0)
+    assert_close(float(r[1][1]), 70.0)
+    assert_close(float(r[1][2]), 86.0)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
