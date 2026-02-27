@@ -3905,6 +3905,222 @@ def test_apply_along_axis_3d():
     assert_close(float(r[1][1]), 70.0)
     assert_close(float(r[1][2]), 86.0)
 
+# --- Tier 23 Group A: vdot, broadcast_shapes, gcd, lcm, polydiv, fabs ---
+
+def test_vdot():
+    """vdot computes dot product of flattened arrays."""
+    r = np.vdot(np.array([1, 2, 3]), np.array([4, 5, 6]))
+    assert_close(float(r), 32.0)
+
+def test_vdot_2d():
+    """vdot flattens 2D arrays before computing dot product."""
+    r = np.vdot(np.array([[1, 2], [3, 4]]), np.array([[5, 6], [7, 8]]))
+    assert_close(float(r), 70.0)
+
+def test_broadcast_shapes():
+    """broadcast_shapes computes result shape for compatible shapes."""
+    r = np.broadcast_shapes((3, 1), (1, 4))
+    assert_eq(r, (3, 4))
+
+def test_broadcast_shapes_3d():
+    """broadcast_shapes works with 3D shapes of different lengths."""
+    r = np.broadcast_shapes((2, 1, 4), (3, 1))
+    assert_eq(r, (2, 3, 4))
+
+def test_gcd():
+    """gcd computes element-wise greatest common divisor."""
+    r = np.gcd(np.array([12, 18, 24]), np.array([8, 12, 16]))
+    assert_close(float(r[0]), 4.0)
+    assert_close(float(r[1]), 6.0)
+    assert_close(float(r[2]), 8.0)
+
+def test_lcm():
+    """lcm computes element-wise least common multiple."""
+    r = np.lcm(np.array([4, 6]), np.array([6, 8]))
+    assert_close(float(r[0]), 12.0)
+    assert_close(float(r[1]), 24.0)
+
+def test_polydiv():
+    """polydiv returns quotient and remainder of polynomial division."""
+    q, rem = np.polydiv([1, -3, 2], [1, -1])
+    assert_close(float(q[0]), 1.0)
+    assert_close(float(q[1]), -2.0)
+    assert_close(float(rem[0]), 0.0, tol=1e-6)
+
+def test_fabs():
+    """fabs returns absolute values as floats."""
+    r = np.fabs(np.array([-1.5, 2.0, -3.0]))
+    assert_close(float(r[0]), 1.5)
+    assert_close(float(r[1]), 2.0)
+    assert_close(float(r[2]), 3.0)
+
+# --- Tier 23 Group B: Fix silently-ignored parameters ---
+
+def test_asarray_dtype():
+    """asarray with dtype should cast the array."""
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.asarray(a, dtype="int64")
+    assert_eq(str(b.dtype), "int64", "asarray should cast to int64")
+    assert_close(float(b[0]), 1.0)
+    assert_close(float(b[1]), 2.0)
+    assert_close(float(b[2]), 3.0)
+
+def test_asarray_no_copy():
+    """asarray without dtype on ndarray should return the same array."""
+    a = np.array([1.0, 2.0])
+    b = np.asarray(a)
+    # They should be the same object (no copy)
+    assert_close(float(b[0]), float(a[0]))
+    assert_close(float(b[1]), float(a[1]))
+
+def test_diff_prepend():
+    """diff with prepend should prepend values before differencing."""
+    r = np.diff(np.array([1.0, 2.0, 4.0, 7.0]), prepend=0)
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 1.0)
+    assert_close(float(r[2]), 2.0)
+    assert_close(float(r[3]), 3.0)
+
+def test_diff_append():
+    """diff with append should append values before differencing."""
+    r = np.diff(np.array([1.0, 3.0, 6.0]), append=10)
+    assert_close(float(r[0]), 2.0)
+    assert_close(float(r[1]), 3.0)
+    assert_close(float(r[2]), 4.0)
+
+def test_gradient_axis():
+    """gradient with axis= should return gradient for that axis only."""
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    # Without axis, should return a list of 2 arrays (one per dimension)
+    g_all = np.gradient(a)
+    assert isinstance(g_all, (list, tuple)), "gradient of 2D should return list"
+    # With axis=0, should return single array (gradient along rows)
+    g0 = np.gradient(a, axis=0)
+    assert isinstance(g0, np.ndarray), "gradient with axis should return single ndarray"
+    # axis=0 gradient: [4-1, 5-2, 6-3] = [3, 3, 3] for each column
+    assert_close(float(g0[0][0]), 3.0)
+    assert_close(float(g0[0][1]), 3.0)
+    assert_close(float(g0[0][2]), 3.0)
+
+def test_histogram_density():
+    """histogram with density=True should normalize so area integrates to 1."""
+    data = np.array([0.5, 1.5, 2.5, 3.5, 4.5])
+    counts, edges = np.histogram(data, bins=5, density=True)
+    # With density, sum(counts * bin_widths) should be approximately 1.0
+    bin_widths = np.diff(edges)
+    area = float(np.sum(counts * bin_widths))
+    assert_close(area, 1.0, tol=1e-6, msg="density histogram should integrate to 1")
+
+def test_inner_2d():
+    """inner of 2D arrays should contract over last axis: A @ B.T."""
+    A = np.array([[1.0, 2.0], [3.0, 4.0]])
+    B = np.array([[5.0, 6.0], [7.0, 8.0]])
+    r = np.inner(A, B)
+    # Expected: [[1*5+2*6, 1*7+2*8], [3*5+4*6, 3*7+4*8]] = [[17, 23], [39, 53]]
+    assert_close(float(r[0][0]), 17.0)
+    assert_close(float(r[0][1]), 23.0)
+    assert_close(float(r[1][0]), 39.0)
+    assert_close(float(r[1][1]), 53.0)
+
+# --- Tier 23 Group C: Fix in-place semantics + misc ---
+
+def test_intersect1d_return_indices():
+    """intersect1d with return_indices=True returns (common, ind1, ind2)."""
+    a = np.array([3, 1, 4, 1, 5])
+    b = np.array([5, 3, 6, 7])
+    common, ind1, ind2 = np.intersect1d(a, b, return_indices=True)
+    # Common elements sorted: [3, 5]
+    assert_close(float(common[0]), 3.0)
+    assert_close(float(common[1]), 5.0)
+    # Index of 3 in a is 0, index of 5 in a is 4
+    assert_close(float(ind1[0]), 0.0)
+    assert_close(float(ind1[1]), 4.0)
+    # Index of 3 in b is 1, index of 5 in b is 0
+    assert_close(float(ind2[0]), 1.0)
+    assert_close(float(ind2[1]), 0.0)
+
+def test_quantile_keepdims():
+    """quantile with keepdims=True should preserve reduced axis as size 1."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.quantile(a, 0.5, axis=1, keepdims=True)
+    assert_eq(str(r.shape), "(2, 1)", "quantile keepdims shape")
+    assert_close(float(r[0][0]), 1.5, tol=1e-6)
+    assert_close(float(r[1][0]), 3.5, tol=1e-6)
+
+def test_percentile_keepdims():
+    """percentile with keepdims=True should preserve reduced axis as size 1."""
+    a = np.array([[10.0, 20.0], [30.0, 40.0]])
+    r = np.percentile(a, 50.0, axis=0, keepdims=True)
+    assert_eq(str(r.shape), "(1, 2)", "percentile keepdims shape")
+    assert_close(float(r[0][0]), 20.0, tol=1e-6)
+    assert_close(float(r[0][1]), 30.0, tol=1e-6)
+
+def test_median_keepdims():
+    """median with keepdims=True should preserve reduced axis as size 1."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.median(a, axis=1, keepdims=True)
+    assert_eq(str(r.shape), "(2, 1)", "median keepdims shape")
+    assert_close(float(r[0][0]), 1.5, tol=1e-6)
+    assert_close(float(r[1][0]), 3.5, tol=1e-6)
+
+def test_maximum_reduce():
+    """maximum.reduce should return the maximum along the array."""
+    r = np.maximum.reduce(np.array([3.0, 1.0, 4.0, 1.0, 5.0]))
+    assert_close(float(r), 5.0)
+
+def test_minimum_reduce():
+    """minimum.reduce should return the minimum along the array."""
+    r = np.minimum.reduce(np.array([3.0, 1.0, 4.0, 1.0, 5.0]))
+    assert_close(float(r), 1.0)
+
+def test_add_reduce():
+    """add.reduce should return the sum of the array."""
+    r = np.add.reduce(np.array([1.0, 2.0, 3.0]))
+    assert_close(float(r), 6.0)
+
+def test_multiply_reduce():
+    """multiply.reduce should return the product of the array."""
+    r = np.multiply.reduce(np.array([2.0, 3.0, 4.0]))
+    assert_close(float(r), 24.0)
+
+def test_maximum_callable():
+    """maximum should still work as a regular element-wise function."""
+    r = np.maximum(np.array([1.0, 5.0, 3.0]), np.array([4.0, 2.0, 6.0]))
+    assert_close(float(r[0]), 4.0)
+    assert_close(float(r[1]), 5.0)
+    assert_close(float(r[2]), 6.0)
+
+def test_minimum_callable():
+    """minimum should still work as a regular element-wise function."""
+    r = np.minimum(np.array([1.0, 5.0, 3.0]), np.array([4.0, 2.0, 6.0]))
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 2.0)
+    assert_close(float(r[2]), 3.0)
+
+def test_add_callable():
+    """add should still work as a regular element-wise function."""
+    r = np.add(np.array([1.0, 2.0]), np.array([3.0, 4.0]))
+    assert_close(float(r[0]), 4.0)
+    assert_close(float(r[1]), 6.0)
+
+def test_dtype_from_scalar_type():
+    """dtype should handle _ScalarType instances like float32 properly."""
+    d = np.dtype(np.float32)
+    assert_eq(d.name, "float32", "dtype(float32).name")
+    assert_eq(d.kind, "f", "dtype(float32).kind")
+    assert_eq(str(d.itemsize), "4", "dtype(float32).itemsize")
+
+def test_dtype_from_string():
+    """dtype('float64') should work."""
+    d = np.dtype('float64')
+    assert_eq(d.name, "float64", "dtype('float64').name")
+    assert_eq(d.kind, "f", "dtype('float64').kind")
+
+def test_dtype_from_python_float():
+    """dtype(float) should give float64."""
+    d = np.dtype(float)
+    assert_eq(d.name, "float64", "dtype(float).name")
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

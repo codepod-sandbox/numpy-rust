@@ -408,8 +408,10 @@ def iscomplex(x):
 
 def asarray(a, dtype=None, order=None):
     if isinstance(a, ndarray):
+        if dtype is not None:
+            return a.astype(str(dtype))
         return a
-    return array(a)
+    return array(a, dtype=dtype)
 
 def ascontiguousarray(a, dtype=None):
     return asarray(a)
@@ -714,6 +716,16 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
         a = array(a)
     if axis is not None and axis < 0:
         axis = a.ndim + axis
+    if prepend is not None:
+        prepend = asarray(prepend)
+        if prepend.ndim == 0:
+            prepend = array([float(prepend)])
+        a = concatenate([prepend, a])
+    if append is not None:
+        append = asarray(append)
+        if append.ndim == 0:
+            append = array([float(append)])
+        a = concatenate([a, append])
     return _native.diff(a, n, axis)
 
 def mean(a, axis=None, dtype=None, out=None, keepdims=False):
@@ -792,20 +804,40 @@ def nancumprod(a, axis=None, dtype=None, out=None):
         a = array(a)
     return _native.nancumprod(a, axis)
 
+def _apply_keepdims(result, a, axis):
+    """Expand reduced axis back to size-1 when keepdims=True."""
+    if isinstance(result, ndarray):
+        shape = list(a.shape)
+        shape[axis] = 1
+        return result.reshape(shape)
+    else:
+        # scalar result - wrap in array with expanded dims
+        shape = [1] * a.ndim
+        return array([float(result)]).reshape(shape)
+
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.quantile(a, float(q), axis)
+    result = _native.quantile(a, float(q), axis)
+    if keepdims and axis is not None:
+        result = _apply_keepdims(result, a, axis)
+    return result
 
 def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.percentile(a, float(q), axis)
+    result = _native.percentile(a, float(q), axis)
+    if keepdims and axis is not None:
+        result = _apply_keepdims(result, a, axis)
+    return result
 
 def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.quantile(a, 0.5, axis)
+    result = _native.quantile(a, 0.5, axis)
+    if keepdims and axis is not None:
+        result = _apply_keepdims(result, a, axis)
+    return result
 
 def cov(m, y=None, rowvar=True, bias=False, ddof=None, fweights=None, aweights=None):
     if not isinstance(m, ndarray):
@@ -1352,11 +1384,12 @@ class dtype:
             self.kind = "b"
             self.itemsize = 1
             self.char = "?"
+        elif isinstance(tp, _ScalarType):
+            self.name = tp._name
+            self._init_from_name(tp._name)
         else:
             self.name = str(tp) if tp else "float64"
-            self.kind = "f"
-            self.itemsize = 8
-            self.char = "d"
+            self._init_from_name(self.name)
         self.type = type(tp) if tp else float
         self.str = self.name
 
@@ -2025,7 +2058,17 @@ def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
         ar1 = array(ar1)
     if not isinstance(ar2, ndarray):
         ar2 = array(ar2)
-    return _native.intersect1d(ar1, ar2)
+    if not return_indices:
+        return _native.intersect1d(ar1, ar2)
+    # Find intersection with indices
+    flat1 = ar1.flatten().tolist()
+    flat2 = ar2.flatten().tolist()
+    s1 = set(flat1)
+    s2 = set(flat2)
+    common = sorted(s1 & s2)
+    ind1 = [flat1.index(v) for v in common]
+    ind2 = [flat2.index(v) for v in common]
+    return array(common), array(ind1), array(ind2)
 
 def union1d(ar1, ar2):
     if not isinstance(ar1, ndarray):
@@ -2324,9 +2367,21 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
                     if edge_list[j] <= v < edge_list[j + 1]:
                         counts[j] += 1
                         break
-        return array(counts), edges
+        counts_arr = array(counts)
+        if density:
+            bin_widths = diff(edges)
+            total = float(sum(counts_arr))
+            if total > 0.0:
+                counts_arr = counts_arr / (total * bin_widths)
+        return counts_arr, edges
     # Default: use native (bins is an int)
-    return _native.histogram(a, bins)
+    counts, edges = _native.histogram(a, bins)
+    if density:
+        bin_widths = diff(edges)
+        total = float(sum(counts))
+        if total > 0.0:
+            counts = counts / (total * bin_widths)
+    return counts, edges
 
 def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
     """Compute the 2D histogram of two data samples."""
@@ -2598,7 +2653,14 @@ def gradient(f, *varargs, axis=None, edge_order=1):
     if not isinstance(f, ndarray):
         f = array(f)
     spacing = float(varargs[0]) if varargs else 1.0
-    return _native.gradient(f, spacing)
+    result = _native.gradient(f, spacing)
+    if axis is not None and f.ndim > 1:
+        if isinstance(result, (list, tuple)):
+            ax = axis
+            if ax < 0:
+                ax = f.ndim + ax
+            return result[ax]
+    return result
 
 def polyfit(x, y, deg, rcond=None, full=False, w=None, cov=False):
     if not isinstance(x, ndarray):
@@ -3130,11 +3192,17 @@ def inner(a, b):
     """Inner product of two arrays.
 
     For 1-D arrays this is the dot product.  For higher-dimensional arrays
-    this contracts over the last axes (simplified: delegates to ``dot``).
+    this contracts over the last axis of both a and b.
     """
     a = asarray(a)
     b = asarray(b)
-    return dot(a, b)
+    if a.ndim <= 1 and b.ndim <= 1:
+        return dot(a, b)
+    # For 2D: inner(A, B) = A @ B.T
+    if a.ndim == 2 and b.ndim == 2:
+        return dot(a, b.T)
+    # General: tensordot contracting last axis of each
+    return tensordot(a, b, axes=([-1], [-1]))
 
 def matmul(x1, x2):
     """Matrix product of two arrays (same as the ``@`` operator)."""
@@ -5054,6 +5122,149 @@ def spacing(x):
         ax = abs(float(v))
         result.append(_math.nextafter(ax, _math.inf) - ax)
     return array(result)
+
+
+def vdot(a, b):
+    """Conjugate dot product of two arrays (flattened)."""
+    a = asarray(a).flatten()
+    b = asarray(b).flatten()
+    return dot(a, b)
+
+
+def broadcast_shapes(*shapes):
+    """Compute the broadcast result shape from multiple shapes."""
+    if not shapes:
+        return ()
+    ndim = _builtin_max(len(s) for s in shapes)
+    result = [1] * ndim
+    for shape in shapes:
+        offset = ndim - len(shape)
+        for i, dim in enumerate(shape):
+            j = i + offset
+            if result[j] == 1:
+                result[j] = dim
+            elif dim != 1 and dim != result[j]:
+                raise ValueError(
+                    f"shape mismatch: objects cannot be broadcast to a single shape. Mismatch at dimension {j}"
+                )
+    return tuple(result)
+
+
+def gcd(x1, x2):
+    """Element-wise greatest common divisor."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    f1 = x1.flatten().tolist()
+    f2 = x2.flatten().tolist()
+    result = [_math.gcd(int(a), int(b)) for a, b in zip(f1, f2)]
+    return array(result).reshape(x1.shape)
+
+
+def lcm(x1, x2):
+    """Element-wise least common multiple."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    f1 = x1.flatten().tolist()
+    f2 = x2.flatten().tolist()
+    def _lcm_pair(a, b):
+        ia, ib = int(a), int(b)
+        if ia == 0 or ib == 0:
+            return 0
+        g = _math.gcd(ia, ib)
+        v = ia * ib
+        if v < 0:
+            v = -v
+        return v // g
+    result = [_lcm_pair(a, b) for a, b in zip(f1, f2)]
+    return array(result).reshape(x1.shape)
+
+
+def polydiv(u, v):
+    """Polynomial division: returns (quotient, remainder)."""
+    if isinstance(u, poly1d):
+        u = list(u._coeffs)
+    elif isinstance(u, ndarray):
+        u = [float(u[i]) for i in range(u.size)]
+    else:
+        u = [float(c) for c in u]
+    if isinstance(v, poly1d):
+        v = list(v._coeffs)
+    elif isinstance(v, ndarray):
+        v = [float(v[i]) for i in range(v.size)]
+    else:
+        v = [float(c) for c in v]
+    n = len(u)
+    nv = len(v)
+    if nv > n:
+        return array([0.0]), array(u)
+    q = [0.0] * (n - nv + 1)
+    r = list(u)
+    for i in range(n - nv + 1):
+        q[i] = r[i] / v[0]
+        for j in range(nv):
+            r[i + j] -= q[i] * v[j]
+    remainder = r[n - nv + 1:]
+    return array(q), array(remainder)
+
+
+def fabs(x):
+    """Absolute value for floats, element-wise."""
+    return abs(asarray(x))
+
+
+# --- ufunc-like wrappers with .reduce() / .accumulate() --------------------
+
+class _UfuncWithReduce:
+    """Wraps a binary element-wise function to add .reduce() and .accumulate()."""
+    def __init__(self, func, reduce_func, name=None):
+        self._func = func
+        self._reduce = reduce_func
+        self.__name__ = name or getattr(func, '__name__', 'ufunc')
+
+    def __call__(self, *args, **kwargs):
+        return self._func(*args, **kwargs)
+
+    def reduce(self, a, axis=None, **kwargs):
+        return self._reduce(a, axis=axis)
+
+    def accumulate(self, a, axis=0, **kwargs):
+        a = asarray(a)
+        flat = a.flatten().tolist()
+        if len(flat) == 0:
+            return a
+        # Simple 1-D accumulate
+        result = [flat[0]]
+        for v in flat[1:]:
+            result.append(float(self._func(result[-1], v)))
+        return array(result).reshape(a.shape)
+
+    def outer(self, a, b, **kwargs):
+        a = asarray(a)
+        b = asarray(b)
+        fa = a.flatten().tolist()
+        fb = b.flatten().tolist()
+        result = []
+        for va in fa:
+            for vb in fb:
+                result.append(float(self._func(va, vb)))
+        return array(result).reshape((len(fa), len(fb)))
+
+    def __repr__(self):
+        return f"<ufunc '{self.__name__}'>"
+
+# Save original function references before wrapping
+_maximum_func = maximum
+_minimum_func = minimum
+_add_func = add
+_multiply_func = multiply
+_subtract_func = subtract
+
+# Wrap them as ufunc-like objects
+maximum = _UfuncWithReduce(_maximum_func, lambda a, axis=None: max(a, axis=axis), name='maximum')
+minimum = _UfuncWithReduce(_minimum_func, lambda a, axis=None: min(a, axis=axis), name='minimum')
+add = _UfuncWithReduce(_add_func, lambda a, axis=None: sum(a, axis=axis), name='add')
+multiply = _UfuncWithReduce(_multiply_func, lambda a, axis=None: prod(a, axis=axis), name='multiply')
+subtract = _UfuncWithReduce(_subtract_func, lambda a, axis=None: _subtract_func(a, axis=axis), name='subtract')
 
 
 # --- dtypes module stub -----------------------------------------------------
