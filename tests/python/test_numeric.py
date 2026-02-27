@@ -2057,6 +2057,139 @@ def test_indices_2d():
     assert_close(grids[1][0][2], 2.0)
 
 
+# ── Tier 13A: nancumsum, nancumprod, digitize, convolve ──────────────────
+
+def test_nancumsum():
+    a = np.array([1.0, float('nan'), 3.0, 4.0])
+    c = np.nancumsum(a)
+    assert_close(c[0], 1.0)
+    assert_close(c[1], 1.0)  # nan skipped
+    assert_close(c[2], 4.0)
+    assert_close(c[3], 8.0)
+
+def test_nancumprod():
+    a = np.array([1.0, float('nan'), 3.0, 4.0])
+    c = np.nancumprod(a)
+    assert_close(c[0], 1.0)
+    assert_close(c[1], 1.0)  # nan skipped
+    assert_close(c[2], 3.0)
+    assert_close(c[3], 12.0)
+
+def test_digitize():
+    x = np.array([0.5, 1.5, 2.5, 3.5])
+    bins = np.array([1.0, 2.0, 3.0])
+    d = np.digitize(x, bins)
+    assert_close(d[0], 0.0)  # 0.5 < 1.0
+    assert_close(d[1], 1.0)  # 1.0 <= 1.5 < 2.0
+    assert_close(d[2], 2.0)  # 2.0 <= 2.5 < 3.0
+    assert_close(d[3], 3.0)  # 3.5 >= 3.0
+
+def test_convolve_full():
+    a = np.array([1.0, 2.0, 3.0])
+    v = np.array([0.0, 1.0, 0.5])
+    c = np.convolve(a, v, mode='full')
+    assert_eq(len(c), 5)
+    assert_close(c[0], 0.0)   # 1*0
+    assert_close(c[1], 1.0)   # 1*1 + 2*0
+    assert_close(c[2], 2.5)   # 1*0.5 + 2*1 + 3*0
+    assert_close(c[3], 4.0)   # 2*0.5 + 3*1
+    assert_close(c[4], 1.5)   # 3*0.5
+
+def test_convolve_same():
+    a = np.array([1.0, 2.0, 3.0])
+    v = np.array([0.0, 1.0, 0.5])
+    c = np.convolve(a, v, mode='same')
+    assert_eq(len(c), 3)
+
+
+# ── Tier 13B: delete, insert, select, piecewise ─────────────────────────
+
+def test_delete_1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    b = np.delete(a, 2)
+    assert_eq(len(b), 4)
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 2.0)
+    assert_close(b[2], 4.0)
+    assert_close(b[3], 5.0)
+
+def test_delete_multiple():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    b = np.delete(a, [1, 3])
+    assert_eq(len(b), 3)
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 3.0)
+    assert_close(b[2], 5.0)
+
+def test_insert_1d():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.insert(a, 1, 10.0)
+    assert_eq(len(b), 4)
+    assert_close(b[0], 1.0)
+    assert_close(b[1], 10.0)
+    assert_close(b[2], 2.0)
+    assert_close(b[3], 3.0)
+
+def test_select():
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    condlist = [x < 2, x >= 2]
+    choicelist = [x, x * 10]
+    result = np.select(condlist, choicelist)
+    assert_close(result[0], 0.0)   # x < 2 -> x = 0
+    assert_close(result[1], 1.0)   # x < 2 -> x = 1
+    assert_close(result[2], 20.0)  # x >= 2 -> x*10 = 20
+    assert_close(result[3], 30.0)  # x >= 2 -> x*10 = 30
+
+def test_piecewise():
+    x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    condlist = [x < 3, x >= 3]
+    funclist = [lambda v: v * 2, lambda v: v * 10]
+    result = np.piecewise(x, condlist, funclist)
+    assert_close(result[0], 2.0)   # 1*2
+    assert_close(result[1], 4.0)   # 2*2
+    assert_close(result[2], 30.0)  # 3*10
+    assert_close(result[3], 40.0)  # 4*10
+    assert_close(result[4], 50.0)  # 5*10
+
+
+# ── Tier 13C: mgrid, ogrid, ix_ ──────────────────────────────────────────
+
+def test_mgrid_1d():
+    g = np.mgrid[0:5]
+    assert_eq(len(g), 5)
+    assert_close(g[0], 0.0)
+    assert_close(g[4], 4.0)
+
+def test_mgrid_2d():
+    g = np.mgrid[0:3, 0:4]
+    assert_eq(len(g), 2)
+    assert_eq(g[0].shape, (3, 4))
+    assert_eq(g[1].shape, (3, 4))
+    # g[0] should have row indices: 0,0,0,0 / 1,1,1,1 / 2,2,2,2
+    assert_close(g[0][0][0], 0.0)
+    assert_close(g[0][1][0], 1.0)
+    assert_close(g[0][2][0], 2.0)
+    # g[1] should have col indices: 0,1,2,3 / 0,1,2,3 / 0,1,2,3
+    assert_close(g[1][0][0], 0.0)
+    assert_close(g[1][0][1], 1.0)
+    assert_close(g[1][0][3], 3.0)
+
+def test_ogrid_2d():
+    g = np.ogrid[0:3, 0:4]
+    assert_eq(len(g), 2)
+    assert_eq(g[0].shape, (3, 1))
+    assert_eq(g[1].shape, (1, 4))
+
+def test_ix_():
+    a, b = np.ix_([0.0, 1.0], [2.0, 3.0, 4.0])
+    assert_eq(a.shape, (2, 1))
+    assert_eq(b.shape, (1, 3))
+    assert_close(a[0][0], 0.0)
+    assert_close(a[1][0], 1.0)
+    assert_close(b[0][0], 2.0)
+    assert_close(b[0][2], 4.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

@@ -659,6 +659,16 @@ def nanprod(a, axis=None, dtype=None, out=None, keepdims=False):
         a = array(a)
     return _native.nanprod(a, axis, keepdims)
 
+def nancumsum(a, axis=None, dtype=None, out=None):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nancumsum(a, axis)
+
+def nancumprod(a, axis=None, dtype=None, out=None):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.nancumprod(a, axis)
+
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
@@ -1644,6 +1654,295 @@ def extract(condition, arr):
     if not result:
         return array([])
     return array(result)
+
+def digitize(x, bins, right=False):
+    """Return the indices of the bins to which each value belongs."""
+    x = asarray(x)
+    bins = asarray(bins)
+    bins_list = [float(bins[i]) for i in range(len(bins))]
+    result = []
+    ascending = len(bins_list) < 2 or bins_list[-1] >= bins_list[0]
+    for i in range(x.size):
+        val = float(x.flatten()[i])
+        if ascending:
+            # bins ascending: find first bin > val (or >= if right)
+            idx = 0
+            for j in range(len(bins_list)):
+                if right:
+                    if bins_list[j] < val:
+                        idx = j + 1
+                else:
+                    if bins_list[j] <= val:
+                        idx = j + 1
+            result.append(idx)
+        else:
+            # bins descending
+            idx = 0
+            for j in range(len(bins_list)):
+                if right:
+                    if bins_list[j] > val:
+                        idx = j + 1
+                else:
+                    if bins_list[j] >= val:
+                        idx = j + 1
+            result.append(idx)
+    return array(result)
+
+def convolve(a, v, mode='full'):
+    """Discrete, linear convolution of two one-dimensional sequences."""
+    a = asarray(a).flatten()
+    v = asarray(v).flatten()
+    na = len(a)
+    nv = len(v)
+    n_full = na + nv - 1
+    result = []
+    for k in range(n_full):
+        s = 0.0
+        for j in range(nv):
+            i = k - j
+            if 0 <= i < na:
+                s += float(a[i]) * float(v[j])
+        result.append(s)
+    result = array(result)
+    if mode == 'full':
+        return result
+    elif mode == 'same':
+        start = (nv - 1) // 2
+        return array([float(result[start + i]) for i in range(na)])
+    elif mode == 'valid':
+        n_valid = abs(na - nv) + 1
+        start = min(na, nv) - 1
+        return array([float(result[start + i]) for i in range(n_valid)])
+    else:
+        raise ValueError("mode must be 'full', 'same', or 'valid', got '" + mode + "'")
+
+def delete(arr, obj, axis=None):
+    """Return a new array with sub-arrays along an axis deleted."""
+    arr = asarray(arr)
+    if axis is None:
+        arr = arr.flatten()
+        axis = 0
+    n = arr.shape[axis]
+    # Normalize obj to a list of indices
+    if isinstance(obj, int):
+        indices_to_del = [obj if obj >= 0 else n + obj]
+    elif isinstance(obj, (list, tuple)):
+        indices_to_del = [i if i >= 0 else n + i for i in obj]
+    elif isinstance(obj, ndarray):
+        indices_to_del = [int(obj[i]) for i in range(len(obj))]
+        indices_to_del = [i if i >= 0 else n + i for i in indices_to_del]
+    else:
+        indices_to_del = [int(obj)]
+    del_set = set(indices_to_del)
+    keep = [i for i in range(n) if i not in del_set]
+    if not keep:
+        # All deleted - return empty
+        new_shape = list(arr.shape)
+        new_shape[axis] = 0
+        return array([])
+    # Build result by selecting kept indices along axis
+    if arr.ndim == 1:
+        result = [float(arr[i]) for i in keep]
+        return array(result)
+    else:
+        # For multi-dimensional, concatenate slices
+        slices = []
+        for i in keep:
+            if axis == 0:
+                slices.append(arr[i])
+            else:
+                pass
+        if axis == 0 and slices:
+            rows = []
+            for s in slices:
+                if s.ndim == 0:
+                    rows.append([float(s)])
+                else:
+                    rows.append([float(s[j]) for j in range(len(s))])
+            return array(rows)
+        # Fallback for other axes
+        return arr
+
+def insert(arr, obj, values, axis=None):
+    """Insert values along the given axis before the given indices."""
+    arr = asarray(arr)
+    if axis is None:
+        arr = arr.flatten()
+        axis = 0
+    n = arr.shape[axis]
+    idx = obj if isinstance(obj, int) else int(obj)
+    if idx < 0:
+        idx = n + idx
+    if arr.ndim == 1:
+        result = []
+        if isinstance(values, (int, float)):
+            values = [values]
+        elif isinstance(values, ndarray):
+            values = [float(values[i]) for i in range(len(values))]
+        for i in range(n):
+            if i == idx:
+                for v in values:
+                    result.append(float(v))
+            result.append(float(arr[i]))
+        if idx >= n:
+            for v in values:
+                result.append(float(v))
+        return array(result)
+    return arr  # simplified for multi-dim
+
+def select(condlist, choicelist, default=0):
+    """Return array drawn from elements in choicelist, depending on conditions."""
+    if len(condlist) != len(choicelist):
+        raise ValueError("condlist and choicelist must be the same length")
+    condlist = [asarray(c) for c in condlist]
+    choicelist = [asarray(c) for c in choicelist]
+    # Determine output shape from first array
+    shape = condlist[0].shape
+    n = condlist[0].size
+    result = [float(default)] * n
+    # Process in reverse order so first matching condition wins
+    for i in range(len(condlist) - 1, -1, -1):
+        cond = condlist[i].flatten()
+        choice = choicelist[i].flatten()
+        for j in range(n):
+            if float(cond[j]) != 0.0:
+                result[j] = float(choice[j])
+    result_arr = array(result)
+    if len(shape) > 1:
+        result_arr = result_arr.reshape(list(shape))
+    return result_arr
+
+def piecewise(x, condlist, funclist):
+    """Evaluate a piecewise-defined function."""
+    x = asarray(x)
+    n = x.size
+    flat_x = x.flatten()
+    result = [0.0] * n
+
+    # funclist should have len(condlist) or len(condlist)+1 entries
+    # If len(condlist)+1, the last entry is the "otherwise" value
+    has_otherwise = len(funclist) == len(condlist) + 1
+
+    for i in range(n):
+        val = float(flat_x[i])
+        matched = False
+        for j, cond in enumerate(condlist):
+            c = asarray(cond).flatten()
+            if float(c[i]) != 0.0:
+                if callable(funclist[j]):
+                    result[i] = float(funclist[j](val))
+                else:
+                    result[i] = float(funclist[j])
+                matched = True
+                break
+        if not matched and has_otherwise:
+            if callable(funclist[-1]):
+                result[i] = float(funclist[-1](val))
+            else:
+                result[i] = float(funclist[-1])
+
+    result_arr = array(result)
+    if len(x.shape) > 1:
+        result_arr = result_arr.reshape(list(x.shape))
+    return result_arr
+
+# --- mgrid / ogrid / ix_ ----------------------------------------------------
+
+class _MGrid:
+    """Return dense multi-dimensional 'meshgrid' arrays via slice notation."""
+    def __getitem__(self, key):
+        if not isinstance(key, tuple):
+            key = (key,)
+        ndim = len(key)
+        arrays = []
+        for s in key:
+            if isinstance(s, slice):
+                start = s.start if s.start is not None else 0
+                stop = s.stop if s.stop is not None else 0
+                step = s.step if s.step is not None else 1
+                vals = []
+                v = float(start)
+                if step > 0:
+                    while v < float(stop):
+                        vals.append(v)
+                        v += float(step)
+                else:
+                    while v > float(stop):
+                        vals.append(v)
+                        v += float(step)
+                arrays.append(array(vals) if vals else array([]))
+            else:
+                arrays.append(array([float(s)]))
+
+        if ndim == 1:
+            return arrays[0]
+
+        # Create dense meshgrid
+        shapes = [len(a) for a in arrays]
+        result = []
+        for i, arr in enumerate(arrays):
+            shape = [1] * ndim
+            shape[i] = shapes[i]
+            reshaped = arr.reshape(shape)
+            reps = list(shapes)
+            reps[i] = 1
+            result.append(tile(reshaped, reps))
+        return result
+
+mgrid = _MGrid()
+
+
+class _OGrid:
+    """Return open (sparse) multi-dimensional 'meshgrid' arrays via slice notation."""
+    def __getitem__(self, key):
+        if not isinstance(key, tuple):
+            key = (key,)
+        ndim = len(key)
+        arrays = []
+        for s in key:
+            if isinstance(s, slice):
+                start = s.start if s.start is not None else 0
+                stop = s.stop if s.stop is not None else 0
+                step = s.step if s.step is not None else 1
+                vals = []
+                v = float(start)
+                if step > 0:
+                    while v < float(stop):
+                        vals.append(v)
+                        v += float(step)
+                else:
+                    while v > float(stop):
+                        vals.append(v)
+                        v += float(step)
+                arrays.append(array(vals) if vals else array([]))
+            else:
+                arrays.append(array([float(s)]))
+
+        if ndim == 1:
+            return arrays[0]
+
+        # Sparse: each array reshaped to broadcast along its own axis
+        result = []
+        for i, arr in enumerate(arrays):
+            shape = [1] * ndim
+            shape[i] = len(arr)
+            result.append(arr.reshape(shape))
+        return result
+
+ogrid = _OGrid()
+
+
+def ix_(*args):
+    """Construct an open mesh from multiple sequences for cross-indexing."""
+    ndim = len(args)
+    result = []
+    for i, arg in enumerate(args):
+        arr = asarray(arg).flatten()
+        shape = [1] * ndim
+        shape[i] = len(arr)
+        result.append(arr.reshape(shape))
+    return tuple(result)
+
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:

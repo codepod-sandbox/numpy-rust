@@ -100,6 +100,104 @@ impl NdArray {
         }
     }
 
+    /// Cumulative sum, treating NaN as zero.
+    pub fn nancumsum(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "nancumsum not supported for string arrays".into(),
+            ));
+        }
+        let f = self.astype(DType::Float64);
+        let ArrayData::Float64(arr) = &f.data else {
+            unreachable!()
+        };
+        match axis {
+            None => {
+                let flat: Vec<f64> = arr.iter().copied().collect();
+                let mut cumulated = Vec::with_capacity(flat.len());
+                let mut acc = 0.0_f64;
+                for v in &flat {
+                    if !v.is_nan() {
+                        acc += v;
+                    }
+                    cumulated.push(acc);
+                }
+                Ok(NdArray::from_data(ArrayData::Float64(
+                    ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
+                        .expect("flat vec matches shape"),
+                )))
+            }
+            Some(ax) => {
+                if ax >= f.ndim() {
+                    return Err(NumpyError::InvalidAxis {
+                        axis: ax,
+                        ndim: f.ndim(),
+                    });
+                }
+                let mut out = arr.clone();
+                for mut lane in out.lanes_mut(Axis(ax)) {
+                    let mut acc = 0.0_f64;
+                    for elem in lane.iter_mut() {
+                        if !elem.is_nan() {
+                            acc += *elem;
+                        }
+                        *elem = acc;
+                    }
+                }
+                Ok(NdArray::from_data(ArrayData::Float64(out)))
+            }
+        }
+    }
+
+    /// Cumulative product, treating NaN as one.
+    pub fn nancumprod(&self, axis: Option<usize>) -> Result<NdArray> {
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "nancumprod not supported for string arrays".into(),
+            ));
+        }
+        let f = self.astype(DType::Float64);
+        let ArrayData::Float64(arr) = &f.data else {
+            unreachable!()
+        };
+        match axis {
+            None => {
+                let flat: Vec<f64> = arr.iter().copied().collect();
+                let mut cumulated = Vec::with_capacity(flat.len());
+                let mut acc = 1.0_f64;
+                for v in &flat {
+                    if !v.is_nan() {
+                        acc *= v;
+                    }
+                    cumulated.push(acc);
+                }
+                Ok(NdArray::from_data(ArrayData::Float64(
+                    ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
+                        .expect("flat vec matches shape"),
+                )))
+            }
+            Some(ax) => {
+                if ax >= f.ndim() {
+                    return Err(NumpyError::InvalidAxis {
+                        axis: ax,
+                        ndim: f.ndim(),
+                    });
+                }
+                let mut out = arr.clone();
+                for mut lane in out.lanes_mut(Axis(ax)) {
+                    let mut acc = 1.0_f64;
+                    for elem in lane.iter_mut() {
+                        if !elem.is_nan() {
+                            acc *= *elem;
+                        }
+                        *elem = acc;
+                    }
+                }
+                Ok(NdArray::from_data(ArrayData::Float64(out)))
+            }
+        }
+    }
+
     /// N-th discrete difference along an axis.
     /// If `axis` is `None`, the array is flattened first.
     /// The result shape has `shape[axis] - n` along the diff axis.
@@ -261,6 +359,28 @@ mod tests {
         assert_eq!(c.get(&[0, 1]).unwrap(), Scalar::Float64(2.0));
         assert_eq!(c.get(&[1, 0]).unwrap(), Scalar::Float64(3.0));
         assert_eq!(c.get(&[1, 1]).unwrap(), Scalar::Float64(8.0));
+    }
+
+    #[test]
+    fn test_nancumsum_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, f64::NAN, 3.0, 4.0]);
+        let c = a.nancumsum(None).unwrap();
+        assert_eq!(c.shape(), &[4]);
+        assert_eq!(c.get(&[0]).unwrap(), Scalar::Float64(1.0));
+        assert_eq!(c.get(&[1]).unwrap(), Scalar::Float64(1.0)); // NaN skipped
+        assert_eq!(c.get(&[2]).unwrap(), Scalar::Float64(4.0));
+        assert_eq!(c.get(&[3]).unwrap(), Scalar::Float64(8.0));
+    }
+
+    #[test]
+    fn test_nancumprod_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, f64::NAN, 3.0, 4.0]);
+        let c = a.nancumprod(None).unwrap();
+        assert_eq!(c.shape(), &[4]);
+        assert_eq!(c.get(&[0]).unwrap(), Scalar::Float64(1.0));
+        assert_eq!(c.get(&[1]).unwrap(), Scalar::Float64(1.0)); // NaN skipped
+        assert_eq!(c.get(&[2]).unwrap(), Scalar::Float64(3.0));
+        assert_eq!(c.get(&[3]).unwrap(), Scalar::Float64(12.0));
     }
 
     #[test]

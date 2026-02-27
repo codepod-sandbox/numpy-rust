@@ -708,6 +708,32 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn nancumsum(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let axis = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .nancumsum(axis)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nancumprod(
+        a: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let axis = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .nancumprod(axis)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
     fn diff(
         a: vm::PyRef<PyNdArray>,
         n: vm::function::OptionalArg<usize>,
