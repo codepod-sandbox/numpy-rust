@@ -4,6 +4,7 @@ pub mod cumulative;
 pub mod einsum;
 pub mod logical;
 pub mod math;
+pub mod nan_reduction;
 pub mod reduction;
 pub mod selection;
 pub mod sorting;
