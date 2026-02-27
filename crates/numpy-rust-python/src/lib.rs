@@ -766,6 +766,47 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Histogram / Bincount ---
+
+    #[pyfunction]
+    fn histogram(
+        a: vm::PyRef<PyNdArray>,
+        bins: vm::function::OptionalArg<usize>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let bins = bins.unwrap_or(10);
+        let (counts, edges) = a
+            .inner()
+            .histogram(bins, None)
+            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        let py_counts = PyNdArray::from_core(counts).into_pyobject(vm);
+        let py_edges = PyNdArray::from_core(edges).into_pyobject(vm);
+        Ok(vm.ctx.new_tuple(vec![py_counts, py_edges]).into())
+    }
+
+    #[pyfunction]
+    fn bincount(
+        x: vm::PyRef<PyNdArray>,
+        weights: PyObjectRef,
+        minlength: vm::function::OptionalArg<usize>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let minlength = minlength.unwrap_or(0);
+        if vm.is_none(&weights) {
+            x.inner()
+                .bincount(None, minlength)
+                .map(PyNdArray::from_core)
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        } else {
+            let w_arr: vm::PyRef<PyNdArray> = weights.try_into_value(vm)?;
+            let w_guard = w_arr.inner();
+            x.inner()
+                .bincount(Some(&*w_guard), minlength)
+                .map(PyNdArray::from_core)
+                .map_err(|e| vm.new_value_error(e.to_string()))
+        }
+    }
+
     // --- Quantile / Percentile ---
 
     #[pyfunction]

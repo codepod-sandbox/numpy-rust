@@ -1286,6 +1286,49 @@ def test_trace():
     assert float(result) == 5.0
 
 
+# ── Tier 8: Histogram & Bincount ──────────────────────────────────────
+
+def test_histogram():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    counts, edges = np.histogram(a, bins=5)
+    assert_eq(counts.shape, (5,))
+    assert_eq(edges.shape, (6,))
+    # Total count should equal number of elements
+    total = 0
+    for i in range(5):
+        total += int(counts[i])
+    assert_eq(total, 5)
+
+def test_histogram_default_bins():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    counts, edges = np.histogram(a)
+    assert_eq(counts.shape, (10,))
+    assert_eq(edges.shape, (11,))
+
+def test_bincount():
+    a = np.array([0.0, 1.0, 1.0, 2.0, 2.0, 2.0])
+    c = np.bincount(a)
+    assert_eq(int(c[0]), 1)
+    assert_eq(int(c[1]), 2)
+    assert_eq(int(c[2]), 3)
+
+def test_bincount_minlength():
+    a = np.array([0.0, 1.0])
+    c = np.bincount(a, minlength=5)
+    assert_eq(c.shape, (5,))
+    assert_eq(int(c[0]), 1)
+    assert_eq(int(c[1]), 1)
+    assert_eq(int(c[2]), 0)
+
+def test_bincount_weights():
+    a = np.array([0.0, 1.0, 1.0, 2.0])
+    w = np.array([0.5, 1.0, 1.5, 2.0])
+    c = np.bincount(a, weights=w)
+    assert_close(float(c[0]), 0.5)
+    assert_close(float(c[1]), 2.5)
+    assert_close(float(c[2]), 2.0)
+
+
 # --- NaN-safe reductions ---
 
 def test_nansum():

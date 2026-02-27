@@ -1115,6 +1115,18 @@ def angle(a, deg=False):
         return a.angle()
     return 0
 
+def histogram(a, bins=10, range=None, density=None, weights=None):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    return _native.histogram(a, bins)
+
+def bincount(x, weights=None, minlength=0):
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if weights is not None and not isinstance(weights, ndarray):
+        weights = array(weights)
+    return _native.bincount(x, weights, minlength)
+
 def einsum(*operands, **kwargs):
     if len(operands) < 2:
         raise ValueError("einsum requires at least a subscript string and one operand")
