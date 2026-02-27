@@ -1186,6 +1186,106 @@ def test_math_int_auto_cast():
     assert np.allclose(result, expected)
 
 
+# ── Tier 7: Array Manipulation Utilities ──────────────────────────────────
+
+def test_flip_1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    result = np.flip(a)
+    assert result.tolist() == [4.0, 3.0, 2.0, 1.0]
+
+def test_flip_2d_axis0():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.flip(a, 0)
+    assert result.tolist() == [[3.0, 4.0], [1.0, 2.0]]
+
+def test_flip_2d_axis1():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.flip(a, 1)
+    assert result.tolist() == [[2.0, 1.0], [4.0, 3.0]]
+
+def test_flipud():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.flipud(a)
+    assert result.tolist() == [[3.0, 4.0], [1.0, 2.0]]
+
+def test_fliplr():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.fliplr(a)
+    assert result.tolist() == [[2.0, 1.0], [4.0, 3.0]]
+
+def test_rot90():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.rot90(a)
+    assert result.shape == (2, 2)
+
+def test_rot90_k2():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.rot90(a, 2)
+    assert result.tolist() == [[4.0, 3.0], [2.0, 1.0]]
+
+def test_unique():
+    a = np.array([3.0, 1.0, 2.0, 1.0, 3.0, 2.0])
+    result = np.unique(a)
+    assert result.tolist() == [1.0, 2.0, 3.0]
+
+def test_unique_sorted():
+    a = np.array([5.0, 3.0, 1.0])
+    result = np.unique(a)
+    assert result.tolist() == [1.0, 3.0, 5.0]
+
+def test_diagonal():
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    result = np.diagonal(a)
+    assert result.tolist() == [1.0, 5.0, 9.0]
+
+def test_diagonal_offset():
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    result = np.diagonal(a, 1)
+    assert result.tolist() == [2.0, 6.0]
+
+def test_diagonal_neg_offset():
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    result = np.diagonal(a, -1)
+    assert result.tolist() == [4.0, 8.0]
+
+def test_outer():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0])
+    result = np.outer(a, b)
+    assert result.shape == (3, 2)
+    assert result.tolist() == [[4.0, 5.0], [8.0, 10.0], [12.0, 15.0]]
+
+def test_roll_1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    result = np.roll(a, 1)
+    assert result.tolist() == [4.0, 1.0, 2.0, 3.0]
+
+def test_roll_negative():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    result = np.roll(a, -1)
+    assert result.tolist() == [2.0, 3.0, 4.0, 1.0]
+
+def test_roll_2d_axis():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.roll(a, 1, axis=0)
+    assert result.tolist() == [[3.0, 4.0], [1.0, 2.0]]
+
+def test_take_1d():
+    a = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    result = np.take(a, [0, 2, 4])
+    assert result.tolist() == [10.0, 30.0, 50.0]
+
+def test_take_flat():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.take(a, [0, 3])
+    assert result.tolist() == [1.0, 4.0]
+
+def test_trace():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    result = np.trace(a)
+    assert float(result) == 5.0
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
