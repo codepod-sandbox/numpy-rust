@@ -1082,8 +1082,37 @@ def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
         constant_values = constant_values[0] if isinstance(constant_values[0], (int, float)) else constant_values[0][0]
     return _native.pad(a, pad_width, float(constant_values))
 
-def indices(dimensions, dtype=int64, sparse=False):
-    return zeros(dimensions)  # stub
+def indices(dimensions, dtype=None, sparse=False):
+    """Return an array representing the indices of a grid."""
+    ndim = len(dimensions)
+    if ndim == 0:
+        return array([], dtype=dtype)
+
+    if sparse:
+        result = []
+        for i in range(ndim):
+            shape = [1] * ndim
+            shape[i] = dimensions[i]
+            idx = arange(0, dimensions[i]).reshape(shape)
+            result.append(idx)
+        return result
+
+    # Dense: result shape is (ndim, *dimensions)
+    grids = []
+    for axis in range(ndim):
+        # For each axis, create index array
+        idx = arange(0, dimensions[axis])
+        # Reshape to broadcast: shape is [1,...,1,dim_axis,1,...,1]
+        shape = [1] * ndim
+        shape[axis] = dimensions[axis]
+        idx = idx.reshape(shape)
+        # Tile to fill all dimensions
+        reps = list(dimensions)
+        reps[axis] = 1
+        grid = tile(idx, reps)
+        grids.append(grid)
+
+    return grids  # Return as list (NumPy returns ndarray but list of arrays is compatible)
 
 def fromiter(iterable, dtype, count=-1):
     return array(list(iterable))
@@ -1499,6 +1528,122 @@ def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='', foote
 def genfromtxt(fname, dtype=None, comments='#', delimiter=None, skip_header=0, usecols=None, names=None, missing_values=None, filling_values=None, **kwargs):
     """Load data from a text file, with missing values handled."""
     return loadtxt(fname, dtype=dtype, comments=comments, delimiter=delimiter, skiprows=skip_header, usecols=usecols)
+
+# --- ufunc function forms (Tier 12A) ----------------------------------------
+
+def subtract(x1, x2, out=None):
+    return asarray(x1) - asarray(x2)
+
+def multiply(x1, x2, out=None):
+    return asarray(x1) * asarray(x2)
+
+def true_divide(x1, x2, out=None):
+    return asarray(x1) / asarray(x2)
+
+def floor_divide(x1, x2, out=None):
+    return asarray(x1) // asarray(x2)
+
+def remainder(x1, x2, out=None):
+    return asarray(x1) % asarray(x2)
+
+mod = remainder
+
+def negative(x):
+    return -asarray(x)
+
+def positive(x):
+    return asarray(x) * 1
+
+def float_power(x1, x2):
+    return power(asarray(x1).astype('float64'), asarray(x2).astype('float64'))
+
+def identity(n, dtype=None):
+    return eye(n, dtype=dtype)
+
+def diag(v, k=0):
+    """Construct a diagonal array or extract a diagonal.
+
+    If *v* is 1-D, return a 2-D array with *v* on the *k*-th diagonal.
+    If *v* is 2-D, extract the *k*-th diagonal (same as ``diagonal``).
+    """
+    v = asarray(v)
+    if v.ndim == 1:
+        n = len(v)
+        abs_k = abs(k)
+        size = n + abs_k
+        # Build as flat list then reshape
+        flat = [0.0] * (size * size)
+        for i in range(n):
+            if k >= 0:
+                flat[i * size + (k + i)] = float(v[i])
+            else:
+                flat[(abs_k + i) * size + i] = float(v[i])
+        return array(flat).reshape([size, size])
+    elif v.ndim == 2:
+        return diagonal(v, offset=k)
+    else:
+        raise ValueError("Input must be 1-D or 2-D")
+
+def inner(a, b):
+    """Inner product of two arrays.
+
+    For 1-D arrays this is the dot product.  For higher-dimensional arrays
+    this contracts over the last axes (simplified: delegates to ``dot``).
+    """
+    a = asarray(a)
+    b = asarray(b)
+    return dot(a, b)
+
+def matmul(x1, x2):
+    """Matrix product of two arrays (same as the ``@`` operator)."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    return dot(x1, x2)
+
+def broadcast_to(arr, shape):
+    """Broadcast an array to a new shape using reshape + tile."""
+    arr = asarray(arr)
+    arr_shape = arr.shape
+    if arr_shape == tuple(shape):
+        return arr
+    ndim = len(shape)
+    arr_ndim = len(arr_shape)
+    # Prepend 1s to make same ndim
+    if arr_ndim < ndim:
+        new_shape = [1] * (ndim - arr_ndim) + list(arr_shape)
+        arr = arr.reshape(new_shape)
+        arr_shape = tuple(new_shape)
+    # Check compatibility and compute reps
+    reps = []
+    for i in range(ndim):
+        if arr_shape[i] == shape[i]:
+            reps.append(1)
+        elif arr_shape[i] == 1:
+            reps.append(shape[i])
+        else:
+            raise ValueError(f"cannot broadcast shape {arr_shape} to {tuple(shape)}")
+    return tile(arr, reps)
+
+def flatnonzero(a):
+    """Return indices of non-zero elements in the flattened array."""
+    a = asarray(a).flatten()
+    indices_list = []
+    for i in range(len(a)):
+        if float(a[i]) != 0.0:
+            indices_list.append(i)
+    return array(indices_list)
+
+def extract(condition, arr):
+    """Return elements of arr where condition is True."""
+    condition = asarray(condition).flatten()
+    arr = asarray(arr).flatten()
+    result = []
+    for i in range(len(arr)):
+        if float(condition[i]) != 0.0:
+            result.append(float(arr[i]))
+    if not result:
+        return array([])
+    return array(result)
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:

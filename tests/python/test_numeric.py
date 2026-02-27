@@ -1876,6 +1876,187 @@ def test_isclose():
     assert_eq(bool(result[2]), True)
 
 
+# --- Tier 12A: ufunc function forms + identity ---
+
+def test_subtract():
+    a = np.array([5.0, 10.0, 15.0])
+    b = np.array([1.0, 2.0, 3.0])
+    c = np.subtract(a, b)
+    assert_close(c[0], 4.0)
+    assert_close(c[1], 8.0)
+    assert_close(c[2], 12.0)
+
+def test_multiply():
+    a = np.array([2.0, 3.0])
+    b = np.array([4.0, 5.0])
+    c = np.multiply(a, b)
+    assert_close(c[0], 8.0)
+    assert_close(c[1], 15.0)
+
+def test_true_divide():
+    a = np.array([10.0, 20.0])
+    b = np.array([3.0, 4.0])
+    c = np.true_divide(a, b)
+    assert_close(c[0], 10.0/3.0)
+    assert_close(c[1], 5.0)
+
+def test_floor_divide():
+    a = np.array([7.0, 10.0])
+    b = np.array([2.0, 3.0])
+    c = np.floor_divide(a, b)
+    assert_close(c[0], 3.0)
+    assert_close(c[1], 3.0)
+
+def test_remainder_func():
+    a = np.array([7.0, 10.0])
+    b = np.array([2.0, 3.0])
+    c = np.remainder(a, b)
+    assert_close(c[0], 1.0)
+    assert_close(c[1], 1.0)
+
+def test_mod_alias():
+    a = np.array([7.0, 10.0])
+    b = np.array([2.0, 3.0])
+    c = np.mod(a, b)
+    assert_close(c[0], 1.0)
+    assert_close(c[1], 1.0)
+
+def test_negative():
+    a = np.array([1.0, -2.0, 3.0])
+    c = np.negative(a)
+    assert_close(c[0], -1.0)
+    assert_close(c[1], 2.0)
+    assert_close(c[2], -3.0)
+
+def test_positive():
+    a = np.array([1.0, -2.0, 3.0])
+    c = np.positive(a)
+    assert_close(c[0], 1.0)
+    assert_close(c[1], -2.0)
+
+def test_float_power():
+    a = np.array([2, 3, 4])
+    b = np.array([2, 2, 2])
+    c = np.float_power(a, b)
+    assert_close(c[0], 4.0)
+    assert_close(c[1], 9.0)
+    assert_close(c[2], 16.0)
+
+def test_identity():
+    I = np.identity(3)
+    assert_eq(I.shape, (3, 3))
+    assert_close(I[0][0], 1.0)
+    assert_close(I[0][1], 0.0)
+    assert_close(I[1][1], 1.0)
+
+
+# --- Tier 12B: diag, inner, matmul, @ operator ---
+
+def test_diag_1d():
+    v = np.array([1.0, 2.0, 3.0])
+    d = np.diag(v)
+    assert_eq(d.shape, (3, 3))
+    assert_close(d[0][0], 1.0)
+    assert_close(d[1][1], 2.0)
+    assert_close(d[2][2], 3.0)
+    assert_close(d[0][1], 0.0)
+
+def test_diag_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    d = np.diag(a)
+    assert_eq(len(d), 2)
+    assert_close(d[0], 1.0)
+    assert_close(d[1], 4.0)
+
+def test_diag_offset():
+    v = np.array([1.0, 2.0])
+    d = np.diag(v, k=1)
+    assert_eq(d.shape, (3, 3))
+    assert_close(d[0][1], 1.0)
+    assert_close(d[1][2], 2.0)
+
+def test_diag_negative_offset():
+    v = np.array([1.0, 2.0])
+    d = np.diag(v, k=-1)
+    assert_eq(d.shape, (3, 3))
+    assert_close(d[1][0], 1.0)
+    assert_close(d[2][1], 2.0)
+
+def test_inner_1d():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0, 6.0])
+    result = np.inner(a, b)
+    assert_close(float(result), 32.0)  # 1*4 + 2*5 + 3*6
+
+def test_matmul_func():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    c = np.matmul(a, b)
+    assert_close(c[0][0], 19.0)
+    assert_close(c[0][1], 22.0)
+    assert_close(c[1][0], 43.0)
+    assert_close(c[1][1], 50.0)
+
+def test_matmul_operator():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    c = a @ b
+    assert_close(c[0][0], 19.0)
+    assert_close(c[0][1], 22.0)
+    assert_close(c[1][0], 43.0)
+    assert_close(c[1][1], 50.0)
+
+def test_matmul_2d_1d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([5.0, 6.0])
+    c = np.matmul(a, b)
+    assert_close(c[0], 17.0)
+    assert_close(c[1], 39.0)
+
+
+# --- Tier 12C: Utility functions ---
+
+def test_broadcast_to():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.broadcast_to(a, (3, 3))
+    assert_eq(b.shape, (3, 3))
+    assert_close(b[0][0], 1.0)
+    assert_close(b[2][2], 3.0)
+
+def test_broadcast_to_scalar():
+    a = np.array([5.0])
+    b = np.broadcast_to(a, (2, 3))
+    assert_eq(b.shape, (2, 3))
+    assert_close(b[1][1], 5.0)
+
+def test_flatnonzero():
+    a = np.array([0.0, 1.0, 0.0, 3.0, 0.0])
+    idx = np.flatnonzero(a)
+    assert_eq(len(idx), 2)
+    assert_close(idx[0], 1.0)
+    assert_close(idx[1], 3.0)
+
+def test_extract():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    condition = np.array([1.0, 0.0, 1.0, 0.0])
+    result = np.extract(condition, a)
+    assert_eq(len(result), 2)
+    assert_close(result[0], 1.0)
+    assert_close(result[1], 3.0)
+
+def test_indices_2d():
+    grids = np.indices((2, 3))
+    assert_eq(len(grids), 2)
+    # grids[0] should be row indices: [[0,0,0],[1,1,1]]
+    assert_eq(grids[0].shape, (2, 3))
+    assert_close(grids[0][0][0], 0.0)
+    assert_close(grids[0][1][0], 1.0)
+    # grids[1] should be col indices: [[0,1,2],[0,1,2]]
+    assert_eq(grids[1].shape, (2, 3))
+    assert_close(grids[1][0][1], 1.0)
+    assert_close(grids[1][0][2], 2.0)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
