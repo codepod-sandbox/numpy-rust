@@ -1419,6 +1419,70 @@ def test_corrcoef_negative():
     assert_close(float(c[0][1]), -1.0)
 
 
+# --- Set Operations (Tier 8) ---
+
+def test_intersect1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    b = np.array([2.0, 4.0, 6.0])
+    r = np.intersect1d(a, b)
+    assert_eq(r.shape, (2,))
+    assert_close(float(r[0]), 2.0)
+    assert_close(float(r[1]), 4.0)
+
+def test_intersect1d_no_overlap():
+    a = np.array([1.0, 3.0, 5.0])
+    b = np.array([2.0, 4.0, 6.0])
+    r = np.intersect1d(a, b)
+    assert_eq(r.shape, (0,))
+
+def test_union1d():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([2.0, 4.0, 5.0])
+    r = np.union1d(a, b)
+    assert_eq(r.shape, (5,))
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 2.0)
+    assert_close(float(r[2]), 3.0)
+    assert_close(float(r[3]), 4.0)
+    assert_close(float(r[4]), 5.0)
+
+def test_setdiff1d():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    b = np.array([2.0, 4.0])
+    r = np.setdiff1d(a, b)
+    assert_eq(r.shape, (3,))
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 3.0)
+    assert_close(float(r[2]), 5.0)
+
+def test_isin():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    test = np.array([2.0, 4.0])
+    r = np.isin(a, test)
+    assert_eq(r.shape, (5,))
+    # r should be [False, True, False, True, False]
+    assert_eq(bool(r[0]), False)
+    assert_eq(bool(r[1]), True)
+    assert_eq(bool(r[2]), False)
+    assert_eq(bool(r[3]), True)
+    assert_eq(bool(r[4]), False)
+
+def test_isin_2d():
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    test = np.array([2.0, 4.0, 6.0])
+    r = np.isin(a, test)
+    assert_eq(r.shape, (2, 3))
+
+def test_in1d_alias():
+    # in1d should be the same as isin
+    a = np.array([1.0, 2.0, 3.0])
+    test = np.array([2.0])
+    r = np.in1d(a, test)
+    assert_eq(bool(r[0]), False)
+    assert_eq(bool(r[1]), True)
+    assert_eq(bool(r[2]), False)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

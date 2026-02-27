@@ -1023,6 +1023,39 @@ def unique(a):
         return _native.unique(a)
     return array(sorted(set(a)))
 
+def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
+    if not isinstance(ar1, ndarray):
+        ar1 = array(ar1)
+    if not isinstance(ar2, ndarray):
+        ar2 = array(ar2)
+    return _native.intersect1d(ar1, ar2)
+
+def union1d(ar1, ar2):
+    if not isinstance(ar1, ndarray):
+        ar1 = array(ar1)
+    if not isinstance(ar2, ndarray):
+        ar2 = array(ar2)
+    return _native.union1d(ar1, ar2)
+
+def setdiff1d(ar1, ar2, assume_unique=False):
+    if not isinstance(ar1, ndarray):
+        ar1 = array(ar1)
+    if not isinstance(ar2, ndarray):
+        ar2 = array(ar2)
+    return _native.setdiff1d(ar1, ar2)
+
+def isin(element, test_elements, assume_unique=False, invert=False):
+    if not isinstance(element, ndarray):
+        element = array(element)
+    if not isinstance(test_elements, ndarray):
+        test_elements = array(test_elements)
+    result = _native.isin(element, test_elements)
+    if invert:
+        return logical_not(result)
+    return result
+
+in1d = isin
+
 def all(a, axis=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
         return a.all()

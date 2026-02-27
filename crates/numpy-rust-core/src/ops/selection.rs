@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ndarray::{ArrayD, IxDyn};
 
 use crate::array_data::ArrayData;
@@ -139,6 +141,100 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
     )))
 }
 
+/// Return sorted unique values present in both arrays.
+pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
+    let a_f = a.astype(DType::Float64).flatten();
+    let b_f = b.astype(DType::Float64).flatten();
+    let ArrayData::Float64(a_arr) = &a_f.data else {
+        unreachable!()
+    };
+    let ArrayData::Float64(b_arr) = &b_f.data else {
+        unreachable!()
+    };
+
+    let b_set: HashSet<u64> = b_arr.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_arr
+        .iter()
+        .copied()
+        .filter(|v| b_set.contains(&v.to_bits()))
+        .collect();
+    // Sort and dedup
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup();
+
+    NdArray::from_data(ArrayData::Float64(
+        ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+    ))
+}
+
+/// Return sorted unique values from either array.
+pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
+    let a_f = a.astype(DType::Float64).flatten();
+    let b_f = b.astype(DType::Float64).flatten();
+    let ArrayData::Float64(a_arr) = &a_f.data else {
+        unreachable!()
+    };
+    let ArrayData::Float64(b_arr) = &b_f.data else {
+        unreachable!()
+    };
+
+    let mut result: Vec<f64> = a_arr.iter().chain(b_arr.iter()).copied().collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup();
+
+    NdArray::from_data(ArrayData::Float64(
+        ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+    ))
+}
+
+/// Return sorted values in `a` that are NOT in `b`.
+pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
+    let a_f = a.astype(DType::Float64).flatten();
+    let b_f = b.astype(DType::Float64).flatten();
+    let ArrayData::Float64(a_arr) = &a_f.data else {
+        unreachable!()
+    };
+    let ArrayData::Float64(b_arr) = &b_f.data else {
+        unreachable!()
+    };
+
+    let b_set: HashSet<u64> = b_arr.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_arr
+        .iter()
+        .copied()
+        .filter(|v| !b_set.contains(&v.to_bits()))
+        .collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup();
+
+    NdArray::from_data(ArrayData::Float64(
+        ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+    ))
+}
+
+/// Return boolean array with same shape as `element`, true where value exists in `test_elements`.
+pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
+    let elem_f = element.astype(DType::Float64);
+    let test_f = test_elements.astype(DType::Float64).flatten();
+    let ArrayData::Float64(elem_arr) = &elem_f.data else {
+        unreachable!()
+    };
+    let ArrayData::Float64(test_arr) = &test_f.data else {
+        unreachable!()
+    };
+
+    let test_set: HashSet<u64> = test_arr.iter().map(|v| v.to_bits()).collect();
+    let shape: Vec<usize> = element.shape().to_vec();
+    let result: Vec<bool> = elem_arr
+        .iter()
+        .map(|v| test_set.contains(&v.to_bits()))
+        .collect();
+
+    NdArray::from_data(ArrayData::Bool(
+        ArrayD::from_shape_vec(IxDyn(&shape), result).expect("shape matches"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +287,92 @@ mod tests {
         assert_eq!(arr[[1]], 60.0);
         assert_eq!(arr[[2]], 30.0);
         assert_eq!(arr[[3]], 80.0);
+    }
+
+    #[test]
+    fn test_intersect1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0]);
+        let b = NdArray::from_vec(vec![2.0_f64, 4.0, 6.0]);
+        let r = intersect1d(&a, &b);
+        assert_eq!(r.shape(), &[2]);
+        let ArrayData::Float64(arr) = r.data() else {
+            panic!()
+        };
+        assert_eq!(arr[[0]], 2.0);
+        assert_eq!(arr[[1]], 4.0);
+    }
+
+    #[test]
+    fn test_intersect1d_no_overlap() {
+        let a = NdArray::from_vec(vec![1.0_f64, 3.0, 5.0]);
+        let b = NdArray::from_vec(vec![2.0_f64, 4.0, 6.0]);
+        let r = intersect1d(&a, &b);
+        assert_eq!(r.shape(), &[0]);
+    }
+
+    #[test]
+    fn test_union1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let b = NdArray::from_vec(vec![2.0_f64, 4.0, 5.0]);
+        let r = union1d(&a, &b);
+        assert_eq!(r.shape(), &[5]);
+        let ArrayData::Float64(arr) = r.data() else {
+            panic!()
+        };
+        assert_eq!(arr[[0]], 1.0);
+        assert_eq!(arr[[1]], 2.0);
+        assert_eq!(arr[[2]], 3.0);
+        assert_eq!(arr[[3]], 4.0);
+        assert_eq!(arr[[4]], 5.0);
+    }
+
+    #[test]
+    fn test_setdiff1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+        let b = NdArray::from_vec(vec![2.0_f64, 4.0]);
+        let r = setdiff1d(&a, &b);
+        assert_eq!(r.shape(), &[3]);
+        let ArrayData::Float64(arr) = r.data() else {
+            panic!()
+        };
+        assert_eq!(arr[[0]], 1.0);
+        assert_eq!(arr[[1]], 3.0);
+        assert_eq!(arr[[2]], 5.0);
+    }
+
+    #[test]
+    fn test_isin_basic() {
+        let element = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+        let test_elements = NdArray::from_vec(vec![2.0_f64, 4.0]);
+        let r = isin(&element, &test_elements);
+        assert_eq!(r.shape(), &[5]);
+        let ArrayData::Bool(arr) = r.data() else {
+            panic!()
+        };
+        assert!(!arr[[0]]); // 1.0 not in test
+        assert!(arr[[1]]); // 2.0 in test
+        assert!(!arr[[2]]); // 3.0 not in test
+        assert!(arr[[3]]); // 4.0 in test
+        assert!(!arr[[4]]); // 5.0 not in test
+    }
+
+    #[test]
+    fn test_isin_preserves_shape() {
+        // 2x3 array
+        let element = NdArray::from_data(ArrayData::Float64(
+            ArrayD::from_shape_vec(IxDyn(&[2, 3]), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+        ));
+        let test_elements = NdArray::from_vec(vec![2.0_f64, 4.0, 6.0]);
+        let r = isin(&element, &test_elements);
+        assert_eq!(r.shape(), &[2, 3]);
+        let ArrayData::Bool(arr) = r.data() else {
+            panic!()
+        };
+        assert!(!arr[[0, 0]]); // 1.0
+        assert!(arr[[0, 1]]); // 2.0
+        assert!(!arr[[0, 2]]); // 3.0
+        assert!(arr[[1, 0]]); // 4.0
+        assert!(!arr[[1, 1]]); // 5.0
+        assert!(arr[[1, 2]]); // 6.0
     }
 }

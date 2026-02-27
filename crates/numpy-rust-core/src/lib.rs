@@ -22,5 +22,5 @@ pub use manipulation::{
     concatenate, hsplit, hstack, split, stack, unique, vsplit, vstack, SplitSpec,
 };
 pub use ops::einsum::einsum;
-pub use ops::selection::choose;
+pub use ops::selection::{choose, intersect1d, isin, setdiff1d, union1d};
 pub use utility::{argwhere, count_nonzero, diagonal, dot, nonzero, outer, where_cond};

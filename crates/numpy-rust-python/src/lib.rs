@@ -766,6 +766,47 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Set Operations ---
+
+    #[pyfunction]
+    fn intersect1d(
+        a: vm::PyRef<PyNdArray>,
+        b: vm::PyRef<PyNdArray>,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        PyNdArray::from_core(numpy_rust_core::intersect1d(&a.inner(), &b.inner()))
+    }
+
+    #[pyfunction]
+    fn union1d(
+        a: vm::PyRef<PyNdArray>,
+        b: vm::PyRef<PyNdArray>,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        PyNdArray::from_core(numpy_rust_core::union1d(&a.inner(), &b.inner()))
+    }
+
+    #[pyfunction]
+    fn setdiff1d(
+        a: vm::PyRef<PyNdArray>,
+        b: vm::PyRef<PyNdArray>,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        PyNdArray::from_core(numpy_rust_core::setdiff1d(&a.inner(), &b.inner()))
+    }
+
+    #[pyfunction]
+    fn isin(
+        element: vm::PyRef<PyNdArray>,
+        test_elements: vm::PyRef<PyNdArray>,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        PyNdArray::from_core(numpy_rust_core::isin(
+            &element.inner(),
+            &test_elements.inner(),
+        ))
+    }
+
     // --- Histogram / Bincount ---
 
     #[pyfunction]
