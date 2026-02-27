@@ -671,13 +671,19 @@ def expand_dims(a, axis):
     return a
 
 def stack(arrays, axis=0, out=None):
-    return concatenate(arrays, axis=axis)
+    return _native.stack_native(list(arrays), axis)
 
 def vstack(tup):
     return concatenate(tup, axis=0)
 
 def hstack(tup):
     return concatenate(tup, axis=1) if tup[0].ndim > 1 else concatenate(tup, axis=0)
+
+def column_stack(tup):
+    return _native.column_stack(list(tup))
+
+def dstack(tup):
+    return _native.dstack(list(tup))
 
 row_stack = vstack
 

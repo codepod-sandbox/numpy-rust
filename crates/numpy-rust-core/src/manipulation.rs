@@ -363,6 +363,67 @@ pub fn hstack(arrays: &[&NdArray]) -> Result<NdArray> {
     }
 }
 
+/// Column stack -- for 1-D arrays: reshape each to (N, 1) then concatenate along axis 1.
+/// For 2-D+ arrays: concatenate along axis 1.
+pub fn column_stack(arrays: &[&NdArray]) -> Result<NdArray> {
+    if arrays.is_empty() {
+        return Err(NumpyError::ValueError(
+            "need at least one array to column_stack".into(),
+        ));
+    }
+
+    // Check if all inputs are 1-D
+    let all_1d = arrays.iter().all(|a| a.ndim() == 1);
+
+    if all_1d {
+        // Reshape each from (N,) to (N, 1), then concatenate along axis 1
+        let reshaped: Vec<NdArray> = arrays
+            .iter()
+            .map(|a| {
+                let n = a.shape()[0];
+                a.reshape(&[n, 1]).expect("reshape to column cannot fail")
+            })
+            .collect();
+        let refs: Vec<&NdArray> = reshaped.iter().collect();
+        concatenate(&refs, 1)
+    } else {
+        concatenate(arrays, 1)
+    }
+}
+
+/// Depth stack -- expand each array to at least 3-D, then concatenate along axis 2.
+/// 1-D (N,) -> (1, N, 1)
+/// 2-D (M, N) -> (M, N, 1)
+/// 3-D+ -> unchanged
+pub fn dstack(arrays: &[&NdArray]) -> Result<NdArray> {
+    if arrays.is_empty() {
+        return Err(NumpyError::ValueError(
+            "need at least one array to dstack".into(),
+        ));
+    }
+
+    let expanded: Vec<NdArray> = arrays
+        .iter()
+        .map(|a| match a.ndim() {
+            1 => {
+                let n = a.shape()[0];
+                a.reshape(&[1, n, 1])
+                    .expect("reshape 1-D to 3-D cannot fail")
+            }
+            2 => {
+                let m = a.shape()[0];
+                let n = a.shape()[1];
+                a.reshape(&[m, n, 1])
+                    .expect("reshape 2-D to 3-D cannot fail")
+            }
+            _ => (*a).clone(),
+        })
+        .collect();
+
+    let refs: Vec<&NdArray> = expanded.iter().collect();
+    concatenate(&refs, 2)
+}
+
 /// Specification for how to split an array.
 pub enum SplitSpec {
     /// Split into N equal sections.
@@ -929,5 +990,41 @@ mod tests {
     fn test_take_invalid_axis() {
         let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
         assert!(a.take(&[0], Some(5)).is_err());
+    }
+
+    // --- column_stack tests ---
+
+    #[test]
+    fn test_column_stack_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let b = NdArray::from_vec(vec![4.0_f64, 5.0, 6.0]);
+        let r = column_stack(&[&a, &b]).unwrap();
+        assert_eq!(r.shape(), &[3, 2]);
+    }
+
+    #[test]
+    fn test_column_stack_2d() {
+        let a = NdArray::zeros(&[2, 3], DType::Float64);
+        let b = NdArray::ones(&[2, 1], DType::Float64);
+        let r = column_stack(&[&a, &b]).unwrap();
+        assert_eq!(r.shape(), &[2, 4]);
+    }
+
+    // --- dstack tests ---
+
+    #[test]
+    fn test_dstack_1d() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let b = NdArray::from_vec(vec![4.0_f64, 5.0, 6.0]);
+        let r = dstack(&[&a, &b]).unwrap();
+        assert_eq!(r.shape(), &[1, 3, 2]);
+    }
+
+    #[test]
+    fn test_dstack_2d() {
+        let a = NdArray::zeros(&[2, 3], DType::Float64);
+        let b = NdArray::ones(&[2, 3], DType::Float64);
+        let r = dstack(&[&a, &b]).unwrap();
+        assert_eq!(r.shape(), &[2, 3, 2]);
     }
 }

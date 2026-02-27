@@ -19,7 +19,8 @@ pub use creation::{arange, eye, full, linspace, linspace_with_step, ones_like, z
 pub use dtype::DType;
 pub use error::{NumpyError, Result};
 pub use manipulation::{
-    concatenate, hsplit, hstack, split, stack, unique, vsplit, vstack, SplitSpec,
+    column_stack, concatenate, dstack, hsplit, hstack, split, stack, unique, vsplit, vstack,
+    SplitSpec,
 };
 pub use ops::einsum::einsum;
 pub use ops::selection::{choose, intersect1d, isin, setdiff1d, union1d};

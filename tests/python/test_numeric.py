@@ -1483,6 +1483,33 @@ def test_in1d_alias():
     assert_eq(bool(r[2]), False)
 
 
+# --- Stacking fixes (Task 10) ---
+
+def test_stack_proper():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0, 6.0])
+    r = np.stack([a, b])
+    assert_eq(r.shape, (2, 3))
+
+def test_stack_axis1():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0, 6.0])
+    r = np.stack([a, b], axis=1)
+    assert_eq(r.shape, (3, 2))
+
+def test_column_stack():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0, 6.0])
+    r = np.column_stack([a, b])
+    assert_eq(r.shape, (3, 2))
+
+def test_dstack():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0, 6.0])
+    r = np.dstack([a, b])
+    assert_eq(r.shape, (1, 3, 2))
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
