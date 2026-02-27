@@ -2442,6 +2442,230 @@ def test_broadcast_arrays():
     assert_close(rb[0][0], 4.0)
     assert_close(rb[2][1], 5.0)
 
+# --- Tier 16 Group A: Math ufuncs ---
+
+def test_absolute():
+    a = np.array([-1.0, 2.0, -3.0])
+    r = np.absolute(a)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 3.0)
+
+def test_rint():
+    a = np.array([1.4, 1.5, 2.6])
+    r = np.rint(a)
+    assert_close(r[0], 1.0)
+    assert_close(r[2], 3.0)
+
+def test_fix():
+    a = np.array([1.7, -1.7, 0.5])
+    r = np.fix(a)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], -1.0)
+    assert_close(r[2], 0.0)
+
+def test_square():
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.square(a)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], 4.0)
+    assert_close(r[2], 9.0)
+
+def test_cbrt():
+    a = np.array([8.0, 27.0])
+    r = np.cbrt(a)
+    assert_close(r[0], 2.0)
+    assert_close(r[1], 3.0)
+
+def test_reciprocal():
+    a = np.array([1.0, 2.0, 4.0])
+    r = np.reciprocal(a)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], 0.5)
+    assert_close(r[2], 0.25)
+
+def test_copysign():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([-1.0, 1.0, -1.0])
+    r = np.copysign(a, b)
+    assert_close(r[0], -1.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], -3.0)
+
+def test_heaviside():
+    x = np.array([-1.0, 0.0, 1.0])
+    h = np.array([0.5, 0.5, 0.5])
+    r = np.heaviside(x, h)
+    assert_close(r[0], 0.0)
+    assert_close(r[1], 0.5)
+    assert_close(r[2], 1.0)
+
+def test_sinc():
+    r = np.sinc(np.array([0.0]))
+    assert_close(r[0], 1.0)
+
+def test_nan_to_num():
+    a = np.array([float('nan'), float('inf'), float('-inf'), 1.0])
+    r = np.nan_to_num(a)
+    assert_close(r[0], 0.0)
+    assert_close(r[3], 1.0)
+
+# --- Tier 16 Group B: array_split, dsplit, row_stack, block, copyto, place ---
+
+def test_array_split():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    parts = np.array_split(a, 3)
+    assert_eq(len(parts), 3)
+    assert_eq(parts[0].size, 2)  # [1, 2]
+    assert_eq(parts[1].size, 2)  # [3, 4]
+    assert_eq(parts[2].size, 1)  # [5]
+    assert_close(parts[0][0], 1.0)
+    assert_close(parts[0][1], 2.0)
+    assert_close(parts[1][0], 3.0)
+    assert_close(parts[2][0], 5.0)
+
+def test_array_split_indices():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    parts = np.array_split(a, [2, 4])
+    assert_eq(len(parts), 3)
+    assert_eq(parts[0].size, 2)
+    assert_eq(parts[1].size, 2)
+    assert_eq(parts[2].size, 2)
+    assert_close(parts[0][0], 1.0)
+    assert_close(parts[1][0], 3.0)
+    assert_close(parts[2][0], 5.0)
+
+def test_dsplit():
+    a = np.zeros((2, 3, 4))
+    parts = np.dsplit(a, 2)
+    assert_eq(len(parts), 2)
+    assert_eq(parts[0].shape, (2, 3, 2))
+    assert_eq(parts[1].shape, (2, 3, 2))
+
+def test_row_stack():
+    a = np.array([1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    r = np.row_stack((a, b))
+    assert_eq(r.shape, (2, 2))
+    assert_close(r[0][0], 1.0)
+    assert_close(r[1][0], 3.0)
+
+def test_block_single_row():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    r = np.block([[a, b]])
+    assert_eq(r.shape, (2, 4))
+    assert_close(r[0][0], 1.0)
+    assert_close(r[0][2], 5.0)
+
+def test_block_grid():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    b = np.array([[5.0, 6.0], [7.0, 8.0]])
+    c = np.array([[9.0, 10.0], [11.0, 12.0]])
+    d = np.array([[13.0, 14.0], [15.0, 16.0]])
+    r = np.block([[a, b], [c, d]])
+    assert_eq(r.shape, (4, 4))
+    assert_close(r[0][0], 1.0)
+    assert_close(r[0][2], 5.0)
+    assert_close(r[2][0], 9.0)
+    assert_close(r[2][2], 13.0)
+
+def test_block_flat():
+    a = np.array([1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    r = np.block([a, b])
+    assert_eq(r.shape, (4,))
+    assert_close(r[0], 1.0)
+    assert_close(r[2], 3.0)
+
+def test_copyto():
+    dst = np.array([1.0, 2.0, 3.0])
+    src = np.array([10.0, 20.0, 30.0])
+    r = np.copyto(dst, src)
+    assert_close(r[0], 10.0)
+    assert_close(r[1], 20.0)
+    assert_close(r[2], 30.0)
+
+def test_copyto_where():
+    dst = np.array([1.0, 2.0, 3.0])
+    src = np.array([10.0, 20.0, 30.0])
+    mask = np.array([True, False, True])
+    r = np.copyto(dst, src, where=mask)
+    assert_close(r[0], 10.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 30.0)
+
+def test_place():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    mask = np.array([True, False, True, False])
+    r = np.place(a, mask, np.array([10.0, 30.0]))
+    assert_close(r[0], 10.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 30.0)
+    assert_close(r[3], 4.0)
+
+def test_place_cycling():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    mask = np.array([True, True, True, True])
+    r = np.place(a, mask, np.array([99.0]))
+    assert_close(r[0], 99.0)
+    assert_close(r[1], 99.0)
+    assert_close(r[2], 99.0)
+    assert_close(r[3], 99.0)
+
+def test_trapz():
+    y = np.array([1.0, 2.0, 3.0])
+    # Trapezoidal: (1+2)/2*1 + (2+3)/2*1 = 1.5 + 2.5 = 4.0
+    assert_close(np.trapz(y), 4.0)
+
+def test_trapezoid():
+    y = np.array([1.0, 2.0, 3.0])
+    assert_close(np.trapezoid(y), 4.0)
+
+def test_trapz_with_x():
+    y = np.array([1.0, 2.0, 3.0])
+    x = np.array([0.0, 1.0, 3.0])
+    # (1+2)/2*1 + (2+3)/2*2 = 1.5 + 5.0 = 6.5
+    assert_close(np.trapz(y, x=x), 6.5)
+
+def test_finfo():
+    fi = np.finfo("float64")
+    assert_eq(fi.bits, 64)
+    assert_close(fi.eps, 2.220446049250313e-16)
+
+def test_iinfo():
+    ii = np.iinfo("int32")
+    assert_eq(ii.bits, 32)
+    assert_eq(ii.min, -2147483648)
+    assert_eq(ii.max, 2147483647)
+
+def test_fromfunction():
+    # fromfunction(lambda i, j: i + j, (3, 3))
+    r = np.fromfunction(lambda i, j: i + j, (3, 3))
+    assert_eq(r.shape, (3, 3))
+    assert_close(r[0][0], 0.0)
+    assert_close(r[0][1], 1.0)
+    assert_close(r[1][0], 1.0)
+    assert_close(r[2][2], 4.0)
+
+def test_fmod():
+    a = np.array([-3.0, -2.0, 2.0, 3.0])
+    b = np.array([2.0, 2.0, 2.0, 2.0])
+    r = np.fmod(a, b)
+    # C-style: -3 % 2 = -1, -2 % 2 = 0, 2 % 2 = 0, 3 % 2 = 1
+    assert_close(r[0], -1.0)
+    assert_close(r[1], 0.0)
+    assert_close(r[2], 0.0)
+    assert_close(r[3], 1.0)
+
+def test_modf():
+    a = np.array([1.5, -2.7])
+    frac, intg = np.modf(a)
+    assert_close(intg[0], 1.0)
+    assert_close(intg[1], -2.0)
+    assert_close(frac[0], 0.5)
+    assert_close(frac[1], -0.7)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

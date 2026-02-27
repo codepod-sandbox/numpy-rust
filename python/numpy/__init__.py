@@ -295,31 +295,6 @@ flexible = (str, bytes)
 character = (str, bytes)
 generic = object
 
-class iinfo:
-    """Stub for integer type info."""
-    def __init__(self, dtype):
-        self.dtype = dtype
-        if dtype in ("int8", int8):
-            self.min, self.max, self.bits = -128, 127, 8
-        elif dtype in ("int16", int16):
-            self.min, self.max, self.bits = -32768, 32767, 16
-        elif dtype in ("int32", int32):
-            self.min, self.max, self.bits = -2147483648, 2147483647, 32
-        elif dtype in ("int64", int64, intp):
-            self.min, self.max, self.bits = -9223372036854775808, 9223372036854775807, 64
-        else:
-            self.min, self.max, self.bits = -9223372036854775808, 9223372036854775807, 64
-
-class finfo:
-    """Stub for float type info."""
-    def __init__(self, dtype=None):
-        self.dtype = dtype or float64
-        self.eps = 2.220446049250313e-16
-        self.max = 1.7976931348623157e+308
-        self.min = -1.7976931348623157e+308
-        self.tiny = 2.2250738585072014e-308
-        self.resolution = 1e-15
-
 # --- Missing functions (stubs) ----------------------------------------------
 def empty(shape, dtype=None, order="C"):
     """Stub: returns zeros instead of uninitialized."""
@@ -593,6 +568,83 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
     diff = abs(a - b)
     limit = full(diff.shape, atol) + full(diff.shape, rtol) * abs(b)
     return (diff <= limit)
+
+def rint(x):
+    """Round to nearest integer."""
+    if isinstance(x, ndarray):
+        return _native.around(x, 0)
+    return float(round(x))
+
+def fix(x):
+    """Round to nearest integer towards zero."""
+    if isinstance(x, ndarray):
+        return _native.trunc(x)
+    return float(_math.trunc(x))
+
+def square(x):
+    """Return the element-wise square."""
+    x = asarray(x)
+    return x * x
+
+def cbrt(x):
+    """Return the element-wise cube root."""
+    x = asarray(x)
+    # cbrt handles negative numbers correctly
+    return sign(x) * power(abs(x), 1.0 / 3.0)
+
+def reciprocal(x):
+    """Return the reciprocal of the argument, element-wise."""
+    x = asarray(x)
+    return ones(x.shape) / x
+
+def copysign(x1, x2):
+    """Change the sign of x1 to that of x2, element-wise."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    return abs(x1) * sign(x2)
+
+def heaviside(x1, x2):
+    """Compute the Heaviside step function.
+    0 where x1 < 0, x2 where x1 == 0, 1 where x1 > 0."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    result = where(x1 > zeros(x1.shape), ones(x1.shape), x2)
+    result = where(x1 < zeros(x1.shape), zeros(x1.shape), result)
+    return result
+
+def sinc(x):
+    """Return the sinc function: sin(pi*x)/(pi*x)."""
+    x = asarray(x)
+    px = x * pi
+    # Avoid division by zero: where px==0, use 1 as denominator
+    result = sin(px) / where(px == zeros(px.shape), ones(px.shape), px)
+    result = where(x == zeros(x.shape), ones(x.shape), result)
+    return result
+
+def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
+    """Replace NaN with zero and infinity with large finite numbers."""
+    x = asarray(x)
+    if posinf is None:
+        posinf = 1.7976931348623157e+308  # float max
+    if neginf is None:
+        neginf = -1.7976931348623157e+308
+    flat = x.flatten()
+    n = flat.size
+    vals = []
+    for i in range(n):
+        v = float(flat[i])
+        if v != v:  # NaN check
+            vals.append(nan)
+        elif v == float('inf'):
+            vals.append(posinf)
+        elif v == float('-inf'):
+            vals.append(neginf)
+        else:
+            vals.append(v)
+    result = array(vals)
+    if x.ndim > 1:
+        result = result.reshape(x.shape)
+    return result
 
 def sum(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
@@ -974,10 +1026,21 @@ def stack(arrays, axis=0, out=None):
     return _native.stack_native(list(arrays), axis)
 
 def vstack(tup):
-    return concatenate(tup, axis=0)
+    arrs = [asarray(a) for a in tup]
+    # For 1D inputs, reshape to 2D first (row vectors)
+    expanded = []
+    for a in arrs:
+        if a.ndim == 1:
+            expanded.append(a.reshape([1, a.shape[0]]))
+        else:
+            expanded.append(a)
+    return concatenate(expanded, 0)
 
 def hstack(tup):
-    return concatenate(tup, axis=1) if tup[0].ndim > 1 else concatenate(tup, axis=0)
+    arrs = [asarray(a) for a in tup]
+    if arrs[0].ndim > 1:
+        return concatenate(arrs, 1)
+    return concatenate(arrs, 0)
 
 def column_stack(tup):
     return _native.column_stack(list(tup))
@@ -997,6 +1060,90 @@ def hsplit(a, indices_or_sections):
     if a.ndim == 1:
         return split(a, indices_or_sections, 0)
     return split(a, indices_or_sections, 1)
+
+def array_split(ary, indices_or_sections, axis=0):
+    """Split an array into multiple sub-arrays (allows unequal division)."""
+    ary = asarray(ary)
+    n = ary.shape[axis]
+    if isinstance(indices_or_sections, (int, float)):
+        nsections = int(indices_or_sections)
+        neach, extras = divmod(n, nsections)
+        boundaries = [0]
+        for i in range(nsections):
+            boundaries.append(boundaries[-1] + neach + (1 if i < extras else 0))
+        indices = boundaries[1:-1]
+    else:
+        indices = list(indices_or_sections)
+    return split(ary, indices, axis)
+
+def dsplit(ary, indices_or_sections):
+    """Split array into multiple sub-arrays along the 3rd axis (depth)."""
+    ary = asarray(ary)
+    if ary.ndim < 3:
+        raise ValueError("dsplit only works on arrays of 3 or more dimensions")
+    return array_split(ary, indices_or_sections, axis=2)
+
+def block(arrays):
+    """Assemble an nd-array from nested lists of blocks."""
+    if isinstance(arrays, ndarray):
+        return arrays
+    if not isinstance(arrays, list):
+        return asarray(arrays)
+    if len(arrays) == 0:
+        return array([])
+    if isinstance(arrays[0], list):
+        rows = []
+        for row_blocks in arrays:
+            row = hstack([asarray(b) for b in row_blocks])
+            rows.append(row)
+        return vstack(rows)
+    else:
+        return concatenate([asarray(a) for a in arrays])
+
+def copyto(dst, src, casting='same_kind', where=True):
+    """Copy values from one array to another, broadcasting as necessary."""
+    src = asarray(src)
+    dst = asarray(dst)
+    src_b = broadcast_to(src, dst.shape)
+    if where is True:
+        return src_b
+    mask = asarray(where)
+    flat_m = mask.flatten()
+    flat_s = src_b.flatten()
+    flat_d = dst.flatten()
+    n = flat_d.size
+    result_vals = []
+    for i in range(n):
+        if flat_m[i]:
+            result_vals.append(float(flat_s[i]))
+        else:
+            result_vals.append(float(flat_d[i]))
+    result = array(result_vals)
+    if dst.ndim > 1:
+        result = result.reshape(dst.shape)
+    return result
+
+def place(arr, mask, vals):
+    """Change elements of an array based on conditional and input values."""
+    arr = asarray(arr)
+    mask = asarray(mask)
+    vals_arr = asarray(vals).flatten()
+    flat_a = arr.flatten()
+    flat_m = mask.flatten()
+    n = flat_a.size
+    nv = vals_arr.size
+    result = []
+    vi = 0
+    for i in range(n):
+        if flat_m[i]:
+            result.append(float(vals_arr[vi % nv]))
+            vi += 1
+        else:
+            result.append(float(flat_a[i]))
+    r = array(result)
+    if arr.ndim > 1:
+        r = r.reshape(arr.shape)
+    return r
 
 def can_cast(from_, to, casting="safe"):
     return True  # stub
@@ -2376,6 +2523,147 @@ def broadcast_arrays(*args):
                 raise ValueError("shape mismatch: objects cannot be broadcast to a single shape")
         shape = new_shape
     return [broadcast_to(a, tuple(shape)) for a in arrays]
+
+
+# --- trapz / trapezoid — trapezoidal integration ----------------------------
+def trapz(y, x=None, dx=1.0, axis=-1):
+    """Integrate along the given axis using the composite trapezoidal rule."""
+    y = asarray(y)
+    if y.ndim == 1:
+        n = y.size
+        if x is not None:
+            x = asarray(x).flatten()
+            total = 0.0
+            for i in range(1, n):
+                total += (x[i] - x[i-1]) * (y[i] + y[i-1]) / 2.0
+            return total
+        else:
+            total = 0.0
+            for i in range(1, n):
+                total += dx * (y[i] + y[i-1]) / 2.0
+            return total
+    # For multi-dim, apply along specified axis
+    if axis == -1:
+        axis = y.ndim - 1
+    if y.ndim == 2:
+        results = []
+        if axis == 0:
+            for j in range(y.shape[1]):
+                col = array([y[i][j] for i in range(y.shape[0])])
+                results.append(trapz(col, dx=dx))
+        else:
+            for i in range(y.shape[0]):
+                results.append(trapz(y[i], dx=dx))
+        return array(results)
+    raise NotImplementedError("trapz only supports 1D and 2D arrays")
+
+trapezoid = trapz
+
+
+# --- finfo — floating point type info ---------------------------------------
+class finfo:
+    """Machine limits for floating point types."""
+    def __init__(self, dtype=None):
+        if dtype is None or str(dtype) in ('float64', 'f8', 'float', 'd'):
+            self.bits = 64
+            self.eps = 2.220446049250313e-16
+            self.max = 1.7976931348623157e+308
+            self.min = -1.7976931348623157e+308
+            self.tiny = 2.2250738585072014e-308
+            self.smallest_normal = 2.2250738585072014e-308
+            self.smallest_subnormal = 5e-324
+            self.resolution = 1e-15
+            self.dtype = float64
+            self.maxexp = 1024
+            self.minexp = -1021
+            self.nmant = 52
+            self.nexp = 11
+            self.machep = -52
+            self.negep = -53
+            self.iexp = 11
+            self.precision = 15
+        elif str(dtype) in ('float32', 'f4', 'f'):
+            self.bits = 32
+            self.eps = 1.1920929e-07
+            self.max = 3.4028235e+38
+            self.min = -3.4028235e+38
+            self.tiny = 1.1754944e-38
+            self.smallest_normal = 1.1754944e-38
+            self.smallest_subnormal = 1e-45
+            self.resolution = 1e-6
+            self.dtype = float32
+            self.maxexp = 128
+            self.minexp = -125
+            self.nmant = 23
+            self.nexp = 8
+            self.machep = -23
+            self.negep = -24
+            self.iexp = 8
+            self.precision = 6
+        else:
+            raise ValueError("finfo only supports float32 and float64")
+
+    def __repr__(self):
+        return f"finfo(resolution={self.resolution}, min={self.min}, max={self.max}, dtype={self.dtype})"
+
+
+# --- iinfo — integer type info ----------------------------------------------
+class iinfo:
+    """Machine limits for integer types."""
+    def __init__(self, dtype=None):
+        if dtype is None or str(dtype) in ('int64', 'i8', 'int', 'l'):
+            self.bits = 64
+            self.min = -9223372036854775808
+            self.max = 9223372036854775807
+            self.dtype = int64
+            self.kind = 'i'
+        elif str(dtype) in ('int32', 'i4', 'i'):
+            self.bits = 32
+            self.min = -2147483648
+            self.max = 2147483647
+            self.dtype = int32
+            self.kind = 'i'
+        elif str(dtype) in ('int8', 'i1'):
+            self.bits = 8
+            self.min = -128
+            self.max = 127
+            self.dtype = int8
+            self.kind = 'i'
+        elif str(dtype) in ('int16', 'i2'):
+            self.bits = 16
+            self.min = -32768
+            self.max = 32767
+            self.dtype = int16
+            self.kind = 'i'
+        else:
+            raise ValueError("iinfo does not support this dtype")
+
+    def __repr__(self):
+        return f"iinfo(min={self.min}, max={self.max}, dtype={self.dtype})"
+
+
+# --- fromfunction — construct array from function ----------------------------
+def fromfunction(function, shape, dtype=float, **kwargs):
+    """Construct an array by executing a function over each coordinate."""
+    coords = indices(shape, dtype=dtype)
+    return asarray(function(*coords, **kwargs))
+
+
+# --- fmod — C-style remainder (sign of dividend) ----------------------------
+def fmod(x1, x2):
+    """Return the element-wise remainder of division (C-style, sign of dividend)."""
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    return x1 - trunc(x1 / x2) * x2
+
+
+# --- modf — return fractional and integer parts -----------------------------
+def modf(x):
+    """Return the fractional and integral parts of an array, element-wise."""
+    x = asarray(x)
+    integer_part = trunc(x)
+    fractional_part = x - integer_part
+    return fractional_part, integer_part
 
 
 # --- dtypes module stub -----------------------------------------------------
