@@ -527,6 +527,115 @@ impl NdArray {
     }
 }
 
+/// Convert flat indices to multi-dimensional indices (C-order).
+///
+/// Given an array of flat indices and a shape, return a Vec of NdArray (one Int64 array
+/// per dimension) representing the multi-dimensional indices.
+pub fn unravel_index(indices: &NdArray, shape: &[usize]) -> Result<Vec<NdArray>> {
+    // Cast to Int64 and flatten
+    let idx_arr = indices.astype(crate::DType::Int64).flatten();
+    let flat_indices = match idx_arr.data() {
+        ArrayData::Int64(a) => a.as_slice().unwrap().to_vec(),
+        _ => unreachable!("astype(Int64) must produce Int64"),
+    };
+
+    // Compute total size
+    let total_size: usize = shape.iter().product();
+    if total_size == 0 {
+        return Err(NumpyError::ValueError(
+            "unravel_index: cannot unravel into zero-size shape".into(),
+        ));
+    }
+
+    // Compute C-order strides: strides[i] = product(shape[i+1:])
+    let ndim = shape.len();
+    let mut strides = vec![1_usize; ndim];
+    for i in (0..ndim.saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    let n = flat_indices.len();
+    // Prepare result vectors, one per dimension
+    let mut result_vecs: Vec<Vec<i64>> = vec![Vec::with_capacity(n); ndim];
+
+    for &flat_idx in &flat_indices {
+        if flat_idx < 0 || (flat_idx as usize) >= total_size {
+            return Err(NumpyError::ValueError(format!(
+                "index {} is out of bounds for array with size {}",
+                flat_idx, total_size
+            )));
+        }
+        let mut remainder = flat_idx as usize;
+        for d in 0..ndim {
+            result_vecs[d].push((remainder / strides[d]) as i64);
+            remainder %= strides[d];
+        }
+    }
+
+    // Convert to NdArray
+    let result: Vec<NdArray> = result_vecs.into_iter().map(NdArray::from_vec).collect();
+
+    Ok(result)
+}
+
+/// Convert multi-dimensional indices to flat indices (C-order).
+///
+/// Given a slice of index arrays (one per dimension) and the dimensions,
+/// compute the flat index for each set of multi-dimensional indices.
+pub fn ravel_multi_index(multi_index: &[&NdArray], dims: &[usize]) -> Result<NdArray> {
+    if multi_index.len() != dims.len() {
+        return Err(NumpyError::ValueError(format!(
+            "ravel_multi_index: number of index arrays ({}) must match number of dims ({})",
+            multi_index.len(),
+            dims.len()
+        )));
+    }
+
+    let ndim = dims.len();
+
+    // Cast each to Int64 and flatten
+    let index_vecs: Vec<Vec<i64>> = multi_index
+        .iter()
+        .map(|arr| {
+            let cast = arr.astype(crate::DType::Int64).flatten();
+            match cast.data() {
+                ArrayData::Int64(a) => a.as_slice().unwrap().to_vec(),
+                _ => unreachable!("astype(Int64) must produce Int64"),
+            }
+        })
+        .collect();
+
+    // All must have the same length
+    let n = index_vecs[0].len();
+    for (d, v) in index_vecs.iter().enumerate() {
+        if v.len() != n {
+            return Err(NumpyError::ValueError(format!(
+                "ravel_multi_index: all index arrays must have the same length (dim {} has length {}, expected {})",
+                d, v.len(), n
+            )));
+        }
+    }
+
+    // Compute C-order strides
+    let mut strides = vec![1_usize; ndim];
+    for i in (0..ndim.saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1];
+    }
+
+    // Compute flat indices
+    let flat: Vec<i64> = (0..n)
+        .map(|i| {
+            strides
+                .iter()
+                .enumerate()
+                .map(|(d, stride)| index_vecs[d][i] * *stride as i64)
+                .sum()
+        })
+        .collect();
+
+    Ok(NdArray::from_vec(flat))
+}
+
 /// Resolve a possibly-negative index to a positive one.
 pub(crate) fn resolve_index(idx: isize, dim_size: usize) -> Result<usize> {
     let resolved = if idx < 0 {
@@ -718,5 +827,65 @@ mod tests {
         assert_eq!(a.get(&[1]).unwrap(), Scalar::Float64(88.0));
         assert_eq!(a.get(&[2]).unwrap(), Scalar::Float64(77.0));
         assert_eq!(a.get(&[0]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_unravel_index_basic() {
+        // flat index 5 in shape (3, 4) -> row=1, col=1
+        let idx = NdArray::from_vec(vec![5_i64]);
+        let result = unravel_index(&idx, &[3, 4]).unwrap();
+        assert_eq!(result.len(), 2);
+        let ArrayData::Int64(r0) = result[0].data() else {
+            panic!()
+        };
+        let ArrayData::Int64(r1) = result[1].data() else {
+            panic!()
+        };
+        assert_eq!(r0[[0]], 1);
+        assert_eq!(r1[[0]], 1);
+    }
+
+    #[test]
+    fn test_unravel_index_multiple() {
+        // indices [0, 5, 11] in shape (3, 4)
+        let idx = NdArray::from_vec(vec![0_i64, 5, 11]);
+        let result = unravel_index(&idx, &[3, 4]).unwrap();
+        let ArrayData::Int64(r0) = result[0].data() else {
+            panic!()
+        };
+        let ArrayData::Int64(r1) = result[1].data() else {
+            panic!()
+        };
+        // 0 -> (0, 0), 5 -> (1, 1), 11 -> (2, 3)
+        assert_eq!(r0[[0]], 0);
+        assert_eq!(r1[[0]], 0);
+        assert_eq!(r0[[1]], 1);
+        assert_eq!(r1[[1]], 1);
+        assert_eq!(r0[[2]], 2);
+        assert_eq!(r1[[2]], 3);
+    }
+
+    #[test]
+    fn test_ravel_multi_index_basic() {
+        let i0 = NdArray::from_vec(vec![1_i64]);
+        let i1 = NdArray::from_vec(vec![1_i64]);
+        let result = ravel_multi_index(&[&i0, &i1], &[3, 4]).unwrap();
+        let ArrayData::Int64(arr) = result.data() else {
+            panic!()
+        };
+        assert_eq!(arr[[0]], 5);
+    }
+
+    #[test]
+    fn test_unravel_ravel_roundtrip() {
+        let idx = NdArray::from_vec(vec![7_i64]);
+        let shape = [3, 4];
+        let unraveled = unravel_index(&idx, &shape).unwrap();
+        let refs: Vec<&NdArray> = unraveled.iter().collect();
+        let raveled = ravel_multi_index(&refs, &shape).unwrap();
+        let ArrayData::Int64(arr) = raveled.data() else {
+            panic!()
+        };
+        assert_eq!(arr[[0]], 7);
     }
 }

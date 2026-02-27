@@ -1510,6 +1510,38 @@ def test_dstack():
     assert_eq(r.shape, (1, 3, 2))
 
 
+# ── Tier 9: Index Utilities ────────────────────────────────────────────
+
+def test_unravel_index():
+    idx = np.unravel_index(np.array([5.0]), (3, 4))
+    assert_eq(int(idx[0]), 1)
+    assert_eq(int(idx[1]), 1)
+
+def test_unravel_index_multiple():
+    idx = np.unravel_index(np.array([0.0, 5.0, 11.0]), (3, 4))
+    assert_eq(idx[0].shape, (3,))
+
+def test_ravel_multi_index():
+    idx = np.ravel_multi_index((np.array([1.0]), np.array([1.0])), (3, 4))
+    assert_eq(int(idx), 5)
+
+def test_unravel_ravel_roundtrip():
+    flat = np.array([7.0])
+    shape = (3, 4)
+    unraveled = np.unravel_index(flat, shape)
+    raveled = np.ravel_multi_index(unraveled, shape)
+    assert_eq(int(raveled), 7)
+
+def test_unravel_index_int():
+    idx = np.unravel_index(5, (3, 4))
+    assert_eq(int(idx[0]), 1)
+    assert_eq(int(idx[1]), 1)
+
+def test_ravel_multi_index_ints():
+    idx = np.ravel_multi_index((1, 1), (3, 4))
+    assert_eq(int(idx), 5)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

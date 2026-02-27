@@ -18,6 +18,7 @@ pub use array_data::ArrayData;
 pub use creation::{arange, eye, full, linspace, linspace_with_step, ones_like, zeros_like};
 pub use dtype::DType;
 pub use error::{NumpyError, Result};
+pub use indexing::{ravel_multi_index, unravel_index};
 pub use manipulation::{
     column_stack, concatenate, dstack, hsplit, hstack, split, stack, unique, vsplit, vstack,
     SplitSpec,

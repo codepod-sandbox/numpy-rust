@@ -1134,6 +1134,69 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Index Utilities ---
+
+    fn parse_shape_tuple(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
+        if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
+            tuple
+                .as_slice()
+                .iter()
+                .map(|item| item.clone().try_into_value::<usize>(vm))
+                .collect::<PyResult<Vec<_>>>()
+        } else if let Some(list) = obj.downcast_ref::<vm::builtins::PyList>() {
+            let items = list.borrow_vec();
+            items
+                .iter()
+                .map(|item| item.clone().try_into_value::<usize>(vm))
+                .collect::<PyResult<Vec<_>>>()
+        } else if let Ok(n) = obj.clone().try_into_value::<usize>(vm) {
+            Ok(vec![n])
+        } else {
+            Err(vm.new_type_error("shape must be tuple, list, or int".to_owned()))
+        }
+    }
+
+    #[pyfunction]
+    fn unravel_index(
+        indices: PyObjectRef,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        // Parse indices: could be int or ndarray
+        let idx_arr = obj_to_ndarray(&indices, vm)?;
+        // Parse shape: tuple/list of ints
+        let shape_vec = parse_shape_tuple(&shape, vm)?;
+        let result = numpy_rust_core::indexing::unravel_index(&idx_arr, &shape_vec)
+            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        let py_arrays: Vec<PyObjectRef> = result
+            .into_iter()
+            .map(|a| py_array::ndarray_or_scalar(a, vm))
+            .collect();
+        Ok(vm.ctx.new_tuple(py_arrays).into())
+    }
+
+    #[pyfunction]
+    fn ravel_multi_index(
+        multi_index: PyObjectRef,
+        dims: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        // Parse multi_index: tuple of arrays/ints
+        let tuple = multi_index
+            .downcast_ref::<vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("multi_index must be a tuple".to_owned()))?;
+        let arrs: Vec<numpy_rust_core::NdArray> = tuple
+            .as_slice()
+            .iter()
+            .map(|item| obj_to_ndarray(item, vm))
+            .collect::<PyResult<Vec<_>>>()?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arrs.iter().collect();
+        let dims_vec = parse_shape_tuple(&dims, vm)?;
+        numpy_rust_core::indexing::ravel_multi_index(&refs, &dims_vec)
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Stacking helpers ---
 
     fn extract_ndarray_list(

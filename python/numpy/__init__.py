@@ -1209,6 +1209,20 @@ class _char_mod:
 
 char = _char_mod()
 
+# --- Index Utilities --------------------------------------------------------
+
+def unravel_index(indices, shape, order='C'):
+    if not isinstance(indices, ndarray):
+        if isinstance(indices, int):
+            indices = array([indices])
+        else:
+            indices = array(indices)
+    return _native.unravel_index(indices, shape)
+
+def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
+    arrays = tuple(array([a]) if isinstance(a, (int, float)) else (a if isinstance(a, ndarray) else array(a)) for a in multi_index)
+    return _native.ravel_multi_index(arrays, dims)
+
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:
     pass
