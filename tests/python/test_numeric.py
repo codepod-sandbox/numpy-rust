@@ -2189,6 +2189,109 @@ def test_ix_():
     assert_close(b[0][0], 2.0)
     assert_close(b[0][2], 4.0)
 
+def test_equal():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([1.0, 9.0, 3.0])
+    r = np.equal(a, b)
+    assert_eq(r[0], True)
+    assert_eq(r[1], False)
+    assert_eq(r[2], True)
+
+def test_not_equal():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([1.0, 9.0, 3.0])
+    r = np.not_equal(a, b)
+    assert_eq(r[0], False)
+    assert_eq(r[1], True)
+    assert_eq(r[2], False)
+
+def test_greater_equal():
+    a = np.array([1.0, 5.0, 3.0])
+    b = np.array([2.0, 3.0, 3.0])
+    r = np.greater_equal(a, b)
+    assert_eq(r[0], False)
+    assert_eq(r[1], True)
+    assert_eq(r[2], True)
+
+def test_less_equal():
+    a = np.array([1.0, 5.0, 3.0])
+    b = np.array([2.0, 3.0, 3.0])
+    r = np.less_equal(a, b)
+    assert_eq(r[0], True)
+    assert_eq(r[1], False)
+    assert_eq(r[2], True)
+
+def test_lexsort():
+    # Sort by last key (primary), then first key (secondary)
+    surnames = np.array([1.0, 2.0, 1.0, 2.0])   # secondary
+    ages = np.array([30.0, 20.0, 10.0, 40.0])     # primary
+    idx = np.lexsort((surnames, ages))
+    # Sorted by ages: 10(idx=2), 20(idx=1), 30(idx=0), 40(idx=3)
+    assert_close(idx[0], 2.0)
+    assert_close(idx[1], 1.0)
+    assert_close(idx[2], 0.0)
+    assert_close(idx[3], 3.0)
+
+def test_partition():
+    a = np.array([3.0, 1.0, 2.0, 5.0, 4.0])
+    p = np.partition(a, 2)
+    # After partition, element at index 2 should be the median (3.0)
+    # and elements before should be <= 3.0, elements after >= 3.0
+    assert_close(p[2], 3.0)
+
+def test_argpartition():
+    a = np.array([3.0, 1.0, 2.0])
+    idx = np.argpartition(a, 1)
+    # Should return valid sort indices
+    assert_eq(idx.size, 3)
+
+def test_correlate():
+    a = np.array([1.0, 2.0, 3.0])
+    v = np.array([0.0, 1.0, 0.5])
+    r = np.correlate(a, v, mode='full')
+    # Full cross-correlation of [1,2,3] with [0,1,0.5]
+    # = convolve([1,2,3], [0.5,1,0]) = [0.5, 2.0, 3.5, 3.0, 0.0]
+    assert_close(r[0], 0.5)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 3.5)
+
+def test_arcsinh():
+    a = np.array([0.0, 1.0])
+    r = np.arcsinh(a)
+    assert_close(r[0], 0.0)
+    assert_close(r[1], 0.8813736198)  # asinh(1)
+
+def test_arccosh():
+    a = np.array([1.0, 2.0])
+    r = np.arccosh(a)
+    assert_close(r[0], 0.0)
+    assert_close(r[1], 1.3169578969)  # acosh(2)
+
+def test_arctanh():
+    a = np.array([0.0, 0.5])
+    r = np.arctanh(a)
+    assert_close(r[0], 0.0)
+    assert_close(r[1], 0.5493061443)  # atanh(0.5)
+
+def test_trunc():
+    a = np.array([1.7, -1.7, 0.5])
+    r = np.trunc(a)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], -1.0)
+    assert_close(r[2], 0.0)
+
+def test_logspace():
+    r = np.logspace(0.0, 2.0, num=3)
+    assert_close(r[0], 1.0)    # 10^0
+    assert_close(r[1], 10.0)   # 10^1
+    assert_close(r[2], 100.0)  # 10^2
+
+def test_geomspace():
+    r = np.geomspace(1.0, 1000.0, num=4)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], 10.0)
+    assert_close(r[2], 100.0)
+    assert_close(r[3], 1000.0)
 
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

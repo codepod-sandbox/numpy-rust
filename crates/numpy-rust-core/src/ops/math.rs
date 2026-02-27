@@ -164,10 +164,33 @@ float_unary!(
     |x: Complex<f64>| x.atan()
 );
 
+float_unary!(
+    arcsinh,
+    |x: f32| x.asinh(),
+    |x: f64| x.asinh(),
+    |x: Complex<f32>| x.asinh(),
+    |x: Complex<f64>| x.asinh()
+);
+float_unary!(
+    arccosh,
+    |x: f32| x.acosh(),
+    |x: f64| x.acosh(),
+    |x: Complex<f32>| x.acosh(),
+    |x: Complex<f64>| x.acosh()
+);
+float_unary!(
+    arctanh,
+    |x: f32| x.atanh(),
+    |x: f64| x.atanh(),
+    |x: Complex<f32>| x.atanh(),
+    |x: Complex<f64>| x.atanh()
+);
+
 float_only_unary!(log1p, |x: f32| x.ln_1p(), |x: f64| x.ln_1p());
 float_only_unary!(expm1, |x: f32| x.exp_m1(), |x: f64| x.exp_m1());
 float_only_unary!(deg2rad, |x: f32| x.to_radians(), |x: f64| x.to_radians());
 float_only_unary!(rad2deg, |x: f32| x.to_degrees(), |x: f64| x.to_degrees());
+float_only_unary!(trunc, |x: f32| x.trunc(), |x: f64| x.trunc());
 
 impl NdArray {
     /// Element-wise absolute value. Works on int and float types.
@@ -622,6 +645,29 @@ mod tests {
         let _ = a.arcsin();
         let _ = a.arccos();
         let _ = a.arctan();
+    }
+
+    #[test]
+    fn test_arcsinh_arccosh_arctanh() {
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0]);
+        let _ = a.arcsinh();
+        let b = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        let _ = b.arccosh();
+        let c = NdArray::from_vec(vec![0.0_f64, 0.5]);
+        let _ = c.arctanh();
+    }
+
+    #[test]
+    fn test_trunc() {
+        let a = NdArray::from_vec(vec![1.7_f64, -1.7, 0.5]);
+        let b = a.trunc().unwrap();
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_trunc_complex_fails() {
+        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
+        assert!(a.trunc().is_err());
     }
 
     #[test]

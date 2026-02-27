@@ -152,6 +152,15 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
         return result, step
     return result
 
+def logspace(start, stop, num=50, endpoint=True, base=10.0, dtype=None):
+    y = linspace(start, stop, num=num)
+    return power(base, y)
+
+def geomspace(start, stop, num=50, endpoint=True, dtype=None):
+    log_start = _math.log10(start)
+    log_stop = _math.log10(stop)
+    return logspace(log_start, log_stop, num=num)
+
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
     if dtype is not None:
         if M is not None:
@@ -524,6 +533,27 @@ def arctan2(y, x, out=None, where=True, **kwargs):
     if not isinstance(x, ndarray):
         x = array(x)
     return _native.arctan2(y, x)
+
+def arcsinh(x):
+    if not isinstance(x, ndarray):
+        x = array(x)
+    return _native.arcsinh(x)
+
+def arccosh(x):
+    if not isinstance(x, ndarray):
+        x = array(x)
+    return _native.arccosh(x)
+
+def arctanh(x):
+    if not isinstance(x, ndarray):
+        x = array(x)
+    return _native.arctanh(x)
+
+def trunc(x):
+    if isinstance(x, ndarray):
+        return _native.trunc(x)
+    import math as _math
+    return _math.trunc(x)
 
 def floor(x):
     if isinstance(x, ndarray):
@@ -1300,6 +1330,18 @@ def greater(x1, x2):
 def less(x1, x2):
     return asarray(x1) < asarray(x2)
 
+def equal(x1, x2):
+    return asarray(x1) == asarray(x2)
+
+def not_equal(x1, x2):
+    return asarray(x1) != asarray(x2)
+
+def greater_equal(x1, x2):
+    return asarray(x1) >= asarray(x2)
+
+def less_equal(x1, x2):
+    return asarray(x1) <= asarray(x2)
+
 def maximum(x1, x2):
     if isinstance(x1, ndarray) and isinstance(x2, ndarray):
         return where(x1 > x2, x1, x2)
@@ -1942,6 +1984,61 @@ def ix_(*args):
         shape[i] = len(arr)
         result.append(arr.reshape(shape))
     return tuple(result)
+
+
+def lexsort(keys):
+    """Perform an indirect stable sort using a sequence of keys.
+    Last key is used as the primary sort key."""
+    keys_list = [asarray(k) for k in keys]
+    n = keys_list[0].size
+    indices = list(range(n))
+    # Flatten all keys
+    flat_keys = []
+    for k in keys_list:
+        fk = k.flatten()
+        flat_keys.append([fk[i] for i in range(n)])
+    # Sort indices using keys (last key = primary, first key = least significant)
+    # Python sort is stable, so we sort from least significant to most significant
+    for ki in range(len(flat_keys)):
+        vals = flat_keys[ki]
+        indices.sort(key=lambda idx, v=vals: v[idx])
+    return array(indices)
+
+def partition(a, kth, axis=-1):
+    """Return a partitioned copy of an array.
+    Creates a copy where the element at kth position is where it would be in a sorted array.
+    Elements before kth are <= element at kth, elements after are >=."""
+    a = asarray(a)
+    if axis == -1:
+        axis = a.ndim - 1
+    if a.ndim == 1 or axis is None:
+        flat = a.flatten()
+        n = flat.size
+        vals = [flat[i] for i in range(n)]
+        vals.sort()
+        return array(vals)
+    # For multi-dim, sort along axis (full sort, which satisfies partition contract)
+    return sort(a, axis=axis)
+
+def argpartition(a, kth, axis=-1):
+    """Return indices that would partition the array.
+    Same as argsort but only guarantees kth element is correct."""
+    a = asarray(a)
+    if axis == -1:
+        axis = a.ndim - 1
+    if a.ndim == 1 or axis is None:
+        return argsort(a)
+    return argsort(a, axis=axis)
+
+def correlate(a, v, mode='valid'):
+    """Cross-correlation of two 1-dimensional sequences."""
+    a = asarray(a).flatten()
+    v = asarray(v).flatten()
+    na = a.size
+    nv = v.size
+    # Reverse v for correlation (correlation = convolution with reversed kernel)
+    v_rev = array([v[nv - 1 - i] for i in range(nv)])
+    return convolve(a, v_rev, mode=mode)
 
 
 # --- dtypes module stub -----------------------------------------------------

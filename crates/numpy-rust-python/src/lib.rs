@@ -349,6 +349,29 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn arcsinh(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().arcsinh())
+    }
+
+    #[pyfunction]
+    fn arccosh(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().arccosh())
+    }
+
+    #[pyfunction]
+    fn arctanh(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().arctanh())
+    }
+
+    #[pyfunction]
+    fn trunc(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .trunc()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
     fn sign(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
         PyNdArray::from_core(a.inner().sign())
     }
