@@ -2792,6 +2792,112 @@ def test_roots_quadratic():
     assert_close(vals[0], 1.0)
     assert_close(vals[1], 2.0)
 
+def test_type_hierarchy():
+    # These should simply exist as classes
+    assert_eq(issubclass(np.integer, np.number), True)
+    assert_eq(issubclass(np.floating, np.inexact), True)
+    assert_eq(issubclass(np.complexfloating, np.inexact), True)
+    assert_eq(issubclass(np.signedinteger, np.integer), True)
+
+def test_nditer_basic():
+    a = np.array([1.0, 2.0, 3.0])
+    vals = []
+    for x in np.nditer(a):
+        vals.append(x)
+    assert_eq(len(vals), 3)
+    assert_close(vals[0], 1.0)
+    assert_close(vals[2], 3.0)
+
+def test_nditer_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    vals = []
+    for x in np.nditer(a):
+        vals.append(x)
+    assert_eq(len(vals), 4)
+
+def test_array_str():
+    a = np.array([1.0, 2.0])
+    s = np.array_str(a)
+    assert_eq(isinstance(s, str), True)
+
+def test_array_repr():
+    a = np.array([1.0, 2.0])
+    r = np.array_repr(a)
+    assert_eq(isinstance(r, str), True)
+
+def test_i0():
+    # I0(0) = 1.0
+    r = np.i0(np.array([0.0]))
+    assert_close(r[0], 1.0)
+    # I0(1) ~ 1.2660658777
+    r2 = np.i0(np.array([1.0]))
+    assert_close(r2[0], 1.2660658777, tol=1e-6)
+
+def test_apply_over_axes():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    # Sum over axis 0: [4, 6]
+    r = np.apply_over_axes(np.sum, a, [0])
+    assert_close(r[0], 4.0)
+    assert_close(r[1], 6.0)
+
+def test_isneginf():
+    a = np.array([float('-inf'), 0.0, float('inf'), float('nan')])
+    r = np.isneginf(a)
+    assert_eq(r[0], True)
+    assert_eq(r[1], False)
+    assert_eq(r[2], False)
+    assert_eq(r[3], False)
+
+def test_isposinf():
+    a = np.array([float('-inf'), 0.0, float('inf'), float('nan')])
+    r = np.isposinf(a)
+    assert_eq(r[0], False)
+    assert_eq(r[1], False)
+    assert_eq(r[2], True)
+    assert_eq(r[3], False)
+
+def test_real_if_close():
+    # For a real array, should return as-is
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.real_if_close(a)
+    assert_close(r[0], 1.0)
+    assert_close(r[1], 2.0)
+    assert_close(r[2], 3.0)
+
+def test_save_load():
+    import os
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    np.save('/tmp/test_np_save.npy', a)
+    b = np.load('/tmp/test_np_save.npy')
+    assert_eq(b.size, 4)
+    assert_close(b[0], 1.0)
+    assert_close(b[3], 4.0)
+    os.remove('/tmp/test_np_save.npy')
+
+def test_save_load_2d():
+    import os
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    np.save('/tmp/test_np_save2d.npy', a)
+    b = np.load('/tmp/test_np_save2d.npy')
+    assert_eq(b.shape, (2, 2))
+    assert_close(b[0][0], 1.0)
+    assert_close(b[1][1], 4.0)
+    os.remove('/tmp/test_np_save2d.npy')
+
+def test_frompyfunc():
+    f = np.frompyfunc(lambda x: x * 2, 1, 1)
+    r = f(np.array([1.0, 2.0, 3.0]))
+    assert_close(r[0], 2.0)
+    assert_close(r[2], 6.0)
+
+def test_take_along_axis():
+    a = np.array([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
+    idx = np.array([[2.0, 0.0, 1.0], [1.0, 2.0, 0.0]])
+    r = np.take_along_axis(a, idx, axis=1)
+    assert_close(r[0][0], 30.0)
+    assert_close(r[0][1], 10.0)
+    assert_close(r[1][0], 50.0)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

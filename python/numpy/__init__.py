@@ -283,17 +283,46 @@ typecodes = {
     "UnsignedInteger": "BHILQ",
 }
 
-# --- Scalar type checks (stubs) --------------------------------------------
-integer = int
-floating = float
-complexfloating = complex
-number = (int, float, complex)
-signedinteger = int
-unsignedinteger = int
-inexact = float
-flexible = (str, bytes)
-character = (str, bytes)
-generic = object
+# --- Type hierarchy classes -------------------------------------------------
+class generic:
+    """Base class for all numpy scalar types."""
+    pass
+
+class number(generic):
+    """Base class for all numeric scalar types."""
+    pass
+
+class integer(number):
+    """Base class for integer scalar types."""
+    pass
+
+class signedinteger(integer):
+    """Base class for signed integer scalar types."""
+    pass
+
+class unsignedinteger(integer):
+    """Base class for unsigned integer scalar types."""
+    pass
+
+class inexact(number):
+    """Base class for inexact (float/complex) scalar types."""
+    pass
+
+class floating(inexact):
+    """Base class for floating-point scalar types."""
+    pass
+
+class complexfloating(inexact):
+    """Base class for complex scalar types."""
+    pass
+
+class character(generic):
+    """Base class for character types."""
+    pass
+
+class flexible(generic):
+    """Base class for flexible types (string, void)."""
+    pass
 
 # --- Missing functions (stubs) ----------------------------------------------
 def empty(shape, dtype=None, order="C"):
@@ -3140,6 +3169,262 @@ def kaiser(M, beta):
         vals.append(_i0(arg) / _i0(beta))
     return array(vals)
 
+
+# --- nditer — simplified N-dimensional iterator -----------------------------
+class nditer:
+    """Simplified N-dimensional iterator."""
+    def __init__(self, op, flags=None, op_flags=None, op_dtypes=None, order='K',
+                 casting='safe', op_axes=None, itershape=None, buffersize=0):
+        if isinstance(op, (list, tuple)):
+            self._arrays = [asarray(a) for a in op]
+        else:
+            self._arrays = [asarray(op)]
+        self._flat = [a.flatten() for a in self._arrays]
+        self._size = self._flat[0].size
+        self._idx = 0
+        self.multi_index = None  # not supported in this simplified version
+
+    def __iter__(self):
+        self._idx = 0
+        return self
+
+    def __next__(self):
+        if self._idx >= self._size:
+            raise StopIteration
+        if len(self._flat) == 1:
+            val = self._flat[0][self._idx]
+            self._idx += 1
+            return val
+        vals = tuple(f[self._idx] for f in self._flat)
+        self._idx += 1
+        return vals
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    @property
+    def finished(self):
+        return self._idx >= self._size
+
+    def iternext(self):
+        if self._idx >= self._size:
+            return False
+        self._idx += 1
+        return self._idx < self._size
+
+    @property
+    def value(self):
+        if len(self._flat) == 1:
+            return self._flat[0][self._idx]
+        return tuple(f[self._idx] for f in self._flat)
+
+
+# --- array_str / array_repr ------------------------------------------------
+def array_str(a, max_line_width=None, precision=None, suppress_small=None):
+    """Return a string representation of the data in an array."""
+    a = asarray(a)
+    return str(a)
+
+def array_repr(a, max_line_width=None, precision=None, suppress_small=None):
+    """Return the string representation of an array."""
+    a = asarray(a)
+    return repr(a)
+
+
+# --- Tier 18 Group C: i0, apply_over_axes, real_if_close, isneginf, isposinf ---
+
+def i0(x):
+    """Modified Bessel function of the first kind, order 0."""
+    x = asarray(x)
+    flat = x.flatten()
+    n = flat.size
+    result = []
+    for i in range(n):
+        v = float(flat[i])
+        # Series expansion: I0(x) = sum_{k=0}^{inf} ((x/2)^k / k!)^2
+        val = 1.0
+        term = 1.0
+        for k in range(1, 25):
+            term *= (v / 2.0) ** 2 / (k * k)
+            val += term
+        result.append(val)
+    r = array(result)
+    if x.ndim > 1:
+        r = r.reshape(x.shape)
+    return r
+
+def apply_over_axes(func, a, axes):
+    """Apply a function repeatedly over multiple axes."""
+    a = asarray(a)
+    if isinstance(axes, int):
+        axes = [axes]
+    for ax in axes:
+        result = func(a, axis=ax)
+        if isinstance(result, ndarray):
+            a = result
+        else:
+            a = asarray(result)
+    return a
+
+def real_if_close(a, tol=100):
+    """If input is complex with all imaginary parts close to zero, return real parts."""
+    a = asarray(a)
+    if a.dtype not in ("complex64", "complex128"):
+        return a
+    # Check if imaginary part is negligible
+    im = imag(a)
+    re = real(a)
+    eps = 2.220446049250313e-16  # float64 machine epsilon
+    flat_im = im.flatten()
+    for i in range(flat_im.size):
+        if _math.fabs(float(flat_im[i])) > tol * eps:
+            return a  # has significant imaginary part
+    return re
+
+def isneginf(x, out=None):
+    """Test element-wise for negative infinity."""
+    x = asarray(x)
+    flat = x.flatten()
+    n = flat.size
+    vals = []
+    for i in range(n):
+        v = float(flat[i])
+        vals.append(1.0 if (not (v != v) and v == float('-inf')) else 0.0)
+    r = array(vals)
+    if x.ndim > 1:
+        r = r.reshape(x.shape)
+    # Convert to bool by comparing > 0
+    return r > zeros(r.shape)
+
+def isposinf(x, out=None):
+    """Test element-wise for positive infinity."""
+    x = asarray(x)
+    flat = x.flatten()
+    n = flat.size
+    vals = []
+    for i in range(n):
+        v = float(flat[i])
+        vals.append(1.0 if (not (v != v) and v == float('inf')) else 0.0)
+    r = array(vals)
+    if x.ndim > 1:
+        r = r.reshape(x.shape)
+    return r > zeros(r.shape)
+
+
+# --- save/load/savez (Tier 18A) ---------------------------------------------
+
+def save(file, arr, allow_pickle=True, fix_imports=True):
+    """Save an array to a .npy file (text-based format for compatibility)."""
+    arr = asarray(arr)
+    with open(file, 'w') as f:
+        f.write(f"# shape: {list(arr.shape)}\n")
+        flat = arr.flatten()
+        vals = [str(flat[i]) for i in range(flat.size)]
+        f.write(','.join(vals) + '\n')
+
+def load(file, mmap_mode=None, allow_pickle=False, fix_imports=True, encoding='ASCII'):
+    """Load array from a .npy file (text-based format)."""
+    with open(file, 'r') as f:
+        lines = f.readlines()
+    # Parse shape from first line
+    shape_line = lines[0].strip()
+    if shape_line.startswith('# shape:'):
+        import json
+        shape = tuple(json.loads(shape_line.split(':')[1].strip()))
+        data_line = lines[1].strip()
+    else:
+        # Fallback: treat as flat data
+        data_line = lines[0].strip()
+        shape = None
+    vals = [float(v) for v in data_line.split(',')]
+    result = array(vals)
+    if shape is not None and len(shape) > 1:
+        result = result.reshape(shape)
+    return result
+
+def savez(file, *args, **kwds):
+    """Save several arrays into a single file in text format.
+    Since we can't use actual npz (zip) format, save as multi-section text."""
+    arrays = {}
+    for i, arr in enumerate(args):
+        arrays[f'arr_{i}'] = asarray(arr)
+    for name, arr in kwds.items():
+        arrays[name] = asarray(arr)
+    with open(file, 'w') as f:
+        for name, arr in arrays.items():
+            f.write(f"# {name} shape: {list(arr.shape)}\n")
+            flat = arr.flatten()
+            vals = [str(flat[i]) for i in range(flat.size)]
+            f.write(','.join(vals) + '\n')
+
+savez_compressed = savez  # alias, same behavior in our sandbox
+
+# --- frompyfunc (Tier 18A) --------------------------------------------------
+
+def frompyfunc(func, nin, nout):
+    """Takes an arbitrary Python function and returns a NumPy ufunc-like object.
+    Returns a vectorize wrapper."""
+    return vectorize(func)
+
+# --- take_along_axis / put_along_axis (Tier 18A) ----------------------------
+
+def take_along_axis(arr, indices, axis):
+    """Take values from the input array by matching 1-d index and data slices along the given axis."""
+    arr = asarray(arr)
+    indices = asarray(indices)
+    if arr.ndim == 1:
+        result = []
+        for i in range(indices.size):
+            result.append(arr[int(indices[i])])
+        return array(result)
+    if arr.ndim == 2:
+        if axis == 0:
+            rows = []
+            for j in range(arr.shape[1]):
+                col = []
+                for i in range(indices.shape[0]):
+                    col.append(arr[int(indices[i][j])][j])
+                rows.append(col)
+            # Transpose to get correct shape
+            result = []
+            for i in range(indices.shape[0]):
+                row = [rows[j][i] for j in range(arr.shape[1])]
+                result.append(row)
+            return array(result)
+        else:  # axis == 1
+            rows = []
+            for i in range(arr.shape[0]):
+                row = []
+                for j in range(indices.shape[1]):
+                    row.append(arr[i][int(indices[i][j])])
+                rows.append(row)
+            return array(rows)
+    raise NotImplementedError("take_along_axis only supports 1D and 2D")
+
+def put_along_axis(arr, indices, values, axis):
+    """Put values into the destination array by matching 1-d index and data slices along the given axis."""
+    arr = asarray(arr)
+    indices = asarray(indices)
+    values = asarray(values)
+    if arr.ndim == 1:
+        result = [arr[i] for i in range(arr.size)]
+        vals_flat = values.flatten()
+        for i in range(indices.size):
+            result[int(indices[i])] = vals_flat[i % vals_flat.size]
+        return array(result)
+    if arr.ndim == 2 and axis == 1:
+        rows = []
+        for i in range(arr.shape[0]):
+            row = [arr[i][j] for j in range(arr.shape[1])]
+            for j in range(indices.shape[1]):
+                idx = int(indices[i][j])
+                row[idx] = values[i][j] if values.ndim == 2 else values[j]
+            rows.append(row)
+        return array(rows)
+    raise NotImplementedError("put_along_axis only supports 1D and 2D axis=1")
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:
