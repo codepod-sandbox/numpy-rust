@@ -1083,6 +1083,109 @@ def test_count_nonzero_all():
     assert np.count_nonzero(a) == 3
 
 
+# ── Tier 6: Math Function Expansion ──────────────────────────────────────
+
+def test_log10():
+    a = np.array([1.0, 10.0, 100.0])
+    result = np.log10(a)
+    expected = np.array([0.0, 1.0, 2.0])
+    assert np.allclose(result, expected)
+
+def test_log2():
+    a = np.array([1.0, 2.0, 4.0, 8.0])
+    result = np.log2(a)
+    expected = np.array([0.0, 1.0, 2.0, 3.0])
+    assert np.allclose(result, expected)
+
+def test_log1p():
+    a = np.array([0.0, 1.0])
+    result = np.log1p(a)
+    expected = np.array([0.0, 0.6931471805599453])
+    assert np.allclose(result, expected)
+
+def test_expm1():
+    a = np.array([0.0, 1.0])
+    result = np.expm1(a)
+    expected = np.array([0.0, 1.718281828459045])
+    assert np.allclose(result, expected)
+
+def test_sign():
+    a = np.array([-5.0, 0.0, 3.0])
+    result = np.sign(a)
+    expected = np.array([-1.0, 0.0, 1.0])
+    assert np.allclose(result, expected)
+
+def test_sign_int():
+    a = np.array([-2, 0, 7]).astype("int32")
+    result = np.sign(a)
+    assert result.tolist() == [-1, 0, 1]
+
+def test_deg2rad():
+    a = np.array([0.0, 90.0, 180.0, 360.0])
+    result = np.deg2rad(a)
+    pi = 3.141592653589793
+    expected = np.array([0.0, pi / 2, pi, 2 * pi])
+    assert np.allclose(result, expected)
+
+def test_rad2deg():
+    pi = 3.141592653589793
+    a = np.array([0.0, pi / 2, pi])
+    result = np.rad2deg(a)
+    expected = np.array([0.0, 90.0, 180.0])
+    assert np.allclose(result, expected)
+
+def test_radians_degrees_aliases():
+    a = np.array([90.0])
+    assert np.allclose(np.radians(a), np.deg2rad(a))
+    assert np.allclose(np.degrees(np.radians(a)), a)
+
+def test_sinh():
+    a = np.array([0.0, 1.0])
+    result = np.sinh(a)
+    expected = np.array([0.0, 1.1752011936438014])
+    assert np.allclose(result, expected)
+
+def test_cosh():
+    a = np.array([0.0, 1.0])
+    result = np.cosh(a)
+    expected = np.array([1.0, 1.5430806348152437])
+    assert np.allclose(result, expected)
+
+def test_tanh():
+    a = np.array([0.0, 1.0])
+    result = np.tanh(a)
+    expected = np.array([0.0, 0.7615941559557649])
+    assert np.allclose(result, expected)
+
+def test_arcsin():
+    a = np.array([0.0, 0.5, 1.0])
+    result = np.arcsin(a)
+    pi = 3.141592653589793
+    expected = np.array([0.0, pi / 6, pi / 2])
+    assert np.allclose(result, expected)
+
+def test_arccos():
+    a = np.array([1.0, 0.5, 0.0])
+    result = np.arccos(a)
+    pi = 3.141592653589793
+    expected = np.array([0.0, pi / 3, pi / 2])
+    assert np.allclose(result, expected)
+
+def test_arctan():
+    a = np.array([0.0, 1.0])
+    result = np.arctan(a)
+    pi = 3.141592653589793
+    expected = np.array([0.0, pi / 4])
+    assert np.allclose(result, expected)
+
+def test_math_int_auto_cast():
+    """Math functions should auto-cast integers to float."""
+    a = np.array([1, 4, 9])
+    result = np.sqrt(a)
+    expected = np.array([1.0, 2.0, 3.0])
+    assert np.allclose(result, expected)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

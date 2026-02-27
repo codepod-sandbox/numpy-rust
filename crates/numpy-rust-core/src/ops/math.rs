@@ -269,12 +269,24 @@ impl NdArray {
             ArrayData::Bool(a) => ArrayData::Int32(a.mapv(|x| if x { 1 } else { 0 })),
             ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.signum())),
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.signum())),
-            ArrayData::Float32(a) => {
-                ArrayData::Float32(a.mapv(|x| if x.is_nan() { x } else { x.signum() }))
-            }
-            ArrayData::Float64(a) => {
-                ArrayData::Float64(a.mapv(|x| if x.is_nan() { x } else { x.signum() }))
-            }
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| {
+                if x.is_nan() {
+                    x
+                } else if x == 0.0 {
+                    0.0
+                } else {
+                    x.signum()
+                }
+            })),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| {
+                if x.is_nan() {
+                    x
+                } else if x == 0.0 {
+                    0.0
+                } else {
+                    x.signum()
+                }
+            })),
             ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
                 // NumPy returns x/|x| for complex, but skip for now — return clone
                 return self.clone();
