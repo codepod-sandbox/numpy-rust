@@ -419,10 +419,16 @@ def copy(a, order="K"):
         return a.copy()
     return array(a)
 
-def clip(a, a_min, a_max, out=None):
+def clip(a, a_min=None, a_max=None, out=None):
     """Clip array values to [a_min, a_max]."""
     if not isinstance(a, ndarray):
         a = array(a)
+    if a_min is None and a_max is None:
+        return a.copy()
+    if a_min is None:
+        a_min = float('-inf')
+    if a_max is None:
+        a_max = float('inf')
     return _native.clip(a, a_min, a_max)
 
 def abs(x):
@@ -1133,7 +1139,14 @@ def hstack(tup):
     return concatenate(arrs, 0)
 
 def column_stack(tup):
-    return _native.column_stack(list(tup))
+    """Stack 1-D arrays as columns into a 2-D array."""
+    arrays = []
+    for a in tup:
+        a = asarray(a)
+        if a.ndim == 1:
+            a = a.reshape((a.size, 1))  # Make column vector
+        arrays.append(a)
+    return concatenate(arrays, 1)
 
 def dstack(tup):
     return _native.dstack(list(tup))
@@ -1375,9 +1388,21 @@ def nonzero(a):
     return (array([]),)
 
 def count_nonzero(a, axis=None):
-    if isinstance(a, ndarray):
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is None:
         return _native.count_nonzero(a)
-    return 0
+    # Build a boolean mask (nonzero -> 1.0, zero -> 0.0), then sum along axis
+    flat = a.flatten().tolist()
+    mask_data = [1.0 if v != 0.0 else 0.0 for v in flat]
+    mask = array(mask_data).reshape(a.shape)
+    result = mask.sum(axis, False)
+    # Convert to integer values
+    if isinstance(result, ndarray):
+        flat_r = result.flatten().tolist()
+        int_data = [int(v) for v in flat_r]
+        return array([float(v) for v in int_data]).reshape(result.shape)
+    return int(result)
 
 # Keep builtin sum reference
 _builtin_sum = __builtins__["sum"] if isinstance(__builtins__, dict) else __import__("builtins").sum
@@ -1408,6 +1433,7 @@ def tile(a, reps):
     return _native.tile(a, reps)
 
 def resize(a, new_shape):
+    a = asarray(a)
     if isinstance(new_shape, int):
         new_shape = (new_shape,)
     total = 1
@@ -1415,10 +1441,13 @@ def resize(a, new_shape):
         total *= s
     if total == 0:
         return zeros(new_shape)
-    flat = a.flatten()
+    flat = a.flatten().tolist()
+    n = len(flat)
+    if n == 0:
+        return zeros(new_shape)
     result = []
     for i in range(total):
-        result.append(float(flat[i % flat.size]))
+        result.append(flat[i % n])
     return array(result).reshape(new_shape)
 
 def choose(a, choices, out=None, mode="raise"):
@@ -1449,14 +1478,48 @@ def outer(a, b, out=None):
     return _native.outer(a_flat, b_flat)
 
 def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
-    """Cross product stub (3D only)."""
-    a = asarray(a) if not isinstance(a, ndarray) else a
-    b = asarray(b) if not isinstance(b, ndarray) else b
-    return array([
-        float(a.flatten()[1]) * float(b.flatten()[2]) - float(a.flatten()[2]) * float(b.flatten()[1]),
-        float(a.flatten()[2]) * float(b.flatten()[0]) - float(a.flatten()[0]) * float(b.flatten()[2]),
-        float(a.flatten()[0]) * float(b.flatten()[1]) - float(a.flatten()[1]) * float(b.flatten()[0]),
-    ])
+    """Cross product of two arrays.
+
+    Handles 1D vectors of length 2 or 3, and batched 2D arrays where the
+    last axis has length 2 or 3.
+    """
+    a = asarray(a)
+    b = asarray(b)
+    # Simple 1D cases
+    if a.ndim == 1 and b.ndim == 1:
+        af = a.flatten().tolist()
+        bf = b.flatten().tolist()
+        if len(af) == 3 and len(bf) == 3:
+            return array([
+                af[1]*bf[2] - af[2]*bf[1],
+                af[2]*bf[0] - af[0]*bf[2],
+                af[0]*bf[1] - af[1]*bf[0],
+            ])
+        elif len(af) == 2 and len(bf) == 2:
+            return array(af[0]*bf[1] - af[1]*bf[0])
+        else:
+            raise ValueError("incompatible vector sizes for cross product")
+    # Batched 2D case: process row by row
+    if a.ndim == 2 and b.ndim == 2:
+        rows = a.shape[0]
+        last = a.shape[-1]
+        results = []
+        for i in range(rows):
+            ai = a[i].flatten().tolist()
+            bi = b[i].flatten().tolist()
+            if last == 3:
+                results.append([
+                    ai[1]*bi[2] - ai[2]*bi[1],
+                    ai[2]*bi[0] - ai[0]*bi[2],
+                    ai[0]*bi[1] - ai[1]*bi[0],
+                ])
+            elif last == 2:
+                results.append(ai[0]*bi[1] - ai[1]*bi[0])
+            else:
+                raise ValueError("incompatible vector sizes for cross product")
+        if last == 2:
+            return array(results)
+        return array(results)
 
 def tensordot(a, b, axes=2):
     """Compute tensor dot product along specified axes.
@@ -1890,14 +1953,29 @@ def isin(element, test_elements, assume_unique=False, invert=False):
 in1d = isin
 
 def all(a, axis=None, out=None, keepdims=False):
-    if isinstance(a, ndarray):
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is None:
         return a.all()
-    return bool(a)
+    # Reduce along specific axis: all elements nonzero iff min != 0
+    # But min of booleans (1.0/0.0) works: min==0 means not all true.
+    # Use the ndarray's min(axis) which supports axis.
+    m = a.min(axis, keepdims)
+    # Convert to boolean array: nonzero => True
+    flat = m.flatten().tolist()
+    result = [v != 0.0 for v in flat]
+    return array(result).reshape(m.shape)
 
 def any(a, axis=None, out=None, keepdims=False):
-    if isinstance(a, ndarray):
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if axis is None:
         return a.any()
-    return bool(a)
+    # Reduce along specific axis: any element nonzero iff max != 0
+    m = a.max(axis, keepdims)
+    flat = m.flatten().tolist()
+    result = [v != 0.0 for v in flat]
+    return array(result).reshape(m.shape)
 
 def may_share_memory(a, b, max_work=None):
     return False  # stub
@@ -1948,10 +2026,20 @@ def minimum(x1, x2):
     return x1 if x1 < x2 else x2
 
 def logical_and(x1, x2):
-    return asarray(x1) * asarray(x2)  # rough
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    flat1 = x1.flatten().tolist()
+    flat2 = x2.flatten().tolist()
+    result = [bool(a) and bool(b) for a, b in zip(flat1, flat2)]
+    return array(result).reshape(x1.shape)
 
 def logical_or(x1, x2):
-    return asarray(x1) + asarray(x2)  # rough
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    flat1 = x1.flatten().tolist()
+    flat2 = x2.flatten().tolist()
+    result = [bool(a) or bool(b) for a, b in zip(flat1, flat2)]
+    return array(result).reshape(x1.shape)
 
 def logical_not(x):
     if isinstance(x, ndarray):
@@ -2054,11 +2142,39 @@ def conj(a):
 
 conjugate = conj
 
-def angle(a, deg=False):
-    """Return the angle (argument) of complex elements."""
-    if isinstance(a, ndarray):
-        return a.angle()
-    return 0
+def angle(z, deg=False):
+    """Return the angle (argument) of complex or real elements."""
+    z = asarray(z)
+    if iscomplexobj(z):
+        try:
+            result = arctan2(imag(z), real(z))
+        except Exception:
+            result = z.angle()
+    else:
+        # For real arrays: arctan2(0, x) gives 0 for positive, pi for negative
+        result = arctan2(zeros(z.shape), z)
+    if deg:
+        result = result * (180.0 / _math.pi)
+    return result
+
+def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
+    """Unwrap by changing deltas between values to 2*pi complement."""
+    p = asarray(p)
+    if discont is None:
+        discont = period / 2
+    flat = p.flatten().tolist()
+    if len(flat) == 0:
+        return array([])
+    result = [flat[0]]
+    for i in range(1, len(flat)):
+        d = flat[i] - result[-1]
+        # Wrap difference to [-period/2, period/2]
+        d = d - period * round(d / period)
+        result.append(result[-1] + d)
+    out = array(result)
+    if p.ndim > 1:
+        out = out.reshape(p.shape)
+    return out
 
 def histogram(a, bins=10, range=None, density=None, weights=None):
     if not isinstance(a, ndarray):
@@ -2378,7 +2494,49 @@ def roots(p):
         else:
             sq = (-disc) ** 0.5
             return array([(-b) / (2 * a), (-b) / (2 * a)])  # real part only
-    raise NotImplementedError("roots for degree > 2 requires eigenvalue decomposition")
+    # For degree > 2: Durand-Kerner method for finding all roots simultaneously.
+    # Normalize polynomial so leading coefficient is 1
+    a0 = float(coeffs[0])
+    norm_coeffs = [float(c) / a0 for c in coeffs]
+    # Horner's method to compute polynomial value at a point
+    import math as _m
+    def _poly_at(z, cs):
+        val = 0.0
+        for c in cs:
+            val = val * z + c
+        return val
+    # Bound on root magnitudes
+    _abs_coeffs = [abs(c) for c in norm_coeffs[1:]]
+    _max_coeff = _abs_coeffs[0]
+    for _ac in _abs_coeffs[1:]:
+        if _ac > _max_coeff:
+            _max_coeff = _ac
+    bound = 1.0 + _max_coeff
+    # Initial guesses: distinct real values spread around
+    z = [bound * (0.4 + 0.6 * _m.cos(2.0 * _m.pi * (k + 0.25) / n)) for k in range(n)]
+    # Durand-Kerner iteration
+    for _iteration in range(1000):
+        max_delta = 0.0
+        new_z = list(z)
+        for i in range(n):
+            pval = _poly_at(z[i], norm_coeffs)
+            denom = 1.0
+            for j in range(n):
+                if j != i:
+                    diff = z[i] - z[j]
+                    if abs(diff) < 1e-15:
+                        diff = 1e-15
+                    denom *= diff
+            if abs(denom) < 1e-30:
+                denom = 1e-30
+            delta = pval / denom
+            new_z[i] = z[i] - delta
+            if abs(delta) > max_delta:
+                max_delta = abs(delta)
+        z = new_z
+        if max_delta < 1e-12:
+            break
+    return array(z)
 
 
 def polyadd(a1, a2):
@@ -2972,23 +3130,32 @@ def delete(arr, obj, axis=None):
         result = [float(arr[i]) for i in keep]
         return array(result)
     else:
-        # For multi-dimensional, concatenate slices
-        slices = []
-        for i in keep:
-            if axis == 0:
+        if axis == 0:
+            # For multi-dimensional, concatenate slices along axis 0
+            slices = []
+            for i in keep:
                 slices.append(arr[i])
-            else:
-                pass
-        if axis == 0 and slices:
-            rows = []
-            for s in slices:
-                if s.ndim == 0:
-                    rows.append([float(s)])
-                else:
-                    rows.append([float(s[j]) for j in range(len(s))])
-            return array(rows)
-        # Fallback for other axes
-        return arr
+            if slices:
+                rows = []
+                for s in slices:
+                    if s.ndim == 0:
+                        rows.append([float(s)])
+                    else:
+                        rows.append([float(s[j]) for j in range(len(s))])
+                return array(rows)
+            return array([])
+        else:
+            # For non-zero axis: transpose so target axis is first,
+            # delete along axis 0, then transpose back
+            # Build axis permutation: move target axis to front
+            ndim = arr.ndim
+            perm = [axis] + [i for i in range(ndim) if i != axis]
+            inv_perm = [0] * ndim
+            for i, p in enumerate(perm):
+                inv_perm[p] = i
+            t = transpose(arr, perm)
+            t_del = delete(t, obj, axis=0)
+            return transpose(t_del, inv_perm)
 
 def insert(arr, obj, values, axis=None):
     """Insert values along the given axis before the given indices."""
@@ -4064,7 +4231,26 @@ def _linalg_multi_dot(arrays):
         result = dot(result, asarray(arrays[i]))
     return result
 
+_linalg_norm_orig = linalg.norm
+
+def _linalg_norm_with_axis(x, ord=None, axis=None, keepdims=False):
+    """Compute matrix or vector norm, optionally along an axis."""
+    x = asarray(x)
+    if axis is None:
+        # Delegate to native Rust norm (Frobenius / flat L2)
+        return _linalg_norm_orig(x)
+    # Compute norm along specified axis (use positional arg for sum/max)
+    if ord is None or ord == 2:
+        return sqrt((x * x).sum(axis))
+    elif ord == 1:
+        return abs(x).sum(axis)
+    elif ord == float('inf'):
+        return abs(x).max(axis)
+    else:
+        return (abs(x) ** ord).sum(axis) ** (1.0 / ord)
+
 # Monkey-patch linalg module
+linalg.norm = _linalg_norm_with_axis
 linalg.pinv = _linalg_pinv
 linalg.matrix_rank = _linalg_matrix_rank
 linalg.matrix_power = _linalg_matrix_power
@@ -4344,6 +4530,117 @@ def _random_gamma(shape_param, scale=1.0, size=None):
         r = r.reshape(size)
     return r
 
+def _random_multinomial(n, pvals, size=None):
+    """Draw samples from a multinomial distribution."""
+    pvals = [float(p) for p in (pvals.tolist() if isinstance(pvals, ndarray) else pvals)]
+    k = len(pvals)
+    if size is None:
+        # Single draw: n trials among k categories
+        result = [0] * k
+        for _ in range(n):
+            r = float(random.rand((1,))[0])
+            cumsum = 0.0
+            for j in range(k):
+                cumsum += pvals[j]
+                if r < cumsum:
+                    result[j] += 1
+                    break
+            else:
+                result[-1] += 1
+        return array(result)
+    else:
+        if isinstance(size, int):
+            size = (size,)
+        total = 1
+        for s in size:
+            total *= s
+        rows = []
+        for _ in range(total):
+            result = [0] * k
+            for _ in range(n):
+                r = float(random.rand((1,))[0])
+                cumsum = 0.0
+                for j in range(k):
+                    cumsum += pvals[j]
+                    if r < cumsum:
+                        result[j] += 1
+                        break
+                else:
+                    result[-1] += 1
+            rows.append(result)
+        out = array(rows)
+        if len(size) > 1:
+            out = out.reshape(list(size) + [k])
+        return out
+
+def _random_lognormal(mean=0.0, sigma=1.0, size=None):
+    """Draw samples from a log-normal distribution."""
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    normals = random.normal(mean, sigma, size)
+    return exp(normals)
+
+def _random_geometric(p, size=None):
+    """Draw samples from a geometric distribution.
+    Returns number of trials until first success (minimum value 1)."""
+    import math as _m
+    if size is None:
+        size = (1,)
+    if isinstance(size, int):
+        size = (size,)
+    total = 1
+    for s in size:
+        total *= s
+    log1mp = _m.log(1.0 - p)
+    result = []
+    for _ in range(total):
+        u = float(random.uniform(0.0, 1.0, (1,))[0])
+        # Avoid log(0)
+        if u >= 1.0:
+            u = 0.9999999999
+        if u <= 0.0:
+            u = 1e-15
+        result.append(float(_m.ceil(_m.log(u) / log1mp)))
+    r = array(result)
+    if len(size) > 1:
+        r = r.reshape(size)
+    return r
+
+def _random_dirichlet(alpha, size=None):
+    """Draw samples from a Dirichlet distribution."""
+    if isinstance(alpha, ndarray):
+        alpha = alpha.tolist()
+    alpha = [float(a) for a in alpha]
+    k = len(alpha)
+    if size is None:
+        # Single draw
+        samples = []
+        for a in alpha:
+            g = float(_random_gamma(a, 1.0, (1,))[0])
+            samples.append(g)
+        total = sum(samples)
+        return array([s / total for s in samples])
+    else:
+        if isinstance(size, int):
+            size = (size,)
+        num = 1
+        for s in size:
+            num *= s
+        rows = []
+        for _ in range(num):
+            samples = []
+            for a in alpha:
+                g = float(_random_gamma(a, 1.0, (1,))[0])
+                samples.append(g)
+            total = sum(samples)
+            rows.append([s / total for s in samples])
+        out = array(rows)
+        if len(size) > 1:
+            out = out.reshape(list(size) + [k])
+        return out
+
 class _Generator:
     """Random number generator (simplified)."""
     def __init__(self, seed_val=None):
@@ -4420,6 +4717,10 @@ random.poisson = _random_poisson
 random.binomial = _random_binomial
 random.beta = _random_beta
 random.gamma = _random_gamma
+random.multinomial = _random_multinomial
+random.lognormal = _random_lognormal
+random.geometric = _random_geometric
+random.dirichlet = _random_dirichlet
 random.default_rng = _default_rng
 random.Generator = _Generator
 

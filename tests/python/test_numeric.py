@@ -3396,6 +3396,250 @@ def test_swapaxes_2d():
     assert_close(float(r[1][0]), 2.0)
     assert_close(float(r[0][1]), 4.0)
 
+# --- Tier 21 Group B tests ---------------------------------------------------
+
+def test_roots_cubic():
+    """roots([1, -6, 11, -6]) should give roots near 1, 2, 3."""
+    r = np.roots([1, -6, 11, -6])
+    vals = sorted([float(r[i]) for i in range(r.size)])
+    assert len(vals) == 3
+    assert_close(vals[0], 1.0, tol=1e-6)
+    assert_close(vals[1], 2.0, tol=1e-6)
+    assert_close(vals[2], 3.0, tol=1e-6)
+
+def test_roots_quartic():
+    """roots([1, -10, 35, -50, 24]) should give roots near 1, 2, 3, 4."""
+    r = np.roots([1, -10, 35, -50, 24])
+    vals = sorted([float(r[i]) for i in range(r.size)])
+    assert len(vals) == 4
+    assert_close(vals[0], 1.0, tol=1e-6)
+    assert_close(vals[1], 2.0, tol=1e-6)
+    assert_close(vals[2], 3.0, tol=1e-6)
+    assert_close(vals[3], 4.0, tol=1e-6)
+
+def test_multinomial():
+    """random.multinomial(100, [0.5, 0.3, 0.2]) should sum to 100."""
+    r = np.random.multinomial(100, [0.5, 0.3, 0.2])
+    total = sum([float(r[i]) for i in range(r.size)])
+    assert_close(total, 100.0)
+    assert r.size == 3
+
+def test_linalg_norm_axis():
+    """linalg.norm([[3,4],[5,12]], axis=1) -> [5, 13]."""
+    a = np.array([[3.0, 4.0], [5.0, 12.0]])
+    r = np.linalg.norm(a, axis=1)
+    assert_close(float(r[0]), 5.0, tol=1e-6)
+    assert_close(float(r[1]), 13.0, tol=1e-6)
+
+def test_lognormal():
+    """random.lognormal(0, 1, size=100) returns 100 positive values."""
+    r = np.random.lognormal(0.0, 1.0, size=100)
+    assert r.size == 100
+    for i in range(r.size):
+        assert float(r[i]) > 0.0
+
+def test_geometric():
+    """random.geometric(0.5, size=100) returns positive integers."""
+    r = np.random.geometric(0.5, size=100)
+    assert r.size == 100
+    for i in range(r.size):
+        v = float(r[i])
+        assert v >= 1.0
+        assert_close(v, round(v), tol=1e-9)
+
+def test_dirichlet():
+    """random.dirichlet([1,1,1]) sums to ~1.0."""
+    r = np.random.dirichlet([1.0, 1.0, 1.0])
+    assert r.size == 3
+    total = sum([float(r[i]) for i in range(r.size)])
+    assert_close(total, 1.0, tol=1e-9)
+    for i in range(r.size):
+        assert float(r[i]) > 0.0
+
+# --- Tier 21 Group A tests: logic fixes & axis support -----------------------
+
+def test_logical_and_correctness():
+    """logical_and should return boolean results, not arithmetic."""
+    r = np.logical_and([2.0, 0.0, -1.0], [3.0, 4.0, 0.0])
+    # Expected: [True, False, False] stored as [1.0, 0.0, 0.0]
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 0.0)
+    assert_close(float(r[2]), 0.0)
+
+def test_logical_or_correctness():
+    """logical_or should return boolean results, not arithmetic."""
+    r = np.logical_or([0.0, 0.0, 1.0], [0.0, 1.0, 0.0])
+    # Expected: [False, True, True] stored as [0.0, 1.0, 1.0]
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 1.0)
+    assert_close(float(r[2]), 1.0)
+
+def test_all_axis():
+    """all with axis should reduce along the given axis."""
+    a = np.array([[1.0, 0.0], [1.0, 1.0]])
+    r = np.all(a, axis=1)
+    # Row 0: 1 and 0 -> False, Row 1: 1 and 1 -> True
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 1.0)
+
+def test_any_axis():
+    """any with axis should reduce along the given axis."""
+    a = np.array([[0.0, 0.0], [0.0, 1.0]])
+    r = np.any(a, axis=1)
+    # Row 0: all zero -> False, Row 1: has 1 -> True
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 1.0)
+
+def test_count_nonzero_axis():
+    """count_nonzero with axis should count along that axis."""
+    a = np.array([[0.0, 1.0, 2.0], [0.0, 0.0, 3.0]])
+    r = np.count_nonzero(a, axis=1)
+    assert_close(float(r[0]), 2.0)
+    assert_close(float(r[1]), 1.0)
+
+def test_clip_none_min():
+    """clip with a_min=None should only clip the upper bound."""
+    r = np.clip([1.0, 5.0, 10.0], None, 7.0)
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 5.0)
+    assert_close(float(r[2]), 7.0)
+
+def test_clip_none_max():
+    """clip with a_max=None should only clip the lower bound."""
+    r = np.clip([1.0, 5.0, 10.0], 3.0, None)
+    assert_close(float(r[0]), 3.0)
+    assert_close(float(r[1]), 5.0)
+    assert_close(float(r[2]), 10.0)
+
+def test_delete_axis1():
+    """delete with axis=1 should remove a column from a 2D array."""
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    r = np.delete(a, 1, axis=1)
+    assert_eq(r.shape, (2, 2))
+    assert_close(float(r[0][0]), 1.0)
+    assert_close(float(r[0][1]), 3.0)
+    assert_close(float(r[1][0]), 4.0)
+    assert_close(float(r[1][1]), 6.0)
+
+# --- Tier 21 Group C tests ---------------------------------------------------
+
+def test_cross_3d():
+    """cross([1,0,0], [0,1,0]) should give [0, 0, 1]."""
+    r = np.cross([1,0,0], [0,1,0])
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 0.0)
+    assert_close(float(r[2]), 1.0)
+
+def test_cross_2d():
+    """cross([1,0], [0,1]) should give scalar 1."""
+    r = np.cross([1,0], [0,1])
+    assert_close(float(r), 1.0)
+
+def test_cross_3d_anticommutative():
+    """cross(b,a) should be -cross(a,b)."""
+    r1 = np.cross([1,0,0], [0,1,0])
+    r2 = np.cross([0,1,0], [1,0,0])
+    assert_close(float(r1[0]), -float(r2[0]))
+    assert_close(float(r1[1]), -float(r2[1]))
+    assert_close(float(r1[2]), -float(r2[2]))
+
+def test_column_stack():
+    """column_stack of two 1D arrays gives a 2D array."""
+    r = np.column_stack(([1,2,3], [4,5,6]))
+    assert_eq(r.shape, (3, 2))
+    assert_close(float(r[0][0]), 1.0)
+    assert_close(float(r[0][1]), 4.0)
+    assert_close(float(r[1][0]), 2.0)
+    assert_close(float(r[1][1]), 5.0)
+    assert_close(float(r[2][0]), 3.0)
+    assert_close(float(r[2][1]), 6.0)
+
+def test_column_stack_three():
+    """column_stack of three 1D arrays."""
+    r = np.column_stack(([1,2], [3,4], [5,6]))
+    assert_eq(r.shape, (2, 3))
+    assert_close(float(r[0][0]), 1.0)
+    assert_close(float(r[0][1]), 3.0)
+    assert_close(float(r[0][2]), 5.0)
+
+def test_row_stack():
+    """row_stack is an alias for vstack."""
+    assert np.row_stack is np.vstack
+
+def test_resize():
+    """resize repeats elements to fill a new shape."""
+    r = np.resize([1,2,3], (2, 4))
+    assert_eq(r.shape, (2, 4))
+    assert_close(float(r[0][0]), 1.0)
+    assert_close(float(r[0][1]), 2.0)
+    assert_close(float(r[0][2]), 3.0)
+    assert_close(float(r[0][3]), 1.0)
+    assert_close(float(r[1][0]), 2.0)
+    assert_close(float(r[1][1]), 3.0)
+    assert_close(float(r[1][2]), 1.0)
+    assert_close(float(r[1][3]), 2.0)
+
+def test_resize_shrink():
+    """resize can also shrink an array."""
+    r = np.resize([1,2,3,4,5], (2,))
+    assert_eq(r.shape, (2,))
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 2.0)
+
+def test_angle_real():
+    """angle of positive reals is 0, negative is pi."""
+    r = np.angle(np.array([1.0, -1.0]))
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 3.141592653589793)
+
+def test_angle_deg():
+    """angle in degrees: negative real should be 180."""
+    r = np.angle(np.array([-1.0]), deg=True)
+    assert_close(float(r[0]), 180.0)
+
+def test_unwrap_basic():
+    """unwrap should remove phase discontinuities."""
+    import math
+    # Create a phase that jumps by 2*pi
+    phases = np.array([0.0, 0.5, 1.0, 1.5 + 2*math.pi, 2.0 + 2*math.pi])
+    r = np.unwrap(phases)
+    # After unwrapping, the result should be smooth
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 0.5)
+    assert_close(float(r[2]), 1.0)
+    assert_close(float(r[3]), 1.5, tol=1e-6)
+    assert_close(float(r[4]), 2.0, tol=1e-6)
+
+def test_unwrap_negative_jump():
+    """unwrap should handle negative jumps too."""
+    import math
+    phases = np.array([3.0, 2.5, 2.0, 1.5 - 2*math.pi])
+    r = np.unwrap(phases)
+    assert_close(float(r[0]), 3.0)
+    assert_close(float(r[1]), 2.5)
+    assert_close(float(r[2]), 2.0)
+    assert_close(float(r[3]), 1.5, tol=1e-6)
+
+def test_conj_real():
+    """conj of real array returns same values."""
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.conj(a)
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 2.0)
+    assert_close(float(r[2]), 3.0)
+
+def test_conjugate_alias():
+    """conjugate should be an alias for conj."""
+    assert np.conjugate is np.conj
+
+def test_nan_to_num_all_nan():
+    """nan_to_num should handle arrays of all NaN."""
+    a = np.array([float('nan'), float('nan'), float('nan')])
+    r = np.nan_to_num(a)
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 0.0)
+    assert_close(float(r[2]), 0.0)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
