@@ -382,6 +382,75 @@ def tan(x):
         return x.tan()
     return _math.tan(x)
 
+def log10(x):
+    if isinstance(x, ndarray):
+        return _native.log10(x)
+    return _math.log10(x)
+
+def log2(x):
+    if isinstance(x, ndarray):
+        return _native.log2(x)
+    return _math.log2(x)
+
+def log1p(x):
+    if isinstance(x, ndarray):
+        return _native.log1p(x)
+    return _math.log1p(x)
+
+def expm1(x):
+    if isinstance(x, ndarray):
+        return _native.expm1(x)
+    return _math.expm1(x)
+
+def sign(x):
+    if isinstance(x, ndarray):
+        return _native.sign(x)
+    return (x > 0) - (x < 0)
+
+def deg2rad(x):
+    if isinstance(x, ndarray):
+        return _native.deg2rad(x)
+    return _math.radians(x)
+
+def rad2deg(x):
+    if isinstance(x, ndarray):
+        return _native.rad2deg(x)
+    return _math.degrees(x)
+
+# Aliases
+radians = deg2rad
+degrees = rad2deg
+
+def sinh(x):
+    if isinstance(x, ndarray):
+        return _native.sinh(x)
+    return _math.sinh(x)
+
+def cosh(x):
+    if isinstance(x, ndarray):
+        return _native.cosh(x)
+    return _math.cosh(x)
+
+def tanh(x):
+    if isinstance(x, ndarray):
+        return _native.tanh(x)
+    return _math.tanh(x)
+
+def arcsin(x):
+    if isinstance(x, ndarray):
+        return _native.arcsin(x)
+    return _math.asin(x)
+
+def arccos(x):
+    if isinstance(x, ndarray):
+        return _native.arccos(x)
+    return _math.acos(x)
+
+def arctan(x):
+    if isinstance(x, ndarray):
+        return _native.arctan(x)
+    return _math.atan(x)
+
 def floor(x):
     if isinstance(x, ndarray):
         return x.floor()

@@ -255,6 +255,83 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    #[pyfunction]
+    fn log10(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().log10())
+    }
+
+    #[pyfunction]
+    fn log2(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().log2())
+    }
+
+    #[pyfunction]
+    fn sinh(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().sinh())
+    }
+
+    #[pyfunction]
+    fn cosh(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().cosh())
+    }
+
+    #[pyfunction]
+    fn tanh(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().tanh())
+    }
+
+    #[pyfunction]
+    fn arcsin(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().arcsin())
+    }
+
+    #[pyfunction]
+    fn arccos(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().arccos())
+    }
+
+    #[pyfunction]
+    fn arctan(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().arctan())
+    }
+
+    #[pyfunction]
+    fn sign(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().sign())
+    }
+
+    #[pyfunction]
+    fn log1p(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .log1p()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn expm1(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .expm1()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn deg2rad(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .deg2rad()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn rad2deg(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .rad2deg()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
     // --- Element-wise check functions ---
 
     #[pyfunction]

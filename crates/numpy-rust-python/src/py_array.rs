@@ -516,6 +516,91 @@ impl PyNdArray {
     }
 
     #[pymethod]
+    fn log10(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().log10())
+    }
+
+    #[pymethod]
+    fn log2(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().log2())
+    }
+
+    #[pymethod]
+    fn sinh(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().sinh())
+    }
+
+    #[pymethod]
+    fn cosh(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().cosh())
+    }
+
+    #[pymethod]
+    fn tanh(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().tanh())
+    }
+
+    #[pymethod]
+    fn arcsin(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().arcsin())
+    }
+
+    #[pymethod]
+    fn arccos(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().arccos())
+    }
+
+    #[pymethod]
+    fn arctan(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().arctan())
+    }
+
+    #[pymethod]
+    fn log1p(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        self.data
+            .read()
+            .unwrap()
+            .log1p()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pymethod]
+    fn expm1(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        self.data
+            .read()
+            .unwrap()
+            .expm1()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pymethod]
+    fn deg2rad(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        self.data
+            .read()
+            .unwrap()
+            .deg2rad()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pymethod]
+    fn rad2deg(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        self.data
+            .read()
+            .unwrap()
+            .rad2deg()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_type_error(e.to_string()))
+    }
+
+    #[pymethod]
+    fn sign(&self) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().sign())
+    }
+
+    #[pymethod]
     fn conj(&self) -> PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().conj())
     }

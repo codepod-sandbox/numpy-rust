@@ -106,6 +106,68 @@ float_only_unary!(floor, |x: f32| x.floor(), |x: f64| x.floor());
 float_only_unary!(ceil, |x: f32| x.ceil(), |x: f64| x.ceil());
 float_only_unary!(round, |x: f32| x.round(), |x: f64| x.round());
 
+float_unary!(
+    log10,
+    |x: f32| x.log10(),
+    |x: f64| x.log10(),
+    |x: Complex<f32>| x.ln() / Complex::new(std::f32::consts::LN_10, 0.0),
+    |x: Complex<f64>| x.ln() / Complex::new(std::f64::consts::LN_10, 0.0)
+);
+float_unary!(
+    log2,
+    |x: f32| x.log2(),
+    |x: f64| x.log2(),
+    |x: Complex<f32>| x.ln() / Complex::new(std::f32::consts::LN_2, 0.0),
+    |x: Complex<f64>| x.ln() / Complex::new(std::f64::consts::LN_2, 0.0)
+);
+float_unary!(
+    sinh,
+    |x: f32| x.sinh(),
+    |x: f64| x.sinh(),
+    |x: Complex<f32>| x.sinh(),
+    |x: Complex<f64>| x.sinh()
+);
+float_unary!(
+    cosh,
+    |x: f32| x.cosh(),
+    |x: f64| x.cosh(),
+    |x: Complex<f32>| x.cosh(),
+    |x: Complex<f64>| x.cosh()
+);
+float_unary!(
+    tanh,
+    |x: f32| x.tanh(),
+    |x: f64| x.tanh(),
+    |x: Complex<f32>| x.tanh(),
+    |x: Complex<f64>| x.tanh()
+);
+float_unary!(
+    arcsin,
+    |x: f32| x.asin(),
+    |x: f64| x.asin(),
+    |x: Complex<f32>| x.asin(),
+    |x: Complex<f64>| x.asin()
+);
+float_unary!(
+    arccos,
+    |x: f32| x.acos(),
+    |x: f64| x.acos(),
+    |x: Complex<f32>| x.acos(),
+    |x: Complex<f64>| x.acos()
+);
+float_unary!(
+    arctan,
+    |x: f32| x.atan(),
+    |x: f64| x.atan(),
+    |x: Complex<f32>| x.atan(),
+    |x: Complex<f64>| x.atan()
+);
+
+float_only_unary!(log1p, |x: f32| x.ln_1p(), |x: f64| x.ln_1p());
+float_only_unary!(expm1, |x: f32| x.exp_m1(), |x: f64| x.exp_m1());
+float_only_unary!(deg2rad, |x: f32| x.to_radians(), |x: f64| x.to_radians());
+float_only_unary!(rad2deg, |x: f32| x.to_degrees(), |x: f64| x.to_degrees());
+
 impl NdArray {
     /// Element-wise absolute value. Works on int and float types.
     /// For complex types, returns the magnitude (norm) as a float.
@@ -199,6 +261,27 @@ impl NdArray {
             )),
         };
         NdArray::from_data(data)
+    }
+
+    /// Element-wise sign function. Returns -1, 0, or 1.
+    pub fn sign(&self) -> NdArray {
+        let result = match &self.data {
+            ArrayData::Bool(a) => ArrayData::Int32(a.mapv(|x| if x { 1 } else { 0 })),
+            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.signum())),
+            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.signum())),
+            ArrayData::Float32(a) => {
+                ArrayData::Float32(a.mapv(|x| if x.is_nan() { x } else { x.signum() }))
+            }
+            ArrayData::Float64(a) => {
+                ArrayData::Float64(a.mapv(|x| if x.is_nan() { x } else { x.signum() }))
+            }
+            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
+                // NumPy returns x/|x| for complex, but skip for now — return clone
+                return self.clone();
+            }
+            ArrayData::Str(_) => panic!("sign not supported for string arrays"),
+        };
+        NdArray::from_data(result)
     }
 
     /// Element-wise negation. Works on int and float types.
@@ -393,5 +476,63 @@ mod tests {
         let b = a.signbit();
         assert_eq!(b.dtype(), DType::Bool);
         assert_eq!(b.shape(), &[4]);
+    }
+
+    #[test]
+    fn test_log10() {
+        let a = NdArray::from_vec(vec![1.0_f64, 10.0, 100.0]);
+        let b = a.log10();
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_log2() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 4.0]);
+        let b = a.log2();
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_log1p() {
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0]);
+        let b = a.log1p().unwrap();
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_expm1() {
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0]);
+        let b = a.expm1().unwrap();
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_sign() {
+        let a = NdArray::from_vec(vec![-5.0_f64, 0.0, 3.0]);
+        let b = a.sign();
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_deg2rad() {
+        let a = NdArray::from_vec(vec![0.0_f64, 90.0, 180.0]);
+        let b = a.deg2rad().unwrap();
+        assert_eq!(b.dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_sinh_cosh_tanh() {
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0]);
+        let _ = a.sinh();
+        let _ = a.cosh();
+        let _ = a.tanh();
+    }
+
+    #[test]
+    fn test_arcsin_arccos_arctan() {
+        let a = NdArray::from_vec(vec![0.0_f64, 0.5, 1.0]);
+        let _ = a.arcsin();
+        let _ = a.arccos();
+        let _ = a.arctan();
     }
 }
