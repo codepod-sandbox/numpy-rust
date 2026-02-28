@@ -4294,6 +4294,197 @@ def test_percentile_array_q():
     assert_close(result[1], 25.0, msg="percentile array q [1]")
     assert_close(result[2], 32.5, msg="percentile array q [2]")
 
+# --- Tier 25 Group A: Bug fix tests ---
+
+def test_argmax_on_list():
+    assert int(np.argmax([3, 1, 4, 1, 5])) == 4
+    assert int(np.argmin([3, 1, 4, 1, 5])) == 1
+
+def test_allclose_equal_nan():
+    a = np.array([1.0, float('nan'), 3.0])
+    b = np.array([1.0, float('nan'), 3.0])
+    assert np.allclose(a, b, equal_nan=True)
+    assert not np.allclose(a, b, equal_nan=False)
+
+def test_isclose_equal_nan():
+    a = np.array([1.0, float('nan'), 3.0])
+    b = np.array([1.0, float('nan'), 3.0])
+    r = np.isclose(a, b, equal_nan=True)
+    assert bool(r[0]) == True
+    assert bool(r[1]) == True
+    assert bool(r[2]) == True
+
+def test_array_equal_nan():
+    a = np.array([1.0, float('nan')])
+    b = np.array([1.0, float('nan')])
+    assert np.array_equal(a, b, equal_nan=True)
+    assert not np.array_equal(a, b, equal_nan=False)
+
+def test_logspace_endpoint():
+    a = np.logspace(0, 2, num=5, endpoint=True)
+    assert_close(float(a[0]), 1.0)
+    assert_close(float(a[-1]), 100.0)
+    b = np.logspace(0, 2, num=5, endpoint=False)
+    assert_close(float(b[0]), 1.0)
+    assert float(b[-1]) < 100.0  # should not reach 100
+
+def test_geomspace_endpoint():
+    a = np.geomspace(1, 1000, num=4, endpoint=True)
+    assert_close(float(a[0]), 1.0)
+    assert_close(float(a[-1]), 1000.0)
+    b = np.geomspace(1, 1000, num=4, endpoint=False)
+    assert_close(float(b[0]), 1.0)
+    assert float(b[-1]) < 1000.0
+
+def test_savetxt_1d():
+    import os
+    a = np.array([1.0, 2.0, 3.0])
+    np.savetxt("/tmp/_test_savetxt_1d.txt", a)
+    lines = []
+    f = open("/tmp/_test_savetxt_1d.txt", "r")
+    for line in f.readlines():
+        line = line.strip()
+        if line:
+            lines.append(line)
+    f.close()
+    assert len(lines) == 3  # each element on its own row
+    os.remove("/tmp/_test_savetxt_1d.txt")
+
+# --- Tier 25 Group C: Edge case / ignored parameter fix tests ---
+
+def test_histogram_weights():
+    """histogram with weights parameter."""
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    w = np.array([1.0, 2.0, 3.0, 4.0])
+    hist, edges = np.histogram(a, bins=2, weights=w)
+    # bins: [1,2.5), [2.5,4] -> weights: 1+2=3, 3+4=7
+    assert_close(float(hist[0]), 3.0, msg="histogram weights bin 0")
+    assert_close(float(hist[1]), 7.0, msg="histogram weights bin 1")
+
+def test_histogram_range():
+    """histogram with range parameter."""
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    hist, edges = np.histogram(a, bins=2, range=(2.0, 4.0))
+    # Only values in [2,4]: 2,3,4 -> bins [2,3), [3,4] -> counts: 1, 2
+    assert_close(float(hist[0]), 1.0, msg="histogram range bin 0")
+    assert_close(float(hist[1]), 2.0, msg="histogram range bin 1")
+
+def test_interp_left_right():
+    """interp with left/right extrapolation values."""
+    xp = np.array([1.0, 2.0, 3.0])
+    fp = np.array([10.0, 20.0, 30.0])
+    x = np.array([0.0, 1.5, 5.0])
+    r = np.interp(x, xp, fp, left=-1.0, right=99.0)
+    assert_close(float(r[0]), -1.0, msg="interp left")
+    assert_close(float(r[1]), 15.0, msg="interp middle")
+    assert_close(float(r[2]), 99.0, msg="interp right")
+
+def test_unwrap_2d():
+    """unwrap applied along axis for 2D input."""
+    import math
+    row = [0.0, math.pi * 0.9, math.pi * 1.1]  # jump at pi
+    p = np.array([row, row])  # 2x3
+    r = np.unwrap(p, axis=1)
+    assert r.shape == (2, 3), "unwrap 2d shape"
+    # After unwrap, values should be continuous (no big jump)
+    r_list = r.tolist()
+    assert abs(r_list[0][2] - r_list[0][1]) < math.pi, "unwrap 2d continuity"
+
+def test_broadcast_shape():
+    """broadcast computes correct shape from multiple arrays."""
+    b = np.broadcast(np.zeros((3, 1)), np.zeros((1, 4)))
+    assert b.shape == (3, 4), "broadcast shape"
+    assert b.size == 12, "broadcast size"
+
+def test_nditer_multi_index():
+    """nditer tracks multi_index during iteration."""
+    a = np.array([1.0, 2.0, 3.0, 4.0]).reshape((2, 2))
+    it = np.nditer(a)
+    indices = []
+    for val in it:
+        indices.append(it.multi_index)
+    assert indices[0] == (0, 0), "nditer multi_index [0]"
+    assert indices[1] == (0, 1), "nditer multi_index [1]"
+    assert indices[2] == (1, 0), "nditer multi_index [2]"
+    assert indices[3] == (1, 1), "nditer multi_index [3]"
+
+def test_diagonal_axis_swap():
+    """diagonal with axis1=1, axis2=0 should swap axes."""
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    d1 = np.diagonal(a, axis1=0, axis2=1)
+    d2 = np.diagonal(a, axis1=1, axis2=0)
+    assert_close(float(d1[0]), 1.0, msg="diagonal axis1=0 axis2=1 [0]")
+    assert_close(float(d1[1]), 5.0, msg="diagonal axis1=0 axis2=1 [1]")
+    assert_close(float(d1[2]), 9.0, msg="diagonal axis1=0 axis2=1 [2]")
+    assert_close(float(d2[0]), 1.0, msg="diagonal axis1=1 axis2=0 [0]")
+    assert_close(float(d2[1]), 5.0, msg="diagonal axis1=1 axis2=0 [1]")
+    assert_close(float(d2[2]), 9.0, msg="diagonal axis1=1 axis2=0 [2]")
+
+# --- Tier 25 Group B: Common features ---
+
+def test_version_exists():
+    """np.__version__ should be a string with dots."""
+    assert isinstance(np.__version__, str)
+    assert "." in np.__version__
+
+def test_testing_assert_allclose():
+    """np.testing.assert_allclose should pass for equal arrays."""
+    np.testing.assert_allclose([1.0, 2.0], [1.0, 2.0])
+    np.testing.assert_allclose([1.0, 2.0], [1.0 + 1e-8, 2.0 - 1e-8])
+
+def test_testing_assert_array_equal():
+    """np.testing.assert_array_equal should pass for identical arrays."""
+    np.testing.assert_array_equal([1, 2, 3], [1, 2, 3])
+
+def test_testing_assert_array_almost_equal():
+    """np.testing.assert_array_almost_equal for close arrays."""
+    np.testing.assert_array_almost_equal([1.0, 2.0], [1.000001, 2.000001])
+
+def test_fft_fftfreq():
+    """np.fft.fftfreq should return correct frequency bins."""
+    f = np.fft.fftfreq(8, d=1.0)
+    assert len(f.tolist()) == 8
+    assert_close(float(f[0]), 0.0)
+    assert_close(float(f[1]), 0.125)
+
+def test_logaddexp():
+    """logaddexp should compute log(exp(x1) + exp(x2))."""
+    a = np.array([1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    r = np.logaddexp(a, b)
+    import math
+    assert_close(float(r[0]), math.log(math.exp(1.0) + math.exp(3.0)), tol=1e-5)
+    assert_close(float(r[1]), math.log(math.exp(2.0) + math.exp(4.0)), tol=1e-5)
+
+def test_logaddexp2():
+    """logaddexp2 should compute log2(2^x1 + 2^x2)."""
+    a = np.array([1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    r = np.logaddexp2(a, b)
+    import math
+    assert_close(float(r[0]), math.log2(2**1 + 2**3), tol=1e-5)
+    assert_close(float(r[1]), math.log2(2**2 + 2**4), tol=1e-5)
+
+def test_linalg_lstsq():
+    """linalg.lstsq should return (solution, residuals, rank, singular_values)."""
+    A = np.array([[1.0, 1.0], [1.0, 2.0], [1.0, 3.0]])
+    b = np.array([1.0, 2.0, 3.0])
+    result = np.linalg.lstsq(A, b)
+    assert len(result) == 4
+
+def test_linalg_cholesky():
+    """linalg.cholesky should return lower triangular factor."""
+    A = np.array([[4.0, 2.0], [2.0, 3.0]])
+    L = np.linalg.cholesky(A)
+    assert L.shape == (2, 2)
+
+def test_linalg_qr():
+    """linalg.qr should return Q and R matrices."""
+    A = np.array([[1.0, 2.0], [3.0, 4.0]])
+    Q, R = np.linalg.qr(A)
+    assert Q.shape == (2, 2)
+    assert R.shape == (2, 2)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

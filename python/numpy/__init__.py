@@ -2,6 +2,8 @@
 import sys as _sys
 import math as _math
 
+__version__ = "1.26.0"
+
 # Import from native Rust module
 import _numpy_native as _native
 from _numpy_native import ndarray
@@ -171,13 +173,13 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
     return result
 
 def logspace(start, stop, num=50, endpoint=True, base=10.0, dtype=None):
-    y = linspace(start, stop, num=num)
+    y = linspace(start, stop, num=num, endpoint=endpoint)
     return power(base, y)
 
 def geomspace(start, stop, num=50, endpoint=True, dtype=None):
     log_start = _math.log10(start)
     log_stop = _math.log10(stop)
-    return logspace(log_start, log_stop, num=num)
+    return logspace(log_start, log_stop, num=num, endpoint=endpoint)
 
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
     if dtype is not None:
@@ -629,14 +631,7 @@ round_ = around
 
 def allclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
     """Return True if two arrays are element-wise equal within a tolerance."""
-    if not isinstance(a, ndarray):
-        a = array(a)
-    if not isinstance(b, ndarray):
-        b = array(b)
-    diff = abs(a - b)
-    limit = full(diff.shape, atol) + full(diff.shape, rtol) * abs(b)
-    result = (diff <= limit)
-    return bool(result.all())
+    return bool(all(isclose(a, b, rtol=rtol, atol=atol, equal_nan=equal_nan)))
 
 def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
     """Return boolean array where two arrays are element-wise equal within tolerance."""
@@ -646,7 +641,23 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
         b = array(b)
     diff = abs(a - b)
     limit = full(diff.shape, atol) + full(diff.shape, rtol) * abs(b)
-    return (diff <= limit)
+    result = (diff <= limit)
+    if equal_nan:
+        both_nan = logical_and(isnan(a), isnan(b))
+        result = logical_or(result, both_nan)
+    return result
+
+def logaddexp(x1, x2):
+    """Logarithm of the sum of exponentiations of the inputs."""
+    x1, x2 = asarray(x1), asarray(x2)
+    mx = maximum(x1, x2)
+    return mx + log1p(exp(-abs(x1 - x2)))
+
+def logaddexp2(x1, x2):
+    """Logarithm base 2 of the sum of exponentiations of the inputs in base 2."""
+    x1, x2 = asarray(x1), asarray(x2)
+    ln2 = 0.6931471805599453
+    return logaddexp(x1 * ln2, x2 * ln2) / ln2
 
 def rint(x):
     """Round to nearest integer."""
@@ -1053,15 +1064,15 @@ def min(a, axis=None, out=None, keepdims=False):
 
 amin = min
 
-def argmax(a, axis=None, out=None):
-    if isinstance(a, ndarray):
-        return a.argmax(axis)
-    return 0
+def argmax(a, axis=None, out=None, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    return a.argmax(axis)
 
-def argmin(a, axis=None, out=None):
-    if isinstance(a, ndarray):
-        return a.argmin(axis)
-    return 0
+def argmin(a, axis=None, out=None, keepdims=False):
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    return a.argmin(axis)
 
 def reshape(a, newshape, order="C"):
     return a.reshape(newshape)
@@ -1477,14 +1488,17 @@ False_ = False
 int_ = int64
 
 class broadcast:
-    """Stub for np.broadcast."""
+    """Broadcast shape computation for multiple arrays."""
     def __init__(self, *args):
-        self.shape = args[0].shape if hasattr(args[0], 'shape') else (1,)
+        arrays = [asarray(a) for a in args]
+        shapes = [a.shape for a in arrays]
+        self.shape = broadcast_shapes(*shapes)
         self.nd = len(self.shape)
         self.ndim = self.nd
         self.size = 1
         for s in self.shape:
             self.size *= s
+        self.numiter = len(arrays)
 
 def argwhere(a):
     return _native.argwhere(a)
@@ -1516,9 +1530,10 @@ _builtin_sum = __builtins__["sum"] if isinstance(__builtins__, dict) else __impo
 
 def diagonal(a, offset=0, axis1=0, axis2=1):
     """Extract diagonal from 2D array."""
-    if isinstance(a, ndarray):
-        return _native.diagonal(a, offset)
-    raise ValueError("diagonal requires ndarray")
+    a = asarray(a)
+    if a.ndim == 2 and axis1 == 1 and axis2 == 0:
+        return _native.diagonal(a.T, offset)
+    return _native.diagonal(a, offset)
 
 _builtin_min = __builtins__["min"] if isinstance(__builtins__, dict) else __import__("builtins").min
 _builtin_max = __builtins__["max"] if isinstance(__builtins__, dict) else __import__("builtins").max
@@ -1881,6 +1896,13 @@ def array_equal(a1, a2, equal_nan=False):
             a2 = array(a2)
         if a1.shape != a2.shape:
             return False
+        if equal_nan:
+            try:
+                both_nan = logical_and(isnan(a1), isnan(a2))
+                neither_nan = logical_and(logical_not(isnan(a1)), logical_not(isnan(a2)))
+                return bool(all(logical_or(both_nan, logical_and(neither_nan, a1 == a2))))
+            except Exception:
+                return bool((a1 == a2).all())
         return bool((a1 == a2).all())
     except Exception:
         return False
@@ -2391,23 +2413,56 @@ def angle(z, deg=False):
         result = result * (180.0 / _math.pi)
     return result
 
+def _unwrap_1d_list(data, discont, period):
+    """Unwrap a 1D list in-place style, returning a new list."""
+    if len(data) == 0:
+        return []
+    result = [data[0]]
+    for i in _builtin_range(1, len(data)):
+        d = data[i] - result[-1]
+        d = d - period * round(d / period)
+        result.append(result[-1] + d)
+    return result
+
 def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
     """Unwrap by changing deltas between values to 2*pi complement."""
     p = asarray(p)
     if discont is None:
         discont = period / 2
-    flat = p.flatten().tolist()
-    if len(flat) == 0:
-        return array([])
-    result = [flat[0]]
-    for i in range(1, len(flat)):
-        d = flat[i] - result[-1]
-        # Wrap difference to [-period/2, period/2]
-        d = d - period * round(d / period)
-        result.append(result[-1] + d)
-    out = array(result)
-    if p.ndim > 1:
-        out = out.reshape(p.shape)
+    if p.ndim <= 1:
+        return array(_unwrap_1d_list(p.flatten().tolist(), discont, period))
+    # For 2D: apply unwrap along the specified axis
+    nd = p.ndim
+    ax = axis
+    if ax < 0:
+        ax = nd + ax
+    shape = p.shape
+    # Move the target axis to the last position
+    if ax != nd - 1:
+        axes = [i for i in _builtin_range(nd) if i != ax] + [ax]
+        pt = transpose(p, axes=axes)
+    else:
+        pt = p
+    # Now unwrap along the last axis
+    pt_shape = pt.shape
+    n_outer = 1
+    for s in pt_shape[:-1]:
+        n_outer *= s
+    flat_all = pt.flatten().tolist()
+    axis_len = pt_shape[-1]
+    result_flat = []
+    for i in _builtin_range(n_outer):
+        start = i * axis_len
+        row = flat_all[start:start + axis_len]
+        result_flat.extend(_unwrap_1d_list(row, discont, period))
+    out = array(result_flat).reshape(pt_shape)
+    # Move axis back if we transposed
+    if ax != nd - 1:
+        # Inverse permutation
+        inv_axes = [0] * nd
+        for i, a_val in enumerate(axes):
+            inv_axes[a_val] = i
+        out = transpose(out, axes=inv_axes)
     return out
 
 def histogram_bin_edges(a, bins=10, range=None, weights=None):
@@ -2433,16 +2488,19 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
         edge_list = edges.tolist()
         flat = a.flatten().tolist()
         n_bins = len(edge_list) - 1
-        counts = [0] * n_bins
-        for v in flat:
+        counts = [0.0] * n_bins
+        w_list = None
+        if weights is not None:
+            w_list = asarray(weights).flatten().tolist()
+        for idx_val, v in enumerate(flat):
             for j in _builtin_range(n_bins):
                 if j == n_bins - 1:
                     if edge_list[j] <= v <= edge_list[j + 1]:
-                        counts[j] += 1
+                        counts[j] += (w_list[idx_val] if w_list is not None else 1.0)
                         break
                 else:
                     if edge_list[j] <= v < edge_list[j + 1]:
-                        counts[j] += 1
+                        counts[j] += (w_list[idx_val] if w_list is not None else 1.0)
                         break
         counts_arr = array(counts)
         if density:
@@ -2451,7 +2509,35 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
             if total > 0.0:
                 counts_arr = counts_arr / (total * bin_widths)
         return counts_arr, edges
-    # Default: use native (bins is an int)
+    # bins is an int
+    if weights is not None or range is not None:
+        # Python fallback for weights/range with integer bins
+        flat = a.flatten().tolist()
+        if range is not None:
+            lo, hi = float(range[0]), float(range[1])
+        else:
+            lo, hi = _builtin_min(flat), _builtin_max(flat)
+        edges = linspace(lo, hi, num=bins + 1, endpoint=True)
+        edge_list = edges.tolist()
+        counts = [0.0] * bins
+        w_list = None
+        if weights is not None:
+            w_list = asarray(weights).flatten().tolist()
+        for idx_val, val in enumerate(flat):
+            if range is not None and (val < lo or val > hi):
+                continue
+            for j in _builtin_range(bins):
+                if (val >= edge_list[j] and val < edge_list[j + 1]) or (j == bins - 1 and val == edge_list[j + 1]):
+                    counts[j] += (w_list[idx_val] if w_list is not None else 1.0)
+                    break
+        hist = array(counts)
+        if density:
+            widths = array([edge_list[i+1] - edge_list[i] for i in _builtin_range(bins)])
+            total = float(sum(hist))
+            if total > 0.0:
+                hist = hist / (total * widths)
+        return hist, edges
+    # No weights, no range: use native
     counts, edges = _native.histogram(a, bins)
     if density:
         bin_widths = diff(edges)
@@ -2724,7 +2810,20 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         xp = array(xp)
     if not isinstance(fp, ndarray):
         fp = array(fp)
-    return _native.interp(x, xp, fp)
+    result = _native.interp(x, xp, fp)
+    if left is not None or right is not None:
+        x_arr = asarray(x).flatten().tolist()
+        xp_arr = asarray(xp).flatten().tolist()
+        result_list = result.flatten().tolist()
+        xp_min = _builtin_min(xp_arr)
+        xp_max = _builtin_max(xp_arr)
+        for i, xi in enumerate(x_arr):
+            if left is not None and xi < xp_min:
+                result_list[i] = float(left)
+            if right is not None and xi > xp_max:
+                result_list[i] = float(right)
+        result = array(result_list)
+    return result
 
 def gradient(f, *varargs, axis=None, edge_order=1):
     if not isinstance(f, ndarray):
@@ -3112,7 +3211,7 @@ def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='', foote
     if not isinstance(X, ndarray):
         X = array(X)
     if X.ndim == 1:
-        X = X.reshape([1, len(X)])
+        X = X.reshape([X.size, 1])
 
     if isinstance(fname, str):
         f = open(fname, 'w')
@@ -3162,6 +3261,11 @@ def remainder(x1, x2, out=None):
     return asarray(x1) % asarray(x2)
 
 mod = remainder
+
+def divmod_(x1, x2):
+    """Return element-wise quotient and remainder simultaneously."""
+    x1, x2 = asarray(x1), asarray(x2)
+    return (floor_divide(x1, x2), remainder(x1, x2))
 
 def negative(x):
     return -asarray(x)
@@ -4267,7 +4371,17 @@ class nditer:
         self._flat = [a.flatten() for a in self._arrays]
         self._size = self._flat[0].size
         self._idx = 0
-        self.multi_index = None  # not supported in this simplified version
+        self._shape = self._arrays[0].shape
+        self.multi_index = None
+
+    def _unravel(self, flat_idx):
+        """Convert flat index to tuple of indices."""
+        idx = []
+        remaining = flat_idx
+        for dim in reversed(self._shape):
+            idx.append(remaining % dim)
+            remaining //= dim
+        return tuple(reversed(idx))
 
     def __iter__(self):
         self._idx = 0
@@ -4276,6 +4390,8 @@ class nditer:
     def __next__(self):
         if self._idx >= self._size:
             raise StopIteration
+        # Compute multi_index from flat index
+        self.multi_index = self._unravel(self._idx)
         if len(self._flat) == 1:
             val = self._flat[0][self._idx]
             self._idx += 1
@@ -4629,6 +4745,9 @@ linalg.cond = _linalg_cond
 linalg.eigh = _linalg_eigh
 linalg.eigvals = _linalg_eigvals
 linalg.multi_dot = _linalg_multi_dot
+linalg.lstsq = _native.linalg.lstsq
+linalg.cholesky = _native.linalg.cholesky
+linalg.qr = _native.linalg.qr
 
 # --- FFT module extensions (Tier 19 Group B) --------------------------------
 
@@ -4639,6 +4758,16 @@ def _fft_rfftfreq(n, d=1.0):
     results = []
     for i in range(N):
         results.append(float(i) * val)
+    return array(results)
+
+def _fft_fftfreq(n, d=1.0):
+    """Return the Discrete Fourier Transform sample frequencies."""
+    results = []
+    half = (n - 1) // 2 + 1
+    for i in range(half):
+        results.append(float(i) / (n * d))
+    for i in range(-(n // 2), 0):
+        results.append(float(i) / (n * d))
     return array(results)
 
 def _fft_fftshift(x, axes=None):
@@ -4728,6 +4857,7 @@ def _fft_ifft2(a, s=None, axes=(-2, -1), norm=None):
 
 # Monkey-patch fft module with extension functions
 fft.rfftfreq = _fft_rfftfreq
+fft.fftfreq = _fft_fftfreq
 fft.fftshift = _fft_fftshift
 fft.ifftshift = _fft_ifftshift
 fft.fft2 = _fft_fft2
@@ -4736,14 +4866,34 @@ fft.ifft2 = _fft_ifft2
 # --- random extension functions (Tier 19 Group C) ---------------------------
 
 def _random_shuffle(x):
-    """Modify a sequence in-place by shuffling its contents. Returns new array."""
-    x = asarray(x)
+    """Modify a sequence in-place by shuffling its contents. Returns None."""
+    if not isinstance(x, ndarray):
+        x = asarray(x)
     n = x.size
     flat = x.flatten()
-    # Fisher-Yates shuffle using random.randint
     vals = [flat[i] for i in range(n)]
     for i in range(n - 1, 0, -1):
-        # Get a random index from 0 to i
+        j_arr = random.randint(0, i + 1, (1,))
+        j = int(j_arr[0])
+        vals[i], vals[j] = vals[j], vals[i]
+    # Attempt to update array in-place via __setitem__
+    try:
+        for i in range(n):
+            x[i] = vals[i]
+    except Exception:
+        pass  # if in-place update not supported, shuffle is best-effort
+    return None  # real numpy returns None
+
+def _random_permutation(x):
+    """Randomly permute a sequence, or return a permuted range."""
+    if isinstance(x, (int, float)):
+        x = arange(0, int(x))
+    else:
+        x = asarray(x)
+    n = x.size
+    flat = x.flatten()
+    vals = [flat[i] for i in range(n)]
+    for i in range(n - 1, 0, -1):
         j_arr = random.randint(0, i + 1, (1,))
         j = int(j_arr[0])
         vals[i], vals[j] = vals[j], vals[i]
@@ -4751,12 +4901,6 @@ def _random_shuffle(x):
     if x.ndim > 1:
         result = result.reshape(x.shape)
     return result
-
-def _random_permutation(x):
-    """Randomly permute a sequence, or return a permuted range."""
-    if isinstance(x, (int, float)):
-        x = arange(0, int(x))
-    return _random_shuffle(asarray(x))
 
 def _random_standard_normal(size=None):
     """Draw samples from a standard Normal distribution (mean=0, stdev=1)."""
@@ -5364,6 +5508,60 @@ def _subtract_reduce(a, axis=None):
 
 subtract = _UfuncWithReduce(_subtract_func, _subtract_reduce, name='subtract')
 
+
+# --- testing module ---------------------------------------------------------
+class _TestingModule:
+    def assert_allclose(self, actual, desired, rtol=1e-7, atol=0, equal_nan=True, err_msg='', verbose=True):
+        actual = asarray(actual)
+        desired = asarray(desired)
+        if not allclose(actual, desired, rtol=rtol, atol=atol, equal_nan=equal_nan):
+            actual_list = actual.tolist()
+            desired_list = desired.tolist()
+            raise AssertionError(err_msg or "Not equal to tolerance rtol={}, atol={}\n Actual: {}\n Desired: {}".format(rtol, atol, actual_list, desired_list))
+
+    def assert_array_equal(self, x, y, err_msg='', verbose=True, strict=False):
+        x = asarray(x)
+        y = asarray(y)
+        if not array_equal(x, y):
+            raise AssertionError(err_msg or "Arrays are not equal\n x: {}\n y: {}".format(x.tolist(), y.tolist()))
+
+    def assert_array_almost_equal(self, x, y, decimal=6, err_msg='', verbose=True):
+        x = asarray(x)
+        y = asarray(y)
+        if not allclose(x, y, rtol=0, atol=1.5 * 10**(-decimal)):
+            raise AssertionError(err_msg or "Arrays are not almost equal to {} decimals".format(decimal))
+
+    def assert_equal(self, actual, desired, err_msg='', verbose=True):
+        actual_a = asarray(actual)
+        desired_a = asarray(desired)
+        if not array_equal(actual_a, desired_a):
+            raise AssertionError(err_msg or "Items are not equal:\n actual: {}\n desired: {}".format(actual, desired))
+
+    def assert_raises(self, exception_class, *args, **kwargs):
+        """Simple assert_raises - returns a context manager."""
+        class _AssertRaisesCtx:
+            def __init__(self, exc_cls):
+                self.exc_cls = exc_cls
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError("Expected {} but no exception raised".format(self.exc_cls.__name__))
+                if not issubclass(exc_type, self.exc_cls):
+                    return False  # re-raise
+                return True  # suppress exception
+        if args:
+            # Called as assert_raises(Error, func, *args)
+            callable_obj = args[0]
+            rest = args[1:]
+            try:
+                callable_obj(*rest, **kwargs)
+            except exception_class:
+                return
+            raise AssertionError("Expected {}".format(exception_class.__name__))
+        return _AssertRaisesCtx(exception_class)
+
+testing = _TestingModule()
 
 # --- dtypes module stub -----------------------------------------------------
 class _dtypes_mod:
