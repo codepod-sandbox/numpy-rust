@@ -2190,10 +2190,18 @@ def place(arr, mask, vals):
 
 def can_cast(from_, to, casting="safe"):
     _type_order = {
-        "bool": 0, "int32": 1, "int64": 2,
-        "float32": 3, "float64": 4,
-        "complex64": 5, "complex128": 6,
+        "bool": 0,
+        "int8": 1, "uint8": 1,
+        "int16": 2, "uint16": 2,
+        "int32": 3, "uint32": 3,
+        "int64": 4, "uint64": 4,
+        "float16": 5,
+        "float32": 6, "float64": 7,
+        "complex64": 8, "complex128": 9,
     }
+    _int_types = {"bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
+    _float_types = {"float16", "float32", "float64"}
+    _complex_types = {"complex64", "complex128"}
     if isinstance(from_, ndarray):
         from_name = str(from_.dtype)
     elif isinstance(from_, str):
@@ -2210,12 +2218,21 @@ def can_cast(from_, to, casting="safe"):
         return False
     if casting == "unsafe":
         return True
-    if casting == "safe" or casting == "same_kind":
+    if casting == "no" or casting == "equiv":
+        return from_name == to_name
+    if casting == "safe":
         return f <= t
-    if casting == "equiv":
-        return f == t
-    if casting == "no":
-        return f == t
+    if casting == "same_kind":
+        if f <= t:
+            return True
+        # Allow casts within the same kind (int->int, float->float, complex->complex)
+        if from_name in _int_types and to_name in _int_types:
+            return True
+        if from_name in _float_types and to_name in _float_types:
+            return True
+        if from_name in _complex_types and to_name in _complex_types:
+            return True
+        return False
     return f <= t
 
 def result_type(*arrays_and_dtypes):
@@ -2267,11 +2284,72 @@ def set_printoptions(**kwargs):
 def get_printoptions():
     return {}
 
+# --- StructuredDtype for field-based (record) arrays -----------------------
+class StructuredDtype:
+    """Minimal structured dtype for field-based array access."""
+    def __init__(self, fields):
+        # fields is list of (name, dtype) or (name, dtype, shape)
+        self._fields = []
+        self._names = []
+        for f in fields:
+            name = f[0]
+            dt = dtype(f[1]) if not isinstance(f[1], str) else f[1]
+            self._fields.append((name, dt))
+            self._names.append(name)
+        self.names = tuple(self._names)
+        self.fields = {}
+        offset = 0
+        for name, dt in self._fields:
+            if isinstance(dt, str):
+                dt_obj = dtype(dt)
+            else:
+                dt_obj = dt
+            self.fields[name] = (dt_obj, offset)
+            offset += dt_obj.itemsize if hasattr(dt_obj, 'itemsize') else 8
+        self.itemsize = offset
+        self.kind = 'V'
+        self.char = 'V'
+        self.name = 'void'
+        self.str = '|V{}'.format(self.itemsize)
+
+    def __repr__(self):
+        parts = ', '.join("('{}', '{}')".format(n, d) for n, d in self._fields)
+        return 'dtype([{}])'.format(parts)
+
+    def __str__(self):
+        return repr(self)
+
+    def __eq__(self, other):
+        if isinstance(other, StructuredDtype):
+            return self._fields == other._fields
+        return False
+
+    def __hash__(self):
+        return hash(tuple((n, str(d)) for n, d in self._fields))
+
 # --- dtype class (stub) -----------------------------------------------------
 class dtype:
     """Stub for numpy dtype objects."""
     def __init__(self, tp=None):
-        if isinstance(tp, dtype):
+        if isinstance(tp, list):
+            # List-of-tuples structured dtype: delegate to StructuredDtype
+            sd = StructuredDtype(tp)
+            self.name = sd.name
+            self.kind = sd.kind
+            self.itemsize = sd.itemsize
+            self.char = sd.char
+            self.names = sd.names
+            self.fields = sd.fields
+            self._structured = sd
+        elif isinstance(tp, StructuredDtype):
+            self.name = tp.name
+            self.kind = tp.kind
+            self.itemsize = tp.itemsize
+            self.char = tp.char
+            self.names = tp.names
+            self.fields = tp.fields
+            self._structured = tp
+        elif isinstance(tp, dtype):
             self.name = tp.name
             self.kind = tp.kind
             self.itemsize = tp.itemsize
@@ -2322,10 +2400,14 @@ class dtype:
             self.kind, self.itemsize, self.char = "f", 8, "d"
 
     def __repr__(self):
+        if hasattr(self, '_structured') and self._structured is not None:
+            return repr(self._structured)
         return f"dtype('{self.name}')"
 
     def __eq__(self, other):
         if isinstance(other, dtype):
+            if hasattr(self, '_structured') and hasattr(other, '_structured'):
+                return self._structured == other._structured
             return self.name == other.name
         if isinstance(other, str):
             return self.name == other
@@ -3343,8 +3425,14 @@ def right_shift(x1, x2):
 def matrix_transpose(a):
     return a.T
 
-def astype(a, dtype):
-    return a.astype(dtype)
+def astype(a, dtype, casting='unsafe'):
+    dtype_str = str(dtype)
+    if casting != 'unsafe':
+        from_dtype = str(a.dtype) if isinstance(a, ndarray) else str(type(a).__name__)
+        if not can_cast(from_dtype, dtype_str, casting=casting):
+            raise TypeError("Cannot cast array data from {} to {} according to the rule '{}'".format(
+                from_dtype, dtype_str, casting))
+    return a.astype(dtype_str)
 
 def real(a):
     """Return the real part of the array elements."""
@@ -7969,6 +8057,33 @@ testing = _TestingModule()
 class _dtypes_mod:
     pass
 dtypes = _dtypes_mod()
+
+# --- np.rec module (basic stub) ---
+class _RecModule:
+    """Minimal np.rec namespace."""
+    def __init__(self):
+        self.recarray = None  # placeholder
+
+    def array(self, data, dtype=None):
+        """Create a record array (falls back to regular array)."""
+        arr = asarray(data)
+        if dtype is not None:
+            dt = dtype if isinstance(dtype, StructuredDtype) else StructuredDtype(dtype) if isinstance(dtype, list) else dtype
+            # Try to attach structured dtype metadata; silently skip if type doesn't allow it
+            try:
+                arr._structured_dtype = dt
+            except (TypeError, AttributeError):
+                pass
+        return arr
+
+    def fromarrays(self, arrays, dtype=None, names=None):
+        """Create a record array from separate arrays."""
+        if names is not None and dtype is None:
+            fields = [(n, 'float64') for n in names]
+            dtype = StructuredDtype(fields)
+        return self.array(arrays, dtype=dtype)
+
+rec = _RecModule()
 
 # --- Import submodules so np.ma and np.polynomial are accessible ------------
 import numpy.ma as ma

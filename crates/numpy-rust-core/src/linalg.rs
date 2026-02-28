@@ -92,12 +92,24 @@ mod inner {
         let eigen = nalgebra::SymmetricEigen::new(symmetric);
 
         let n = m.nrows();
-        let eigenvalues = ArrayD::from_shape_fn(IxDyn(&[n]), |idx| eigen.eigenvalues[idx[0]]);
-        let eigenvectors = from_nalgebra(&eigen.eigenvectors);
+
+        // Sort eigenvalues ascending (NumPy convention) and reorder eigenvectors
+        let mut indices: Vec<usize> = (0..n).collect();
+        indices.sort_by(|&a, &b| {
+            eigen.eigenvalues[a]
+                .partial_cmp(&eigen.eigenvalues[b])
+                .unwrap()
+        });
+
+        let eigenvalues =
+            ArrayD::from_shape_fn(IxDyn(&[n]), |idx| eigen.eigenvalues[indices[idx[0]]]);
+        let eigenvectors = ArrayD::from_shape_fn(IxDyn(&[n, n]), |idx| {
+            eigen.eigenvectors[(idx[0], indices[idx[1]])]
+        });
 
         Ok((
             NdArray::from_data(ArrayData::Float64(eigenvalues)),
-            eigenvectors,
+            NdArray::from_data(ArrayData::Float64(eigenvectors)),
         ))
     }
 

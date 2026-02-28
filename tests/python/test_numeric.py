@@ -7103,6 +7103,213 @@ def test_t33_issubdtype_float16():
     import numpy as np
     assert_eq(np.issubdtype("float16", np.floating), True)
 
+# ── Tier 34 ── eigh ordering, casting=, __array_interface__, structured dtype, rec ──
+
+def test_t34_eigh_ascending_order():
+    import numpy as np
+    a = np.array([[2.0, 1.0], [1.0, 3.0]])
+    vals, vecs = np.linalg.eigh(a)
+    v = vals.tolist()
+    assert v[0] < v[1], "eigh eigenvalues should be ascending"
+
+def test_t34_eigh_identity():
+    import numpy as np
+    a = np.eye(3)
+    vals, vecs = np.linalg.eigh(a)
+    for v in vals.tolist():
+        assert_close(v, 1.0, tol=1e-10)
+
+def test_t34_eigh_diagonal():
+    import numpy as np
+    a = np.array([[3.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 2.0]])
+    vals, vecs = np.linalg.eigh(a)
+    v = vals.tolist()
+    assert_close(v[0], 1.0, tol=1e-10)
+    assert_close(v[1], 2.0, tol=1e-10)
+    assert_close(v[2], 3.0, tol=1e-10)
+
+def test_t34_eigvalsh_ascending():
+    import numpy as np
+    a = np.array([[5.0, 2.0], [2.0, 1.0]])
+    vals = np.linalg.eigvalsh(a)
+    v = vals.tolist()
+    assert v[0] < v[1], "eigvalsh should return ascending eigenvalues"
+
+def test_t34_eigvals():
+    import numpy as np
+    a = np.eye(2)
+    vals = np.linalg.eigvals(a)
+    assert_eq(vals.shape, (2,))
+
+def test_t34_astype_casting_unsafe():
+    import numpy as np
+    a = np.array([1.5, 2.7])
+    b = a.astype("int32")
+    assert_eq(str(b.dtype), "int32")
+
+def test_t34_astype_casting_safe_ok():
+    import numpy as np
+    a = np.array([1, 2, 3])
+    b = a.astype("float64", casting="safe")
+    assert_eq(str(b.dtype), "float64")
+
+def test_t34_astype_casting_safe_fail():
+    import numpy as np
+    a = np.array([1.5, 2.7])
+    try:
+        b = a.astype("int32", casting="safe")
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+
+def test_t34_astype_casting_no():
+    import numpy as np
+    a = np.array([1.0, 2.0])
+    try:
+        b = a.astype("int32", casting="no")
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+
+def test_t34_astype_casting_no_same_dtype():
+    import numpy as np
+    a = np.array([1.0, 2.0])
+    b = a.astype("float64", casting="no")
+    assert_eq(str(b.dtype), "float64")
+
+def test_t34_astype_casting_same_kind():
+    import numpy as np
+    a = np.array([1.0, 2.0])
+    b = a.astype("float32", casting="same_kind")
+    assert_eq(str(b.dtype), "float32")
+
+def test_t34_astype_casting_same_kind_fail():
+    import numpy as np
+    a = np.array([1.0, 2.0])
+    try:
+        b = a.astype("int32", casting="same_kind")
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+
+def test_t34_can_cast_safe():
+    import numpy as np
+    assert_eq(np.can_cast("int32", "float64", casting="safe"), True)
+    assert_eq(np.can_cast("float64", "int32", casting="safe"), False)
+
+def test_t34_can_cast_same_kind():
+    import numpy as np
+    assert_eq(np.can_cast("float64", "float32", casting="same_kind"), True)
+    assert_eq(np.can_cast("int64", "int32", casting="same_kind"), True)
+    assert_eq(np.can_cast("float64", "int32", casting="same_kind"), False)
+
+def test_t34_can_cast_no():
+    import numpy as np
+    assert_eq(np.can_cast("int32", "int32", casting="no"), True)
+    assert_eq(np.can_cast("int32", "float64", casting="no"), False)
+
+def test_t34_can_cast_unsafe():
+    import numpy as np
+    assert_eq(np.can_cast("float64", "int32", casting="unsafe"), True)
+
+def test_t34_array_interface_float64():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0])
+    iface = a.__array_interface__
+    assert_eq(iface['version'], 3)
+    assert_eq(iface['shape'], (3,))
+    assert_eq(iface['typestr'], '<f8')
+    assert_eq(iface['strides'], None)
+
+def test_t34_array_interface_int32():
+    import numpy as np
+    a = np.zeros(3, dtype="int32")
+    iface = a.__array_interface__
+    assert_eq(iface['typestr'], '<i4')
+
+def test_t34_array_interface_bool():
+    import numpy as np
+    a = np.zeros(2, dtype="bool")
+    iface = a.__array_interface__
+    assert_eq(iface['typestr'], '|b1')
+
+def test_t34_array_interface_2d():
+    import numpy as np
+    a = np.zeros((3, 4))
+    iface = a.__array_interface__
+    assert_eq(iface['shape'], (3, 4))
+
+def test_t34_array_interface_complex():
+    import numpy as np
+    a = np.zeros(2, dtype="complex128")
+    iface = a.__array_interface__
+    assert_eq(iface['typestr'], '<c16')
+
+def test_t34_array_interface_data_tuple():
+    import numpy as np
+    a = np.array([1.0])
+    iface = a.__array_interface__
+    d = iface['data']
+    assert_eq(len(d), 2)
+
+def test_t34_structured_dtype_create():
+    import numpy as np
+    dt = np.dtype([('x', 'float64'), ('y', 'int32')])
+    assert_eq(dt.kind, 'V')
+    assert 'x' in dt.names
+    assert 'y' in dt.names
+
+def test_t34_structured_dtype_fields():
+    import numpy as np
+    dt = np.dtype([('a', 'float64'), ('b', 'float32')])
+    assert 'a' in dt.fields
+    assert 'b' in dt.fields
+
+def test_t34_structured_dtype_itemsize():
+    import numpy as np
+    dt = np.dtype([('x', 'float64'), ('y', 'float64')])
+    assert_eq(dt.itemsize, 16)
+
+def test_t34_structured_dtype_repr():
+    import numpy as np
+    dt = np.dtype([('x', 'float64')])
+    s = repr(dt)
+    assert 'x' in s
+
+def test_t34_structured_dtype_names():
+    import numpy as np
+    dt = np.dtype([('a', 'int32'), ('b', 'float64'), ('c', 'bool')])
+    assert_eq(dt.names, ('a', 'b', 'c'))
+
+def test_t34_rec_module_exists():
+    import numpy as np
+    assert hasattr(np, 'rec')
+
+def test_t34_rec_array_basic():
+    import numpy as np
+    a = np.rec.array([1.0, 2.0, 3.0])
+    assert_eq(a.shape, (3,))
+
+def test_t34_rec_fromarrays():
+    import numpy as np
+    result = np.rec.fromarrays([[1.0, 2.0], [3.0, 4.0]], names=['x', 'y'])
+    assert result is not None
+
+def test_t34_np_astype_function_casting():
+    import numpy as np
+    a = np.array([1, 2, 3])
+    b = np.astype(a, "float64", casting="safe")
+    assert_eq(str(b.dtype), "float64")
+
+def test_t34_np_astype_function_casting_fail():
+    import numpy as np
+    a = np.array([1.5, 2.7])
+    try:
+        b = np.astype(a, "int32", casting="safe")
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+
 
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

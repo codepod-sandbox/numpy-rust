@@ -327,6 +327,56 @@ impl PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().imag())
     }
 
+    #[pygetset(name = "__array_interface__")]
+    fn array_interface(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let data = self.data.read().unwrap();
+        let dtype = data.dtype();
+
+        // Build typestr
+        let typestr = match dtype {
+            DType::Bool => "|b1",
+            DType::Int8 => "|i1",
+            DType::Int16 => "<i2",
+            DType::Int32 => "<i4",
+            DType::Int64 => "<i8",
+            DType::UInt8 => "|u1",
+            DType::UInt16 => "<u2",
+            DType::UInt32 => "<u4",
+            DType::UInt64 => "<u8",
+            DType::Float16 => "<f2",
+            DType::Float32 => "<f4",
+            DType::Float64 => "<f8",
+            DType::Complex64 => "<c8",
+            DType::Complex128 => "<c16",
+            DType::Str => "|U1",
+        };
+
+        // Build shape tuple
+        let shape: Vec<PyObjectRef> = data
+            .shape()
+            .iter()
+            .map(|&s| vm.ctx.new_int(s).into())
+            .collect();
+        let shape_tuple = PyTuple::new_ref(shape, &vm.ctx).into();
+
+        // Build data tuple: (pointer_as_int, read_only_flag)
+        let data_tuple = PyTuple::new_ref(
+            vec![vm.ctx.new_int(0).into(), vm.ctx.new_bool(false).into()],
+            &vm.ctx,
+        )
+        .into();
+
+        // Build the dict
+        let dict = vm.ctx.new_dict();
+        dict.set_item("shape", shape_tuple, vm)?;
+        dict.set_item("typestr", vm.ctx.new_str(typestr).into(), vm)?;
+        dict.set_item("data", data_tuple, vm)?;
+        dict.set_item("strides", vm.ctx.none(), vm)?;
+        dict.set_item("version", vm.ctx.new_int(3).into(), vm)?;
+
+        Ok(dict.into())
+    }
+
     // --- Methods ---
 
     #[pymethod]
@@ -383,9 +433,53 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn astype(&self, dtype: PyRef<PyStr>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let dt = parse_dtype(dtype.as_str(), vm)?;
-        Ok(PyNdArray::from_core(self.data.read().unwrap().astype(dt)))
+    fn astype(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let dtype_obj = args
+            .args
+            .first()
+            .ok_or_else(|| vm.new_type_error("astype() requires a dtype argument".to_owned()))?;
+        let dtype_str: PyRef<PyStr> = dtype_obj
+            .clone()
+            .try_into_value(vm)
+            .map_err(|_| vm.new_type_error("dtype must be a string".to_owned()))?;
+        let dt = parse_dtype(dtype_str.as_str(), vm)?;
+
+        // Extract optional 'casting' keyword argument
+        let casting_str = args
+            .kwargs
+            .get("casting")
+            .map(|v| -> PyResult<String> {
+                let s: PyRef<PyStr> = v
+                    .clone()
+                    .try_into_value(vm)
+                    .map_err(|_| vm.new_type_error("casting must be a string".to_owned()))?;
+                Ok(s.as_str().to_owned())
+            })
+            .transpose()?
+            .unwrap_or_else(|| "unsafe".to_owned());
+
+        let inner = self.data.read().unwrap();
+        let from_dt = inner.dtype();
+        if casting_str != "unsafe" && from_dt != dt {
+            let allowed = match casting_str.as_str() {
+                "no" | "equiv" => false,
+                "safe" => from_dt.promote(dt) == dt,
+                "same_kind" => {
+                    from_dt.promote(dt) == dt
+                        || (from_dt.is_float() && dt.is_float())
+                        || (from_dt.is_integer() && dt.is_integer())
+                        || (from_dt.is_complex() && dt.is_complex())
+                }
+                _ => true,
+            };
+            if !allowed {
+                return Err(vm.new_type_error(format!(
+                    "Cannot cast array data from {} to {} according to the rule '{}'",
+                    from_dt, dt, casting_str
+                )));
+            }
+        }
+        Ok(PyNdArray::from_core(inner.astype(dt)))
     }
 
     /// Simplified view() – returns a copy (true memory views not supported).
