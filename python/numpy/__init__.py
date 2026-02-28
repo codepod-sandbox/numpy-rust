@@ -9,6 +9,21 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from _numpy_native import dot, concatenate
 
+class AxisError(ValueError, IndexError):
+    """Exception for invalid axis."""
+    def __init__(self, axis=None, ndim=None, msg_prefix=None):
+        if axis is not None and ndim is not None:
+            msg = "axis {} is out of bounds for array of dimension {}".format(axis, ndim)
+            if msg_prefix:
+                msg = "{}: {}".format(msg_prefix, msg)
+        elif axis is not None:
+            msg = str(axis)
+        else:
+            msg = msg_prefix or ""
+        super().__init__(msg)
+        self.axis = axis
+        self.ndim = ndim
+
 # Wrap creation functions to accept (and currently ignore) dtype keyword
 class _ObjectArray:
     """Lightweight fallback for arrays with non-numeric dtypes (strings, structured, etc.)."""
@@ -168,18 +183,26 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
     else:
         step = (stop - start) / num if num > 0 else 0.0
         result = array([start + i * step for i in range(num)])
+    if dtype is not None:
+        result = result.astype(str(dtype))
     if retstep:
         return result, step
     return result
 
-def logspace(start, stop, num=50, endpoint=True, base=10.0, dtype=None):
+def logspace(start, stop, num=50, endpoint=True, base=10.0, dtype=None, axis=0):
     y = linspace(start, stop, num=num, endpoint=endpoint)
-    return power(base, y)
+    result = power(base, y)
+    if dtype is not None:
+        result = result.astype(str(dtype))
+    return result
 
-def geomspace(start, stop, num=50, endpoint=True, dtype=None):
+def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
     log_start = _math.log10(start)
     log_stop = _math.log10(stop)
-    return logspace(log_start, log_stop, num=num, endpoint=endpoint)
+    result = logspace(log_start, log_stop, num=num, endpoint=endpoint)
+    if dtype is not None:
+        result = result.astype(str(dtype))
+    return result
 
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
     if dtype is not None:
@@ -1917,7 +1940,9 @@ def indices(dimensions, dtype=None, sparse=False):
         grid = tile(idx, reps)
         grids.append(grid)
 
-    return grids  # Return as list (NumPy returns ndarray but list of arrays is compatible)
+    # Force contiguous layout before stacking to avoid memory layout issues
+    contiguous = [asarray(g.tolist()) for g in grids]
+    return stack(contiguous)  # Return single ndarray like NumPy
 
 def fromiter(iterable, dtype=None, count=-1):
     if count > 0:
@@ -1962,7 +1987,16 @@ def array_equal(a1, a2, equal_nan=False):
         return False
 
 def array_equiv(a1, a2):
-    return array_equal(a1, a2)
+    """True if arrays are shape-consistent and element-wise equal, with broadcasting."""
+    a1 = asarray(a1)
+    a2 = asarray(a2)
+    try:
+        bshape = broadcast_shapes(a1.shape, a2.shape)
+        b1 = broadcast_to(a1, bshape)
+        b2 = broadcast_to(a2, bshape)
+        return bool(all(b1 == b2))
+    except Exception:
+        return False
 
 def require(a, dtype=None, requirements=None):
     return asarray(a)
@@ -2840,6 +2874,118 @@ class _char_mod:
         i = int(i)
         result = [str(s) * i for s in items]
         return array(result)
+
+    @staticmethod
+    def _to_str_list(a):
+        """Convert input to a flat list of strings."""
+        if isinstance(a, _ObjectArray):
+            return [str(x) for x in a._data]
+        if isinstance(a, ndarray):
+            data = a.tolist()
+            if isinstance(data, list):
+                result = []
+                for item in data:
+                    if isinstance(item, list):
+                        result.extend([str(x) for x in item])
+                    else:
+                        result.append(str(item))
+                return result
+            return [str(data)]
+        if isinstance(a, str):
+            return [a]
+        if isinstance(a, (list, tuple)):
+            result = []
+            for item in a:
+                if isinstance(item, (list, tuple)):
+                    result.extend([str(x) for x in item])
+                else:
+                    result.append(str(item))
+            return result
+        return [str(a)]
+
+    @staticmethod
+    def center(a, width, fillchar=' '):
+        """Pad each string element in a to width, centering the string."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.center(int(width), fillchar) for s in data])
+
+    @staticmethod
+    def ljust(a, width, fillchar=' '):
+        """Left-justify each string element in a to width."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.ljust(int(width), fillchar) for s in data])
+
+    @staticmethod
+    def rjust(a, width, fillchar=' '):
+        """Right-justify each string element in a to width."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.rjust(int(width), fillchar) for s in data])
+
+    @staticmethod
+    def zfill(a, width):
+        """Pad each string element in a with zeros on the left to width."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.zfill(int(width)) for s in data])
+
+    @staticmethod
+    def title(a):
+        """Return element-wise title cased version of string."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.title() for s in data])
+
+    @staticmethod
+    def swapcase(a):
+        """Return element-wise with uppercase converted to lowercase and vice versa."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.swapcase() for s in data])
+
+    @staticmethod
+    def isalpha(a):
+        """Return true for each element if all characters are alphabetic."""
+        data = _char_mod._to_str_list(a)
+        return array([1.0 if s.isalpha() else 0.0 for s in data]).astype("bool")
+
+    @staticmethod
+    def isdigit(a):
+        """Return true for each element if all characters are digits."""
+        data = _char_mod._to_str_list(a)
+        return array([1.0 if s.isdigit() else 0.0 for s in data]).astype("bool")
+
+    @staticmethod
+    def isnumeric(a):
+        """Return true for each element if all characters are numeric."""
+        data = _char_mod._to_str_list(a)
+        return array([1.0 if (s.isnumeric() if hasattr(s, 'isnumeric') else s.isdigit()) else 0.0 for s in data]).astype("bool")
+
+    @staticmethod
+    def isupper(a):
+        """Return true for each element if all cased characters are uppercase."""
+        data = _char_mod._to_str_list(a)
+        return array([1.0 if s.isupper() else 0.0 for s in data]).astype("bool")
+
+    @staticmethod
+    def islower(a):
+        """Return true for each element if all cased characters are lowercase."""
+        data = _char_mod._to_str_list(a)
+        return array([1.0 if s.islower() else 0.0 for s in data]).astype("bool")
+
+    @staticmethod
+    def isspace(a):
+        """Return true for each element if all characters are whitespace."""
+        data = _char_mod._to_str_list(a)
+        return array([1.0 if s.isspace() else 0.0 for s in data]).astype("bool")
+
+    @staticmethod
+    def encode(a, encoding='utf-8', errors='strict'):
+        """Encode each string element to bytes."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.encode(encoding, errors) for s in data])
+
+    @staticmethod
+    def decode(a, encoding='utf-8', errors='strict'):
+        """Decode each bytes element to string."""
+        data = _char_mod._to_str_list(a)
+        return _ObjectArray([s.decode(encoding, errors) if isinstance(s, bytes) else s for s in data])
 
 char = _char_mod()
 
@@ -4171,6 +4317,30 @@ class iinfo:
             self.max = 32767
             self.dtype = int16
             self.kind = 'i'
+        elif str(dtype) in ('uint8',):
+            self.bits = 8
+            self.min = 0
+            self.max = 255
+            self.dtype = dtype
+            self.kind = 'u'
+        elif str(dtype) in ('uint16',):
+            self.bits = 16
+            self.min = 0
+            self.max = 65535
+            self.dtype = dtype
+            self.kind = 'u'
+        elif str(dtype) in ('uint32',):
+            self.bits = 32
+            self.min = 0
+            self.max = 4294967295
+            self.dtype = dtype
+            self.kind = 'u'
+        elif str(dtype) in ('uint64',):
+            self.bits = 64
+            self.min = 0
+            self.max = 18446744073709551615
+            self.dtype = dtype
+            self.kind = 'u'
         else:
             raise ValueError("iinfo does not support this dtype")
 
@@ -4804,6 +4974,13 @@ linalg.cholesky = _native.linalg.cholesky
 linalg.qr = _native.linalg.qr
 linalg.trace = trace
 
+def _linalg_eigvalsh(a, UPLO='L'):
+    """Eigenvalues of symmetric/Hermitian matrix."""
+    vals, _ = linalg.eigh(a)
+    return vals
+
+linalg.eigvalsh = _linalg_eigvalsh
+
 # --- FFT module extensions (Tier 19 Group B) --------------------------------
 
 def _fft_rfftfreq(n, d=1.0):
@@ -4870,8 +5047,15 @@ def _fft_complex_column_fft(row_ffts, rows, cols, inverse=False):
     for j in range(cols):
         col_real = array([row_ffts[i][j][0] for i in range(rows)])
         col_imag = array([row_ffts[i][j][1] for i in range(rows)])
-        fft_of_real = fft_fn(col_real)   # (rows, 2)
-        fft_of_imag = fft_fn(col_imag)   # (rows, 2)
+        if inverse:
+            # ifft requires complex format (n, 2) - convert real arrays to complex with zero imag
+            col_real_c = array([[float(col_real[i]), 0.0] for i in range(rows)])
+            col_imag_c = array([[float(col_imag[i]), 0.0] for i in range(rows)])
+            fft_of_real = fft_fn(col_real_c)   # (rows, 2)
+            fft_of_imag = fft_fn(col_imag_c)   # (rows, 2)
+        else:
+            fft_of_real = fft_fn(col_real)   # (rows, 2)
+            fft_of_imag = fft_fn(col_imag)   # (rows, 2)
         # Combine: for each row i
         col_ri = []
         for i in range(rows):
@@ -4918,6 +5102,50 @@ fft.ifftshift = _fft_ifftshift
 fft.fft2 = _fft_fft2
 fft.ifft2 = _fft_ifft2
 
+def _fft_fftn(a, s=None, axes=None):
+    """N-dimensional FFT."""
+    a = asarray(a)
+    if a.ndim == 1:
+        return fft.fft(a)
+    elif a.ndim == 2:
+        return fft.fft2(a, s=s)
+    else:
+        # For higher dimensions, apply fft2 on last two axes as approximation
+        # This is a simplified implementation
+        result = a
+        ax_list = axes if axes is not None else list(range(a.ndim))
+        for ax in reversed(ax_list):
+            # Apply 1D FFT along each axis using apply_along_axis
+            result = apply_along_axis(lambda x: array(fft.fft(array(x)).tolist()), ax, result)
+        return result
+
+def _fft_ifftn(a, s=None, axes=None):
+    """N-dimensional inverse FFT."""
+    a = asarray(a)
+    if a.ndim == 1:
+        return fft.ifft(a)
+    elif a.ndim == 2:
+        return fft.ifft2(a, s=s)
+    elif a.ndim == 3 and a.shape[-1] == 2:
+        # Complex representation from fft2/fftn: shape (rows, cols, 2)
+        # This is a complex array; apply ifft2 logic
+        rows = a.shape[0]
+        cols = a.shape[1]
+        # Extract row-wise complex data and apply ifft
+        row_iffts = []
+        for i in _builtin_range(rows):
+            row_iffts.append(fft.ifft(a[i]))
+        return _fft_complex_column_fft(row_iffts, rows, cols, inverse=True)
+    else:
+        result = a
+        ax_list = axes if axes is not None else list(range(a.ndim))
+        for ax in reversed(ax_list):
+            result = apply_along_axis(lambda x: array(fft.ifft(array(x)).tolist()), ax, result)
+        return result
+
+fft.fftn = _fft_fftn
+fft.ifftn = _fft_ifftn
+
 # --- random extension functions (Tier 19 Group C) ---------------------------
 
 def _random_shuffle(x):
@@ -4960,7 +5188,7 @@ def _random_permutation(x):
 def _random_standard_normal(size=None):
     """Draw samples from a standard Normal distribution (mean=0, stdev=1)."""
     if size is None:
-        size = (1,)
+        return float(random.normal(0.0, 1.0, (1,)).flatten()[0])
     if isinstance(size, int):
         size = (size,)
     return random.normal(0.0, 1.0, size)
@@ -4968,7 +5196,11 @@ def _random_standard_normal(size=None):
 def _random_exponential(scale=1.0, size=None):
     """Draw samples from an exponential distribution."""
     if size is None:
-        size = (1,)
+        import math as _m
+        u = float(random.uniform(0.0, 1.0, (1,)).flatten()[0])
+        if u >= 1.0:
+            u = 0.9999999999
+        return float(-scale * _m.log(1.0 - u))
     if isinstance(size, int):
         size = (size,)
     # Generate uniform [0,1) then transform: -scale * ln(1 - U)
@@ -4989,11 +5221,20 @@ def _random_exponential(scale=1.0, size=None):
 
 def _random_poisson(lam=1.0, size=None):
     """Draw samples from a Poisson distribution."""
+    import math as _m
     if size is None:
-        size = (1,)
+        L = _m.exp(-lam)
+        k = 0
+        p = 1.0
+        while True:
+            k += 1
+            u = random.uniform(0.0, 1.0, (1,))
+            p *= float(u[0])
+            if p <= L:
+                break
+        return float(k - 1)
     if isinstance(size, int):
         size = (size,)
-    import math as _m
     total = 1
     for s in size:
         total *= s
@@ -5018,7 +5259,12 @@ def _random_poisson(lam=1.0, size=None):
 def _random_binomial(n, p, size=None):
     """Draw samples from a binomial distribution."""
     if size is None:
-        size = (1,)
+        successes = 0
+        for _ in range(int(n)):
+            u = random.uniform(0.0, 1.0, (1,))
+            if float(u[0]) < p:
+                successes += 1
+        return float(successes)
     if isinstance(size, int):
         size = (size,)
     total = 1
@@ -5041,7 +5287,13 @@ def _random_beta(a, b, size=None):
     """Draw samples from a Beta distribution.
     Uses the relationship: if X~Gamma(a,1) and Y~Gamma(b,1), then X/(X+Y)~Beta(a,b)."""
     if size is None:
-        size = (1,)
+        while True:
+            u1 = float(random.uniform(0.0, 1.0, (1,))[0])
+            u2 = float(random.uniform(0.0, 1.0, (1,))[0])
+            x = u1 ** (1.0 / a)
+            y = u2 ** (1.0 / b)
+            if x + y <= 1.0:
+                return float(x / (x + y))
     if isinstance(size, int):
         size = (size,)
     total = 1
@@ -5066,20 +5318,10 @@ def _random_beta(a, b, size=None):
 
 def _random_gamma(shape_param, scale=1.0, size=None):
     """Draw samples from a Gamma distribution using Marsaglia-Tsang method."""
-    if size is None:
-        size = (1,)
-    if isinstance(size, int):
-        size = (size,)
     import math as _m
-    total = 1
-    for s in size:
-        total *= s
-    result = []
-    for _ in range(total):
-        # For shape >= 1, use Marsaglia-Tsang
+    def _gamma_one_sample(shape_param, scale):
         alpha = shape_param
         if alpha < 1:
-            # Boost: X = Y * U^(1/alpha) where Y ~ Gamma(alpha+1)
             u = float(random.uniform(0.0, 1.0, (1,))[0])
             alpha = alpha + 1
             boost = u ** (1.0 / shape_param)
@@ -5094,11 +5336,19 @@ def _random_gamma(shape_param, scale=1.0, size=None):
                 continue
             u = float(random.uniform(0.0, 1.0, (1,))[0])
             if u < 1 - 0.0331 * x**4:
-                result.append(d * v * scale * boost)
-                break
+                return d * v * scale * boost
             if _m.log(u) < 0.5 * x**2 + d * (1 - v + _m.log(v)):
-                result.append(d * v * scale * boost)
-                break
+                return d * v * scale * boost
+    if size is None:
+        return float(_gamma_one_sample(shape_param, scale))
+    if isinstance(size, int):
+        size = (size,)
+    total = 1
+    for s in size:
+        total *= s
+    result = []
+    for _ in range(total):
+        result.append(_gamma_one_sample(shape_param, scale))
     r = array(result)
     if len(size) > 1:
         r = r.reshape(size)
@@ -5150,7 +5400,9 @@ def _random_multinomial(n, pvals, size=None):
 def _random_lognormal(mean=0.0, sigma=1.0, size=None):
     """Draw samples from a log-normal distribution."""
     if size is None:
-        size = (1,)
+        import math as _m
+        n = float(random.normal(mean, sigma, (1,)).flatten()[0])
+        return float(_m.exp(n))
     if isinstance(size, int):
         size = (size,)
     normals = random.normal(mean, sigma, size)
@@ -5161,7 +5413,13 @@ def _random_geometric(p, size=None):
     Returns number of trials until first success (minimum value 1)."""
     import math as _m
     if size is None:
-        size = (1,)
+        log1mp = _m.log(1.0 - p)
+        u = float(random.uniform(0.0, 1.0, (1,))[0])
+        if u >= 1.0:
+            u = 0.9999999999
+        if u <= 0.0:
+            u = 1e-15
+        return float(_m.ceil(_m.log(u) / log1mp))
     if isinstance(size, int):
         size = (size,)
     total = 1
@@ -5231,16 +5489,16 @@ class _Generator:
     def standard_normal(self, size=None):
         return _random_standard_normal(size)
 
-    def integers(self, low, high=None, size=None, endpoint=False):
+    def integers(self, low, high=None, size=None, dtype='int64', endpoint=False):
         if high is None:
             high = low
             low = 0
         if not endpoint:
-            high = high
+            pass  # high is exclusive already
         else:
             high = high + 1
         if size is None:
-            size = (1,)
+            return int(random.randint(low, high, (1,)).flatten()[0])
         if isinstance(size, int):
             size = (size,)
         return random.randint(low, high, size)
@@ -5466,6 +5724,200 @@ def _random_weibull(a, size=None):
         result = result.reshape(list(size))
     return result
 
+def _random_logistic(loc=0.0, scale=1.0, size=None):
+    """Logistic distribution via inverse CDF."""
+    import math
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    results = []
+    while len(results) < total:
+        u = float(random.uniform(0.0, 1.0, (1,))[0])
+        if 0 < u < 1:
+            results.append(loc + scale * math.log(u / (1.0 - u)))
+    result = array(results[:total])
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_gumbel(loc=0.0, scale=1.0, size=None):
+    """Gumbel distribution via inverse CDF."""
+    import math
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    results = []
+    while len(results) < total:
+        u = float(random.uniform(0.0, 1.0, (1,))[0])
+        if 0 < u < 1:
+            results.append(loc - scale * math.log(-math.log(u)))
+    result = array(results[:total])
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_negative_binomial(n, p, size=None):
+    """Negative binomial distribution."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    results = []
+    for _ in range(total):
+        # Generate n geometric trials: count failures before n successes
+        count = 0
+        successes = 0
+        while successes < n:
+            u = float(random.uniform(0.0, 1.0, (1,))[0])
+            if u < p:
+                successes += 1
+            else:
+                count += 1
+        results.append(float(count))
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_power(a, size=None):
+    """Power distribution."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    u = random.uniform(0.0, 1.0, (total,))
+    results = [ui ** (1.0 / a) for ui in u.tolist()]
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_vonmises(mu, kappa, size=None):
+    """Von Mises distribution (rejection sampling)."""
+    import math
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    results = []
+    if kappa < 1e-6:
+        # For very small kappa, uniform on [-pi, pi]
+        for _ in range(total):
+            u = float(random.uniform(0.0, 1.0, (1,))[0])
+            results.append(-math.pi + 2.0 * math.pi * u)
+    else:
+        tau = 1.0 + (1.0 + 4.0 * kappa * kappa) ** 0.5
+        rho = (tau - (2.0 * tau) ** 0.5) / (2.0 * kappa)
+        r = (1.0 + rho * rho) / (2.0 * rho)
+        for _ in range(total):
+            while True:
+                u1 = float(random.uniform(0.0, 1.0, (1,))[0])
+                z = _math.cos(math.pi * u1)
+                f = (1.0 + r * z) / (r + z)
+                c = kappa * (r - f)
+                u2 = float(random.uniform(0.0, 1.0, (1,))[0])
+                if u2 < c * (2.0 - c) or u2 <= c * _math.exp(1.0 - c):
+                    u3 = float(random.uniform(0.0, 1.0, (1,))[0])
+                    theta = mu + (1.0 if u3 > 0.5 else -1.0) * _math.acos(f)
+                    results.append(theta)
+                    break
+    result = array(results[:total])
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_wald(mean, scale, size=None):
+    """Wald (inverse Gaussian) distribution."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    results = []
+    for _ in range(total):
+        v = float(random.normal(0.0, 1.0, (1,))[0])
+        y = v * v
+        x = mean + (mean * mean * y) / (2.0 * scale) - (mean / (2.0 * scale)) * (4.0 * mean * scale * y + mean * mean * y * y) ** 0.5
+        u = float(random.uniform(0.0, 1.0, (1,))[0])
+        if u <= mean / (mean + x):
+            results.append(x)
+        else:
+            results.append(mean * mean / x)
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_zipf(a, size=None):
+    """Zipf distribution (rejection sampling)."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    am1 = a - 1.0
+    b = 2.0 ** am1
+    results = []
+    for _ in range(total):
+        while True:
+            u = float(random.uniform(0.0, 1.0, (1,))[0])
+            if u <= 0.0:
+                continue
+            v = float(random.uniform(0.0, 1.0, (1,))[0])
+            x = int(u ** (-1.0 / am1))
+            if x < 1:
+                x = 1
+            t = (1.0 + 1.0 / x) ** am1
+            if v * x * (t - 1.0) / (b - 1.0) <= t / b:
+                results.append(float(x))
+                break
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
 def _default_rng(seed=None):
     return _Generator(seed)
 
@@ -5492,6 +5944,13 @@ random.laplace = _random_laplace
 random.triangular = _random_triangular
 random.rayleigh = _random_rayleigh
 random.weibull = _random_weibull
+random.logistic = _random_logistic
+random.gumbel = _random_gumbel
+random.negative_binomial = _random_negative_binomial
+random.power = _random_power
+random.vonmises = _random_vonmises
+random.wald = _random_wald
+random.zipf = _random_zipf
 
 # --- Numerical Utilities (Tier 20C) -----------------------------------------
 
@@ -5759,6 +6218,204 @@ def _subtract_reduce(a, axis=None):
 subtract = _UfuncWithReduce(_subtract_func, _subtract_reduce, name='subtract')
 
 
+# --- Tier 27 Group B: Additional functions ----------------------------------
+
+def frombuffer(buffer, dtype=None, count=-1, offset=0):
+    """Interpret a buffer as a 1-D array (simplified: treats as uint8)."""
+    if isinstance(buffer, (bytes, bytearray)):
+        data = list(buffer[offset:])
+        if count != -1:
+            data = data[:count]
+        result = array([float(x) for x in data])
+        if dtype is not None:
+            result = result.astype(str(dtype))
+        return result
+    return asarray(buffer)
+
+def trim_zeros(filt, trim='fb'):
+    """Trim leading and/or trailing zeros from a 1-D array."""
+    filt = asarray(filt)
+    data = filt.tolist()
+    first = 0
+    last = len(data)
+    if 'f' in trim or 'F' in trim:
+        for i in _builtin_range(len(data)):
+            if data[i] != 0:
+                first = i
+                break
+        else:
+            return array([])
+    if 'b' in trim or 'B' in trim:
+        for i in _builtin_range(len(data) - 1, -1, -1):
+            if data[i] != 0:
+                last = i + 1
+                break
+        else:
+            return array([])
+    return array(data[first:last])
+
+def histogramdd(sample, bins=10, range=None, density=False, weights=None):
+    """Simplified N-dimensional histogram."""
+    sample = asarray(sample)
+    if sample.ndim == 1:
+        sample = sample.reshape((-1, 1))
+    sample_list = sample.tolist()
+    n_samples = len(sample_list)
+    n_dims = len(sample_list[0])
+
+    # Determine bins per dimension
+    if isinstance(bins, int):
+        bins_per_dim = [bins] * n_dims
+    else:
+        bins_per_dim = list(bins)
+
+    # Determine edges per dimension
+    _range = range  # local alias to avoid conflict
+    edges = []
+    for d in _builtin_range(n_dims):
+        vals = [row[d] for row in sample_list]
+        if _range is not None and _range[d] is not None:
+            lo, hi = float(_range[d][0]), float(_range[d][1])
+        else:
+            lo, hi = _builtin_min(vals), _builtin_max(vals)
+        edge = linspace(lo, hi, num=bins_per_dim[d] + 1, endpoint=True).tolist()
+        edges.append(edge)
+
+    # Build histogram
+    shape = bins_per_dim
+    total = 1
+    for s in shape:
+        total *= s
+    counts = [0.0] * total
+
+    w_list = None
+    if weights is not None:
+        w_list = asarray(weights).flatten().tolist()
+
+    for idx_s in _builtin_range(n_samples):
+        row = sample_list[idx_s]
+        bin_indices = []
+        in_range_flag = True
+        for d in _builtin_range(n_dims):
+            val = row[d]
+            edge = edges[d]
+            nb = bins_per_dim[d]
+            found = False
+            for j in _builtin_range(nb):
+                if (val >= edge[j] and val < edge[j + 1]) or (j == nb - 1 and val == edge[j + 1]):
+                    bin_indices.append(j)
+                    found = True
+                    break
+            if not found:
+                in_range_flag = False
+                break
+        if not in_range_flag:
+            continue
+        # Compute flat index
+        flat_idx = 0
+        stride = 1
+        for d in _builtin_range(n_dims - 1, -1, -1):
+            flat_idx += bin_indices[d] * stride
+            stride *= bins_per_dim[d]
+        counts[flat_idx] += (w_list[idx_s] if w_list is not None else 1.0)
+
+    hist = array(counts).reshape(shape)
+    edge_arrays = [array(e) for e in edges]
+
+    if density and float(sum(hist)) > 0:
+        # Normalize
+        total_count = float(sum(hist))
+        bin_volumes = ones(shape)
+        for d in _builtin_range(n_dims):
+            widths = [edges[d][i+1] - edges[d][i] for i in _builtin_range(bins_per_dim[d])]
+            w_arr = array(widths)
+            bcast_shape = [1] * n_dims
+            bcast_shape[d] = bins_per_dim[d]
+            w_arr = w_arr.reshape(bcast_shape)
+            bin_volumes = bin_volumes * broadcast_to(w_arr, shape)
+        hist = hist / (total_count * bin_volumes)
+
+    return hist, edge_arrays
+
+def common_type(*arrays):
+    """Return a scalar type common to input arrays."""
+    has_complex = False
+    max_float = 32
+    for a in arrays:
+        arr = asarray(a)
+        dt = str(arr.dtype)
+        if "complex" in dt:
+            has_complex = True
+            if "128" in dt:
+                max_float = 64
+            else:
+                max_float = _builtin_max(max_float, 32)
+        elif "float64" in dt or "float" == dt:
+            max_float = _builtin_max(max_float, 64)
+        elif "float32" in dt:
+            max_float = _builtin_max(max_float, 32)
+        elif "int" in dt:
+            max_float = _builtin_max(max_float, 64)  # int promotes to float64
+    if has_complex:
+        return complex128 if max_float >= 64 else complex64
+    return float64 if max_float >= 64 else float32
+
+class matrix:
+    """Simplified matrix class (deprecated in NumPy, but still used)."""
+    def __init__(self, data, dtype=None, copy=True):
+        if isinstance(data, str):
+            # Parse string like "1 2; 3 4"
+            rows = data.split(";")
+            parsed = []
+            for row in rows:
+                parsed.append([float(x) for x in row.strip().split()])
+            self.A = array(parsed)
+        else:
+            self.A = atleast_2d(asarray(data))
+        if dtype is not None:
+            self.A = self.A.astype(str(dtype))
+
+    @property
+    def T(self):
+        return matrix(self.A.T)
+
+    @property
+    def I(self):
+        return matrix(linalg.inv(self.A))
+
+    @property
+    def shape(self):
+        return self.A.shape
+
+    @property
+    def ndim(self):
+        return self.A.ndim
+
+    def __mul__(self, other):
+        if isinstance(other, matrix):
+            return matrix(dot(self.A, other.A))
+        return matrix(self.A * asarray(other))
+
+    def __add__(self, other):
+        if isinstance(other, matrix):
+            return matrix(self.A + other.A)
+        return matrix(self.A + asarray(other))
+
+    def __sub__(self, other):
+        if isinstance(other, matrix):
+            return matrix(self.A - other.A)
+        return matrix(self.A - asarray(other))
+
+    def __getitem__(self, key):
+        return self.A[key]
+
+    def tolist(self):
+        return self.A.tolist()
+
+    def __repr__(self):
+        return "matrix({})".format(self.A.tolist())
+
+
 # --- testing module ---------------------------------------------------------
 class _TestingModule:
     def assert_allclose(self, actual, desired, rtol=1e-7, atol=0, equal_nan=True, err_msg='', verbose=True):
@@ -5817,3 +6474,7 @@ testing = _TestingModule()
 class _dtypes_mod:
     pass
 dtypes = _dtypes_mod()
+
+# --- Import submodules so np.ma and np.polynomial are accessible ------------
+import numpy.ma as ma
+import numpy.polynomial as polynomial

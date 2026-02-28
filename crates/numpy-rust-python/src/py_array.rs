@@ -1250,6 +1250,119 @@ impl PyNdArray {
             data.shape()[0]
         }
     }
+
+    // --- Tier 27 Group A methods ---
+
+    #[pymethod]
+    fn ptp(
+        &self,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
+        let max_val = inner.max(ax, false).map_err(|e| numpy_err(e, vm))?;
+        let min_val = inner.min(ax, false).map_err(|e| numpy_err(e, vm))?;
+        let result = (&max_val - &min_val).map_err(|e| numpy_err(e, vm))?;
+        Ok(ndarray_or_scalar(result, vm))
+    }
+
+    #[pymethod]
+    fn tobytes(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let inner = self.data.read().unwrap();
+        let flat = inner.flatten();
+        let bytes = match flat.data() {
+            numpy_rust_core::ArrayData::Float64(arr) => {
+                let mut bytes = Vec::with_capacity(arr.len() * 8);
+                for &val in arr.iter() {
+                    bytes.extend_from_slice(&val.to_le_bytes());
+                }
+                bytes
+            }
+            numpy_rust_core::ArrayData::Int64(arr) => {
+                let mut bytes = Vec::with_capacity(arr.len() * 8);
+                for &val in arr.iter() {
+                    bytes.extend_from_slice(&val.to_le_bytes());
+                }
+                bytes
+            }
+            numpy_rust_core::ArrayData::Int32(arr) => {
+                let mut bytes = Vec::with_capacity(arr.len() * 4);
+                for &val in arr.iter() {
+                    bytes.extend_from_slice(&val.to_le_bytes());
+                }
+                bytes
+            }
+            numpy_rust_core::ArrayData::Float32(arr) => {
+                let mut bytes = Vec::with_capacity(arr.len() * 4);
+                for &val in arr.iter() {
+                    bytes.extend_from_slice(&val.to_le_bytes());
+                }
+                bytes
+            }
+            numpy_rust_core::ArrayData::Bool(arr) => {
+                arr.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect()
+            }
+            _ => return Err(vm.new_type_error("tobytes not supported for this dtype".to_string())),
+        };
+        Ok(vm.ctx.new_bytes(bytes).into())
+    }
+
+    #[pymethod]
+    fn tostring(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        self.tobytes(vm)
+    }
+
+    #[pymethod]
+    fn compress(
+        &self,
+        condition: PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
+        let cond = condition.data.read().unwrap();
+        inner
+            .compress(&cond, ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn searchsorted(
+        &self,
+        v: PyRef<PyNdArray>,
+        side: vm::function::OptionalArg<PyRef<PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let inner = self.data.read().unwrap();
+        let values = v.data.read().unwrap();
+        let side_str = side
+            .into_option()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_else(|| "left".to_string());
+        inner
+            .searchsorted(&values, &side_str)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn partition(&self, _kth: usize, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        // Full sort satisfies the partition contract
+        let inner = self.data.read().unwrap();
+        inner
+            .sort(None)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pygetset]
+    fn flat(&self) -> PyNdArray {
+        let inner = self.data.read().unwrap();
+        PyNdArray::from_core(inner.flatten())
+    }
 }
 
 /// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).

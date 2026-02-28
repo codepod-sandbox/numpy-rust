@@ -4954,6 +4954,432 @@ def test_piecewise():
     assert_close(float(r[0]), -1.0)
     assert_close(float(r[2]), 1.0)
 
+# --- Tier 27 Group A: ndarray methods + AxisError ---
+
+def test_ndarray_ptp():
+    a = np.array([3.0, 1.0, 7.0, 2.0])
+    assert_close(float(a.ptp()), 6.0)
+
+def test_ndarray_ptp_2d():
+    a = np.array([[1.0, 5.0], [3.0, 2.0]])
+    r = a.ptp(1)
+    assert_close(float(r[0]), 4.0)
+    assert_close(float(r[1]), 1.0)
+
+def test_ndarray_tobytes():
+    a = np.array([1.0, 2.0, 3.0])
+    b = a.tobytes()
+    assert isinstance(b, bytes)
+    assert len(b) == 24  # 3 * 8 bytes for float64
+
+def test_ndarray_tostring():
+    a = np.array([1.0, 2.0])
+    b = a.tostring()
+    assert isinstance(b, bytes)
+    assert len(b) == 16  # 2 * 8 bytes for float64
+
+def test_ndarray_compress_method():
+    a = np.array([10.0, 20.0, 30.0, 40.0])
+    cond = np.array([1.0, 0.0, 1.0, 0.0])
+    r = a.compress(cond)
+    assert len(r.tolist()) == 2
+    assert_close(float(r[0]), 10.0)
+    assert_close(float(r[1]), 30.0)
+
+def test_ndarray_searchsorted_method():
+    a = np.array([1.0, 3.0, 5.0, 7.0])
+    idx = a.searchsorted(np.array([2.0, 4.0, 6.0]))
+    assert int(idx[0]) == 1
+    assert int(idx[1]) == 2
+    assert int(idx[2]) == 3
+
+def test_ndarray_partition_method():
+    a = np.array([3.0, 1.0, 4.0, 1.0, 5.0])
+    p = a.partition(2)
+    # Element at index 2 should be correct (full sort satisfies partition)
+    assert_close(float(p[2]), 3.0)
+
+def test_ndarray_flat():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    f = a.flat
+    assert len(f.tolist()) == 4
+
+def test_axis_error():
+    try:
+        e = np.AxisError(5, 3)
+        raise e
+    except np.AxisError as err:
+        assert "5" in str(err)
+        assert "3" in str(err)
+
+def test_axis_error_isinstance():
+    e = np.AxisError(2, 1)
+    assert isinstance(e, ValueError)
+    assert isinstance(e, IndexError)
+
+# --- Tier 27 Group C: char methods, ma module, polynomial module ---
+
+def test_char_center():
+    r = np.char.center(["hello", "hi"], 10)
+    assert len(str(r[0])) == 10
+    assert len(str(r[1])) == 10
+
+def test_char_ljust():
+    r = np.char.ljust(["hi"], 10)
+    assert str(r[0]).startswith("hi")
+    assert len(str(r[0])) == 10
+
+def test_char_rjust():
+    r = np.char.rjust(["hi"], 10)
+    assert str(r[0]).endswith("hi")
+    assert len(str(r[0])) == 10
+
+def test_char_zfill():
+    r = np.char.zfill(["42"], 5)
+    assert str(r[0]) == "00042"
+
+def test_char_title():
+    r = np.char.title(["hello world"])
+    assert str(r[0]) == "Hello World"
+
+def test_char_swapcase():
+    r = np.char.swapcase(["Hello"])
+    assert str(r[0]) == "hELLO"
+
+def test_char_isalpha():
+    r = np.char.isalpha(["hello", "123", "hi2"])
+    r_list = r.tolist()
+    assert r_list[0] == 1.0  # True
+    assert r_list[1] == 0.0  # False
+    assert r_list[2] == 0.0  # False
+
+def test_char_isdigit():
+    r = np.char.isdigit(["123", "abc", "12a"])
+    r_list = r.tolist()
+    assert r_list[0] == 1.0
+    assert r_list[1] == 0.0
+    assert r_list[2] == 0.0
+
+def test_char_isupper():
+    r = np.char.isupper(["HELLO", "hello", "Hello"])
+    r_list = r.tolist()
+    assert r_list[0] == 1.0
+    assert r_list[1] == 0.0
+    assert r_list[2] == 0.0
+
+def test_char_islower():
+    r = np.char.islower(["hello", "HELLO", "Hello"])
+    r_list = r.tolist()
+    assert r_list[0] == 1.0
+    assert r_list[1] == 0.0
+    assert r_list[2] == 0.0
+
+def test_char_isspace():
+    r = np.char.isspace(["   ", "hello", " h "])
+    r_list = r.tolist()
+    assert r_list[0] == 1.0
+    assert r_list[1] == 0.0
+    assert r_list[2] == 0.0
+
+def test_char_encode():
+    r = np.char.encode(["hello"])
+    assert isinstance(r[0], bytes)
+
+def test_ma_basic():
+    import numpy
+    a = numpy.ma.masked_array([1.0, 2.0, 3.0], mask=[0, 1, 0])
+    assert a.count() == 2
+    c = a.compressed()
+    assert len(c.tolist()) == 2
+
+def test_ma_masked_constant():
+    import numpy
+    assert str(numpy.ma.masked) == '--'
+    assert not bool(numpy.ma.masked)
+
+def test_ma_filled():
+    import numpy
+    a = numpy.ma.masked_array([1.0, 2.0, 3.0], mask=[0, 1, 0], fill_value=-999.0)
+    filled = a.filled()
+    f_list = filled.tolist()
+    assert_close(f_list[0], 1.0)
+    assert_close(f_list[1], -999.0)
+    assert_close(f_list[2], 3.0)
+
+def test_ma_sum():
+    import numpy
+    a = numpy.ma.masked_array([1.0, 2.0, 3.0], mask=[0, 1, 0])
+    s = a.sum()
+    assert_close(float(s), 4.0)
+
+def test_ma_mean():
+    import numpy
+    a = numpy.ma.masked_array([1.0, 2.0, 3.0], mask=[0, 1, 0])
+    m = a.mean()
+    assert_close(float(m), 2.0)
+
+def test_ma_is_masked():
+    import numpy
+    a = numpy.ma.masked_array([1.0, 2.0, 3.0], mask=[0, 1, 0])
+    assert numpy.ma.is_masked(a)
+    b = numpy.ma.masked_array([1.0, 2.0, 3.0], mask=[0, 0, 0])
+    assert not numpy.ma.is_masked(b)
+
+def test_ma_masked_equal():
+    import numpy
+    a = numpy.ma.masked_equal([1.0, 2.0, 3.0, 2.0], 2.0)
+    c = a.compressed()
+    assert len(c.tolist()) == 2
+    assert_close(float(c[0]), 1.0)
+    assert_close(float(c[1]), 3.0)
+
+def test_ma_masked_greater():
+    import numpy
+    a = numpy.ma.masked_greater([1.0, 2.0, 3.0, 4.0], 2.0)
+    c = a.compressed()
+    assert len(c.tolist()) == 2
+
+def test_ma_masked_less():
+    import numpy
+    a = numpy.ma.masked_less([1.0, 2.0, 3.0, 4.0], 3.0)
+    c = a.compressed()
+    assert len(c.tolist()) == 2
+
+def test_ma_masked_invalid():
+    import numpy
+    a = numpy.ma.masked_invalid(np.array([1.0, float('nan'), 3.0]))
+    c = a.compressed()
+    assert len(c.tolist()) == 2
+
+def test_ma_shape():
+    import numpy
+    a = numpy.ma.masked_array([1.0, 2.0, 3.0], mask=[0, 1, 0])
+    assert a.shape == (3,)
+
+def test_polynomial_polyval():
+    import numpy.polynomial as poly
+    # c[0] + c[1]*x + c[2]*x^2 = 1 + 2*x + 3*x^2
+    # At x=2: 1 + 4 + 12 = 17
+    r = poly.polynomial.polyval(np.array([2.0]), [1.0, 2.0, 3.0])
+    assert_close(float(r[0]), 17.0)
+
+def test_polynomial_polyadd():
+    import numpy.polynomial as poly
+    # (1 + 2x) + (3 + 4x) = (4 + 6x)
+    r = poly.polynomial.polyadd([1.0, 2.0], [3.0, 4.0])
+    r_list = r.tolist()
+    assert_close(r_list[0], 4.0)
+    assert_close(r_list[1], 6.0)
+
+def test_polynomial_polysub():
+    import numpy.polynomial as poly
+    # (3 + 4x) - (1 + 2x) = (2 + 2x)
+    r = poly.polynomial.polysub([3.0, 4.0], [1.0, 2.0])
+    r_list = r.tolist()
+    assert_close(r_list[0], 2.0)
+    assert_close(r_list[1], 2.0)
+
+def test_polynomial_polymul():
+    import numpy.polynomial as poly
+    # (1 + x) * (1 + x) = 1 + 2x + x^2
+    r = poly.polynomial.polymul([1.0, 1.0], [1.0, 1.0])
+    r_list = r.tolist()
+    assert_close(r_list[0], 1.0)
+    assert_close(r_list[1], 2.0)
+    assert_close(r_list[2], 1.0)
+
+def test_polynomial_polyder():
+    import numpy.polynomial as poly
+    # d/dx (1 + 2x + 3x^2) = 2 + 6x
+    r = poly.polynomial.polyder([1.0, 2.0, 3.0])
+    r_list = r.tolist()
+    assert_close(r_list[0], 2.0)
+    assert_close(r_list[1], 6.0)
+
+def test_polynomial_polyint():
+    import numpy.polynomial as poly
+    # integral of (2 + 6x) = 0 + 2x + 3x^2
+    r = poly.polynomial.polyint([2.0, 6.0])
+    r_list = r.tolist()
+    assert_close(r_list[0], 0.0)
+    assert_close(r_list[1], 2.0)
+    assert_close(r_list[2], 3.0)
+
+# --- Tier 27 Group D: Fix silently wrong results ---
+
+def test_array_equiv_broadcast():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([[1.0, 2.0, 3.0]])
+    assert np.array_equiv(a, b)
+
+def test_array_equiv_different():
+    a = np.array([1.0, 2.0])
+    b = np.array([1.0, 3.0])
+    assert not np.array_equiv(a, b)
+
+def test_random_standard_normal_scalar():
+    r = np.random.standard_normal()
+    assert isinstance(r, float)
+
+def test_random_exponential_scalar():
+    r = np.random.exponential()
+    assert isinstance(r, float)
+
+def test_random_poisson_scalar():
+    r = np.random.poisson(5.0)
+    assert isinstance(r, (int, float))
+
+def test_random_beta_scalar():
+    r = np.random.beta(2.0, 5.0)
+    assert isinstance(r, float)
+
+def test_random_gamma_scalar():
+    r = np.random.gamma(2.0, 1.0)
+    assert isinstance(r, float)
+
+def test_random_lognormal_scalar():
+    r = np.random.lognormal()
+    assert isinstance(r, float)
+
+def test_random_geometric_scalar():
+    r = np.random.geometric(0.5)
+    assert isinstance(r, float)
+
+def test_random_binomial_scalar():
+    r = np.random.binomial(10, 0.5)
+    assert isinstance(r, float)
+
+def test_iinfo_unsigned():
+    info = np.iinfo("uint8")
+    assert info.min == 0
+    assert info.max == 255
+    info32 = np.iinfo("uint32")
+    assert info32.min == 0
+    assert info32.max == 4294967295
+
+def test_logspace_dtype():
+    r = np.logspace(0, 2, num=5, dtype="float32")
+    assert str(r.dtype) == "float32"
+
+def test_linspace_dtype():
+    r = np.linspace(0, 10, num=5, dtype="int64")
+    assert str(r.dtype) == "int64"
+
+def test_geomspace_dtype():
+    r = np.geomspace(1, 100, num=5, dtype="float32")
+    assert str(r.dtype) == "float32"
+
+def test_generator_integers_scalar():
+    rng = np.random.default_rng(42)
+    r = rng.integers(0, 10)
+    assert isinstance(r, (int, float))
+
+def test_indices_returns_ndarray():
+    r = np.indices((2, 3))
+    assert isinstance(r, np.ndarray)
+    assert r.shape[0] == 2
+
+# --- Tier 27 Group B tests ---
+
+def test_frombuffer():
+    # Simple: bytes to uint8 values
+    b = bytes([1, 2, 3, 4])
+    a = np.frombuffer(b)
+    assert len(a.tolist()) == 4
+
+def test_trim_zeros():
+    a = np.array([0.0, 0.0, 1.0, 2.0, 0.0])
+    r = np.trim_zeros(a)
+    assert len(r.tolist()) == 2
+    assert_close(float(r[0]), 1.0)
+    assert_close(float(r[1]), 2.0)
+
+def test_trim_zeros_front():
+    a = np.array([0.0, 0.0, 1.0, 2.0, 3.0])
+    r = np.trim_zeros(a, 'f')
+    assert_close(float(r[0]), 1.0)
+    assert len(r.tolist()) == 3
+
+def test_histogramdd():
+    data = np.array([[0.5, 0.5], [1.5, 1.5], [0.5, 1.5]])
+    hist, edges = np.histogramdd(data, bins=2)
+    assert len(edges) == 2
+
+def test_linalg_eigvalsh():
+    a = np.array([[2.0, 1.0], [1.0, 3.0]])
+    vals = np.linalg.eigvalsh(a)
+    assert len(vals.tolist()) == 2
+
+def test_fft_fftn():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.fftn(a)
+    assert r.shape == (2, 2) or r.shape[0] == 2
+
+def test_fft_ifftn():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.ifftn(np.fft.fftn(a))
+    # Should round-trip (shape preserved)
+    assert r.shape[0] == 2
+
+def test_random_logistic():
+    r = np.random.logistic(0.0, 1.0, size=50)
+    assert len(r.tolist()) == 50
+
+def test_random_gumbel():
+    r = np.random.gumbel(0.0, 1.0, size=50)
+    assert len(r.tolist()) == 50
+
+def test_random_negative_binomial():
+    r = np.random.negative_binomial(5, 0.5, size=20)
+    assert len(r.tolist()) == 20
+
+def test_random_power():
+    r = np.random.power(2.0, size=50)
+    vals = r.tolist()
+    for v in vals:
+        assert 0.0 <= v <= 1.0
+
+def test_random_vonmises():
+    r = np.random.vonmises(0.0, 1.0, size=50)
+    assert len(r.tolist()) == 50
+
+def test_random_wald():
+    r = np.random.wald(1.0, 1.0, size=50)
+    vals = r.tolist()
+    for v in vals:
+        assert v > 0.0
+
+def test_random_zipf():
+    r = np.random.zipf(2.0, size=50)
+    vals = r.tolist()
+    for v in vals:
+        assert v >= 1.0
+
+def test_common_type():
+    a = np.array([1.0, 2.0])
+    b = np.array([1, 2])
+    ct = np.common_type(a, b)
+    # Should be float64
+    assert ct is np.float64 or str(ct) == "float64"
+
+def test_matrix_basic():
+    m = np.matrix([[1.0, 2.0], [3.0, 4.0]])
+    assert m.shape == (2, 2)
+    mt = m.T
+    assert_close(float(mt[0][1]), 3.0)
+
+def test_matrix_multiply():
+    m1 = np.matrix([[1.0, 0.0], [0.0, 1.0]])
+    m2 = np.matrix([[5.0, 6.0], [7.0, 8.0]])
+    r = m1 * m2
+    assert_close(float(r[0][0]), 5.0)
+
+def test_matrix_from_string():
+    m = np.matrix("1 2; 3 4")
+    assert m.shape == (2, 2)
+    assert_close(float(m[0][0]), 1.0)
+    assert_close(float(m[1][1]), 4.0)
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
