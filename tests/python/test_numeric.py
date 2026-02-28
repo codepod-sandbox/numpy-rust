@@ -5532,6 +5532,292 @@ def test_ogrid_complex_step():
     except Exception:
         pass  # Complex slice step may not be supported in this runtime
 
+# --- Tier 29 tests ---
+
+# 1. Tuple-axis reductions
+def test_sum_tuple_axis():
+    a = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])  # shape (3,2)
+    r = np.sum(a, axis=(0, 1))
+    assert_close(r, 21.0)
+
+def test_mean_tuple_axis():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.mean(a, axis=(0, 1))
+    assert_close(r, 2.5)
+
+def test_max_tuple_axis():
+    a = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    r = np.max(a, axis=(0, 1))
+    assert_close(r, 6.0)
+
+# 2. ndarray.item()
+def test_ndarray_item():
+    a = np.array([42.0])
+    v = a.item()
+    assert_close(v, 42.0)
+
+def test_ndarray_item_2d():
+    a = np.array([[5.0]])
+    v = a.item()
+    assert_close(v, 5.0)
+
+# 3. ndarray.view()
+def test_ndarray_view():
+    a = np.array([1.0, 2.0, 3.0])
+    b = a.view()
+    assert_eq(b.tolist(), [1.0, 2.0, 3.0])
+
+# 4. rfft / irfft / rfftfreq
+def test_rfft_basic():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    r = np.fft.rfft(a)
+    # rfft of [1,2,3,4] should have 3 elements (N//2+1)
+    # Result is (3, 2) shaped: [[real, imag], ...]
+    assert_eq(r.shape[0], 3)
+    # First element is sum (real part = 10.0, imag part = 0.0)
+    assert_close(r.tolist()[0][0], 10.0, tol=1e-5)
+
+def test_irfft_basic():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    r = np.fft.rfft(a)
+    back = np.fft.irfft(r, n=4)
+    for i in range(4):
+        assert_close(back.tolist()[i], a.tolist()[i], tol=1e-5)
+
+def test_rfftfreq():
+    f = np.fft.rfftfreq(8, d=1.0)
+    assert_eq(len(f.tolist()), 5)
+    assert_close(f.tolist()[0], 0.0)
+
+# 5. ndindex / ndenumerate (Tier 29 versions)
+def test_ndindex_t29():
+    indices = list(np.ndindex(2, 3))
+    assert_eq(len(indices), 6)
+    assert_eq(indices[0], (0, 0))
+    assert_eq(indices[-1], (1, 2))
+
+def test_ndenumerate_t29():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    items = list(np.ndenumerate(a))
+    assert_eq(len(items), 4)
+    assert_eq(items[0], ((0, 0), 1.0))
+    assert_eq(items[-1], ((1, 1), 4.0))
+
+# 6. pad modes
+def test_pad_symmetric():
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.pad(a, 2, mode='symmetric')
+    # symmetric: [2, 1, 1, 2, 3, 3, 2]
+    assert_eq(len(r.tolist()), 7)
+
+def test_pad_mean():
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.pad(a, 1, mode='mean')
+    # mean is 2.0, so [2, 1, 2, 3, 2]
+    assert_close(r.tolist()[0], 2.0)
+    assert_close(r.tolist()[-1], 2.0)
+
+def test_pad_linear_ramp():
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.pad(a, 2, mode='linear_ramp')
+    assert_eq(len(r.tolist()), 7)
+
+# 7. genfromtxt
+def test_genfromtxt():
+    import os
+    fname = "/tmp/test_genfromtxt.csv"
+    with open(fname, 'w') as f:
+        f.write("1.0 2.0 3.0\n4.0 5.0 6.0\n")
+    r = np.genfromtxt(fname)
+    assert_eq(r.shape, (2, 3))
+    assert_close(r.tolist()[0][0], 1.0)
+    os.remove(fname)
+
+def test_genfromtxt_missing():
+    import os
+    fname = "/tmp/test_genfromtxt2.csv"
+    with open(fname, 'w') as f:
+        f.write("1.0 2.0\n3.0 nan\n")
+    r = np.genfromtxt(fname)
+    assert_eq(r.shape, (2, 2))
+    os.remove(fname)
+
+# 8. Type hierarchy isinstance
+def test_issubdtype_class():
+    assert_eq(np.issubdtype("float64", np.floating), True)
+    assert_eq(np.issubdtype("int32", np.integer), True)
+    assert_eq(np.issubdtype("float32", np.integer), False)
+    assert_eq(np.issubdtype("int64", np.number), True)
+    assert_eq(np.issubdtype("complex128", np.inexact), True)
+
+def test_type_hierarchy_t29():
+    assert_eq(issubclass(np.float64, np.floating), True)
+    assert_eq(issubclass(np.int32, np.integer), True)
+    assert_eq(issubclass(np.float64, np.number), True)
+    assert_eq(issubclass(np.int64, np.signedinteger), True)
+
+# 9. Masked array extras
+def test_ma_masked_less_equal():
+    a = np.ma.masked_less_equal([1, 2, 3, 4], 2)
+    assert_eq(a.count(), 2)
+
+def test_ma_masked_greater_equal():
+    a = np.ma.masked_greater_equal([1, 2, 3, 4], 3)
+    assert_eq(a.count(), 2)
+
+def test_ma_masked_not_equal():
+    a = np.ma.masked_not_equal([1, 2, 3, 2], 2)
+    assert_eq(a.count(), 2)
+
+def test_ma_masked_inside():
+    a = np.ma.masked_inside([1, 2, 3, 4, 5], 2, 4)
+    assert_eq(a.count(), 2)  # 1 and 5 are outside
+
+def test_ma_masked_outside():
+    a = np.ma.masked_outside([1, 2, 3, 4, 5], 2, 4)
+    assert_eq(a.count(), 3)  # 2, 3, 4 are inside
+
+def test_ma_getdata():
+    a = np.ma.masked_equal([1, 2, 3], 2)
+    d = np.ma.getdata(a)
+    assert_eq(d.tolist(), [1.0, 2.0, 3.0])
+
+def test_ma_getmaskarray():
+    a = np.ma.masked_equal([1, 2, 3], 2)
+    m = np.ma.getmaskarray(a)
+    assert_eq(m.tolist(), [False, True, False])
+
+# 10. Testing module extras
+def test_testing_assert_approx_equal():
+    np.testing.assert_approx_equal(1.00000001, 1.0, significant=7)
+
+def test_testing_assert_array_less():
+    np.testing.assert_array_less(np.array([1, 2]), np.array([3, 4]))
+
+def test_testing_assert_raises_regex():
+    def bad():
+        raise ValueError("bad value here")
+    np.testing.assert_raises_regex(ValueError, "bad value", bad)
+
+# 11. Empty array mean/std
+def test_mean_empty():
+    import math
+    a = np.array([])
+    r = np.mean(a)
+    assert_eq(math.isnan(r), True)
+
+def test_std_empty():
+    import math
+    a = np.array([])
+    r = np.std(a)
+    assert_eq(math.isnan(r), True)
+
+# 12. ndarray.view (alias test)
+def test_view():
+    a = np.array([1.0, 2.0, 3.0])
+    b = a.view()
+    assert_eq(b.tolist(), a.tolist())
+
+# --- Tier 29 Group A: tuple-axis reductions, item(), view() ---
+
+# Tuple-axis sum via method (positional arg)
+def test_tuple_axis_sum_2d():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    # sum over both axes -> scalar
+    r = a.sum((0, 1))
+    assert_close(r, 10.0, msg="sum((0,1)) on 2x2")
+
+def test_tuple_axis_sum_3d():
+    a = np.ones((2, 3, 4))
+    # sum axes 0 and 2 -> shape (3,)
+    r = a.sum((0, 2))
+    assert_eq(r.shape, (3,))
+    assert_close(r[0], 8.0, msg="sum((0,2)) on 2x3x4")
+
+# Tuple-axis mean via method (positional arg)
+def test_tuple_axis_mean():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = a.mean((0, 1))
+    assert_close(r, 2.5, msg="mean((0,1))")
+
+# Tuple-axis min via method (positional arg)
+def test_tuple_axis_min():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = a.min((0, 1))
+    assert_close(r, 1.0, msg="min((0,1))")
+
+# Tuple-axis max via method (positional arg)
+def test_tuple_axis_max():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = a.max((0, 1))
+    assert_close(r, 4.0, msg="max((0,1))")
+
+# Tuple-axis prod via method (positional arg)
+def test_tuple_axis_prod():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = a.prod((0, 1))
+    assert_close(r, 24.0, msg="prod((0,1))")
+
+# Tuple-axis via module-level np.sum (keyword arg)
+def test_tuple_axis_np_sum():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.sum(a, axis=(0, 1))
+    assert_close(r, 10.0, msg="np.sum(axis=(0,1))")
+
+# Tuple-axis via module-level np.mean (keyword arg)
+def test_tuple_axis_np_mean():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.mean(a, axis=(0, 1))
+    assert_close(r, 2.5, msg="np.mean(axis=(0,1))")
+
+# Tuple-axis via module-level np.min/np.max (keyword arg)
+def test_tuple_axis_np_min():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.min(a, axis=(0, 1))
+    assert_close(r, 1.0, msg="np.min(axis=(0,1))")
+
+def test_tuple_axis_np_max():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.max(a, axis=(0, 1))
+    assert_close(r, 4.0, msg="np.max(axis=(0,1))")
+
+# Tuple-axis std/var via method (positional arg)
+def test_tuple_axis_std():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = a.std((0, 1))
+    # std of [1,2,3,4] = sqrt(var) = sqrt(1.25) ~ 1.118
+    assert_close(r, 1.118033988749895, tol=1e-5, msg="std((0,1))")
+
+def test_tuple_axis_var():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = a.var((0, 1))
+    # var of [1,2,3,4] = 1.25
+    assert_close(r, 1.25, msg="var((0,1))")
+
+# item() method
+def test_item_scalar():
+    a = np.array([42.0])
+    assert_close(a.item(), 42.0, msg="item() on single-element array")
+
+def test_item_scalar_2d():
+    a = np.array([[7.0]])
+    assert_close(a.item(), 7.0, msg="item() on 2D single-element array")
+
+def test_item_error():
+    a = np.array([1.0, 2.0])
+    try:
+        a.item()
+        raise AssertionError("item() should have raised ValueError for non-scalar array")
+    except ValueError:
+        pass  # expected
+
+# view() returns a copy
+def test_view_copy():
+    a = np.array([1.0, 2.0, 3.0])
+    b = a.view()
+    assert_eq(b.shape, a.shape)
+    assert_eq(b.tolist(), a.tolist())
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

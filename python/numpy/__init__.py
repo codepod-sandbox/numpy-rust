@@ -265,52 +265,54 @@ class _ScalarType:
             return self._name == other._name
         if isinstance(other, str):
             return self._name == other
+        if isinstance(other, type) and hasattr(other, '_scalar_name'):
+            return self._name == other._scalar_name
         return NotImplemented
 
     def __hash__(self):
         return hash(self._name)
 
 
-float64 = _ScalarType("float64", float)
-float32 = _ScalarType("float32", float)
-float16 = _ScalarType("float16", float)
-float128 = _ScalarType("float128", float)
-int64 = _ScalarType("int64", int)
-int32 = _ScalarType("int32", int)
-int16 = _ScalarType("int16", int)
-int8 = _ScalarType("int8", int)
-uint64 = _ScalarType("uint64", int)
-uint32 = _ScalarType("uint32", int)
-uint16 = _ScalarType("uint16", int)
-uint8 = _ScalarType("uint8", int)
-complex64 = _ScalarType("complex64", complex)
-complex128 = _ScalarType("complex128", complex)
-bool_ = _ScalarType("bool", bool)
-intp = _ScalarType("int64", int)
-intc = _ScalarType("int32", int)
-uintp = _ScalarType("uint64", int)
-byte = _ScalarType("int8", int)
-ubyte = _ScalarType("uint8", int)
-short = _ScalarType("int16", int)
-ushort = _ScalarType("uint16", int)
-longlong = _ScalarType("int64", int)
-ulonglong = _ScalarType("uint64", int)
-single = _ScalarType("float32", float)
-double = _ScalarType("float64", float)
-longdouble = _ScalarType("float64", float)
-csingle = _ScalarType("complex64", complex)
-cdouble = _ScalarType("complex128", complex)
-clongdouble = _ScalarType("complex128", complex)
-object_ = _ScalarType("object", object)
-str_ = _ScalarType("str", str)
-bytes_ = _ScalarType("bytes", bytes)
-void = _ScalarType("void")
-timedelta64 = _ScalarType("timedelta64", int)
-datetime64 = _ScalarType("datetime64", int)
-string_ = _ScalarType("str", str)
-unicode_ = _ScalarType("str", str)
-half = _ScalarType("float16", float)
-int_ = int64
+# Metaclass for scalar type classes so the CLASS itself has custom __str__, __eq__, __hash__
+class _ScalarTypeMeta(type):
+    """Metaclass for numpy scalar type classes in the type hierarchy."""
+    def __new__(mcs, name, bases, namespace, scalar_name=None, python_type=float):
+        cls = super().__new__(mcs, name, bases, namespace)
+        cls._scalar_name = scalar_name or name
+        cls._python_type = python_type
+        return cls
+
+    def __init__(cls, name, bases, namespace, scalar_name=None, python_type=float):
+        super().__init__(name, bases, namespace)
+
+    def __call__(cls, value=0, *args, **kwargs):
+        try:
+            return cls._python_type(value)
+        except (ValueError, TypeError):
+            return value
+
+    def __repr__(cls):
+        return f"<class 'numpy.{cls._scalar_name}'>"
+
+    def __str__(cls):
+        return cls._scalar_name
+
+    def __eq__(cls, other):
+        if isinstance(other, _ScalarTypeMeta):
+            return cls._scalar_name == other._scalar_name
+        if isinstance(other, _ScalarType):
+            return cls._scalar_name == other._name
+        if isinstance(other, str):
+            return cls._scalar_name == other
+        return type.__eq__(cls, other)
+
+    def __hash__(cls):
+        return hash(cls._scalar_name)
+
+    def __instancecheck__(cls, instance):
+        # These are abstract type hierarchy classes, not instantiated
+        return False
+
 
 # --- Constants --------------------------------------------------------------
 nan = float("nan")
@@ -336,45 +338,117 @@ typecodes = {
 }
 
 # --- Type hierarchy classes -------------------------------------------------
-class generic:
+class generic(metaclass=_ScalarTypeMeta, scalar_name="generic"):
     """Base class for all numpy scalar types."""
     pass
 
-class number(generic):
+class number(generic, metaclass=_ScalarTypeMeta, scalar_name="number"):
     """Base class for all numeric scalar types."""
     pass
 
-class integer(number):
+class integer(number, metaclass=_ScalarTypeMeta, scalar_name="integer"):
     """Base class for integer scalar types."""
     pass
 
-class signedinteger(integer):
+class signedinteger(integer, metaclass=_ScalarTypeMeta, scalar_name="signedinteger"):
     """Base class for signed integer scalar types."""
     pass
 
-class unsignedinteger(integer):
+class unsignedinteger(integer, metaclass=_ScalarTypeMeta, scalar_name="unsignedinteger"):
     """Base class for unsigned integer scalar types."""
     pass
 
-class inexact(number):
+class inexact(number, metaclass=_ScalarTypeMeta, scalar_name="inexact"):
     """Base class for inexact (float/complex) scalar types."""
     pass
 
-class floating(inexact):
+class floating(inexact, metaclass=_ScalarTypeMeta, scalar_name="floating"):
     """Base class for floating-point scalar types."""
     pass
 
-class complexfloating(inexact):
+class complexfloating(inexact, metaclass=_ScalarTypeMeta, scalar_name="complexfloating"):
     """Base class for complex scalar types."""
     pass
 
-class character(generic):
+class character(generic, metaclass=_ScalarTypeMeta, scalar_name="character"):
     """Base class for character types."""
     pass
 
-class flexible(generic):
+class flexible(generic, metaclass=_ScalarTypeMeta, scalar_name="flexible"):
     """Base class for flexible types (string, void)."""
     pass
+
+class bool_(generic, metaclass=_ScalarTypeMeta, scalar_name="bool", python_type=bool):
+    """Boolean scalar type."""
+    pass
+
+# Specific signed integer types
+class int8(signedinteger, metaclass=_ScalarTypeMeta, scalar_name="int8", python_type=int):
+    pass
+class int16(signedinteger, metaclass=_ScalarTypeMeta, scalar_name="int16", python_type=int):
+    pass
+class int32(signedinteger, metaclass=_ScalarTypeMeta, scalar_name="int32", python_type=int):
+    pass
+class int64(signedinteger, metaclass=_ScalarTypeMeta, scalar_name="int64", python_type=int):
+    pass
+
+# Specific unsigned integer types
+class uint8(unsignedinteger, metaclass=_ScalarTypeMeta, scalar_name="uint8", python_type=int):
+    pass
+class uint16(unsignedinteger, metaclass=_ScalarTypeMeta, scalar_name="uint16", python_type=int):
+    pass
+class uint32(unsignedinteger, metaclass=_ScalarTypeMeta, scalar_name="uint32", python_type=int):
+    pass
+class uint64(unsignedinteger, metaclass=_ScalarTypeMeta, scalar_name="uint64", python_type=int):
+    pass
+
+# Specific floating-point types
+class float16(floating, metaclass=_ScalarTypeMeta, scalar_name="float16", python_type=float):
+    pass
+class float32(floating, metaclass=_ScalarTypeMeta, scalar_name="float32", python_type=float):
+    pass
+class float64(floating, metaclass=_ScalarTypeMeta, scalar_name="float64", python_type=float):
+    pass
+
+# Specific complex types
+class complex64(complexfloating, metaclass=_ScalarTypeMeta, scalar_name="complex64", python_type=complex):
+    pass
+class complex128(complexfloating, metaclass=_ScalarTypeMeta, scalar_name="complex128", python_type=complex):
+    pass
+
+# Character/flexible types
+class str_(character, metaclass=_ScalarTypeMeta, scalar_name="str", python_type=str):
+    pass
+class bytes_(character, metaclass=_ScalarTypeMeta, scalar_name="bytes", python_type=bytes):
+    pass
+class void(flexible, metaclass=_ScalarTypeMeta, scalar_name="void", python_type=float):
+    pass
+
+# Aliases using _ScalarType (for types that don't need hierarchy participation)
+float128 = _ScalarType("float128", float)
+intp = _ScalarType("int64", int)
+intc = _ScalarType("int32", int)
+uintp = _ScalarType("uint64", int)
+byte = _ScalarType("int8", int)
+ubyte = _ScalarType("uint8", int)
+short = _ScalarType("int16", int)
+ushort = _ScalarType("uint16", int)
+longlong = _ScalarType("int64", int)
+ulonglong = _ScalarType("uint64", int)
+single = _ScalarType("float32", float)
+double = _ScalarType("float64", float)
+longdouble = _ScalarType("float64", float)
+csingle = _ScalarType("complex64", complex)
+cdouble = _ScalarType("complex128", complex)
+clongdouble = _ScalarType("complex128", complex)
+object_ = _ScalarType("object", object)
+timedelta64 = _ScalarType("timedelta64", int)
+datetime64 = _ScalarType("datetime64", int)
+string_ = _ScalarType("str", str)
+unicode_ = _ScalarType("str", str)
+half = _ScalarType("float16", float)
+int_ = int64
+float_ = float64
 
 # --- Missing functions (stubs) ----------------------------------------------
 def empty(shape, dtype=None, order="C"):
@@ -469,20 +543,53 @@ def iscomplex(x):
 
 def issubdtype(arg1, arg2):
     """Check if arg1 dtype is a subtype of arg2."""
-    # Normalize arg1 to a dtype string
+    # Map dtype strings to type hierarchy classes
+    _dtype_to_class = {
+        'bool': bool_,
+        'int8': int8, 'int16': int16, 'int32': int32, 'int64': int64,
+        'uint8': uint8, 'uint16': uint16, 'uint32': uint32, 'uint64': uint64,
+        'float16': float16, 'float32': float32, 'float64': float64,
+        'complex64': complex64, 'complex128': complex128,
+    }
+
+    # If arg2 is one of our type hierarchy classes, use issubclass
+    if isinstance(arg2, type) and isinstance(arg2, _ScalarTypeMeta):
+        # Normalize arg1 to a dtype string
+        if isinstance(arg1, dtype):
+            dt1 = str(arg1)
+        elif isinstance(arg1, str):
+            dt1 = arg1
+        elif isinstance(arg1, type) and isinstance(arg1, _ScalarTypeMeta):
+            dt1 = arg1._scalar_name
+        elif isinstance(arg1, _ScalarType):
+            dt1 = arg1._name
+        elif hasattr(arg1, 'dtype'):
+            dt1 = str(arg1.dtype)
+        else:
+            dt1 = str(arg1)
+        cls1 = _dtype_to_class.get(dt1)
+        if cls1 is not None:
+            return issubclass(cls1, arg2)
+        return False
+
+    # Fall back to string-based logic for backward compatibility
+    # Normalize arg1
     if isinstance(arg1, dtype):
         dt1 = str(arg1)
     elif isinstance(arg1, str):
         dt1 = arg1
+    elif isinstance(arg1, _ScalarType):
+        dt1 = arg1._name
     elif hasattr(arg1, 'dtype'):
         dt1 = str(arg1.dtype)
     else:
-        # It might be a type like np.float64, np.int32, etc.
         dt1 = str(arg1) if not callable(arg1) else getattr(arg1, '__name__', str(arg1))
 
-    # Normalize arg2 - could be a type category like np.floating, np.integer, np.number, etc.
+    # Normalize arg2
     if isinstance(arg2, str):
         dt2 = arg2
+    elif isinstance(arg2, _ScalarType):
+        dt2 = arg2._name
     elif isinstance(arg2, type) and hasattr(arg2, '__name__'):
         dt2 = arg2.__name__
     elif isinstance(arg2, dtype):
@@ -513,6 +620,8 @@ def issubdtype(arg1, arg2):
         return dt1 in _bool_types
     elif dt2 in ("generic",):
         return True  # everything is a subtype of generic
+    elif dt2 in ("inexact",):
+        return dt1 in (_float_types | _complex_types)
     else:
         # Direct dtype comparison
         return dt1 == dt2
@@ -858,6 +967,8 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
 def mean(a, axis=None, dtype=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if a.size == 0:
+        return float('nan')
     if axis is not None:
         return a.mean(axis, keepdims)
     return a.mean(None, keepdims)
@@ -865,6 +976,8 @@ def mean(a, axis=None, dtype=None, out=None, keepdims=False):
 def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if a.size == 0:
+        return float('nan')
     if axis is not None:
         return a.std(axis, ddof, keepdims)
     return a.std(None, ddof, keepdims)
@@ -872,6 +985,8 @@ def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
 def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if a.size == 0:
+        return float('nan')
     if axis is not None:
         return a.var(axis, ddof, keepdims)
     return a.var(None, ddof, keepdims)
@@ -1454,6 +1569,8 @@ def result_type(*arrays_and_dtypes):
             dtypes.append(str(a.dtype))
         elif isinstance(a, _ScalarType):
             dtypes.append(str(a))
+        elif isinstance(a, type) and isinstance(a, _ScalarTypeMeta):
+            dtypes.append(str(a))
         elif isinstance(a, str):
             dtypes.append(a)
         else:
@@ -1522,6 +1639,9 @@ class dtype:
         elif isinstance(tp, _ScalarType):
             self.name = tp._name
             self._init_from_name(tp._name)
+        elif isinstance(tp, type) and isinstance(tp, _ScalarTypeMeta):
+            self.name = tp._scalar_name
+            self._init_from_name(tp._scalar_name)
         else:
             self.name = str(tp) if tp else "float64"
             self._init_from_name(self.name)
@@ -1880,6 +2000,55 @@ def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
             for i in range(after):
                 right.append(data_list[i % n])
             result = left + list(data_list) + right
+        elif mode_str == 'symmetric':
+            # Like reflect but includes the edge value
+            left = []
+            for i in range(before):
+                idx = i % (2 * n) if n > 0 else 0
+                if idx >= n:
+                    idx = 2 * n - 1 - idx
+                left.insert(0, data_list[idx])
+            right = []
+            for i in range(after):
+                idx = i % (2 * n) if n > 0 else 0
+                if idx >= n:
+                    idx = 2 * n - 1 - idx
+                right.append(data_list[n - 1 - idx])
+            result = left + list(data_list) + right
+        elif mode_str == 'linear_ramp':
+            end_val = kwargs.get('end_values', 0)
+            if isinstance(end_val, (list, tuple)):
+                end_val = end_val[0] if isinstance(end_val[0], (int, float)) else end_val[0][0]
+            left = []
+            for i in range(before):
+                # Linear ramp from end_val to data_list[0]
+                frac = float(i + 1) / float(before + 1) if before > 0 else 1.0
+                left.append(end_val + (data_list[0] - end_val) * frac)
+            right = []
+            for i in range(after):
+                # Linear ramp from data_list[-1] to end_val
+                frac = float(i + 1) / float(after + 1) if after > 0 else 1.0
+                right.append(data_list[-1] + (end_val - data_list[-1]) * frac)
+            result = left + list(data_list) + right
+        elif mode_str == 'mean':
+            mean_val = sum(data_list) / len(data_list) if len(data_list) > 0 else 0.0
+            result = [mean_val] * before + list(data_list) + [mean_val] * after
+        elif mode_str == 'median':
+            sorted_data = sorted(data_list)
+            mid = len(sorted_data) // 2
+            if len(sorted_data) % 2 == 0 and len(sorted_data) > 0:
+                median_val = (sorted_data[mid - 1] + sorted_data[mid]) / 2.0
+            elif len(sorted_data) > 0:
+                median_val = sorted_data[mid]
+            else:
+                median_val = 0.0
+            result = [median_val] * before + list(data_list) + [median_val] * after
+        elif mode_str == 'minimum':
+            min_val = min(data_list) if len(data_list) > 0 else 0.0
+            result = [min_val] * before + list(data_list) + [min_val] * after
+        elif mode_str == 'maximum':
+            max_val = max(data_list) if len(data_list) > 0 else 0.0
+            result = [max_val] * before + list(data_list) + [max_val] * after
         else:
             raise NotImplementedError("pad mode '{}' is not supported".format(mode_str))
         return result
@@ -3477,9 +3646,60 @@ def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='', foote
         if close_file:
             f.close()
 
-def genfromtxt(fname, dtype=None, comments='#', delimiter=None, skip_header=0, usecols=None, names=None, missing_values=None, filling_values=None, **kwargs):
-    """Load data from a text file, with missing values handled."""
-    return loadtxt(fname, dtype=dtype, comments=comments, delimiter=delimiter, skiprows=skip_header, usecols=usecols)
+def genfromtxt(fname, dtype=None, comments='#', delimiter=None, skip_header=0,
+               skip_footer=0, missing_values=None, filling_values=None,
+               usecols=None, names=None, excludelist=None, deletechars=None,
+               replace_space='_', autostrip=False, case_sensitive=True,
+               defaultfmt='f%i', unpack=False, usemask=False, loose=True,
+               invalid_raise=True, max_rows=None, encoding='bytes', **kwargs):
+    """Load data from text file, handling missing values."""
+    if filling_values is None:
+        filling_values = float('nan')
+
+    if isinstance(fname, str):
+        with open(fname, 'r') as f:
+            lines = f.readlines()
+    else:
+        lines = fname.readlines()
+
+    # Skip header/footer
+    lines = lines[skip_header:]
+    if skip_footer > 0:
+        lines = lines[:-skip_footer]
+    if max_rows is not None:
+        lines = lines[:max_rows]
+
+    rows = []
+    for line in lines:
+        line = line.strip()
+        if not line or (comments and line.startswith(comments)):
+            continue
+        if delimiter is None:
+            parts = line.split()
+        else:
+            parts = line.split(delimiter)
+
+        if usecols is not None:
+            parts = [parts[i] for i in usecols]
+
+        row = []
+        for p in parts:
+            p = p.strip()
+            if missing_values and p in (missing_values if isinstance(missing_values, (list, tuple, set)) else [missing_values]):
+                row.append(filling_values)
+            else:
+                try:
+                    row.append(float(p))
+                except (ValueError, TypeError):
+                    row.append(filling_values)
+        rows.append(row)
+
+    if not rows:
+        return array([])
+    result = array(rows)
+    if unpack:
+        return result.T
+    return result
 
 # --- ufunc function forms (Tier 12A) ----------------------------------------
 
@@ -5273,6 +5493,82 @@ def _fft_ifftn(a, s=None, axes=None):
 fft.fftn = _fft_fftn
 fft.ifftn = _fft_ifftn
 
+def _fft_rfft(a, n=None, axis=-1, norm=None):
+    """Real FFT - only positive frequencies."""
+    a = asarray(a).astype("float64")
+    if a.ndim == 0:
+        a = a.reshape([1])
+    data = a.tolist()
+    if isinstance(data[0], list):
+        raise NotImplementedError("rfft only supports 1D")
+    N = n if n is not None else len(data)
+    # Pad or truncate
+    if len(data) < N:
+        data = data + [0.0] * (N - len(data))
+    elif len(data) > N:
+        data = data[:N]
+    # Compute full DFT - only first N//2 + 1 frequencies
+    import cmath
+    result = []
+    out_len = N // 2 + 1
+    for k in _builtin_range(out_len):
+        s = 0.0 + 0.0j
+        for n_idx in _builtin_range(N):
+            angle = -2.0 * 3.141592653589793 * k * n_idx / N
+            s += data[n_idx] * cmath.exp(1j * angle)
+        if norm == "ortho":
+            s /= N ** 0.5
+        result.append([s.real, s.imag])
+    # Return as (out_len, 2) shaped array matching native fft format
+    return array(result)
+
+def _fft_irfft(a, n=None, axis=-1, norm=None):
+    """Inverse real FFT."""
+    a = asarray(a)
+    # Handle (M, 2) complex format from rfft
+    data_list = a.tolist()
+    if a.ndim == 2 and a.shape[1] == 2:
+        # Complex format: [[real, imag], ...]
+        data_r = [row[0] for row in data_list]
+        data_i = [row[1] for row in data_list]
+    elif a.ndim == 1:
+        # Real-only input
+        data_r = data_list
+        data_i = [0.0] * len(data_r)
+    else:
+        data_r = a.real.tolist() if hasattr(a, 'real') else data_list
+        data_i = a.imag.tolist() if hasattr(a, 'imag') else [0.0] * len(data_r)
+    if not isinstance(data_r, list):
+        data_r = [data_r]
+        data_i = [data_i]
+    m = len(data_r)
+    N = n if n is not None else 2 * (m - 1)
+    # Reconstruct full spectrum using Hermitian symmetry
+    import math as _math_mod
+    full_spectrum = []
+    for i in _builtin_range(m):
+        full_spectrum.append(complex(data_r[i], data_i[i]))
+    # Mirror for negative frequencies
+    for i in _builtin_range(m, N):
+        mirror = N - i
+        full_spectrum.append(complex(data_r[mirror], -data_i[mirror]))
+    # IDFT
+    result = []
+    for n_idx in _builtin_range(N):
+        s = 0.0
+        for k in _builtin_range(N):
+            angle = 2.0 * 3.141592653589793 * k * n_idx / N
+            s += full_spectrum[k].real * _math_mod.cos(angle) - full_spectrum[k].imag * _math_mod.sin(angle)
+        if norm == "ortho":
+            s /= N ** 0.5
+        else:
+            s /= N
+        result.append(s)
+    return array(result)
+
+fft.rfft = _fft_rfft
+fft.irfft = _fft_irfft
+
 # --- random extension functions (Tier 19 Group C) ---------------------------
 
 def _random_shuffle(x):
@@ -6594,6 +6890,73 @@ class _TestingModule:
                 return
             raise AssertionError("Expected {}".format(exception_class.__name__))
         return _AssertRaisesCtx(exception_class)
+
+    def assert_raises_regex(self, exception_class, expected_regex, *args, **kwargs):
+        """Assert that an exception is raised matching a regex."""
+        import re
+        callable_obj = kwargs.pop('callable', None)
+        if callable_obj is None and len(args) >= 1:
+            callable_obj = args[0]
+            args = args[1:]
+        if callable_obj is not None:
+            try:
+                callable_obj(*args, **kwargs)
+            except exception_class as e:
+                if not re.search(expected_regex, str(e)):
+                    raise AssertionError(
+                        "Exception message '{}' did not match '{}'".format(str(e), expected_regex))
+                return
+            except Exception as e:
+                raise AssertionError(
+                    "Expected {}, got {}".format(exception_class.__name__, type(e).__name__))
+            raise AssertionError("{} not raised".format(exception_class.__name__))
+        else:
+            # Context manager mode
+            return _AssertRaisesRegexContext(exception_class, expected_regex)
+
+    def assert_warns(self, warning_class, *args, **kwargs):
+        """Assert that a warning is raised. Since we don't have warnings module, just run the callable."""
+        callable_obj = kwargs.pop('callable', None)
+        if callable_obj is None and len(args) >= 1:
+            callable_obj = args[0]
+            args = args[1:]
+        if callable_obj is not None:
+            return callable_obj(*args, **kwargs)
+
+    def assert_approx_equal(self, actual, desired, significant=7, err_msg='', verbose=True):
+        """Assert approximately equal to given number of significant digits."""
+        if desired == 0:
+            if _math.fabs(actual) > 1.5 * 10**(-significant):
+                raise AssertionError("{} != {} to {} significant digits".format(actual, desired, significant))
+        else:
+            rel = _math.fabs((actual - desired) / desired)
+            if rel > 1.5 * 10**(-significant):
+                raise AssertionError("{} != {} to {} significant digits".format(actual, desired, significant))
+
+    def assert_array_less(self, x, y, err_msg='', verbose=True):
+        """Assert array_like x is less than array_like y, element-wise."""
+        x = asarray(x)
+        y = asarray(y)
+        if not all((x < y).flatten().tolist()):
+            raise AssertionError("Arrays are not less-ordered\nx: {}\ny: {}".format(x.tolist(), y.tolist()))
+
+
+class _AssertRaisesRegexContext:
+    def __init__(self, exc_class, pattern):
+        self.exc_class = exc_class
+        self.pattern = pattern
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        import re
+        if exc_type is None:
+            raise AssertionError("{} not raised".format(self.exc_class.__name__))
+        if not issubclass(exc_type, self.exc_class):
+            return False
+        if not re.search(self.pattern, str(exc_val)):
+            raise AssertionError("'{}' did not match '{}'".format(str(exc_val), self.pattern))
+        return True
+
 
 testing = _TestingModule()
 

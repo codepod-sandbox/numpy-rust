@@ -164,3 +164,72 @@ def masked_invalid(x):
     x = np.asarray(x)
     mask = np.logical_or(np.isnan(x), np.isinf(x))
     return MaskedArray(x, mask=mask)
+
+
+def masked_less_equal(x, value):
+    """Mask where less than or equal to value."""
+    import numpy as np
+    x = np.asarray(x)
+    mask = (x <= value)
+    return MaskedArray(x, mask=mask)
+
+
+def masked_greater_equal(x, value):
+    """Mask where greater than or equal to value."""
+    import numpy as np
+    x = np.asarray(x)
+    mask = (x >= value)
+    return MaskedArray(x, mask=mask)
+
+
+def masked_not_equal(x, value):
+    """Mask where not equal to value."""
+    import numpy as np
+    x = np.asarray(x)
+    mask = (x != value)
+    return MaskedArray(x, mask=mask)
+
+
+def masked_inside(x, v1, v2):
+    """Mask where between v1 and v2 (inclusive)."""
+    import numpy as np
+    x = np.asarray(x)
+    mask = np.logical_and(x >= min(v1, v2), x <= max(v1, v2))
+    return MaskedArray(x, mask=mask)
+
+
+def masked_outside(x, v1, v2):
+    """Mask where outside v1 and v2."""
+    import numpy as np
+    x = np.asarray(x)
+    mask = np.logical_or(x < min(v1, v2), x > max(v1, v2))
+    return MaskedArray(x, mask=mask)
+
+
+def getmaskarray(arr):
+    """Return the mask of a masked array, or full False mask."""
+    import numpy as np
+    if isinstance(arr, MaskedArray):
+        return arr.mask
+    return np.zeros(np.asarray(arr).shape).astype("bool")
+
+
+def getdata(arr):
+    """Return data of a masked array as ndarray."""
+    if isinstance(arr, MaskedArray):
+        return arr.data
+    import numpy as np
+    return np.asarray(arr)
+
+
+def fix_invalid(a, mask=None, copy=True, fill_value=None):
+    """Return with invalid data (NaN/Inf) masked and replaced."""
+    import numpy as np
+    a = np.asarray(a)
+    invalid_mask = np.logical_or(np.isnan(a), np.isinf(a))
+    if mask is not None:
+        combined = np.logical_or(invalid_mask, np.asarray(mask))
+    else:
+        combined = invalid_mask
+    result = MaskedArray(a, mask=combined, fill_value=fill_value)
+    return result

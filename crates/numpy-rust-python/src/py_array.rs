@@ -376,6 +376,16 @@ impl PyNdArray {
         Ok(PyNdArray::from_core(self.data.read().unwrap().astype(dt)))
     }
 
+    /// Simplified view() – returns a copy (true memory views not supported).
+    #[pymethod]
+    fn view(
+        &self,
+        _dtype: vm::function::OptionalArg<PyObjectRef>,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        PyNdArray::from_core(self.data.read().unwrap().clone())
+    }
+
     #[pymethod]
     fn sum(
         &self,
@@ -383,14 +393,16 @@ impl PyNdArray {
         keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
         let kd = keepdims.unwrap_or(false);
-        self.data
-            .read()
-            .unwrap()
-            .sum(ax, kd)
-            .map(|arr| ndarray_or_scalar(arr, vm))
-            .map_err(|e| numpy_err(e, vm))
+        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.sum(None, kd),
+            AxisArg::Single(a) => inner.sum(Some(a), kd),
+            AxisArg::Multi(axes) => reduce_multi_axis(&inner, &axes, |arr, a| arr.sum(a, false)),
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
@@ -400,14 +412,16 @@ impl PyNdArray {
         keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
         let kd = keepdims.unwrap_or(false);
-        self.data
-            .read()
-            .unwrap()
-            .mean(ax, kd)
-            .map(|arr| ndarray_or_scalar(arr, vm))
-            .map_err(|e| numpy_err(e, vm))
+        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.mean(None, kd),
+            AxisArg::Single(a) => inner.mean(Some(a), kd),
+            AxisArg::Multi(axes) => reduce_multi_axis(&inner, &axes, |arr, a| arr.mean(a, false)),
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
@@ -417,14 +431,16 @@ impl PyNdArray {
         keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
         let kd = keepdims.unwrap_or(false);
-        self.data
-            .read()
-            .unwrap()
-            .min(ax, kd)
-            .map(|arr| ndarray_or_scalar(arr, vm))
-            .map_err(|e| numpy_err(e, vm))
+        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.min(None, kd),
+            AxisArg::Single(a) => inner.min(Some(a), kd),
+            AxisArg::Multi(axes) => reduce_multi_axis(&inner, &axes, |arr, a| arr.min(a, false)),
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
@@ -434,14 +450,16 @@ impl PyNdArray {
         keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
         let kd = keepdims.unwrap_or(false);
-        self.data
-            .read()
-            .unwrap()
-            .max(ax, kd)
-            .map(|arr| ndarray_or_scalar(arr, vm))
-            .map_err(|e| numpy_err(e, vm))
+        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.max(None, kd),
+            AxisArg::Single(a) => inner.max(Some(a), kd),
+            AxisArg::Multi(axes) => reduce_multi_axis(&inner, &axes, |arr, a| arr.max(a, false)),
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
@@ -452,15 +470,17 @@ impl PyNdArray {
         keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
         let dd = ddof.unwrap_or(0);
         let kd = keepdims.unwrap_or(false);
-        self.data
-            .read()
-            .unwrap()
-            .std(ax, dd, kd)
-            .map(|arr| ndarray_or_scalar(arr, vm))
-            .map_err(|e| numpy_err(e, vm))
+        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.std(None, dd, kd),
+            AxisArg::Single(a) => inner.std(Some(a), dd, kd),
+            AxisArg::Multi(axes) => std_multi_axis(&inner, &axes, dd),
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
@@ -471,15 +491,17 @@ impl PyNdArray {
         keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
         let dd = ddof.unwrap_or(0);
         let kd = keepdims.unwrap_or(false);
-        self.data
-            .read()
-            .unwrap()
-            .var(ax, dd, kd)
-            .map(|arr| ndarray_or_scalar(arr, vm))
-            .map_err(|e| numpy_err(e, vm))
+        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.var(None, dd, kd),
+            AxisArg::Single(a) => inner.var(Some(a), dd, kd),
+            AxisArg::Multi(axes) => var_multi_axis(&inner, &axes, dd),
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
@@ -958,14 +980,16 @@ impl PyNdArray {
         keepdims: vm::function::OptionalArg<bool>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let axis = parse_optional_axis(axis, vm)?;
-        let keepdims = keepdims.unwrap_or(false);
-        self.data
-            .read()
-            .unwrap()
-            .prod(axis, keepdims)
-            .map(|arr| ndarray_or_scalar(arr, vm))
-            .map_err(|e| vm.new_value_error(e.to_string()))
+        let inner = self.data.read().unwrap();
+        let kd = keepdims.unwrap_or(false);
+        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.prod(None, kd),
+            AxisArg::Single(a) => inner.prod(Some(a), kd),
+            AxisArg::Multi(axes) => reduce_multi_axis(&inner, &axes, |arr, a| arr.prod(a, false)),
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     // --- Operators ---
@@ -1770,6 +1794,116 @@ pub fn parse_optional_axis(
             }
         }
     }
+}
+
+/// Parsed axis argument that can be None, a single axis, or multiple axes (tuple).
+pub enum AxisArg {
+    /// No axis specified – reduce over all elements.
+    None,
+    /// A single axis.
+    Single(usize),
+    /// Multiple axes (from a tuple).
+    Multi(Vec<usize>),
+}
+
+/// Parse an optional axis argument that may be None, int, or tuple-of-ints.
+pub fn parse_axis_arg(
+    arg: vm::function::OptionalArg<PyObjectRef>,
+    ndim: usize,
+    vm: &VirtualMachine,
+) -> PyResult<AxisArg> {
+    match arg.into_option() {
+        Option::None => Ok(AxisArg::None),
+        Some(obj) => {
+            if vm.is_none(&obj) {
+                return Ok(AxisArg::None);
+            }
+            // Try as tuple first
+            if let Some(tuple) = obj.downcast_ref::<PyTuple>() {
+                let mut axes = Vec::new();
+                for item in tuple.as_slice() {
+                    let i: i64 = item.clone().try_into_value(vm)?;
+                    let ax = if i < 0 {
+                        (ndim as i64 + i) as usize
+                    } else {
+                        i as usize
+                    };
+                    axes.push(ax);
+                }
+                return Ok(AxisArg::Multi(axes));
+            }
+            // Try as int
+            let i: i64 = obj.try_into_value(vm)?;
+            let ax = if i < 0 {
+                (ndim as i64 + i) as usize
+            } else {
+                i as usize
+            };
+            Ok(AxisArg::Single(ax))
+        }
+    }
+}
+
+/// Reduce along multiple axes sequentially (highest axis first to keep indices valid).
+fn reduce_multi_axis(
+    arr: &NdArray,
+    axes: &[usize],
+    reduce_fn: impl Fn(&NdArray, Option<usize>) -> numpy_rust_core::error::Result<NdArray>,
+) -> numpy_rust_core::error::Result<NdArray> {
+    let mut sorted_axes: Vec<usize> = axes.to_vec();
+    sorted_axes.sort();
+    sorted_axes.dedup();
+    // Reduce from highest axis first so lower indices stay valid
+    let mut result = arr.clone();
+    for &ax in sorted_axes.iter().rev() {
+        result = reduce_fn(&result, Some(ax))?;
+    }
+    Ok(result)
+}
+
+/// Compute variance over multiple axes correctly using the formula:
+///   var = mean(x^2, axes) - mean(x, axes)^2
+/// Then adjust for ddof: var * N / (N - ddof)
+fn var_multi_axis(
+    arr: &NdArray,
+    axes: &[usize],
+    ddof: usize,
+) -> numpy_rust_core::error::Result<NdArray> {
+    // Compute total number of elements in the reduction axes
+    let shape = arr.shape();
+    let mut n: usize = 1;
+    for &ax in axes {
+        n *= shape[ax];
+    }
+
+    // mean(x, axes)
+    let mean_x = reduce_multi_axis(arr, axes, |a, ax| a.mean(ax, false))?;
+    // mean(x^2, axes)
+    let x_sq = (arr * arr)?;
+    let mean_x_sq = reduce_multi_axis(&x_sq, axes, |a, ax| a.mean(ax, false))?;
+    // var = mean(x^2) - mean(x)^2
+    let mean_x_sq_val = (&mean_x * &mean_x)?;
+    let var = (&mean_x_sq - &mean_x_sq_val)?;
+
+    if ddof > 0 && n > ddof {
+        // Adjust: var * N / (N - ddof)
+        let adj = n as f64 / (n - ddof) as f64;
+        let adj_arr = NdArray::from_scalar(adj);
+        let result = (&var * &adj_arr)?;
+        Ok(result)
+    } else {
+        Ok(var)
+    }
+}
+
+/// Compute std over multiple axes = sqrt(var_multi_axis).
+fn std_multi_axis(
+    arr: &NdArray,
+    axes: &[usize],
+    ddof: usize,
+) -> numpy_rust_core::error::Result<NdArray> {
+    let v = var_multi_axis(arr, axes, ddof)?;
+    Ok(v.sqrt())
 }
 
 // --- __setitem__ implementation ---
