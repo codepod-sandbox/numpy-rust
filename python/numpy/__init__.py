@@ -2316,10 +2316,12 @@ def any(a, axis=None, out=None, keepdims=False):
     return array(result).reshape(m.shape)
 
 def may_share_memory(a, b, max_work=None):
-    return False  # stub
+    """Check if arrays may share memory. Returns True if a and b are the same object."""
+    return a is b
 
 def shares_memory(a, b, max_work=None):
-    return False  # stub
+    """Check if arrays share memory. Returns True if a and b are the same object."""
+    return a is b
 
 def signbit(x):
     if isinstance(x, ndarray):
@@ -3028,15 +3030,51 @@ def interp(x, xp, fp, left=None, right=None, period=None):
 def gradient(f, *varargs, axis=None, edge_order=1):
     if not isinstance(f, ndarray):
         f = array(f)
-    spacing = float(varargs[0]) if varargs else 1.0
-    result = _native.gradient(f, spacing)
-    if axis is not None and f.ndim > 1:
-        if isinstance(result, (list, tuple)):
+    if f.ndim == 1:
+        # 1D case: single spacing
+        spacing = float(varargs[0]) if varargs else 1.0
+        return _native.gradient(f, spacing)
+    # nD case
+    if axis is not None:
+        # gradient along specific axis/axes
+        if isinstance(axis, int):
             ax = axis
             if ax < 0:
                 ax = f.ndim + ax
-            return result[ax]
-    return result
+            sp = float(varargs[0]) if varargs else 1.0
+            result = _native.gradient(f, sp)
+            if isinstance(result, (list, tuple)):
+                return result[ax]
+            return result
+        # multiple axes
+        results = []
+        for i, ax in enumerate(axis):
+            sp = float(varargs[i]) if i < len(varargs) else 1.0
+            grads = _native.gradient(f, sp)
+            if isinstance(grads, (list, tuple)):
+                a = ax
+                if a < 0:
+                    a = f.ndim + a
+                results.append(grads[a])
+            else:
+                results.append(grads)
+        return results
+    # All axes
+    if len(varargs) == 0:
+        return _native.gradient(f, 1.0)
+    elif len(varargs) == 1:
+        return _native.gradient(f, float(varargs[0]))
+    else:
+        # Different spacing per axis
+        results = []
+        for i in range(f.ndim):
+            sp = float(varargs[i]) if i < len(varargs) else 1.0
+            grads = _native.gradient(f, sp)
+            if isinstance(grads, (list, tuple)):
+                results.append(grads[i])
+            else:
+                results.append(grads)
+        return results
 
 def polyfit(x, y, deg, rcond=None, full=False, w=None, cov=False):
     if not isinstance(x, ndarray):
@@ -3890,17 +3928,23 @@ class _MGrid:
                 start = s.start if s.start is not None else 0
                 stop = s.stop if s.stop is not None else 0
                 step = s.step if s.step is not None else 1
-                vals = []
-                v = float(start)
-                if step > 0:
-                    while v < float(stop):
-                        vals.append(v)
-                        v += float(step)
+                # Complex step means "use linspace with this many points"
+                if isinstance(step, complex) or (hasattr(step, 'imag') and step.imag != 0):
+                    num = int(abs(step))
+                    grid = linspace(float(start), float(stop), num=num, endpoint=True)
+                    arrays.append(grid)
                 else:
-                    while v > float(stop):
-                        vals.append(v)
-                        v += float(step)
-                arrays.append(array(vals) if vals else array([]))
+                    vals = []
+                    v = float(start)
+                    if step > 0:
+                        while v < float(stop):
+                            vals.append(v)
+                            v += float(step)
+                    else:
+                        while v > float(stop):
+                            vals.append(v)
+                            v += float(step)
+                    arrays.append(array(vals) if vals else array([]))
             else:
                 arrays.append(array([float(s)]))
 
@@ -3934,17 +3978,23 @@ class _OGrid:
                 start = s.start if s.start is not None else 0
                 stop = s.stop if s.stop is not None else 0
                 step = s.step if s.step is not None else 1
-                vals = []
-                v = float(start)
-                if step > 0:
-                    while v < float(stop):
-                        vals.append(v)
-                        v += float(step)
+                # Complex step means "use linspace with this many points"
+                if isinstance(step, complex) or (hasattr(step, 'imag') and step.imag != 0):
+                    num = int(abs(step))
+                    grid = linspace(float(start), float(stop), num=num, endpoint=True)
+                    arrays.append(grid)
                 else:
-                    while v > float(stop):
-                        vals.append(v)
-                        v += float(step)
-                arrays.append(array(vals) if vals else array([]))
+                    vals = []
+                    v = float(start)
+                    if step > 0:
+                        while v < float(stop):
+                            vals.append(v)
+                            v += float(step)
+                    else:
+                        while v > float(stop):
+                            vals.append(v)
+                            v += float(step)
+                    arrays.append(array(vals) if vals else array([]))
             else:
                 arrays.append(array([float(s)]))
 
@@ -4237,7 +4287,28 @@ def trapz(y, x=None, dx=1.0, axis=-1):
             for i in range(y.shape[0]):
                 results.append(trapz(y[i], dx=dx))
         return array(results)
-    raise NotImplementedError("trapz only supports 1D and 2D arrays")
+    # General nD case
+    if axis < 0:
+        axis = y.ndim + axis
+    # Move target axis to last, flatten leading dims, apply trapz per lane
+    y_moved = moveaxis(y, axis, -1)
+    result_shape = list(y_moved.shape[:-1])
+    n_lane = y_moved.shape[-1]
+    lead = 1
+    for s in result_shape:
+        lead *= s
+    y_flat = y_moved.reshape((lead, n_lane))
+    flat_results = []
+    y_list = y_flat.tolist()
+    for i in range(lead):
+        row = array(y_list[i])
+        if x is not None:
+            flat_results.append(float(trapz(row, x=asarray(x), dx=dx)))
+        else:
+            flat_results.append(float(trapz(row, dx=dx)))
+    if not result_shape:
+        return float(flat_results[0])
+    return array(flat_results).reshape(result_shape)
 
 trapezoid = trapz
 
@@ -4282,8 +4353,26 @@ class finfo:
             self.negep = -24
             self.iexp = 8
             self.precision = 6
+        elif str(dtype) in ('float16', 'half', 'f2', 'e'):
+            self.bits = 16
+            self.eps = 9.765625e-04
+            self.max = 65504.0
+            self.min = -65504.0
+            self.tiny = 6.103515625e-05
+            self.smallest_normal = 6.103515625e-05
+            self.smallest_subnormal = 5.96e-08
+            self.resolution = 0.001
+            self.dtype = float16
+            self.maxexp = 16
+            self.minexp = -13
+            self.nmant = 10
+            self.nexp = 5
+            self.machep = -10
+            self.negep = -11
+            self.iexp = 5
+            self.precision = 3
         else:
-            raise ValueError("finfo only supports float32 and float64")
+            raise ValueError("finfo only supports float16, float32 and float64")
 
     def __repr__(self):
         return f"finfo(resolution={self.resolution}, min={self.min}, max={self.max}, dtype={self.dtype})"
@@ -4827,7 +4916,27 @@ def take_along_axis(arr, indices, axis):
                     row.append(arr[i][int(indices[i][j])])
                 rows.append(row)
             return array(rows)
-    raise NotImplementedError("take_along_axis only supports 1D and 2D")
+    # General nD case: move axis to last, flatten leading dims, gather, reshape back
+    if axis < 0:
+        axis = arr.ndim + axis
+    arr_m = moveaxis(arr, axis, -1)
+    ind_m = moveaxis(indices, axis, -1)
+    out_shape = ind_m.shape
+    n_axis = arr_m.shape[-1]
+    lead = 1
+    for s in arr_m.shape[:-1]:
+        lead *= s
+    arr_flat = arr_m.reshape((lead, n_axis))
+    ind_flat = ind_m.reshape((lead, ind_m.shape[-1]))
+    arr_list = arr_flat.tolist()
+    ind_list = ind_flat.tolist()
+    result = []
+    for i in range(lead):
+        row = arr_list[i]
+        idxs = ind_list[i]
+        result.append([row[int(j)] for j in idxs])
+    result_arr = array(result).reshape(out_shape)
+    return moveaxis(result_arr, -1, axis)
 
 def put_along_axis(arr, indices, values, axis):
     """Put values into the destination array by matching 1-d index and data slices along the given axis."""
@@ -4849,7 +4958,25 @@ def put_along_axis(arr, indices, values, axis):
                 row[idx] = values[i][j] if values.ndim == 2 else values[j]
             rows.append(row)
         return array(rows)
-    raise NotImplementedError("put_along_axis only supports 1D and 2D axis=1")
+    # General nD case: move axis to last, flatten, scatter, reshape back
+    if axis < 0:
+        axis = arr.ndim + axis
+    arr_m = moveaxis(arr, axis, -1)
+    ind_m = moveaxis(indices, axis, -1)
+    val_m = moveaxis(values, axis, -1)
+    out_shape = arr_m.shape
+    lead = 1
+    for s in arr_m.shape[:-1]:
+        lead *= s
+    n_axis = arr_m.shape[-1]
+    arr_flat = arr_m.reshape((lead, n_axis)).tolist()
+    ind_flat = ind_m.reshape((lead, ind_m.shape[-1])).tolist()
+    val_flat = val_m.reshape((lead, val_m.shape[-1])).tolist()
+    for i in range(lead):
+        for j in range(len(ind_flat[i])):
+            arr_flat[i][int(ind_flat[i][j])] = val_flat[i][j]
+    result = array(arr_flat).reshape(out_shape)
+    return moveaxis(result, -1, axis)
 
 # --- linalg extensions (built on existing primitives) -----------------------
 
