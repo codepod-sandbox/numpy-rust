@@ -6723,6 +6723,209 @@ def test_lagder_numerical_check():
     assert_close(analytic, numerical, tol=1e-4)
 
 
+# ---------------------------------------------------------------------------
+# Tier 32: Special math, Bessel functions, where=/initial= on reductions
+# ---------------------------------------------------------------------------
+
+def test_t32_erf_scalar():
+    import numpy as np
+    # erf(0) = 0
+    assert_close(np.erf(0.0), 0.0)
+    # erf(1) ≈ 0.8427007929
+    assert_close(np.erf(1.0), 0.8427007929, tol=1e-5)
+    # erf(-1) ≈ -0.8427007929 (odd function)
+    assert_close(np.erf(-1.0), -0.8427007929, tol=1e-5)
+    # erf(large) → 1
+    assert_close(np.erf(5.0), 1.0, tol=1e-5)
+
+def test_t32_erf_array():
+    import numpy as np
+    x = np.array([0.0, 0.5, 1.0, 2.0])
+    r = np.erf(x)
+    assert_close(r.tolist()[0], 0.0, tol=1e-5)
+    assert_close(r.tolist()[1], 0.5204998778, tol=1e-4)
+    assert_close(r.tolist()[2], 0.8427007929, tol=1e-5)
+
+def test_t32_erfc_scalar():
+    import numpy as np
+    assert_close(np.erfc(0.0), 1.0, tol=1e-5)
+    assert_close(np.erfc(1.0), 0.1572992070, tol=1e-5)
+
+def test_t32_gamma_scalar():
+    import numpy as np
+    # gamma(1) = 1 (0!)
+    assert_close(np.gamma(1.0), 1.0, tol=1e-5)
+    # gamma(5) = 24 (4!)
+    assert_close(np.gamma(5.0), 24.0, tol=1e-4)
+    # gamma(0.5) = sqrt(pi) ≈ 1.7724538509
+    assert_close(np.gamma(0.5), 1.7724538509, tol=1e-4)
+
+def test_t32_gamma_array():
+    import numpy as np
+    x = np.array([1.0, 2.0, 3.0, 4.0])
+    r = np.gamma(x)
+    expected = [1.0, 1.0, 2.0, 6.0]
+    for i in range(4):
+        assert_close(r.tolist()[i], expected[i], tol=1e-4)
+
+def test_t32_lgamma_scalar():
+    import numpy as np
+    # lgamma(1) = 0
+    assert_close(np.lgamma(1.0), 0.0, tol=1e-5)
+    # lgamma(5) = log(24) ≈ 3.178
+    assert_close(np.lgamma(5.0), 3.1780538303, tol=1e-4)
+
+def test_t32_lgamma_array():
+    import numpy as np
+    x = np.array([1.0, 2.0, 5.0])
+    r = np.lgamma(x)
+    assert_close(r.tolist()[0], 0.0, tol=1e-5)
+    assert_close(r.tolist()[2], 3.1780538303, tol=1e-4)
+
+def test_t32_j0_scalar():
+    import numpy as np
+    # j0(0) = 1
+    assert_close(np.j0(0.0), 1.0, tol=1e-5)
+    # j0(1) ≈ 0.7651976866
+    assert_close(np.j0(1.0), 0.7651976866, tol=1e-4)
+    # j0(5) ≈ -0.1775967713
+    assert_close(np.j0(5.0), -0.1775967713, tol=1e-4)
+
+def test_t32_j1_scalar():
+    import numpy as np
+    # j1(0) = 0
+    assert_close(np.j1(0.0), 0.0, tol=1e-5)
+    # j1(1) ≈ 0.4400505857
+    assert_close(np.j1(1.0), 0.4400505857, tol=1e-4)
+
+def test_t32_j0_array():
+    import numpy as np
+    x = np.array([0.0, 1.0, 2.0])
+    r = np.j0(x)
+    assert_close(r.tolist()[0], 1.0, tol=1e-5)
+    assert_close(r.tolist()[1], 0.7651976866, tol=1e-4)
+
+def test_t32_j1_array():
+    import numpy as np
+    x = np.array([0.0, 1.0, 2.0])
+    r = np.j1(x)
+    assert_close(r.tolist()[0], 0.0, tol=1e-5)
+    assert_close(r.tolist()[1], 0.4400505857, tol=1e-4)
+
+def test_t32_y0_scalar():
+    import numpy as np
+    # y0(1) ≈ 0.0882569642
+    assert_close(np.y0(1.0), 0.0882569642, tol=1e-4)
+
+def test_t32_y1_scalar():
+    import numpy as np
+    # y1(1) ≈ -0.7812128213
+    assert_close(np.y1(1.0), -0.7812128213, tol=1e-4)
+
+def test_t32_j0_large():
+    import numpy as np
+    # Test large argument (uses asymptotic branch)
+    assert_close(np.j0(10.0), -0.2459357645, tol=1e-4)
+
+def test_t32_j1_negative():
+    import numpy as np
+    # j1 is odd: j1(-x) = -j1(x)
+    assert_close(np.j1(-1.0), -0.4400505857, tol=1e-4)
+
+def test_t32_sum_where():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    w = np.array([True, False, True, False, True])
+    # sum of [1, 3, 5] = 9
+    r = np.sum(a, where=w)
+    assert_close(float(r), 9.0)
+
+def test_t32_sum_initial():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.sum(a, initial=10.0)
+    assert_close(float(r), 16.0)  # 6 + 10
+
+def test_t32_sum_where_initial():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    w = np.array([True, False, True, False])
+    r = np.sum(a, where=w, initial=100.0)
+    assert_close(float(r), 104.0)  # 1+3 + 100
+
+def test_t32_prod_where():
+    import numpy as np
+    a = np.array([2.0, 3.0, 4.0, 5.0])
+    w = np.array([True, True, False, False])
+    r = np.prod(a, where=w)
+    assert_close(float(r), 6.0)  # 2*3
+
+def test_t32_prod_initial():
+    import numpy as np
+    a = np.array([2.0, 3.0])
+    r = np.prod(a, initial=10.0)
+    assert_close(float(r), 60.0)  # 2*3*10
+
+def test_t32_mean_where():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    w = np.array([True, False, True, False, True])
+    r = np.mean(a, where=w)
+    assert_close(float(r), 3.0)  # (1+3+5)/3
+
+def test_t32_var_where():
+    import numpy as np
+    a = np.array([1.0, 100.0, 3.0, 200.0, 5.0])
+    w = np.array([True, False, True, False, True])
+    # var of [1, 3, 5] = ((1-3)^2 + (3-3)^2 + (5-3)^2) / 3 = 8/3 ≈ 2.6667
+    r = np.var(a, where=w)
+    assert_close(float(r), 2.6667, tol=1e-3)
+
+def test_t32_std_where():
+    import numpy as np
+    a = np.array([1.0, 100.0, 3.0, 200.0, 5.0])
+    w = np.array([True, False, True, False, True])
+    r = np.std(a, where=w)
+    import math
+    assert_close(float(r), math.sqrt(8.0 / 3.0), tol=1e-3)
+
+def test_t32_min_where():
+    import numpy as np
+    a = np.array([5.0, 1.0, 3.0, 2.0])
+    w = np.array([True, False, True, False])
+    r = np.min(a, where=w)
+    assert_close(float(r), 3.0)  # min of [5, 3]
+
+def test_t32_max_where():
+    import numpy as np
+    a = np.array([5.0, 100.0, 3.0, 200.0])
+    w = np.array([True, False, True, False])
+    r = np.max(a, where=w)
+    assert_close(float(r), 5.0)  # max of [5, 3]
+
+def test_t32_any_where():
+    import numpy as np
+    a = np.array([False, True, False, True])
+    w = np.array([True, False, True, False])
+    # Only look at indices 0 and 2: both False
+    r = np.any(a, where=w)
+    assert_eq(bool(r), False)
+
+def test_t32_all_where():
+    import numpy as np
+    a = np.array([True, False, True, True])
+    w = np.array([True, False, True, True])
+    # Only look at indices 0, 2, 3: all True
+    r = np.all(a, where=w)
+    assert_eq(bool(r), True)
+
+def test_t32_special_module():
+    import numpy as np
+    # np.special.erf should work
+    assert_close(np.special.erf(1.0), 0.8427007929, tol=1e-5)
+    assert_close(np.special.gamma(5.0), 24.0, tol=1e-4)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

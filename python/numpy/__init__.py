@@ -1306,27 +1306,182 @@ def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
         result = result.reshape(x.shape)
     return result
 
+def gamma(x):
+    """Gamma function using Lanczos approximation."""
+    if not isinstance(x, ndarray):
+        g = 7
+        c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+             771.32342877765313, -176.61502916214059, 12.507343278686905,
+             -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7]
+        if x < 0.5:
+            return _math.pi / (_math.sin(_math.pi * x) * gamma(1 - x))
+        x -= 1
+        a = c[0]
+        t = x + g + 0.5
+        for i in range(1, len(c)):
+            a += c[i] / (x + i)
+        return _math.sqrt(2 * _math.pi) * t ** (x + 0.5) * _math.exp(-t) * a
+    flat_x = x.flatten().tolist()
+    flat_r = [gamma(v) for v in flat_x]
+    return array(flat_r).reshape(x.shape)
+
+def lgamma(x):
+    """Log of absolute value of the gamma function."""
+    if not isinstance(x, ndarray):
+        return _math.lgamma(float(x))
+    flat = x.flatten().tolist()
+    return array([_math.lgamma(float(v)) for v in flat]).reshape(x.shape)
+
+def erf(x):
+    """Error function (Abramowitz & Stegun approximation)."""
+    if not isinstance(x, ndarray):
+        a1 = 0.254829592
+        a2 = -0.284496736
+        a3 = 1.421413741
+        a4 = -1.453152027
+        a5 = 1.061405429
+        p = 0.3275911
+        sign_x = 1.0 if x >= 0 else -1.0
+        ax = x if x >= 0 else -x
+        t = 1.0 / (1.0 + p * ax)
+        y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * _math.exp(-x * x)
+        return sign_x * y
+    flat = x.flatten().tolist()
+    return array([erf(v) for v in flat]).reshape(x.shape)
+
+def erfc(x):
+    """Complementary error function: 1 - erf(x)."""
+    if not isinstance(x, ndarray):
+        return 1.0 - erf(x)
+    flat = x.flatten().tolist()
+    return array([erfc(v) for v in flat]).reshape(x.shape)
+
+def j0(x):
+    """Bessel function of the first kind, order 0."""
+    if not isinstance(x, ndarray):
+        import math as _m
+        ax = x if x >= 0 else -x
+        if ax < 8.0:
+            y = x * x
+            ans1 = 57568490574.0 + y * (-13362590354.0 + y * (651619640.7 + y * (-11214424.18 + y * (77392.33017 + y * (-184.9052456)))))
+            ans2 = 57568490411.0 + y * (1029532985.0 + y * (9494680.718 + y * (59272.64853 + y * (267.8532712 + y * 1.0))))
+            return ans1 / ans2
+        else:
+            z = 8.0 / ax
+            y = z * z
+            xx = ax - 0.785398164
+            p0 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 + y * (-0.2073370639e-5 + y * 0.2093887211e-6)))
+            q0 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5 + y * (0.7621095161e-6 + y * (-0.934935152e-7))))
+            return _m.sqrt(0.636619772 / ax) * (_m.cos(xx) * p0 - z * _m.sin(xx) * q0)
+    flat = x.flatten().tolist()
+    return array([j0(v) for v in flat]).reshape(x.shape)
+
+def j1(x):
+    """Bessel function of the first kind, order 1."""
+    if not isinstance(x, ndarray):
+        import math as _m
+        ax = x if x >= 0 else -x
+        if ax < 8.0:
+            y = x * x
+            ans1 = x * (72362614232.0 + y * (-7895059235.0 + y * (242396853.1 + y * (-2972611.439 + y * (15704.48260 + y * (-30.16036606))))))
+            ans2 = 144725228442.0 + y * (2300535178.0 + y * (18583304.74 + y * (99447.43394 + y * (376.9991397 + y * 1.0))))
+            return ans1 / ans2
+        else:
+            z = 8.0 / ax
+            y = z * z
+            xx = ax - 2.356194491
+            p1 = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4 + y * (0.2457520174e-5 + y * (-0.240337019e-6))))
+            q1 = 0.04687499995 + y * (-0.2002690873e-3 + y * (0.8449199096e-5 + y * (-0.88228987e-6 + y * 0.105787412e-6)))
+            ans = _m.sqrt(0.636619772 / ax) * (_m.cos(xx) * p1 - z * _m.sin(xx) * q1)
+            return ans if x >= 0 else -ans
+    flat = x.flatten().tolist()
+    return array([j1(v) for v in flat]).reshape(x.shape)
+
+def y0(x):
+    """Bessel function of the second kind, order 0."""
+    if not isinstance(x, ndarray):
+        import math as _m
+        if x < 8.0:
+            y = x * x
+            ans1 = -2957821389.0 + y * (7062834065.0 + y * (-512359803.6 + y * (10879881.29 + y * (-86327.92757 + y * 228.4622733))))
+            ans2 = 40076544269.0 + y * (745249964.8 + y * (7189466.438 + y * (47447.26470 + y * (226.1030244 + y * 1.0))))
+            return (ans1 / ans2) + 0.636619772 * j0(x) * _m.log(x)
+        else:
+            z = 8.0 / x
+            y = z * z
+            xx = x - 0.785398164
+            p0 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 + y * (-0.2073370639e-5 + y * 0.2093887211e-6)))
+            q0 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5 + y * (0.7621095161e-6 + y * (-0.934935152e-7))))
+            return _m.sqrt(0.636619772 / x) * (_m.sin(xx) * p0 + z * _m.cos(xx) * q0)
+    flat = x.flatten().tolist()
+    return array([y0(v) for v in flat]).reshape(x.shape)
+
+def y1(x):
+    """Bessel function of the second kind, order 1."""
+    if not isinstance(x, ndarray):
+        import math as _m
+        if x < 8.0:
+            y = x * x
+            ans1 = x * (-4900604943000.0 + y * (1275274390000.0 + y * (-51534866838.0 + y * (622785432.7 + y * (-3130827.838 + y * 7.374510962)))))
+            ans2 = 24995805700000.0 + y * (424441966400.0 + y * (3733650367.0 + y * (22459040.02 + y * (103680.2068 + y * (365.9584658 + y * 1.0)))))
+            return (ans1 / ans2) + 0.636619772 * (j1(x) * _m.log(x) - 1.0 / x)
+        else:
+            z = 8.0 / x
+            y = z * z
+            xx = x - 2.356194491
+            p1 = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4 + y * (0.2457520174e-5 + y * (-0.240337019e-6))))
+            q1 = 0.04687499995 + y * (-0.2002690873e-3 + y * (0.8449199096e-5 + y * (-0.88228987e-6 + y * 0.105787412e-6)))
+            return _m.sqrt(0.636619772 / x) * (_m.sin(xx) * p1 + z * _m.cos(xx) * q1)
+    flat = x.flatten().tolist()
+    return array([y1(v) for v in flat]).reshape(x.shape)
+
+special = type('special', (), {
+    'gamma': staticmethod(gamma),
+    'erf': staticmethod(erf),
+    'erfc': staticmethod(erfc),
+    'lgamma': staticmethod(lgamma),
+    'j0': staticmethod(j0),
+    'j1': staticmethod(j1),
+    'y0': staticmethod(y0),
+    'y1': staticmethod(y1),
+})()
+
 def _dtype_cast(result, dtype):
     """Cast result to dtype if dtype is not None."""
     if dtype is not None:
         result = asarray(result).astype(str(dtype) if not isinstance(dtype, str) else dtype)
     return result
 
-def sum(a, axis=None, dtype=None, out=None, keepdims=False):
-    if isinstance(a, ndarray):
-        if axis is not None:
-            result = a.sum(axis, keepdims)
-        else:
-            result = a.sum(None, keepdims)
-        return _dtype_cast(result, dtype)
-    return __builtins__["sum"](a) if isinstance(__builtins__, dict) else a
-
-def prod(a, axis=None, dtype=None, out=None, keepdims=False):
-    if isinstance(a, ndarray):
-        result = a.prod(axis, keepdims)
+def sum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
+    if not isinstance(a, ndarray):
+        if where is True and initial is None and dtype is None:
+            return __builtins__["sum"](a) if isinstance(__builtins__, dict) else a
+        a = asarray(a)
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        a = a * w
+    if axis is not None:
+        result = a.sum(axis, keepdims)
     else:
-        result = _native.prod(array(a), axis, keepdims)
-    return _dtype_cast(result, dtype)
+        result = a.sum(None, keepdims)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    if initial is not None:
+        result = result + initial
+    return result
+
+def prod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        a = a * w + (1.0 - w)
+    result = a.prod(axis, keepdims)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    if initial is not None:
+        result = result * initial
+    return result
 
 def cumsum(a, axis=None, dtype=None, out=None):
     if isinstance(a, ndarray):
@@ -1359,62 +1514,118 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
         a = concatenate([a, append])
     return _native.diff(a, n, axis)
 
-def mean(a, axis=None, dtype=None, out=None, keepdims=False):
+def mean(a, axis=None, dtype=None, out=None, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = asarray(a)
     if a.size == 0:
         return float('nan')
-    if axis is not None:
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        s = (a * w).sum(axis, keepdims)
+        c = w.sum(axis, keepdims)
+        result = s / c
+    elif axis is not None:
         result = a.mean(axis, keepdims)
     else:
         result = a.mean(None, keepdims)
-    return _dtype_cast(result, dtype)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    return result
 
-def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
+def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = asarray(a)
     if a.size == 0:
         return float('nan')
-    if axis is not None:
+    if where is not True:
+        result = sqrt(var(a, axis=axis, ddof=ddof, keepdims=keepdims, where=where))
+    elif axis is not None:
         result = a.std(axis, ddof, keepdims)
     else:
         result = a.std(None, ddof, keepdims)
-    return _dtype_cast(result, dtype)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    return result
 
-def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
+def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = asarray(a)
     if a.size == 0:
         return float('nan')
-    if axis is not None:
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        c = w.sum(axis, True)
+        m = (a * w).sum(axis, True) / c
+        if ddof == 0:
+            result = ((a - m) ** 2 * w).sum(axis, keepdims) / c
+        else:
+            result = ((a - m) ** 2 * w).sum(axis, keepdims) / (c - ddof)
+        if not keepdims and isinstance(result, ndarray) and result.ndim > 0:
+            result = result.squeeze()
+    elif axis is not None:
         result = a.var(axis, ddof, keepdims)
     else:
         result = a.var(None, ddof, keepdims)
-    return _dtype_cast(result, dtype)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    return result
 
-def nansum(a, axis=None, dtype=None, out=None, keepdims=False):
+def nansum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        a = a * w
     result = _native.nansum(a, axis, keepdims)
-    return _dtype_cast(result, dtype)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    if initial is not None:
+        result = result + initial
+    return result
 
-def nanmean(a, axis=None, dtype=None, out=None, keepdims=False):
+def nanmean(a, axis=None, dtype=None, out=None, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
-    result = _native.nanmean(a, axis, keepdims)
-    return _dtype_cast(result, dtype)
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        s = (a * w).sum(axis, keepdims)
+        c = w.sum(axis, keepdims)
+        result = s / c
+    else:
+        result = _native.nanmean(a, axis, keepdims)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    return result
 
-def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
+def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
-    result = _native.nanstd(a, axis, ddof, keepdims)
-    return _dtype_cast(result, dtype)
+    if where is not True:
+        result = sqrt(nanvar(a, axis=axis, ddof=ddof, keepdims=keepdims, where=where))
+    else:
+        result = _native.nanstd(a, axis, ddof, keepdims)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    return result
 
-def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
+def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
-    result = _native.nanvar(a, axis, ddof, keepdims)
-    return _dtype_cast(result, dtype)
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        c = w.sum(axis, True)
+        m = (a * w).sum(axis, True) / c
+        if ddof == 0:
+            result = ((a - m) ** 2 * w).sum(axis, keepdims) / c
+        else:
+            result = ((a - m) ** 2 * w).sum(axis, keepdims) / (c - ddof)
+        if not keepdims and isinstance(result, ndarray) and result.ndim > 0:
+            result = result.squeeze()
+    else:
+        result = _native.nanvar(a, axis, ddof, keepdims)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    return result
 
 def nanmin(a, axis=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
@@ -1436,11 +1647,18 @@ def nanargmax(a, axis=None, out=None):
         a = array(a)
     return _native.nanargmax(a, axis)
 
-def nanprod(a, axis=None, dtype=None, out=None, keepdims=False):
+def nanprod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
+    if where is not True:
+        w = asarray(where).astype("bool").astype("float64")
+        a = a * w + (1.0 - w)
     result = _native.nanprod(a, axis, keepdims)
-    return _dtype_cast(result, dtype)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    if initial is not None:
+        result = result * initial
+    return result
 
 def nancumsum(a, axis=None, dtype=None, out=None):
     if not isinstance(a, ndarray):
@@ -1644,18 +1862,32 @@ def fmin(x1, x2):
     result = where(x2_nan, x1, result)
     return result
 
-def max(a, axis=None, out=None, keepdims=False):
+def max(a, axis=None, out=None, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if where is not True:
+        w = asarray(where).astype("bool")
+        fill_val = float('-inf')
+        flat_a = a.flatten().tolist()
+        flat_w = w.flatten().tolist()
+        masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
+        a = array(masked).reshape(a.shape)
     if axis is not None:
         return a.max(axis, keepdims)
     return a.max(None, keepdims)
 
 amax = max
 
-def min(a, axis=None, out=None, keepdims=False):
+def min(a, axis=None, out=None, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if where is not True:
+        w = asarray(where).astype("bool")
+        fill_val = float('inf')
+        flat_a = a.flatten().tolist()
+        flat_w = w.flatten().tolist()
+        masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
+        a = array(masked).reshape(a.shape)
     if axis is not None:
         return a.min(axis, keepdims)
     return a.min(None, keepdims)
@@ -2929,23 +3161,30 @@ def isin(element, test_elements, assume_unique=False, invert=False):
 
 in1d = isin
 
-def all(a, axis=None, out=None, keepdims=False):
+def all(a, axis=None, out=None, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if where is not True:
+        w = asarray(where).astype("bool")
+        # Masked elements become True (identity for AND)
+        mask_f = w.astype("float64")
+        a = a * mask_f + (1.0 - mask_f)
     if axis is None:
         return a.all()
     # Reduce along specific axis: all elements nonzero iff min != 0
-    # But min of booleans (1.0/0.0) works: min==0 means not all true.
-    # Use the ndarray's min(axis) which supports axis.
     m = a.min(axis, keepdims)
-    # Convert to boolean array: nonzero => True
     flat = m.flatten().tolist()
     result = [v != 0.0 for v in flat]
     return array(result).reshape(m.shape)
 
-def any(a, axis=None, out=None, keepdims=False):
+def any(a, axis=None, out=None, keepdims=False, where=True):
     if not isinstance(a, ndarray):
         a = asarray(a)
+    if where is not True:
+        w = asarray(where).astype("bool")
+        # Masked elements become False (identity for OR / 0.0)
+        mask_f = w.astype("float64")
+        a = a * mask_f
     if axis is None:
         return a.any()
     # Reduce along specific axis: any element nonzero iff max != 0
