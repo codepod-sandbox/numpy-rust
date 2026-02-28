@@ -925,27 +925,41 @@ def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
         result = result.reshape(x.shape)
     return result
 
+def _dtype_cast(result, dtype):
+    """Cast result to dtype if dtype is not None."""
+    if dtype is not None:
+        result = asarray(result).astype(str(dtype) if not isinstance(dtype, str) else dtype)
+    return result
+
 def sum(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
         if axis is not None:
-            return a.sum(axis, keepdims)
-        return a.sum(None, keepdims)
+            result = a.sum(axis, keepdims)
+        else:
+            result = a.sum(None, keepdims)
+        return _dtype_cast(result, dtype)
     return __builtins__["sum"](a) if isinstance(__builtins__, dict) else a
 
 def prod(a, axis=None, dtype=None, out=None, keepdims=False):
     if isinstance(a, ndarray):
-        return a.prod(axis, keepdims)
-    return _native.prod(array(a), axis, keepdims)
+        result = a.prod(axis, keepdims)
+    else:
+        result = _native.prod(array(a), axis, keepdims)
+    return _dtype_cast(result, dtype)
 
 def cumsum(a, axis=None, dtype=None, out=None):
     if isinstance(a, ndarray):
-        return a.cumsum(axis)
-    return array(a).cumsum(axis)
+        result = a.cumsum(axis)
+    else:
+        result = array(a).cumsum(axis)
+    return _dtype_cast(result, dtype)
 
 def cumprod(a, axis=None, dtype=None, out=None):
     if isinstance(a, ndarray):
-        return a.cumprod(axis)
-    return array(a).cumprod(axis)
+        result = a.cumprod(axis)
+    else:
+        result = array(a).cumprod(axis)
+    return _dtype_cast(result, dtype)
 
 def diff(a, n=1, axis=-1, prepend=None, append=None):
     if not isinstance(a, ndarray):
@@ -970,8 +984,10 @@ def mean(a, axis=None, dtype=None, out=None, keepdims=False):
     if a.size == 0:
         return float('nan')
     if axis is not None:
-        return a.mean(axis, keepdims)
-    return a.mean(None, keepdims)
+        result = a.mean(axis, keepdims)
+    else:
+        result = a.mean(None, keepdims)
+    return _dtype_cast(result, dtype)
 
 def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if not isinstance(a, ndarray):
@@ -979,8 +995,10 @@ def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if a.size == 0:
         return float('nan')
     if axis is not None:
-        return a.std(axis, ddof, keepdims)
-    return a.std(None, ddof, keepdims)
+        result = a.std(axis, ddof, keepdims)
+    else:
+        result = a.std(None, ddof, keepdims)
+    return _dtype_cast(result, dtype)
 
 def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if not isinstance(a, ndarray):
@@ -988,28 +1006,34 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if a.size == 0:
         return float('nan')
     if axis is not None:
-        return a.var(axis, ddof, keepdims)
-    return a.var(None, ddof, keepdims)
+        result = a.var(axis, ddof, keepdims)
+    else:
+        result = a.var(None, ddof, keepdims)
+    return _dtype_cast(result, dtype)
 
 def nansum(a, axis=None, dtype=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.nansum(a, axis, keepdims)
+    result = _native.nansum(a, axis, keepdims)
+    return _dtype_cast(result, dtype)
 
 def nanmean(a, axis=None, dtype=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.nanmean(a, axis, keepdims)
+    result = _native.nanmean(a, axis, keepdims)
+    return _dtype_cast(result, dtype)
 
 def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.nanstd(a, axis, ddof, keepdims)
+    result = _native.nanstd(a, axis, ddof, keepdims)
+    return _dtype_cast(result, dtype)
 
 def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.nanvar(a, axis, ddof, keepdims)
+    result = _native.nanvar(a, axis, ddof, keepdims)
+    return _dtype_cast(result, dtype)
 
 def nanmin(a, axis=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
@@ -1034,7 +1058,8 @@ def nanargmax(a, axis=None, out=None):
 def nanprod(a, axis=None, dtype=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.nanprod(a, axis, keepdims)
+    result = _native.nanprod(a, axis, keepdims)
+    return _dtype_cast(result, dtype)
 
 def nancumsum(a, axis=None, dtype=None, out=None):
     if not isinstance(a, ndarray):
@@ -1336,11 +1361,31 @@ def ravel(a, order="C"):
     return array(a).ravel()
 
 def squeeze(a, axis=None):
+    a = asarray(a)
+    if axis is not None and isinstance(axis, (tuple, list)):
+        result = a
+        for ax in sorted(axis, reverse=True):
+            result = squeeze(result, axis=ax)
+        return result
     if isinstance(a, ndarray):
         return a.squeeze(axis)
     return a
 
 def expand_dims(a, axis):
+    a = asarray(a)
+    if isinstance(axis, (tuple, list)):
+        ndim_out = a.ndim + len(axis)
+        # Normalize negative axes
+        normalized = []
+        for ax in axis:
+            if ax < 0:
+                ax = ndim_out + ax
+            normalized.append(ax)
+        normalized.sort()
+        result = a
+        for ax in normalized:
+            result = expand_dims(result, ax)
+        return result
     if isinstance(a, ndarray):
         return a.expand_dims(axis)
     return a
@@ -4244,6 +4289,68 @@ def ix_(*args):
     return tuple(result)
 
 
+class _RClass:
+    """Row concatenation using index syntax: np.r_[1:5, 7, 8]"""
+    def __getitem__(self, key):
+        if not isinstance(key, tuple):
+            key = (key,)
+        pieces = []
+        for item in key:
+            if isinstance(item, slice):
+                start = item.start if item.start is not None else 0
+                stop = item.stop
+                step = item.step if item.step is not None else 1
+                if stop is None:
+                    raise ValueError("r_ requires explicit stop for slices")
+                pieces.append(arange(start, stop, step))
+            elif isinstance(item, (int, float)):
+                pieces.append(array([item]))
+            else:
+                pieces.append(asarray(item))
+        if len(pieces) == 0:
+            return array([])
+        return concatenate(pieces)
+
+r_ = _RClass()
+
+
+class _CClass:
+    """Column concatenation: np.c_[a, b] == np.column_stack((a, b))"""
+    def __getitem__(self, key):
+        if not isinstance(key, tuple):
+            key = (key,)
+        arrays = []
+        for item in key:
+            if isinstance(item, slice):
+                start = item.start if item.start is not None else 0
+                stop = item.stop
+                step = item.step if item.step is not None else 1
+                if stop is None:
+                    raise ValueError("c_ requires explicit stop for slices")
+                arr = arange(start, stop, step)
+            elif isinstance(item, (int, float)):
+                arr = array([item])
+            else:
+                arr = asarray(item)
+            # Ensure 2D
+            if arr.ndim == 1:
+                arr = arr.reshape((-1 if arr.size > 0 else 0, 1))
+            arrays.append(arr)
+        if len(arrays) == 0:
+            return array([])
+        return concatenate(arrays, 1)
+
+c_ = _CClass()
+
+
+class _SClass:
+    """Index expression helper: np.s_[0:5, 1::2]"""
+    def __getitem__(self, key):
+        return key
+
+s_ = _SClass()
+
+
 def lexsort(keys):
     """Perform an indirect stable sort using a sequence of keys.
     Last key is used as the primary sort key."""
@@ -6344,6 +6451,100 @@ def _random_zipf(a, size=None):
 def _default_rng(seed=None):
     return _Generator(seed)
 
+class _RandomState:
+    """Legacy random state compatible with np.random.RandomState(seed)."""
+    def __init__(self, seed=None):
+        if seed is not None:
+            random.seed(seed)
+
+    def rand(self, *shape):
+        if len(shape) == 0:
+            return float(random.rand((1,))[0])
+        return random.rand(shape)
+
+    def randn(self, *shape):
+        if len(shape) == 0:
+            return float(random.randn((1,))[0])
+        return random.randn(shape)
+
+    def randint(self, low, high=None, size=None, dtype='int64'):
+        if high is None:
+            high = low
+            low = 0
+        if size is None:
+            return int(random.randint(low, high, (1,)).flatten()[0])
+        if isinstance(size, int):
+            size = (size,)
+        return random.randint(low, high, size)
+
+    def random(self, size=None):
+        return _random_random(size=size)
+
+    def random_sample(self, size=None):
+        return _random_random(size=size)
+
+    def normal(self, loc=0.0, scale=1.0, size=None):
+        if size is None:
+            return float(random.normal(float(loc), float(scale), (1,))[0])
+        if isinstance(size, int):
+            size = (size,)
+        return random.normal(float(loc), float(scale), size)
+
+    def uniform(self, low=0.0, high=1.0, size=None):
+        if size is None:
+            return float(random.uniform(float(low), float(high), (1,))[0])
+        if isinstance(size, int):
+            size = (size,)
+        return random.uniform(float(low), float(high), size)
+
+    def choice(self, a, size=None, replace=True, p=None):
+        arr = asarray(a) if not isinstance(a, ndarray) else a
+        if size is None:
+            size = 1
+        return random.choice(arr, size, replace)
+
+    def shuffle(self, x):
+        return _random_shuffle(x)
+
+    def permutation(self, x):
+        return _random_permutation(x)
+
+    def seed(self, seed=None):
+        random.seed(seed)
+
+    def exponential(self, scale=1.0, size=None):
+        return _random_exponential(scale, size)
+
+    def poisson(self, lam=1.0, size=None):
+        return _random_poisson(lam, size)
+
+    def binomial(self, n, p, size=None):
+        return _random_binomial(n, p, size)
+
+    def beta(self, a, b, size=None):
+        return _random_beta(a, b, size)
+
+    def gamma(self, shape, scale=1.0, size=None):
+        return _random_gamma(shape, scale, size)
+
+    def lognormal(self, mean=0.0, sigma=1.0, size=None):
+        return _random_lognormal(mean, sigma, size)
+
+    def chisquare(self, df, size=None):
+        return _random_chisquare(df, size)
+
+    def standard_normal(self, size=None):
+        return _random_standard_normal(size)
+
+    def multivariate_normal(self, mean, cov, size=None):
+        return _random_multivariate_normal(mean, cov, size)
+
+    def get_state(self):
+        return {'state': 'not_implemented'}
+
+    def set_state(self, state):
+        pass
+
 # Monkey-patch random module with extension functions
 random.shuffle = _random_shuffle
 random.permutation = _random_permutation
@@ -6374,6 +6575,7 @@ random.power = _random_power
 random.vonmises = _random_vonmises
 random.wald = _random_wald
 random.zipf = _random_zipf
+random.RandomState = _RandomState
 
 # --- Numerical Utilities (Tier 20C) -----------------------------------------
 
@@ -6837,6 +7039,78 @@ class matrix:
 
     def __repr__(self):
         return "matrix({})".format(self.A.tolist())
+
+
+# --- Tier 30 Group C: array2string, lib.stride_tricks, info, who -----------
+
+def array2string(a, max_line_width=None, precision=None, suppress_small=None,
+                 separator=' ', prefix='', style=None, formatter=None,
+                 threshold=None, edgeitems=None, sign=None, floatmode=None,
+                 suffix='', legacy=None):
+    """Return a string representation of an array."""
+    a = asarray(a)
+    return repr(a)
+
+
+def info(object=None, maxwidth=76, output=None, toplevel='numpy'):
+    """Display documentation for numpy objects."""
+    if object is not None:
+        doc = getattr(object, '__doc__', None)
+        if doc:
+            print(doc)
+        else:
+            print("No documentation available for {}".format(object))
+
+
+def who(vardict=None):
+    """Print info about variables in the given dictionary."""
+    if vardict is None:
+        return
+    for name, val in vardict.items():
+        if hasattr(val, 'shape'):
+            print("{}: shape={}, dtype={}".format(name, val.shape, val.dtype))
+
+
+class _LibModule:
+    class stride_tricks:
+        @staticmethod
+        def as_strided(x, shape=None, strides=None, subok=False, writeable=True):
+            """Simplified as_strided - creates a new array with the given shape.
+            WARNING: This does NOT share memory with the original array.
+            It creates a view-like result by repeating/tiling data."""
+            x = asarray(x)
+            if shape is None:
+                return x.copy()
+            # Best effort: reshape or tile to match requested shape
+            flat = x.flatten().tolist()
+            total = 1
+            for s in shape:
+                total *= s
+            # Repeat flat data to fill the requested size
+            result = []
+            for i in range(total):
+                result.append(flat[i % len(flat)])
+            return array(result).reshape(shape)
+
+        @staticmethod
+        def sliding_window_view(x, window_shape, axis=None):
+            """Create a sliding window view of the array."""
+            x = asarray(x)
+            if isinstance(window_shape, int):
+                window_shape = (window_shape,)
+            if x.ndim == 1 and len(window_shape) == 1:
+                w = window_shape[0]
+                data = x.tolist()
+                n = len(data) - w + 1
+                if n <= 0:
+                    return array([]).reshape((0, w))
+                rows = []
+                for i in range(n):
+                    rows.append(data[i:i+w])
+                return array(rows)
+            raise NotImplementedError("sliding_window_view only supports 1D")
+
+lib = _LibModule()
 
 
 # --- testing module ---------------------------------------------------------

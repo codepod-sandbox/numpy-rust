@@ -5818,6 +5818,138 @@ def test_view_copy():
     assert_eq(b.shape, a.shape)
     assert_eq(b.tolist(), a.tolist())
 
+# --- Tier 30 tests ---
+
+# RandomState
+def test_random_state_basic():
+    rng = np.random.RandomState(42)
+    a = rng.rand(3)
+    assert_eq(a.shape, (3,))
+
+def test_random_state_normal():
+    rng = np.random.RandomState(0)
+    a = rng.normal(0, 1, size=10)
+    assert_eq(a.shape, (10,))
+
+def test_random_state_randint():
+    rng = np.random.RandomState(0)
+    a = rng.randint(0, 10, size=5)
+    assert_eq(a.shape, (5,))
+
+def test_random_state_choice():
+    rng = np.random.RandomState(0)
+    a = rng.choice([1, 2, 3, 4, 5], size=3)
+    assert_eq(a.shape, (3,))
+
+def test_random_state_uniform():
+    rng = np.random.RandomState(0)
+    a = rng.uniform(0, 1, size=4)
+    assert_eq(a.shape, (4,))
+
+# r_ and c_
+def test_r_basic():
+    r = np.r_[1:5, 7, 8]
+    expected = [1.0, 2.0, 3.0, 4.0, 7.0, 8.0]
+    assert_eq(r.tolist(), expected)
+
+def test_r_arrays():
+    a = np.array([1.0, 2.0])
+    b = np.array([3.0, 4.0])
+    r = np.r_[a, b]
+    assert_eq(r.tolist(), [1.0, 2.0, 3.0, 4.0])
+
+def test_c_basic():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.array([4.0, 5.0, 6.0])
+    r = np.c_[a, b]
+    assert_eq(r.shape, (3, 2))
+
+def test_s_basic():
+    s = np.s_[0:5]
+    assert_eq(isinstance(s, slice), True)
+
+def test_s_tuple():
+    s = np.s_[0:5, 1:3]
+    assert_eq(isinstance(s, tuple), True)
+
+# ix_
+def test_ix_basic_t30():
+    a, b = np.ix_([0, 2], [1, 3])
+    assert_eq(a.shape, (2, 1))
+    assert_eq(b.shape, (1, 2))
+
+# expand_dims tuple axis
+def test_expand_dims_tuple():
+    a = np.array([1.0, 2.0, 3.0])  # shape (3,)
+    r = np.expand_dims(a, axis=(0, 2))
+    assert_eq(r.shape, (1, 3, 1))
+
+def test_expand_dims_tuple_2():
+    a = np.zeros((3, 4))
+    r = np.expand_dims(a, axis=(0, 3))
+    assert_eq(r.shape, (1, 3, 4, 1))
+
+# squeeze tuple axis
+def test_squeeze_tuple():
+    a = np.zeros((1, 3, 1, 4))
+    r = np.squeeze(a, axis=(0, 2))
+    assert_eq(r.shape, (3, 4))
+
+# dtype on reductions
+def test_sum_dtype():
+    a = np.array([1, 2, 3])
+    r = np.sum(a, dtype="float64")
+    assert_close(r, 6.0)
+
+def test_mean_dtype():
+    a = np.array([1, 2, 3])
+    r = np.mean(a, dtype="float64")
+    assert_close(r, 2.0)
+
+def test_prod_dtype():
+    a = np.array([1.0, 2.0, 3.0])
+    r = np.prod(a, dtype="float64")
+    assert_close(r, 6.0)
+
+# packbits / unpackbits
+def test_packbits_t30():
+    a = np.array([1, 0, 1, 0, 0, 0, 0, 1])
+    r = np.packbits(a)
+    assert_eq(r.tolist(), [161.0])  # 10100001 = 161
+
+def test_unpackbits_t30():
+    a = np.array([161])
+    r = np.unpackbits(a)
+    assert_eq(r.tolist(), [1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+def test_packbits_unpackbits_roundtrip():
+    bits = np.array([1, 0, 1, 1, 0, 0, 1, 0])
+    packed = np.packbits(bits)
+    unpacked = np.unpackbits(packed)
+    assert_eq(unpacked.tolist()[:8], bits.tolist())
+
+# lib.stride_tricks
+def test_sliding_window_view():
+    a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    r = np.lib.stride_tricks.sliding_window_view(a, 3)
+    assert_eq(r.shape, (3, 3))
+    assert_eq(r.tolist()[0], [1.0, 2.0, 3.0])
+    assert_eq(r.tolist()[2], [3.0, 4.0, 5.0])
+
+# array2string
+def test_array2string():
+    a = np.array([1.0, 2.0, 3.0])
+    s = np.array2string(a)
+    assert_eq(isinstance(s, str), True)
+
+# out= parameter
+def test_clip_out():
+    a = np.array([1.0, 5.0, 10.0])
+    out = np.zeros(3)
+    r = np.clip(a, 2.0, 8.0, out=out)
+    # Just verify it doesn't crash and returns correct values
+    assert_eq(r.tolist(), [2.0, 5.0, 8.0])
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
