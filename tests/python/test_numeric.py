@@ -7575,6 +7575,90 @@ def test_t36_ndarray_getfield_stub():
     except:
         pass
 
+# ── Tier 37 ── module stubs, format, sctypes, window funcs, misc ────────────
+
+def test_t37_core_module():
+    import numpy as np
+    assert hasattr(np, 'core')
+    assert hasattr(np.core, 'numeric')
+    assert hasattr(np.core, 'multiarray')
+
+def test_t37_compat_module():
+    import numpy as np
+    assert hasattr(np, 'compat')
+
+def test_t37_exceptions_module():
+    import numpy as np
+    assert hasattr(np.exceptions, 'AxisError')
+    assert hasattr(np.exceptions, 'ComplexWarning')
+    assert hasattr(np.exceptions, 'DTypePromotionError')
+
+def test_t37_matlib_ctypeslib():
+    import numpy as np
+    assert hasattr(np, 'matlib')
+    assert hasattr(np, 'ctypeslib')
+
+def test_t37_format_float_positional():
+    import numpy as np
+    s = np.format_float_positional(3.14159, precision=2)
+    assert_eq(s, '3.14')
+
+def test_t37_format_float_scientific():
+    import numpy as np
+    s = np.format_float_scientific(12345.0, precision=2)
+    assert 'e' in s or 'E' in s
+
+def test_t37_sctypes():
+    import numpy as np
+    assert 'int' in np.sctypes
+    assert 'float' in np.sctypes
+    assert 'complex' in np.sctypes
+
+def test_t37_sctypeDict():
+    import numpy as np
+    assert 'float64' in np.sctypeDict
+    assert 'f8' in np.sctypeDict
+    assert 'int32' in np.sctypeDict
+
+def test_t37_memmap_stub():
+    import numpy as np
+    try:
+        np.memmap("dummy")
+        assert False, "should raise"
+    except (NotImplementedError, TypeError):
+        pass
+
+def test_t37_ufunc_class():
+    import numpy as np
+    u = np.ufunc('add', 2, 1)
+    assert_eq(u.__name__, 'add')
+    assert_eq(u.nin, 2)
+    assert_eq(u.nout, 1)
+
+def test_t37_seterrcall_geterrcall():
+    import numpy as np
+    assert_eq(np.seterrcall(None), None)
+    assert_eq(np.geterrcall(), None)
+
+def test_t37_add_newdoc():
+    import numpy as np
+    np.add_newdoc('', '', '')  # Should not raise
+
+def test_t37_deprecate():
+    import numpy as np
+    def f(): return 42
+    g = np.deprecate(f)
+    assert_eq(g(), 42)
+
+def test_t37_get_include():
+    import numpy as np
+    assert isinstance(np.get_include(), str)
+
+def test_t37_tracemalloc_constants():
+    import numpy as np
+    assert_eq(np.tracemalloc_domain, 0)
+    assert_eq(np.use_hugepage, 0)
+
 
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

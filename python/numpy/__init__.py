@@ -8267,6 +8267,123 @@ def byte_bounds(a):
     arr = asarray(a)
     return (0, arr.nbytes)
 
+# --- Module stubs -----------------------------------------------------------
+
+# np.core module stub
+class _CoreModule:
+    """Minimal np.core namespace."""
+    pass
+
+core = _CoreModule()
+core.numeric = core  # self-reference for np.core.numeric compatibility
+core.multiarray = core  # np.core.multiarray compatibility
+core.fromnumeric = core  # np.core.fromnumeric compatibility
+
+# np.compat module stub
+class _CompatModule:
+    pass
+compat = _CompatModule()
+
+# np.exceptions module
+class _ExceptionsModule:
+    AxisError = AxisError  # already defined
+    ComplexWarning = type('ComplexWarning', (UserWarning,), {})
+    DTypePromotionError = type('DTypePromotionError', (TypeError,), {})
+    VisibleDeprecationWarning = type('VisibleDeprecationWarning', (UserWarning,), {})
+    ModuleDeprecationWarning = type('ModuleDeprecationWarning', (DeprecationWarning,), {})
+    RankWarning = type('RankWarning', (UserWarning,), {})
+    TooHardError = type('TooHardError', (RuntimeError,), {})
+exceptions = _ExceptionsModule()
+
+# np.matlib stub
+class _MatlibModule:
+    """Minimal np.matlib namespace."""
+    pass
+matlib = _MatlibModule()
+
+# np.ctypeslib stub
+class _CtypeslibModule:
+    pass
+ctypeslib = _CtypeslibModule()
+
+# --- format_float functions -------------------------------------------------
+def format_float_positional(x, precision=None, unique=True, fractional=True, trim='k', sign=False, pad_left=None, pad_right=None, min_digits=None):
+    """Format a float in positional notation."""
+    if precision is not None:
+        return f"{x:.{precision}f}"
+    return str(x)
+
+def format_float_scientific(x, precision=None, unique=True, trim='k', sign=False, pad_left=None, exp_digits=None, min_digits=None):
+    """Format a float in scientific notation."""
+    if precision is not None:
+        return f"{x:.{precision}e}"
+    return f"{x:e}"
+
+# --- sctypes and sctypeDict -------------------------------------------------
+sctypes = {
+    'int': [int8, int16, int32, int64],
+    'uint': [uint8, uint16, uint32, uint64],
+    'float': [float16, float32, float64],
+    'complex': [complex64, complex128],
+    'others': [bool_, object_, str_, bytes_, void],
+}
+sctypeDict = {
+    'int8': int8, 'int16': int16, 'int32': int32, 'int64': int64,
+    'uint8': uint8, 'uint16': uint16, 'uint32': uint32, 'uint64': uint64,
+    'float16': float16, 'float32': float32, 'float64': float64,
+    'complex64': complex64, 'complex128': complex128,
+    'bool': bool_, 'object': object_, 'str': str_, 'bytes': bytes_,
+    'i1': int8, 'i2': int16, 'i4': int32, 'i8': int64,
+    'u1': uint8, 'u2': uint16, 'u4': uint32, 'u8': uint64,
+    'f2': float16, 'f4': float32, 'f8': float64,
+    'c8': complex64, 'c16': complex128,
+}
+
+# --- memmap stub ------------------------------------------------------------
+class memmap:
+    """Memory-mapped file stub (not supported in sandboxed environment)."""
+    def __new__(cls, filename, dtype=None, mode='r+', offset=0, shape=None, order='C'):
+        raise NotImplementedError("memmap not supported in sandboxed environment")
+
+# --- ufunc class stub -------------------------------------------------------
+class ufunc:
+    """Universal function stub."""
+    def __init__(self, name='', nin=0, nout=0):
+        self.__name__ = name
+        self.nin = nin
+        self.nout = nout
+    def __repr__(self):
+        return f"<ufunc '{self.__name__}'>"
+
+# --- Misc stubs -------------------------------------------------------------
+def seterrcall(func):
+    """Set callback for floating-point error handler (no-op)."""
+    return None
+
+def geterrcall():
+    """Get callback for floating-point error handler (no-op)."""
+    return None
+
+def add_newdoc(place, obj, doc):
+    """Add documentation (no-op in our implementation)."""
+    pass
+
+def deprecate(func=None, oldname=None, newname=None, message=None):
+    """Deprecation decorator (no-op)."""
+    if func is not None:
+        return func
+    def decorator(f):
+        return f
+    return decorator
+
+def get_include():
+    """Return include directory (not applicable)."""
+    return ""
+
+tracemalloc_domain = 0
+use_hugepage = 0
+nested_iters = None  # Not supported
+
 # --- Import submodules so np.ma and np.polynomial are accessible ------------
 import numpy.ma as ma
 import numpy.polynomial as polynomial
