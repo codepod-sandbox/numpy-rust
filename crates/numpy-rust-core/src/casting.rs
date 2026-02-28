@@ -6,12 +6,15 @@ use crate::dtype::DType;
 
 /// Cast an ArrayData to a different dtype.
 /// If already the target dtype, returns a clone.
+/// For narrow dtypes, casts to the storage type instead.
 pub fn cast_array_data(data: &ArrayData, target: DType) -> ArrayData {
-    if data.dtype() == target {
+    // Map narrow dtypes to their storage type
+    let storage = target.storage_dtype();
+    if data.dtype() == storage {
         return data.clone();
     }
 
-    match target {
+    match storage {
         DType::Bool => ArrayData::Bool(cast_to_bool(data)),
         DType::Int32 => ArrayData::Int32(cast_to_i32(data)),
         DType::Int64 => ArrayData::Int64(cast_to_i64(data)),
@@ -20,6 +23,7 @@ pub fn cast_array_data(data: &ArrayData, target: DType) -> ArrayData {
         DType::Complex64 => ArrayData::Complex64(cast_to_complex64(data)),
         DType::Complex128 => ArrayData::Complex128(cast_to_complex128(data)),
         DType::Str => ArrayData::Str(cast_to_str(data)),
+        _ => unreachable!("storage_dtype maps to canonical types"),
     }
 }
 

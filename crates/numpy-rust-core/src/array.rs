@@ -8,6 +8,10 @@ use crate::dtype::DType;
 #[derive(Debug, Clone)]
 pub struct NdArray {
     pub(crate) data: ArrayData,
+    /// If set, overrides the dtype reported by the underlying ArrayData.
+    /// Used for narrow dtypes (int8, uint8, etc.) that are stored internally
+    /// as wider types (int32, int64).
+    pub(crate) declared_dtype: Option<DType>,
 }
 
 // --- Constructors ---
@@ -15,13 +19,23 @@ pub struct NdArray {
 impl NdArray {
     /// Create an NdArray from existing ArrayData.
     pub fn from_data(data: ArrayData) -> Self {
-        Self { data }
+        Self {
+            data,
+            declared_dtype: None,
+        }
+    }
+
+    /// Set a declared dtype override (for narrow types stored as wider types).
+    pub fn with_declared_dtype(mut self, dtype: DType) -> Self {
+        self.declared_dtype = if dtype.is_narrow() { Some(dtype) } else { None };
+        self
     }
 
     /// Create an array filled with zeros.
     pub fn zeros(shape: &[usize], dtype: DType) -> Self {
+        let storage = dtype.storage_dtype();
         let sh = IxDyn(shape);
-        let data = match dtype {
+        let data = match storage {
             DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, false)),
             DType::Int32 => ArrayData::Int32(ArrayD::zeros(sh)),
             DType::Int64 => ArrayData::Int64(ArrayD::zeros(sh)),
@@ -34,8 +48,12 @@ impl NdArray {
                 ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(0.0f64, 0.0)))
             }
             DType::Str => ArrayData::Str(ArrayD::from_elem(sh, String::new())),
+            _ => unreachable!("storage_dtype maps to canonical types"),
         };
-        Self { data }
+        Self {
+            data,
+            declared_dtype: if dtype.is_narrow() { Some(dtype) } else { None },
+        }
     }
 
     /// Create an array filled with ones.
@@ -43,8 +61,9 @@ impl NdArray {
         if dtype == DType::Str {
             panic!("ones() not supported for string dtype");
         }
+        let storage = dtype.storage_dtype();
         let sh = IxDyn(shape);
-        let data = match dtype {
+        let data = match storage {
             DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, true)),
             DType::Int32 => ArrayData::Int32(ArrayD::ones(sh)),
             DType::Int64 => ArrayData::Int64(ArrayD::ones(sh)),
@@ -57,8 +76,12 @@ impl NdArray {
                 ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(1.0f64, 0.0)))
             }
             DType::Str => unreachable!(),
+            _ => unreachable!("storage_dtype maps to canonical types"),
         };
-        Self { data }
+        Self {
+            data,
+            declared_dtype: if dtype.is_narrow() { Some(dtype) } else { None },
+        }
     }
 
     /// Create an array filled with a given f64 value.
@@ -66,6 +89,7 @@ impl NdArray {
         let sh = IxDyn(shape);
         Self {
             data: ArrayData::Float64(ArrayD::from_elem(sh, value)),
+            declared_dtype: None,
         }
     }
 
@@ -73,6 +97,7 @@ impl NdArray {
     pub fn from_scalar(value: f64) -> Self {
         Self {
             data: ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), value)),
+            declared_dtype: None,
         }
     }
 }
@@ -89,7 +114,7 @@ impl NdArray {
     }
 
     pub fn dtype(&self) -> DType {
-        self.data.dtype()
+        self.declared_dtype.unwrap_or_else(|| self.data.dtype())
     }
 
     pub fn size(&self) -> usize {
@@ -102,8 +127,10 @@ impl NdArray {
 
     /// Cast this array to a different dtype, following NumPy's astype semantics.
     pub fn astype(&self, dtype: DType) -> Self {
+        let storage = dtype.storage_dtype();
         Self {
-            data: crate::casting::cast_array_data(&self.data, dtype),
+            data: crate::casting::cast_array_data(&self.data, storage),
+            declared_dtype: if dtype.is_narrow() { Some(dtype) } else { None },
         }
     }
 }
@@ -178,6 +205,7 @@ impl NdArray {
     pub fn from_vec<V: IntoArrayData>(vec: V) -> Self {
         Self {
             data: vec.into_array_data(),
+            declared_dtype: None,
         }
     }
 

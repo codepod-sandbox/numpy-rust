@@ -353,6 +353,7 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
         crate::DType::Complex64 => concat_variant!(Complex64),
         crate::DType::Complex128 => concat_variant!(Complex128),
         crate::DType::Str => concat_variant!(Str),
+        _ => unreachable!("promote() returns canonical storage types"),
     };
 
     Ok(NdArray::from_data(data))

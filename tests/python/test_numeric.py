@@ -6926,6 +6926,184 @@ def test_t32_special_module():
     assert_close(np.special.gamma(5.0), 24.0, tol=1e-4)
 
 
+# --- Tier 33: Narrow dtype support ---
+
+def test_t33_zeros_uint8():
+    import numpy as np
+    a = np.zeros(5, dtype="uint8")
+    assert_eq(a.shape, (5,))
+    assert_eq(str(a.dtype), "uint8")
+    assert_eq(a.tolist(), [0, 0, 0, 0, 0])
+
+def test_t33_zeros_int8():
+    import numpy as np
+    a = np.zeros(3, dtype="int8")
+    assert_eq(str(a.dtype), "int8")
+
+def test_t33_zeros_int16():
+    import numpy as np
+    a = np.zeros(3, dtype="int16")
+    assert_eq(str(a.dtype), "int16")
+
+def test_t33_zeros_uint16():
+    import numpy as np
+    a = np.zeros(3, dtype="uint16")
+    assert_eq(str(a.dtype), "uint16")
+
+def test_t33_zeros_uint32():
+    import numpy as np
+    a = np.zeros(3, dtype="uint32")
+    assert_eq(str(a.dtype), "uint32")
+
+def test_t33_zeros_uint64():
+    import numpy as np
+    a = np.zeros(3, dtype="uint64")
+    assert_eq(str(a.dtype), "uint64")
+
+def test_t33_zeros_float16():
+    import numpy as np
+    a = np.zeros(3, dtype="float16")
+    assert_eq(str(a.dtype), "float16")
+
+def test_t33_ones_uint8():
+    import numpy as np
+    a = np.ones(4, dtype="uint8")
+    assert_eq(str(a.dtype), "uint8")
+    assert_eq(a.tolist(), [1, 1, 1, 1])
+
+def test_t33_array_uint8():
+    import numpy as np
+    a = np.array([1, 2, 3], dtype="uint8")
+    assert_eq(str(a.dtype), "uint8")
+    assert_eq(a.tolist(), [1, 2, 3])
+
+def test_t33_array_float16():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0], dtype="float16")
+    assert_eq(str(a.dtype), "float16")
+
+def test_t33_astype_uint8():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0])
+    b = a.astype("uint8")
+    assert_eq(str(b.dtype), "uint8")
+    assert_eq(b.tolist(), [1, 2, 3])
+
+def test_t33_astype_int16():
+    import numpy as np
+    a = np.array([10, 20, 30])
+    b = a.astype("int16")
+    assert_eq(str(b.dtype), "int16")
+
+def test_t33_astype_float16_to_float32():
+    import numpy as np
+    a = np.array([1.5, 2.5], dtype="float16")
+    b = a.astype("float32")
+    assert_eq(str(b.dtype), "float32")
+
+def test_t33_uint8_arithmetic():
+    import numpy as np
+    a = np.array([1, 2, 3], dtype="uint8")
+    b = a + 1
+    # After arithmetic, dtype may promote to int32 (storage type)
+    assert_eq(b.tolist(), [2, 3, 4])
+
+def test_t33_uint8_sum():
+    import numpy as np
+    a = np.array([1, 2, 3, 4], dtype="uint8")
+    s = np.sum(a)
+    assert_close(float(s), 10.0)
+
+def test_t33_uint8_mean():
+    import numpy as np
+    a = np.array([2, 4, 6], dtype="uint8")
+    m = np.mean(a)
+    assert_close(float(m), 4.0)
+
+def test_t33_itemsize_uint8():
+    import numpy as np
+    a = np.zeros(3, dtype="uint8")
+    assert_eq(a.itemsize, 1)
+
+def test_t33_itemsize_int16():
+    import numpy as np
+    a = np.zeros(3, dtype="int16")
+    assert_eq(a.itemsize, 2)
+
+def test_t33_itemsize_uint32():
+    import numpy as np
+    a = np.zeros(3, dtype="uint32")
+    assert_eq(a.itemsize, 4)
+
+def test_t33_itemsize_float16():
+    import numpy as np
+    a = np.zeros(3, dtype="float16")
+    assert_eq(a.itemsize, 2)
+
+def test_t33_iinfo_int8():
+    import numpy as np
+    info = np.iinfo("int8")
+    assert_eq(info.min, -128)
+    assert_eq(info.max, 127)
+    assert_eq(info.bits, 8)
+
+def test_t33_iinfo_uint8():
+    import numpy as np
+    info = np.iinfo("uint8")
+    assert_eq(info.min, 0)
+    assert_eq(info.max, 255)
+    assert_eq(info.bits, 8)
+
+def test_t33_iinfo_int16():
+    import numpy as np
+    info = np.iinfo("int16")
+    assert_eq(info.min, -32768)
+    assert_eq(info.max, 32767)
+    assert_eq(info.bits, 16)
+
+def test_t33_iinfo_uint16():
+    import numpy as np
+    info = np.iinfo("uint16")
+    assert_eq(info.min, 0)
+    assert_eq(info.max, 65535)
+    assert_eq(info.bits, 16)
+
+def test_t33_iinfo_uint32():
+    import numpy as np
+    info = np.iinfo("uint32")
+    assert_eq(info.min, 0)
+    assert_eq(info.max, 4294967295)
+
+def test_t33_iinfo_uint64():
+    import numpy as np
+    info = np.iinfo("uint64")
+    assert_eq(info.min, 0)
+
+def test_t33_full_uint8():
+    import numpy as np
+    a = np.full(3, 42, dtype="uint8")
+    assert_eq(str(a.dtype), "uint8")
+    assert_eq(a.tolist(), [42, 42, 42])
+
+def test_t33_copy_preserves_dtype():
+    import numpy as np
+    a = np.zeros(3, dtype="uint8")
+    b = a.copy()
+    assert_eq(str(b.dtype), "uint8")
+
+def test_t33_issubdtype_uint8():
+    import numpy as np
+    assert_eq(np.issubdtype("uint8", np.integer), True)
+
+def test_t33_issubdtype_int8():
+    import numpy as np
+    assert_eq(np.issubdtype("int8", np.integer), True)
+
+def test_t33_issubdtype_float16():
+    import numpy as np
+    assert_eq(np.issubdtype("float16", np.floating), True)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

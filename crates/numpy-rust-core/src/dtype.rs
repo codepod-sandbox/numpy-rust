@@ -2,8 +2,15 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
     Bool,
+    Int8,
+    Int16,
     Int32,
     Int64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    Float16,
     Float32,
     Float64,
     Complex64,  // Complex<f32>
@@ -15,29 +22,29 @@ impl DType {
     /// Returns the common type that both `self` and `other` can be promoted to,
     /// following NumPy's type promotion rules.
     ///
-    /// Promotion lattice:
-    ///   Bool -> Int32 -> Int64 -> Float64
-    ///                    Float32 -> Float64
-    ///   i64 + f32 -> f64 (to avoid precision loss)
+    /// Promotion lattice (uses storage types for narrow dtypes):
+    ///   Bool -> Int8 -> Int16 -> Int32 -> Int64 -> Float64
+    ///   UInt8 -> UInt16 -> UInt32 -> UInt64 -> Float64
+    ///   Float16 -> Float32 -> Float64
     ///   Complex64 / Complex128 follow float promotion lifted to complex
     pub fn promote(self, other: DType) -> DType {
-        if self == other {
-            return self;
+        // Always work with storage types so the result is a canonical type
+        // that ArrayData can represent directly.
+        let a = self.storage_dtype();
+        let b = other.storage_dtype();
+        if a == b {
+            return a;
         }
-        if self == DType::Str || other == DType::Str {
+        if a == DType::Str || b == DType::Str {
             panic!("cannot promote string dtype with numeric dtype");
         }
         // If either is complex, result is complex
-        if self.is_complex() || other.is_complex() {
-            if self.is_complex() && other.is_complex() {
-                return if self.rank() >= other.rank() {
-                    self
-                } else {
-                    other
-                };
+        if a.is_complex() || b.is_complex() {
+            if a.is_complex() && b.is_complex() {
+                return if a.rank() >= b.rank() { a } else { b };
             }
-            let real_type = if self.is_complex() { other } else { self };
-            let complex_type = if self.is_complex() { self } else { other };
+            let real_type = if a.is_complex() { b } else { a };
+            let complex_type = if a.is_complex() { a } else { b };
             return match (complex_type, real_type) {
                 (DType::Complex64, DType::Float64 | DType::Int64) => DType::Complex128,
                 (DType::Complex128, _) => DType::Complex128,
@@ -45,11 +52,7 @@ impl DType {
                 _ => DType::Complex128,
             };
         }
-        let (hi, lo) = if self.rank() >= other.rank() {
-            (self, other)
-        } else {
-            (other, self)
-        };
+        let (hi, lo) = if a.rank() >= b.rank() { (a, b) } else { (b, a) };
         // Special case: mixing i64 with f32 promotes to f64 to avoid precision loss
         if (hi == DType::Float32 && lo == DType::Int64)
             || (hi == DType::Int64 && lo == DType::Float32)
@@ -59,16 +62,37 @@ impl DType {
         hi
     }
 
+    /// Map narrow dtypes to their internal storage type.
+    /// Canonical types (Bool, Int32, Int64, Float32, Float64, Complex64, Complex128, Str)
+    /// map to themselves.
+    pub fn storage_dtype(self) -> DType {
+        match self {
+            DType::Int8 | DType::Int16 => DType::Int32,
+            DType::UInt8 | DType::UInt16 => DType::Int32,
+            DType::UInt32 | DType::UInt64 => DType::Int64,
+            DType::Float16 => DType::Float32,
+            other => other,
+        }
+    }
+
+    /// Returns true if this is a narrow dtype that requires internal widening.
+    pub fn is_narrow(self) -> bool {
+        self.storage_dtype() != self
+    }
+
     /// Numeric rank for promotion ordering.
     fn rank(self) -> u8 {
         match self {
             DType::Bool => 0,
-            DType::Int32 => 1,
-            DType::Int64 => 2,
-            DType::Float32 => 3,
-            DType::Float64 => 4,
-            DType::Complex64 => 5,
-            DType::Complex128 => 6,
+            DType::Int8 | DType::UInt8 => 1,
+            DType::Int16 | DType::UInt16 => 2,
+            DType::Int32 | DType::UInt32 => 3,
+            DType::Int64 | DType::UInt64 => 4,
+            DType::Float16 => 5,
+            DType::Float32 => 6,
+            DType::Float64 => 7,
+            DType::Complex64 => 8,
+            DType::Complex128 => 9,
             DType::Str => 255,
         }
     }
@@ -76,9 +100,10 @@ impl DType {
     /// Size in bytes of a single element.
     pub fn itemsize(self) -> usize {
         match self {
-            DType::Bool => 1,
-            DType::Int32 | DType::Float32 => 4,
-            DType::Int64 | DType::Float64 | DType::Complex64 => 8,
+            DType::Bool | DType::Int8 | DType::UInt8 => 1,
+            DType::Int16 | DType::UInt16 | DType::Float16 => 2,
+            DType::Int32 | DType::UInt32 | DType::Float32 => 4,
+            DType::Int64 | DType::UInt64 | DType::Float64 | DType::Complex64 => 8,
             DType::Complex128 => 16,
             DType::Str => 0, // variable-length
         }
@@ -86,12 +111,30 @@ impl DType {
 
     /// Returns true if this is a floating-point type.
     pub fn is_float(self) -> bool {
-        matches!(self, DType::Float32 | DType::Float64)
+        matches!(self, DType::Float16 | DType::Float32 | DType::Float64)
     }
 
-    /// Returns true if this is an integer type.
+    /// Returns true if this is an integer type (signed or unsigned).
     pub fn is_integer(self) -> bool {
-        matches!(self, DType::Int32 | DType::Int64)
+        matches!(
+            self,
+            DType::Int8
+                | DType::Int16
+                | DType::Int32
+                | DType::Int64
+                | DType::UInt8
+                | DType::UInt16
+                | DType::UInt32
+                | DType::UInt64
+        )
+    }
+
+    /// Returns true if this is an unsigned integer type.
+    pub fn is_unsigned(self) -> bool {
+        matches!(
+            self,
+            DType::UInt8 | DType::UInt16 | DType::UInt32 | DType::UInt64
+        )
     }
 
     /// Returns true if this is a complex type.
@@ -109,8 +152,15 @@ impl std::fmt::Display for DType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DType::Bool => write!(f, "bool"),
+            DType::Int8 => write!(f, "int8"),
+            DType::Int16 => write!(f, "int16"),
             DType::Int32 => write!(f, "int32"),
             DType::Int64 => write!(f, "int64"),
+            DType::UInt8 => write!(f, "uint8"),
+            DType::UInt16 => write!(f, "uint16"),
+            DType::UInt32 => write!(f, "uint32"),
+            DType::UInt64 => write!(f, "uint64"),
+            DType::Float16 => write!(f, "float16"),
             DType::Float32 => write!(f, "float32"),
             DType::Float64 => write!(f, "float64"),
             DType::Complex64 => write!(f, "complex64"),

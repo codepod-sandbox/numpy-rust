@@ -5397,29 +5397,29 @@ class iinfo:
             self.max = 32767
             self.dtype = int16
             self.kind = 'i'
-        elif str(dtype) in ('uint8',):
+        elif str(dtype) in ('uint8', 'u1', 'B'):
             self.bits = 8
             self.min = 0
             self.max = 255
-            self.dtype = dtype
+            self.dtype = uint8
             self.kind = 'u'
-        elif str(dtype) in ('uint16',):
+        elif str(dtype) in ('uint16', 'u2', 'H'):
             self.bits = 16
             self.min = 0
             self.max = 65535
-            self.dtype = dtype
+            self.dtype = uint16
             self.kind = 'u'
-        elif str(dtype) in ('uint32',):
+        elif str(dtype) in ('uint32', 'u4', 'I'):
             self.bits = 32
             self.min = 0
             self.max = 4294967295
-            self.dtype = dtype
+            self.dtype = uint32
             self.kind = 'u'
-        elif str(dtype) in ('uint64',):
+        elif str(dtype) in ('uint64', 'u8', 'Q'):
             self.bits = 64
             self.min = 0
             self.max = 18446744073709551615
-            self.dtype = dtype
+            self.dtype = uint64
             self.kind = 'u'
         else:
             raise ValueError("iinfo does not support this dtype")

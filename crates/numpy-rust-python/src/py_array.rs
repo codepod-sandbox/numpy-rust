@@ -115,9 +115,12 @@ fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
 }
 
 /// Convert a Python object to a Scalar matching the target array dtype.
+/// For narrow dtypes, maps to the storage type's Scalar variant.
 fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyResult<Scalar> {
+    // Use storage dtype for scalar conversion (narrow types map to wider storage)
+    let storage = dtype.storage_dtype();
     if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
-        return Ok(match dtype {
+        return Ok(match storage {
             DType::Float64 => Scalar::Float64(f),
             DType::Float32 => Scalar::Float32(f as f32),
             DType::Int64 => Scalar::Int64(f as i64),
@@ -126,10 +129,11 @@ fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyR
             DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(f as f32, 0.0)),
             DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(f, 0.0)),
             DType::Str => Scalar::Str(f.to_string()),
+            _ => unreachable!("storage_dtype maps to canonical types"),
         });
     }
     if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
-        return Ok(match dtype {
+        return Ok(match storage {
             DType::Float64 => Scalar::Float64(i as f64),
             DType::Float32 => Scalar::Float32(i as f32),
             DType::Int64 => Scalar::Int64(i),
@@ -138,6 +142,7 @@ fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyR
             DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(i as f32, 0.0)),
             DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(i as f64, 0.0)),
             DType::Str => Scalar::Str(i.to_string()),
+            _ => unreachable!("storage_dtype maps to canonical types"),
         });
     }
     Err(vm.new_type_error("cannot convert value to array scalar".to_owned()))
@@ -168,12 +173,19 @@ pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
 pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
     match s {
         "bool" => Ok(DType::Bool),
-        "int32" | "i32" => Ok(DType::Int32),
-        "int64" | "i64" | "int" => Ok(DType::Int64),
-        "float32" | "f32" => Ok(DType::Float32),
+        "int8" | "i1" => Ok(DType::Int8),
+        "int16" | "i2" => Ok(DType::Int16),
+        "int32" | "i32" | "i4" => Ok(DType::Int32),
+        "int64" | "i64" | "i8" | "int" => Ok(DType::Int64),
+        "uint8" | "u1" => Ok(DType::UInt8),
+        "uint16" | "u2" => Ok(DType::UInt16),
+        "uint32" | "u4" => Ok(DType::UInt32),
+        "uint64" | "u8" => Ok(DType::UInt64),
+        "float16" | "f2" => Ok(DType::Float16),
+        "float32" | "f32" | "f4" => Ok(DType::Float32),
         "float64" | "f64" | "float" => Ok(DType::Float64),
-        "complex64" | "c64" => Ok(DType::Complex64),
-        "complex128" | "c128" | "complex" => Ok(DType::Complex128),
+        "complex64" | "c64" | "c8" => Ok(DType::Complex64),
+        "complex128" | "c128" | "c16" | "complex" => Ok(DType::Complex128),
         "str" | "U" => Ok(DType::Str),
         _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),

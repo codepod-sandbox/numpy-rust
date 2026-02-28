@@ -128,8 +128,9 @@ pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> NdArray {
 
 /// Create an array filled with a given value.
 pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
+    let storage = dtype.storage_dtype();
     let sh = IxDyn(shape);
-    let data = match dtype {
+    let data = match storage {
         DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, value != 0.0)),
         DType::Int32 => ArrayData::Int32(ArrayD::from_elem(sh, value as i32)),
         DType::Int64 => ArrayData::Int64(ArrayD::from_elem(sh, value as i64)),
@@ -140,8 +141,9 @@ pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
         }
         DType::Complex128 => ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(value, 0.0))),
         DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string())),
+        _ => unreachable!("storage_dtype maps to canonical types"),
     };
-    NdArray::from_data(data)
+    NdArray::from_data(data).with_declared_dtype(dtype)
 }
 
 /// Create a string array filled with a given string value.
