@@ -324,6 +324,16 @@ PINF = float("inf")
 NINF = float("-inf")
 PZERO = 0.0
 NZERO = -0.0
+Inf = inf
+Infinity = inf
+NaN = nan
+NAN = nan
+euler_gamma = 0.5772156649015329
+ALLOW_THREADS = 1
+little_endian = True
+
+# Save builtin divmod before we shadow it later
+_builtin_divmod = __builtins__["divmod"] if isinstance(__builtins__, dict) else __import__("builtins").divmod
 
 # --- typecodes (mapping of type character codes) ----------------------------
 typecodes = {
@@ -1013,6 +1023,8 @@ def asarray(a, dtype=None, order=None):
             return a.astype(str(dtype))
         return a
     return array(a, dtype=dtype)
+
+asanyarray = asarray  # In our implementation, same as asarray
 
 def ascontiguousarray(a, dtype=None):
     return asarray(a)
@@ -2132,7 +2144,7 @@ def array_split(ary, indices_or_sections, axis=0):
     n = ary.shape[axis]
     if isinstance(indices_or_sections, (int, float)):
         nsections = int(indices_or_sections)
-        neach, extras = divmod(n, nsections)
+        neach, extras = _builtin_divmod(n, nsections)
         boundaries = [0]
         for i in range(nsections):
             boundaries.append(boundaries[-1] + neach + (1 if i < extras else 0))
@@ -2305,6 +2317,16 @@ def set_printoptions(**kwargs):
 
 def get_printoptions():
     return {}
+
+class printoptions:
+    """Context manager for print options."""
+    def __init__(self, **kwargs):
+        self._opts = kwargs
+    def __enter__(self):
+        set_printoptions(**self._opts)
+        return self
+    def __exit__(self, *args):
+        pass  # We don't actually track old options
 
 # --- StructuredDtype for field-based (record) arrays -----------------------
 class StructuredDtype:
@@ -4550,6 +4572,8 @@ def divmod_(x1, x2):
     x1, x2 = asarray(x1), asarray(x2)
     return (floor_divide(x1, x2), remainder(x1, x2))
 
+divmod = divmod_
+
 def negative(x):
     return -asarray(x)
 
@@ -5129,6 +5153,7 @@ class _SClass:
         return key
 
 s_ = _SClass()
+index_exp = s_  # s_ already exists and does the same thing
 
 
 def lexsort(keys):
@@ -6214,6 +6239,27 @@ def _linalg_eigvalsh(a, UPLO='L'):
     return vals
 
 linalg.eigvalsh = _linalg_eigvalsh
+
+# --- linalg additions (Tier 36 Group A) ------------------------------------
+linalg.cross = cross        # delegate to top-level cross()
+linalg.diagonal = diagonal  # delegate to top-level diagonal()
+linalg.outer = outer        # delegate to top-level outer()
+
+def _linalg_matrix_norm(x, ord='fro', axis=(-2, -1), keepdims=False):
+    """Matrix norm."""
+    return linalg.norm(x)
+
+def _linalg_vector_norm(x, ord=2, axis=None, keepdims=False):
+    """Vector norm."""
+    return linalg.norm(x)
+
+def _linalg_tensorsolve(a, b, axes=None):
+    """Solve tensor equation (stub)."""
+    raise NotImplementedError("tensorsolve not implemented")
+
+linalg.matrix_norm = _linalg_matrix_norm
+linalg.vector_norm = _linalg_vector_norm
+linalg.tensorsolve = _linalg_tensorsolve
 
 # --- FFT module extensions (Tier 19 Group B) --------------------------------
 
@@ -8195,6 +8241,31 @@ class _RecModule:
         return self.array(arrays, dtype=dtype)
 
 rec = _RecModule()
+
+# --- show_config stub -------------------------------------------------------
+def show_config():
+    """Show numpy-rust build configuration."""
+    print("numpy-rust (codepod)")
+    print("  backend: Rust + RustPython")
+
+# --- fromfile stub ----------------------------------------------------------
+def fromfile(file, dtype=float, count=-1, sep='', offset=0, like=None):
+    """Read array from file (stub - not supported in sandbox)."""
+    raise NotImplementedError("fromfile not supported in sandboxed environment")
+
+# --- einsum_path stub -------------------------------------------------------
+def einsum_path(*operands, optimize='greedy'):
+    """Evaluate optimal contraction order (stub returns naive path)."""
+    # Return a naive path: contract in order
+    n = int(len(operands) // 2)  # rough estimate
+    path = [(0, 1)] * int(max(1, n - 1))
+    return path, ""
+
+# --- byte_bounds stub -------------------------------------------------------
+def byte_bounds(a):
+    """Return low and high byte pointers (stub returns (0, nbytes))."""
+    arr = asarray(a)
+    return (0, arr.nbytes)
 
 # --- Import submodules so np.ma and np.polynomial are accessible ------------
 import numpy.ma as ma

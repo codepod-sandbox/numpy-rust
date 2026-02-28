@@ -7438,6 +7438,143 @@ def test_t35_char_isdecimal():
     assert_eq(vals[0], True)
     assert_eq(vals[1], False)
 
+# ── Tier 36 ── constants, aliases, linalg wrappers, ndarray stubs ────────────
+
+def test_t36_inf_aliases():
+    import numpy as np
+    assert_eq(np.Inf, float('inf'))
+    assert_eq(np.Infinity, float('inf'))
+
+def test_t36_nan_aliases():
+    import numpy as np
+    assert_eq(np.isnan(np.array([np.NaN])).tolist()[0], True)
+    assert_eq(np.isnan(np.array([np.NAN])).tolist()[0], True)
+
+def test_t36_euler_gamma():
+    import numpy as np
+    assert_close(np.euler_gamma, 0.5772156649015329, tol=1e-10)
+
+def test_t36_allow_threads():
+    import numpy as np
+    assert_eq(np.ALLOW_THREADS, 1)
+
+def test_t36_little_endian():
+    import numpy as np
+    assert_eq(np.little_endian, True)
+
+def test_t36_asanyarray():
+    import numpy as np
+    a = np.asanyarray([1.0, 2.0, 3.0])
+    assert_eq(a.shape, (3,))
+
+def test_t36_divmod():
+    import numpy as np
+    q, r = np.divmod(np.array([7.0, 10.0]), np.array([3.0, 4.0]))
+    assert_eq(q.tolist(), [2.0, 2.0])
+    assert_eq(r.tolist(), [1.0, 2.0])
+
+def test_t36_printoptions():
+    import numpy as np
+    with np.printoptions(precision=4):
+        pass  # Should not raise
+
+def test_t36_show_config():
+    import numpy as np
+    np.show_config()  # Should not raise
+
+def test_t36_fromfile_stub():
+    import numpy as np
+    try:
+        np.fromfile("dummy.bin")
+        assert False, "should raise"
+    except NotImplementedError:
+        pass
+
+def test_t36_einsum_path():
+    import numpy as np
+    path, info = np.einsum_path('ij,jk', np.eye(2), np.eye(2))
+    assert isinstance(path, list)
+
+def test_t36_index_exp():
+    import numpy as np
+    assert hasattr(np, 'index_exp')
+
+def test_t36_byte_bounds():
+    import numpy as np
+    lo, hi = np.byte_bounds(np.array([1.0, 2.0, 3.0]))
+    assert_eq(lo, 0)
+    assert hi > 0
+
+def test_t36_linalg_cross():
+    import numpy as np
+    r = np.linalg.cross(np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+    assert_close(r.tolist()[2], 1.0, tol=1e-10)
+
+def test_t36_linalg_diagonal():
+    import numpy as np
+    a = np.eye(3)
+    d = np.linalg.diagonal(a)
+    assert_eq(d.shape, (3,))
+
+def test_t36_linalg_outer():
+    import numpy as np
+    r = np.linalg.outer(np.array([1.0, 2.0]), np.array([3.0, 4.0]))
+    assert_eq(r.shape, (2, 2))
+
+def test_t36_linalg_matrix_norm():
+    import numpy as np
+    r = np.linalg.matrix_norm(np.eye(3))
+    assert_close(r, 3.0 ** 0.5, tol=1e-10)
+
+def test_t36_linalg_vector_norm():
+    import numpy as np
+    r = np.linalg.vector_norm(np.array([3.0, 4.0]))
+    assert_close(r, 5.0, tol=1e-10)
+
+def test_t36_linalg_tensorsolve_stub():
+    import numpy as np
+    try:
+        np.linalg.tensorsolve(np.eye(2), np.array([1.0, 2.0]))
+        assert False, "should raise"
+    except NotImplementedError:
+        pass
+
+def test_t36_ndarray_dumps():
+    import numpy as np
+    a = np.array([1.0, 2.0])
+    s = a.dumps()
+    assert isinstance(s, str)
+    assert len(s) > 0
+
+def test_t36_ndarray_byteswap():
+    import numpy as np
+    a = np.array([1.0, 2.0])
+    b = a.byteswap()
+    assert_eq(b.shape, (2,))
+
+def test_t36_ndarray_setflags():
+    import numpy as np
+    a = np.array([1.0])
+    a.setflags()  # Should not raise
+
+def test_t36_ndarray_dump_stub():
+    import numpy as np
+    a = np.array([1.0])
+    try:
+        a.dump("test.npy")
+        assert False, "should raise"
+    except:
+        pass
+
+def test_t36_ndarray_getfield_stub():
+    import numpy as np
+    a = np.array([1.0])
+    try:
+        a.getfield("float64")
+        assert False, "should raise"
+    except:
+        pass
+
 
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

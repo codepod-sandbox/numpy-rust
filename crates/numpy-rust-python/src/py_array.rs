@@ -1618,6 +1618,51 @@ impl PyNdArray {
             .map(PyNdArray::from_core)
             .map_err(|e| numpy_err(e, vm))
     }
+
+    #[pymethod]
+    fn dump(&self, _file: PyRef<PyStr>, vm: &VirtualMachine) -> PyResult<()> {
+        Err(vm
+            .new_not_implemented_error("dump() not supported in sandboxed environment".to_owned()))
+    }
+
+    #[pymethod]
+    fn dumps(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        // Return a string representation of the data
+        let inner = self.data.read().unwrap();
+        let s = format!("{:?}", inner.data());
+        Ok(vm.ctx.new_str(s).into())
+    }
+
+    #[pymethod]
+    fn byteswap(&self, _inplace: vm::function::OptionalArg<bool>) -> PyNdArray {
+        // No-op: return clone (we don't deal with byte order)
+        PyNdArray::from_core(self.data.read().unwrap().clone())
+    }
+
+    #[pymethod]
+    fn setflags(
+        &self,
+        _write: vm::function::OptionalArg<bool>,
+        _align: vm::function::OptionalArg<bool>,
+        _uic: vm::function::OptionalArg<bool>,
+    ) {
+        // No-op: flags are fixed in our implementation
+    }
+
+    #[pymethod]
+    fn getfield(&self, _dtype: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        Err(vm.new_not_implemented_error("getfield() not supported".to_owned()))
+    }
+
+    #[pymethod]
+    fn setfield(
+        &self,
+        _val: PyObjectRef,
+        _dtype: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
+        Err(vm.new_not_implemented_error("setfield() not supported".to_owned()))
+    }
 }
 
 /// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).
