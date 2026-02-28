@@ -444,6 +444,56 @@ def iscomplex(x):
         return ones(x.shape, dtype="bool")
     return zeros(x.shape, dtype="bool")
 
+def issubdtype(arg1, arg2):
+    """Check if arg1 dtype is a subtype of arg2."""
+    # Normalize arg1 to a dtype string
+    if isinstance(arg1, dtype):
+        dt1 = str(arg1)
+    elif isinstance(arg1, str):
+        dt1 = arg1
+    elif hasattr(arg1, 'dtype'):
+        dt1 = str(arg1.dtype)
+    else:
+        # It might be a type like np.float64, np.int32, etc.
+        dt1 = str(arg1) if not callable(arg1) else getattr(arg1, '__name__', str(arg1))
+
+    # Normalize arg2 - could be a type category like np.floating, np.integer, np.number, etc.
+    if isinstance(arg2, str):
+        dt2 = arg2
+    elif isinstance(arg2, type) and hasattr(arg2, '__name__'):
+        dt2 = arg2.__name__
+    elif isinstance(arg2, dtype):
+        dt2 = str(arg2)
+    else:
+        dt2 = str(arg2)
+
+    # Map type categories
+    _float_types = {"float16", "float32", "float64", "float", "floating", "float_"}
+    _int_types = {"int8", "int16", "int32", "int64", "int", "integer", "signedinteger", "int_"}
+    _uint_types = {"uint8", "uint16", "uint32", "uint64", "unsignedinteger"}
+    _complex_types = {"complex64", "complex128", "complex", "complexfloating", "complex_"}
+    _number_types = _float_types | _int_types | _uint_types | _complex_types | {"number"}
+    _bool_types = {"bool", "bool_"}
+
+    # Check if dt1 is a subtype of dt2
+    if dt2 in ("floating", "float"):
+        return dt1 in _float_types
+    elif dt2 in ("integer", "signedinteger", "int"):
+        return dt1 in _int_types
+    elif dt2 in ("unsignedinteger",):
+        return dt1 in _uint_types
+    elif dt2 in ("complexfloating", "complex"):
+        return dt1 in _complex_types
+    elif dt2 in ("number",):
+        return dt1 in _number_types
+    elif dt2 in ("bool", "bool_"):
+        return dt1 in _bool_types
+    elif dt2 in ("generic",):
+        return True  # everything is a subtype of generic
+    else:
+        # Direct dtype comparison
+        return dt1 == dt2
+
 def asarray(a, dtype=None, order=None):
     if isinstance(a, ndarray):
         if dtype is not None:
@@ -487,6 +537,10 @@ def exp(x):
     if isinstance(x, ndarray):
         return x.exp()
     return _math.exp(x)
+
+def exp2(x):
+    """Compute 2**x element-wise."""
+    return power(2.0, asarray(x))
 
 def log(x):
     if isinstance(x, ndarray):
@@ -4748,6 +4802,7 @@ linalg.multi_dot = _linalg_multi_dot
 linalg.lstsq = _native.linalg.lstsq
 linalg.cholesky = _native.linalg.cholesky
 linalg.qr = _native.linalg.qr
+linalg.trace = trace
 
 # --- FFT module extensions (Tier 19 Group B) --------------------------------
 
@@ -5224,6 +5279,193 @@ class _Generator:
     def binomial(self, n, p, size=None):
         return _random_binomial(n, p, size)
 
+def _random_random(size=None):
+    """Return random floats in [0, 1). Same as rand but takes size tuple."""
+    if size is None:
+        return float(random.rand((1,))[0])
+    if isinstance(size, int):
+        size = (size,)
+    # Compute total elements
+    total = 1
+    for s in size:
+        total *= s
+    result = random.uniform(0.0, 1.0, (total,))
+    if len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_multivariate_normal(mean, cov, size=None):
+    """Draw from multivariate normal distribution."""
+    mean = asarray(mean)
+    cov = asarray(cov)
+    n = len(mean.tolist())
+
+    # Cholesky decomposition of covariance
+    L = linalg.cholesky(cov)
+
+    if size is None:
+        # Single sample: generate n standard normals
+        z = random.normal(0.0, 1.0, (n,))
+        # Transform: L @ z + mean
+        z_list = z.tolist()
+        mean_list = mean.tolist()
+        L_list = L.tolist()
+        sample = []
+        for i in range(n):
+            val = mean_list[i]
+            for j in range(n):
+                val += L_list[i][j] * z_list[j]
+            sample.append(val)
+        return array(sample)
+
+    if isinstance(size, int):
+        size = (size,)
+
+    total = 1
+    for s in size:
+        total *= s
+
+    # Generate total*n standard normals
+    z = random.normal(0.0, 1.0, (total * n,)).reshape((total, n))
+
+    # Transform: samples = mean + z @ L^T
+    z_list = z.tolist()
+    mean_list = mean.tolist()
+    L_list = L.tolist()
+
+    results = []
+    for row in z_list:
+        sample = []
+        for i in range(n):
+            val = mean_list[i]
+            for j in range(n):
+                val += L_list[i][j] * row[j]
+            sample.append(val)
+        results.append(sample)
+
+    result = array(results)
+    if len(size) > 1:
+        result = result.reshape(list(size) + [n])
+    return result
+
+def _random_chisquare(df, size=None):
+    """Chi-square distribution (sum of df squared standard normals)."""
+    df = int(df)
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    results = []
+    for _ in range(total):
+        z = random.normal(0.0, 1.0, (df,))
+        z_list = z.tolist()
+        results.append(sum(v * v for v in z_list))
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_laplace(loc=0.0, scale=1.0, size=None):
+    """Laplace distribution."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    u = random.uniform(0.0, 1.0, (total,))
+    # Inverse CDF: loc - scale * sign(u - 0.5) * log(1 - 2*abs(u - 0.5))
+    u_list = u.tolist()
+    results = []
+    import math
+    for ui in u_list:
+        ui_shifted = ui - 0.5
+        if ui_shifted == 0:
+            results.append(loc)
+        else:
+            sign_val = 1.0 if ui_shifted > 0 else -1.0
+            results.append(loc - scale * sign_val * math.log(1.0 - 2.0 * abs(ui_shifted)))
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_triangular(left, mode, right, size=None):
+    """Triangular distribution."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    u = random.uniform(0.0, 1.0, (total,))
+    u_list = u.tolist()
+    results = []
+    fc = (mode - left) / (right - left)
+    for ui in u_list:
+        if ui < fc:
+            results.append(left + ((right - left) * (mode - left) * ui) ** 0.5)
+        else:
+            results.append(right - ((right - left) * (right - mode) * (1.0 - ui)) ** 0.5)
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_rayleigh(scale=1.0, size=None):
+    """Rayleigh distribution."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    u = random.uniform(0.0, 1.0, (total,))
+    import math
+    results = [scale * math.sqrt(-2.0 * math.log(1.0 - ui)) for ui in u.tolist()]
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
+def _random_weibull(a, size=None):
+    """Weibull distribution."""
+    if size is None:
+        total = 1
+    elif isinstance(size, int):
+        total = size
+    else:
+        total = 1
+        for s in size:
+            total *= s
+    u = random.uniform(0.0, 1.0, (total,))
+    import math
+    results = [(-math.log(1.0 - ui)) ** (1.0 / a) for ui in u.tolist()]
+    result = array(results)
+    if size is None:
+        return float(result[0])
+    if not isinstance(size, int) and len(size) > 1:
+        result = result.reshape(list(size))
+    return result
+
 def _default_rng(seed=None):
     return _Generator(seed)
 
@@ -5242,6 +5484,14 @@ random.geometric = _random_geometric
 random.dirichlet = _random_dirichlet
 random.default_rng = _default_rng
 random.Generator = _Generator
+random.random = _random_random
+random.random_sample = _random_random
+random.multivariate_normal = _random_multivariate_normal
+random.chisquare = _random_chisquare
+random.laplace = _random_laplace
+random.triangular = _random_triangular
+random.rayleigh = _random_rayleigh
+random.weibull = _random_weibull
 
 # --- Numerical Utilities (Tier 20C) -----------------------------------------
 

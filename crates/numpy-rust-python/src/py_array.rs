@@ -715,6 +715,89 @@ impl PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().around(d))
     }
 
+    // --- ndarray methods mirroring top-level functions ---
+
+    #[pymethod]
+    fn dot(&self, other: PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let a = self.data.read().unwrap();
+        let b = other.data.read().unwrap();
+        numpy_rust_core::utility::dot(&a, &b)
+            .map(|arr| ndarray_or_scalar(arr, vm))
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn swapaxes(&self, axis1: usize, axis2: usize, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        self.data
+            .read()
+            .unwrap()
+            .swapaxes(axis1, axis2)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn take(
+        &self,
+        indices: PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
+        let idx_arr = indices.data.read().unwrap();
+        let dim_size = match ax {
+            Some(a) => inner.shape()[a],
+            None => inner.size(),
+        };
+        let idx_vec = extract_int_indices(&idx_arr, dim_size, vm)?;
+        inner
+            .take(&idx_vec, ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn repeat(
+        &self,
+        repeats: usize,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let ax = parse_optional_axis(axis, vm)?;
+        let inner = self.data.read().unwrap();
+        numpy_rust_core::manipulation::repeat(&inner, repeats, ax)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn diagonal(
+        &self,
+        offset: vm::function::OptionalArg<i64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let off = offset.unwrap_or(0);
+        let inner = self.data.read().unwrap();
+        numpy_rust_core::utility::diagonal(&inner, off)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn trace(
+        &self,
+        offset: vm::function::OptionalArg<i64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let off = offset.unwrap_or(0);
+        let inner = self.data.read().unwrap();
+        let diag = numpy_rust_core::utility::diagonal(&inner, off).map_err(|e| numpy_err(e, vm))?;
+        diag.sum(None, false)
+            .map(|arr| ndarray_or_scalar(arr, vm))
+            .map_err(|e| numpy_err(e, vm))
+    }
+
     // --- Scalar conversion ---
 
     #[pymethod]
