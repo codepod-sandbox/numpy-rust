@@ -1,6 +1,7 @@
 """NumPy-compatible Python package wrapping the Rust native module."""
 import sys as _sys
 import math as _math
+from functools import reduce as _reduce
 
 __version__ = "1.26.0"
 
@@ -64,6 +65,94 @@ class _ObjectArray:
             return _ObjectArray([a == b for a, b in zip(self._data, other._data)], "bool")
         return NotImplemented
     def __repr__(self): return f"array({self._data!r}, dtype='{self._dtype}')"
+
+
+def _make_complex_array(values, shape):
+    """Create a complex128 ndarray from a list of Python complex/float values.
+    Uses real+imag decomposition since the Rust array() can't handle complex lists directly."""
+    reals = [v.real if isinstance(v, complex) else float(v) for v in values]
+    imags = [v.imag if isinstance(v, complex) else 0.0 for v in values]
+    # Build real and imag arrays, promote both to complex128, then add
+    re_arr = _native.array(reals).reshape(shape).astype("complex128")
+    im_arr = _native.array(imags).reshape(shape).astype("complex128")
+    # im_arr contains real values that should become imaginary parts.
+    # We need to multiply by 1j. The Rust side supports complex arithmetic,
+    # so create a scalar 1j array and multiply.
+    j_scalar = zeros(shape, dtype="complex128")
+    # Workaround: we can construct the complex array correctly by
+    # using the real array as base and adding imag * 1j via Rust ops
+    # re_arr already has imag=0, im_arr has the imag values as real part
+    # We need: result[i] = complex(reals[i], imags[i])
+    # Since Rust complex arrays store (re, im) pairs, and re_arr.astype("complex128")
+    # gives us (reals[i], 0), we need a way to set the imaginary part.
+    # The cleanest way: build via the Rust ops: re_arr + im_arr * 1j
+    # But we need a 1j constant array. Let's try creating one:
+    ones_arr = ones(shape, dtype="complex128")  # (1+0j)
+    # Subtract real part to get (0+0j), then... this doesn't help.
+    # Alternative: use Rust-level subtract and multiply
+    # Actually, the simplest: create the array by putting values into an _ObjectArray
+    # with reshape support, since scimath results are usually small.
+    return _ComplexResultArray(values, shape)
+
+
+class _ComplexResultArray:
+    """Lightweight wrapper for complex-valued array results (used by lib.scimath).
+    Provides basic ndarray-like interface for complex results that can't go through
+    the Rust array constructor directly."""
+    def __init__(self, data, shape):
+        if isinstance(data, list):
+            self._data = data
+        else:
+            self._data = list(data)
+        self._shape = tuple(shape) if not isinstance(shape, tuple) else shape
+
+    @property
+    def shape(self):
+        return self._shape
+
+    @property
+    def ndim(self):
+        return len(self._shape)
+
+    @property
+    def size(self):
+        n = 1
+        for s in self._shape:
+            n *= s
+        return n
+
+    @property
+    def dtype(self):
+        return dtype("complex128")
+
+    def flatten(self):
+        return _ComplexResultArray(self._data, (len(self._data),))
+
+    def reshape(self, shape):
+        if isinstance(shape, int):
+            shape = (shape,)
+        return _ComplexResultArray(self._data, tuple(shape))
+
+    def tolist(self):
+        return list(self._data)
+
+    def __len__(self):
+        return self._shape[0] if self._shape else 1
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            if self.ndim == 1:
+                return self._data[key]
+            # For 2D, return a row
+            cols = self._shape[1] if len(self._shape) > 1 else 1
+            return _ComplexResultArray(self._data[key * cols:(key + 1) * cols], (cols,))
+        return self._data[key]
+
+    def __repr__(self):
+        return f"array({self._data!r}, dtype=complex128)"
+
+    def copy(self):
+        return _ComplexResultArray(list(self._data), self._shape)
 
 
 def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=None):
@@ -310,7 +399,28 @@ class _ScalarTypeMeta(type):
         return hash(cls._scalar_name)
 
     def __instancecheck__(cls, instance):
-        # These are abstract type hierarchy classes, not instantiated
+        """Allow isinstance(3, np.integer) etc. to work."""
+        scalar_name = cls._scalar_name
+
+        # Map Python types to numpy type hierarchy
+        if isinstance(instance, bool):
+            # bool is a subclass of int in Python, check it first
+            return scalar_name in ('bool', 'generic', 'number', 'integer', 'signedinteger')
+        if isinstance(instance, int):
+            return scalar_name in ('generic', 'number', 'integer', 'signedinteger',
+                                   'int8', 'int16', 'int32', 'int64',
+                                   'uint8', 'uint16', 'uint32', 'uint64',
+                                   'unsignedinteger', 'intp')
+        if isinstance(instance, float):
+            return scalar_name in ('generic', 'number', 'inexact', 'floating',
+                                   'float16', 'float32', 'float64')
+        if isinstance(instance, complex):
+            return scalar_name in ('generic', 'number', 'inexact', 'complexfloating',
+                                   'complex64', 'complex128')
+        if isinstance(instance, str):
+            return scalar_name in ('generic', 'character', 'str')
+        if isinstance(instance, bytes):
+            return scalar_name in ('generic', 'character', 'bytes')
         return False
 
 
@@ -840,6 +950,10 @@ unicode_ = _ScalarType("str", str)
 half = _ScalarType("float16", float)
 int_ = int64
 float_ = float64
+complex_ = complex128
+uint = uint64
+long = int64
+ulong = uint64
 
 # --- Missing functions (stubs) ----------------------------------------------
 def empty(shape, dtype=None, order="C"):
@@ -2294,6 +2408,14 @@ def result_type(*arrays_and_dtypes):
 def promote_types(type1, type2):
     return _ScalarType(_native.promote_types(str(type1), str(type2)))
 
+def find_common_type(array_types, scalar_types):
+    """Deprecated in numpy 2.0, but still used by some packages.
+    Determines common type following standard coercion rules."""
+    all_types = list(array_types) + list(scalar_types)
+    if not all_types:
+        return dtype("float64")
+    return _reduce(lambda a, b: dtype(str(result_type(a, b))), all_types)
+
 def seterr(**kwargs):
     """Stub for floating point error handling."""
     old = {"divide": "warn", "over": "warn", "under": "ignore", "invalid": "warn"}
@@ -2425,8 +2547,56 @@ class dtype:
         else:
             self.name = str(tp) if tp else "float64"
             self._init_from_name(self.name)
-        self.type = type(tp) if tp else float
-        self.str = self.name
+        # self.type: numpy scalar type class
+        _type_map = {
+            "float64": float64, "float32": float32, "float16": float16,
+            "int64": int64, "int32": int32, "int16": int16, "int8": int8,
+            "uint64": uint64, "uint32": uint32, "uint16": uint16, "uint8": uint8,
+            "bool": bool_, "complex128": complex128, "complex64": complex64,
+            "str": str_, "object": object_,
+        }
+        self.type = _type_map.get(self.name, float64)
+        # self.str: typestring format (e.g., "<f8")
+        _typestr = {
+            "float64": "<f8", "float32": "<f4", "float16": "<f2",
+            "int64": "<i8", "int32": "<i4", "int16": "<i2", "int8": "|i1",
+            "uint64": "<u8", "uint32": "<u4", "uint16": "<u2", "uint8": "|u1",
+            "bool": "|b1",
+            "complex128": "<c16", "complex64": "<c8",
+            "object": "|O", "str": "<U",
+        }
+        self.str = _typestr.get(self.name, "<f8")
+        # names/fields: None for non-structured dtypes
+        if not hasattr(self, 'names'):
+            self.names = None
+        if not hasattr(self, 'fields'):
+            self.fields = None
+        # byteorder
+        self.byteorder = '=' if self.name in ('bool',) else '<'
+        if self.kind == 'b':
+            self.byteorder = '|'
+        elif self.itemsize == 1:
+            self.byteorder = '|'
+        self.subdtype = None
+        self.base = self
+        self.metadata = None
+        self.alignment = self.itemsize
+        self.isalignedstruct = False
+        self.isnative = True
+        self.hasobject = False
+        # num: unique dtype number (matching numpy convention loosely)
+        _num_map = {
+            "bool": 0, "int8": 1, "uint8": 2, "int16": 3, "uint16": 4,
+            "int32": 5, "uint32": 6, "int64": 7, "uint64": 8,
+            "float16": 23, "float32": 11, "float64": 12,
+            "complex64": 14, "complex128": 15, "object": 17, "str": 19,
+        }
+        self.num = _num_map.get(self.name, 12)
+        # descr: list of (name, typestr) tuples for structured arrays, or [('', typestr)]
+        if hasattr(self, '_structured') and self._structured is not None:
+            self.descr = [(n, str(self.fields[n][0])) for n in self.names]
+        else:
+            self.descr = [('', self.str)]
 
     def _init_from_name(self, name):
         _info = {
@@ -2447,6 +2617,9 @@ class dtype:
         if hasattr(self, '_structured') and self._structured is not None:
             return repr(self._structured)
         return f"dtype('{self.name}')"
+
+    def __str__(self):
+        return self.name
 
     def __eq__(self, other):
         if isinstance(other, dtype):
@@ -8088,6 +8261,158 @@ class _LibModule:
 
 lib = _LibModule()
 
+def _has_complex(result):
+    """Check if any element in result is complex (avoids shadowed builtin any)."""
+    for r in result:
+        if isinstance(r, complex):
+            return True
+    return False
+
+class _ScimathModule:
+    """Complex-safe math functions (numpy.lib.scimath)."""
+
+    @staticmethod
+    def _to_array(result, shape):
+        """Convert list of float/complex results to an ndarray."""
+        has_cplx = False
+        for r in result:
+            if isinstance(r, complex):
+                has_cplx = True
+                break
+        if has_cplx:
+            return _make_complex_array(result, shape)
+        return _native.array([float(r) for r in result]).reshape(shape)
+
+    @staticmethod
+    def sqrt(x):
+        x = asarray(x)
+        flat = x.flatten()
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            if v < 0:
+                result.append(complex(0, (-v)**0.5))
+            else:
+                result.append(v**0.5)
+        return _ScimathModule._to_array(result, x.shape)
+
+    @staticmethod
+    def log(x):
+        x = asarray(x)
+        flat = x.flatten()
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            if v <= 0:
+                import cmath
+                result.append(cmath.log(v))
+            else:
+                result.append(_math.log(v))
+        return _ScimathModule._to_array(result, x.shape)
+
+    @staticmethod
+    def log10(x):
+        x = asarray(x)
+        flat = x.flatten()
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            if v <= 0:
+                import cmath
+                result.append(cmath.log10(v))
+            else:
+                result.append(_math.log10(v))
+        return _ScimathModule._to_array(result, x.shape)
+
+    @staticmethod
+    def log2(x):
+        x = asarray(x)
+        flat = x.flatten()
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            if v <= 0:
+                import cmath
+                result.append(cmath.log(v) / cmath.log(2))
+            else:
+                result.append(_math.log2(v))
+        return _ScimathModule._to_array(result, x.shape)
+
+    @staticmethod
+    def power(x, p):
+        x = asarray(x)
+        flat = x.flatten()
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            try:
+                r = v ** p
+                result.append(r)
+            except (ValueError, ZeroDivisionError):
+                import cmath
+                result.append(cmath.exp(p * cmath.log(v)))
+        return _ScimathModule._to_array(result, x.shape)
+
+    @staticmethod
+    def arccos(x):
+        x = asarray(x)
+        flat = x.flatten()
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            if abs(v) > 1:
+                import cmath
+                result.append(cmath.acos(v))
+            else:
+                result.append(_math.acos(v))
+        return _ScimathModule._to_array(result, x.shape)
+
+    @staticmethod
+    def arcsin(x):
+        x = asarray(x)
+        flat = x.flatten()
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            if abs(v) > 1:
+                import cmath
+                result.append(cmath.asin(v))
+            else:
+                result.append(_math.asin(v))
+        return _ScimathModule._to_array(result, x.shape)
+
+lib.scimath = _ScimathModule()
+
+class NumpyVersion:
+    """Minimal numpy version comparison class."""
+    def __init__(self, vstring):
+        self.vstring = vstring
+        parts = vstring.split('.')
+        self.major = int(parts[0]) if len(parts) > 0 else 0
+        self.minor = int(parts[1]) if len(parts) > 1 else 0
+        self.bugfix = int(parts[2].split('rc')[0].split('a')[0].split('b')[0]) if len(parts) > 2 else 0
+    def __repr__(self):
+        return f"NumpyVersion('{self.vstring}')"
+    def __str__(self):
+        return self.vstring
+    def __lt__(self, other):
+        if isinstance(other, str): other = NumpyVersion(other)
+        return (self.major, self.minor, self.bugfix) < (other.major, other.minor, other.bugfix)
+    def __le__(self, other):
+        if isinstance(other, str): other = NumpyVersion(other)
+        return (self.major, self.minor, self.bugfix) <= (other.major, other.minor, other.bugfix)
+    def __gt__(self, other):
+        if isinstance(other, str): other = NumpyVersion(other)
+        return (self.major, self.minor, self.bugfix) > (other.major, other.minor, other.bugfix)
+    def __ge__(self, other):
+        if isinstance(other, str): other = NumpyVersion(other)
+        return (self.major, self.minor, self.bugfix) >= (other.major, other.minor, other.bugfix)
+    def __eq__(self, other):
+        if isinstance(other, str): other = NumpyVersion(other)
+        return (self.major, self.minor, self.bugfix) == (other.major, other.minor, other.bugfix)
+
+lib.NumpyVersion = NumpyVersion
+
 
 # --- testing module ---------------------------------------------------------
 class _TestingModule:
@@ -8294,6 +8619,11 @@ class _ExceptionsModule:
     RankWarning = type('RankWarning', (UserWarning,), {})
     TooHardError = type('TooHardError', (RuntimeError,), {})
 exceptions = _ExceptionsModule()
+exceptions.__name__ = 'numpy.exceptions'
+
+# Expose exception classes at top level (sklearn fallback path)
+ComplexWarning = exceptions.ComplexWarning
+VisibleDeprecationWarning = exceptions.VisibleDeprecationWarning
 
 # np.matlib stub
 class _MatlibModule:

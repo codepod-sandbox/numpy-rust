@@ -7660,6 +7660,174 @@ def test_t37_tracemalloc_constants():
     assert_eq(np.use_hugepage, 0)
 
 
+# ============================================================================
+# Tier 38: pandas/sklearn/scipy compatibility
+# ============================================================================
+
+def test_t38_dtype_str_typestring():
+    """dtype.str should be typestring format like '<f8', not 'float64'."""
+    import numpy as np
+    assert_eq(np.dtype("float64").str, "<f8")
+    assert_eq(np.dtype("float32").str, "<f4")
+    assert_eq(np.dtype("int64").str, "<i8")
+    assert_eq(np.dtype("int32").str, "<i4")
+    assert_eq(np.dtype("bool").str, "|b1")
+    assert_eq(np.dtype("uint8").str, "|u1")
+    assert_eq(np.dtype("complex128").str, "<c16")
+
+def test_t38_dtype_names_fields_none():
+    """Non-structured dtypes should have names=None and fields=None."""
+    import numpy as np
+    dt = np.dtype("float64")
+    assert dt.names is None, f"Expected None, got {dt.names}"
+    assert dt.fields is None, f"Expected None, got {dt.fields}"
+
+def test_t38_dtype_type_class():
+    """dtype.type should be the numpy scalar type class."""
+    import numpy as np
+    assert np.dtype("float64").type is np.float64, f"got {np.dtype('float64').type}"
+    assert np.dtype("int32").type is np.int32, f"got {np.dtype('int32').type}"
+    assert np.dtype("bool").type is np.bool_, f"got {np.dtype('bool').type}"
+    assert np.dtype("complex128").type is np.complex128
+
+def test_t38_dtype_byteorder():
+    """dtype should have byteorder attribute."""
+    import numpy as np
+    dt = np.dtype("float64")
+    assert hasattr(dt, 'byteorder'), "dtype missing byteorder"
+    assert dt.byteorder in ('<', '>', '=', '|'), f"bad byteorder: {dt.byteorder}"
+
+def test_t38_dtype_extra_attrs():
+    """dtype should have subdtype, base, metadata, alignment, num, descr."""
+    import numpy as np
+    dt = np.dtype("float64")
+    assert dt.subdtype is None
+    assert dt.base is dt
+    assert dt.metadata is None
+    assert dt.alignment > 0
+    assert isinstance(dt.num, int)
+    assert dt.isalignedstruct == False
+    assert dt.isnative == True
+    assert dt.hasobject == False
+    assert isinstance(dt.descr, list)
+
+def test_t38_isinstance_integer():
+    """isinstance(3, np.integer) should work."""
+    import numpy as np
+    assert isinstance(3, np.integer), "int should be np.integer"
+    assert isinstance(3, np.signedinteger), "int should be np.signedinteger"
+    assert isinstance(3, np.number), "int should be np.number"
+    assert isinstance(3, np.generic), "int should be np.generic"
+
+def test_t38_isinstance_floating():
+    """isinstance(3.14, np.floating) should work."""
+    import numpy as np
+    assert isinstance(3.14, np.floating), "float should be np.floating"
+    assert isinstance(3.14, np.inexact), "float should be np.inexact"
+    assert isinstance(3.14, np.number), "float should be np.number"
+    assert not isinstance(3.14, np.integer), "float should not be np.integer"
+
+def test_t38_isinstance_complex():
+    """isinstance(1+2j, np.complexfloating) should work."""
+    import numpy as np
+    assert isinstance(1+2j, np.complexfloating), "complex should be np.complexfloating"
+    assert isinstance(1+2j, np.inexact), "complex should be np.inexact"
+    assert not isinstance(1+2j, np.floating), "complex should not be np.floating"
+
+def test_t38_isinstance_bool():
+    """isinstance(True, np.bool_) should work (bool is int subclass)."""
+    import numpy as np
+    assert isinstance(True, np.bool_), "bool should be np.bool_"
+    # bool is NOT a np.floating
+    assert not isinstance(True, np.floating), "bool should not be np.floating"
+
+def test_t38_find_common_type():
+    """find_common_type should work."""
+    import numpy as np
+    dt = np.find_common_type([np.dtype("float32"), np.dtype("int32")], [])
+    # float32+int32 -> float64 (precision preservation) is correct
+    assert str(dt) == "float64", f"got {dt}"
+    dt2 = np.find_common_type([], [np.dtype("float64")])
+    assert str(dt2) == "float64"
+    dt3 = np.find_common_type([np.dtype("float64"), np.dtype("float64")], [])
+    assert str(dt3) == "float64"
+
+def test_t38_complex_alias():
+    """np.complex_ should be alias for complex128."""
+    import numpy as np
+    assert np.complex_ is np.complex128 or np.complex_ == np.complex128
+
+def test_t38_uint_alias():
+    """np.uint should exist."""
+    import numpy as np
+    assert hasattr(np, 'uint')
+    assert np.uint == np.uint64 or np.uint is np.uint64
+
+def test_t38_long_ulong():
+    """np.long and np.ulong should exist."""
+    import numpy as np
+    assert hasattr(np, 'long')
+    assert hasattr(np, 'ulong')
+
+def test_t38_lib_scimath_sqrt():
+    """lib.scimath.sqrt should return complex for negative input."""
+    import numpy as np
+    result = np.lib.scimath.sqrt(np.array([-1.0]))
+    flat = result.flatten()
+    # Should be approximately 1j
+    v = flat[0]
+    assert isinstance(v, complex), f"expected complex, got {type(v)}: {v}"
+
+def test_t38_lib_scimath_log():
+    """lib.scimath.log should return complex for negative input."""
+    import numpy as np
+    result = np.lib.scimath.log(np.array([-1.0]))
+    flat = result.flatten()
+    v = flat[0]
+    assert isinstance(v, complex), f"expected complex, got {type(v)}: {v}"
+
+def test_t38_lib_numpyversion():
+    """lib.NumpyVersion should support comparison."""
+    import numpy as np
+    v = np.lib.NumpyVersion("1.26.0")
+    assert v >= "1.25.0"
+    assert v < "2.0.0"
+    assert str(v) == "1.26.0"
+
+def test_t38_exceptions_importable():
+    """numpy.exceptions should have ComplexWarning etc."""
+    import numpy as np
+    assert hasattr(np.exceptions, 'ComplexWarning')
+    assert hasattr(np.exceptions, 'VisibleDeprecationWarning')
+    assert hasattr(np.exceptions, 'AxisError')
+
+def test_t38_toplevel_warnings():
+    """ComplexWarning and VisibleDeprecationWarning at top level."""
+    import numpy as np
+    assert hasattr(np, 'ComplexWarning')
+    assert hasattr(np, 'VisibleDeprecationWarning')
+
+def test_t38_dtype_descr():
+    """dtype.descr should be [('', typestr)] for simple dtypes."""
+    import numpy as np
+    dt = np.dtype("float64")
+    assert isinstance(dt.descr, list)
+    assert len(dt.descr) == 1
+    assert dt.descr[0][0] == ''
+
+def test_t38_dtype_kind_char():
+    """dtype.kind and dtype.char should be correct."""
+    import numpy as np
+    assert_eq(np.dtype("float64").kind, "f")
+    assert_eq(np.dtype("float64").char, "d")
+    assert_eq(np.dtype("int32").kind, "i")
+    assert_eq(np.dtype("int32").char, "l")
+    assert_eq(np.dtype("bool").kind, "b")
+    assert_eq(np.dtype("bool").char, "?")
+    assert_eq(np.dtype("complex128").kind, "c")
+    assert_eq(np.dtype("uint8").kind, "u")
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
