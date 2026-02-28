@@ -4121,6 +4121,179 @@ def test_dtype_from_python_float():
     d = np.dtype(float)
     assert_eq(d.name, "float64", "dtype(float).name")
 
+
+# --- Tier 24 Group B: Fix Silent Wrong Results ---
+
+def test_logical_and_broadcast():
+    """logical_and should broadcast arrays of different shapes."""
+    result = np.logical_and(np.array([[1.0,0.0],[1.0,1.0]]).reshape((2,2)), np.array([1.0,0.0]))
+    assert_eq(result.shape, (2, 2), "logical_and broadcast shape")
+    assert_close(float(result[0][0]), 1.0, msg="logical_and broadcast [0,0]")
+    assert_close(float(result[0][1]), 0.0, msg="logical_and broadcast [0,1]")
+    assert_close(float(result[1][0]), 1.0, msg="logical_and broadcast [1,0]")
+    assert_close(float(result[1][1]), 0.0, msg="logical_and broadcast [1,1]")
+
+def test_logical_or_broadcast():
+    """logical_or should broadcast arrays of different shapes."""
+    result = np.logical_or(np.array([[0.0,0.0],[1.0,0.0]]).reshape((2,2)), np.array([0.0,1.0]))
+    assert_eq(result.shape, (2, 2), "logical_or broadcast shape")
+    assert_close(float(result[0][0]), 0.0, msg="logical_or broadcast [0,0]")
+    assert_close(float(result[0][1]), 1.0, msg="logical_or broadcast [0,1]")
+    assert_close(float(result[1][0]), 1.0, msg="logical_or broadcast [1,0]")
+    assert_close(float(result[1][1]), 1.0, msg="logical_or broadcast [1,1]")
+
+def test_copysign_zero():
+    """copysign(5.0, 0.0) should return 5.0, not 0.0."""
+    result = np.copysign(5.0, 0.0)
+    assert_close(float(result[0]), 5.0, msg="copysign(5.0, 0.0)")
+
+def test_copysign_neg_zero():
+    """copysign(5.0, -1.0) should return -5.0."""
+    result = np.copysign(5.0, -1.0)
+    assert_close(float(result[0]), -5.0, msg="copysign(5.0, -1.0)")
+
+def test_copysign_array():
+    """copysign([1,-2,3], [-1,1,-1]) should return [-1, 2, -3]."""
+    result = np.copysign([1,-2,3], [-1,1,-1])
+    assert_close(float(result[0]), -1.0, msg="copysign array [0]")
+    assert_close(float(result[1]), 2.0, msg="copysign array [1]")
+    assert_close(float(result[2]), -3.0, msg="copysign array [2]")
+
+def test_array_ndmin():
+    """array([1,2,3], ndmin=2) should have shape (1, 3)."""
+    result = np.array([1, 2, 3], ndmin=2)
+    assert_eq(result.shape, (1, 3), "array ndmin=2 shape")
+    assert_close(float(result[0][0]), 1.0, msg="array ndmin=2 [0,0]")
+    assert_close(float(result[0][2]), 3.0, msg="array ndmin=2 [0,2]")
+
+def test_array_ndmin_already():
+    """array([[1,2]], ndmin=2) should have shape (1, 2) unchanged."""
+    result = np.array([[1.0, 2.0]], ndmin=2)
+    assert_eq(result.shape, (1, 2), "array ndmin=2 already 2d shape")
+
+def test_subtract_reduce():
+    """subtract.reduce([10, 3, 2, 1]) should return 4 (10-3-2-1)."""
+    result = np.subtract.reduce([10, 3, 2, 1])
+    assert_close(float(result), 4.0, msg="subtract.reduce")
+
+# ---------------------------------------------------------------------------
+# Tier 24C - Bool arrays, sort dtype, fromiter, fromstring, newaxis, type stubs
+# ---------------------------------------------------------------------------
+
+def test_array_bool():
+    """array([True, False, True]) should produce values [1, 0, 1]."""
+    a = np.array([True, False, True])
+    assert_close(float(a[0]), 1.0, msg="bool array [0]")
+    assert_close(float(a[1]), 0.0, msg="bool array [1]")
+    assert_close(float(a[2]), 1.0, msg="bool array [2]")
+
+def test_sort_int_dtype():
+    """sort(array([3, 1, 2])) should produce [1, 2, 3] with correct ordering."""
+    a = np.array([3, 1, 2])
+    result = np.sort(a)
+    assert_close(float(result[0]), 1.0, msg="sort int [0]")
+    assert_close(float(result[1]), 2.0, msg="sort int [1]")
+    assert_close(float(result[2]), 3.0, msg="sort int [2]")
+
+def test_newaxis_exists():
+    """newaxis should be None."""
+    assert_eq(np.newaxis, None, "newaxis is None")
+
+def test_fromiter():
+    """fromiter(range(5), dtype='float64') should produce [0, 1, 2, 3, 4]."""
+    a = np.fromiter(range(5), dtype="float64")
+    assert_eq(a.shape, (5,), "fromiter shape")
+    assert_close(float(a[0]), 0.0, msg="fromiter [0]")
+    assert_close(float(a[1]), 1.0, msg="fromiter [1]")
+    assert_close(float(a[4]), 4.0, msg="fromiter [4]")
+
+def test_fromiter_count():
+    """fromiter(range(100), dtype='float64', count=5) should produce [0, 1, 2, 3, 4]."""
+    a = np.fromiter(range(100), dtype="float64", count=5)
+    assert_eq(a.shape, (5,), "fromiter count shape")
+    assert_close(float(a[0]), 0.0, msg="fromiter count [0]")
+    assert_close(float(a[4]), 4.0, msg="fromiter count [4]")
+
+def test_fromstring():
+    """fromstring('1 2 3 4 5') should produce [1, 2, 3, 4, 5]."""
+    a = np.fromstring("1 2 3 4 5")
+    assert_eq(a.shape, (5,), "fromstring shape")
+    assert_close(float(a[0]), 1.0, msg="fromstring [0]")
+    assert_close(float(a[4]), 5.0, msg="fromstring [4]")
+
+def test_fromstring_sep():
+    """fromstring('1,2,3', sep=',') should produce [1, 2, 3]."""
+    a = np.fromstring("1,2,3", sep=",")
+    assert_eq(a.shape, (3,), "fromstring sep shape")
+    assert_close(float(a[0]), 1.0, msg="fromstring sep [0]")
+    assert_close(float(a[2]), 3.0, msg="fromstring sep [2]")
+
+# ---------------------------------------------------------------------------
+# Tier 24A – Fix critical crashes in common patterns
+# ---------------------------------------------------------------------------
+
+def test_where_scalar():
+    """where(condition, scalar, scalar) should broadcast scalars."""
+    result = np.where(np.array([True, False, True]), 1.0, 0.0)
+    assert_close(result[0], 1.0, msg="where scalar [0]")
+    assert_close(result[1], 0.0, msg="where scalar [1]")
+    assert_close(result[2], 1.0, msg="where scalar [2]")
+
+def test_where_scalar_int():
+    """where with integer scalars."""
+    result = np.where(np.array([False, True]), 10, 20)
+    assert_close(result[0], 20.0, msg="where int scalar [0]")
+    assert_close(result[1], 10.0, msg="where int scalar [1]")
+
+def test_maximum_arr_scalar():
+    """maximum(array, scalar) should work element-wise."""
+    result = np.maximum(np.array([-1, 0, 3]), 0)
+    assert_close(result[0], 0.0, msg="maximum arr/scalar [0]")
+    assert_close(result[1], 0.0, msg="maximum arr/scalar [1]")
+    assert_close(result[2], 3.0, msg="maximum arr/scalar [2]")
+
+def test_minimum_arr_scalar():
+    """minimum(array, scalar) should work element-wise."""
+    result = np.minimum(np.array([5, 2, 8]), 4)
+    assert_close(result[0], 4.0, msg="minimum arr/scalar [0]")
+    assert_close(result[1], 2.0, msg="minimum arr/scalar [1]")
+    assert_close(result[2], 4.0, msg="minimum arr/scalar [2]")
+
+def test_isnan_list():
+    """isnan on a plain list should work."""
+    result = np.isnan([1.0, float('nan'), 3.0])
+    assert_close(result[0], 0.0, msg="isnan list [0]")
+    assert_close(result[1], 1.0, msg="isnan list [1]")
+    assert_close(result[2], 0.0, msg="isnan list [2]")
+
+def test_isfinite_list():
+    """isfinite on a plain list should work."""
+    result = np.isfinite([1.0, float('inf'), float('nan')])
+    assert_close(result[0], 1.0, msg="isfinite list [0]")
+    assert_close(result[1], 0.0, msg="isfinite list [1]")
+    assert_close(result[2], 0.0, msg="isfinite list [2]")
+
+def test_linspace_no_endpoint():
+    """linspace with endpoint=False should not include the stop value."""
+    result = np.linspace(0, 1, 5, endpoint=False)
+    expected = [0.0, 0.2, 0.4, 0.6, 0.8]
+    for i in range(5):
+        assert_close(result[i], expected[i], msg="linspace no endpoint [" + str(i) + "]")
+
+def test_quantile_array_q():
+    """quantile with a list of q values."""
+    result = np.quantile(np.array([1, 2, 3, 4, 5]), [0.0, 0.5, 1.0])
+    assert_close(result[0], 1.0, msg="quantile array q [0]")
+    assert_close(result[1], 3.0, msg="quantile array q [1]")
+    assert_close(result[2], 5.0, msg="quantile array q [2]")
+
+def test_percentile_array_q():
+    """percentile with a list of q values."""
+    result = np.percentile(np.array([10, 20, 30, 40]), [25, 50, 75])
+    assert_close(result[0], 17.5, msg="percentile array q [0]")
+    assert_close(result[1], 25.0, msg="percentile array q [1]")
+    assert_close(result[2], 32.5, msg="percentile array q [2]")
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0

@@ -50,6 +50,13 @@ class _ObjectArray:
 
 
 def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=None):
+    result = _array_core(data, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
+    if ndmin > 0 and isinstance(result, ndarray):
+        while result.ndim < ndmin:
+            result = expand_dims(result, 0)
+    return result
+
+def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
     # Check if dtype forces a non-numeric path
     if dtype is not None:
         dt = str(dtype)
@@ -84,6 +91,13 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     if isinstance(data, list) and len(data) > 0 and isinstance(data[0], str):
         # List of strings -> string array
         return _native.array(data)
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], bool):
+        result = _native.array([1.0 if x else 0.0 for x in data])
+        if dtype is not None:
+            dt = str(dtype)
+            if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                result = result.astype(dt)
+        return result
     if isinstance(data, list) and len(data) > 0 and isinstance(data[0], (int, float)):
         result = _native.array([float(x) for x in data])
         if dtype is not None:
@@ -146,9 +160,13 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
     start = float(start)
     stop = float(stop)
     num = int(num)
-    result = _native.linspace(start, stop, num)
-    if retstep:
+    if endpoint:
+        result = _native.linspace(start, stop, num)
         step = (stop - start) / (num - 1) if num > 1 else 0.0
+    else:
+        step = (stop - start) / num if num > 0 else 0.0
+        result = array([start + i * step for i in range(num)])
+    if retstep:
         return result, step
     return result
 
@@ -175,6 +193,15 @@ def eye(N, M=None, k=0, dtype=None, order="C", like=None):
 def where(condition, x=None, y=None):
     if x is None and y is None:
         return nonzero(condition)
+    if not isinstance(condition, ndarray):
+        condition = asarray(condition)
+    # Ensure condition is boolean dtype (native where_ requires bool)
+    if str(condition.dtype) != "bool":
+        condition = condition.astype("bool")
+    if not isinstance(x, ndarray):
+        x = full(condition.shape, float(x))
+    if not isinstance(y, ndarray):
+        y = full(condition.shape, float(y))
     return _native.where_(condition, x, y)
 
 # Import submodules so they're accessible as numpy.linalg etc.
@@ -360,19 +387,28 @@ def ones_like(a, dtype=None, order="K", subok=True, shape=None):
 
 def isnan(x):
     """Check for NaN element-wise."""
-    if isinstance(x, ndarray):
-        return _native.isnan(x)
-    return _math.isnan(x)
+    if not isinstance(x, ndarray):
+        if isinstance(x, (list, tuple)):
+            x = asarray(x)
+        else:
+            return _math.isnan(x)
+    return _native.isnan(x)
 
 def isfinite(x):
-    if isinstance(x, ndarray):
-        return _native.isfinite(x)
-    return _math.isfinite(x)
+    if not isinstance(x, ndarray):
+        if isinstance(x, (list, tuple)):
+            x = asarray(x)
+        else:
+            return _math.isfinite(x)
+    return _native.isfinite(x)
 
 def isinf(x):
-    if isinstance(x, ndarray):
-        return _native.isinf(x)
-    return _math.isinf(x)
+    if not isinstance(x, ndarray):
+        if isinstance(x, (list, tuple)):
+            x = asarray(x)
+        else:
+            return _math.isinf(x)
+    return _native.isinf(x)
 
 def isscalar(x):
     """Return True if x is a scalar (not an array)."""
@@ -644,7 +680,10 @@ def copysign(x1, x2):
     """Change the sign of x1 to that of x2, element-wise."""
     x1 = asarray(x1)
     x2 = asarray(x2)
-    return abs(x1) * sign(x2)
+    f1 = x1.flatten().tolist()
+    f2 = x2.flatten().tolist()
+    result = [_math.copysign(a, b) for a, b in zip(f1, f2)]
+    return array(result).reshape(x1.shape)
 
 def heaviside(x1, x2):
     """Compute the Heaviside step function.
@@ -818,6 +857,10 @@ def _apply_keepdims(result, a, axis):
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
+    if isinstance(q, (list, tuple, ndarray)):
+        q_list = q.tolist() if isinstance(q, ndarray) else list(q)
+        results = [_native.quantile(a, float(qi), axis) for qi in q_list]
+        return array(results) if axis is None else stack(results)
     result = _native.quantile(a, float(q), axis)
     if keepdims and axis is not None:
         result = _apply_keepdims(result, a, axis)
@@ -826,6 +869,10 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
 def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
+    if isinstance(q, (list, tuple, ndarray)):
+        q_list = q.tolist() if isinstance(q, ndarray) else list(q)
+        results = [_native.percentile(a, float(qi), axis) for qi in q_list]
+        return array(results) if axis is None else stack(results)
     result = _native.percentile(a, float(q), axis)
     if keepdims and axis is not None:
         result = _apply_keepdims(result, a, axis)
@@ -1803,8 +1850,27 @@ def indices(dimensions, dtype=None, sparse=False):
 
     return grids  # Return as list (NumPy returns ndarray but list of arrays is compatible)
 
-def fromiter(iterable, dtype, count=-1):
-    return array(list(iterable))
+def fromiter(iterable, dtype=None, count=-1):
+    if count > 0:
+        data = []
+        for i, val in enumerate(iterable):
+            if i >= count:
+                break
+            data.append(val)
+    else:
+        data = list(iterable)
+    return array(data, dtype=dtype)
+
+def fromstring(string, dtype=None, count=-1, sep=''):
+    """Parse array from a string."""
+    if sep:
+        parts = string.split(sep)
+        data = [float(p.strip()) for p in parts if p.strip()]
+    else:
+        data = [float(x) for x in string.split()]
+    if count > 0:
+        data = data[:count]
+    return array(data, dtype=dtype)
 
 def array_equal(a1, a2, equal_nan=False):
     """True if two arrays have the same shape and elements."""
@@ -1849,11 +1915,16 @@ def base_repr(number, base=2, padding=0):
     return "0" * padding + "".join(reversed(digits))
 
 def sort(a, axis=-1, kind=None, order=None):
-    if isinstance(a, ndarray):
-        if axis is not None and axis < 0:
-            axis = a.ndim + axis
-        return a.sort(axis)
-    return array(sorted(a))
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    original_dtype = str(a.dtype)
+    if axis is not None and axis < 0:
+        axis = a.ndim + axis
+    result = a.sort(axis)
+    # Preserve original dtype (Rust sort may convert to float64)
+    if original_dtype in ('int32', 'int64') and str(result.dtype) != original_dtype:
+        result = result.astype(original_dtype)
+    return result
 
 def argsort(a, axis=-1, kind=None, order=None):
     if isinstance(a, ndarray):
@@ -2173,30 +2244,36 @@ def less_equal(x1, x2):
     return asarray(x1) <= asarray(x2)
 
 def maximum(x1, x2):
-    if isinstance(x1, ndarray) and isinstance(x2, ndarray):
-        return where(x1 > x2, x1, x2)
-    return x1 if x1 > x2 else x2
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    return where(x1 >= x2, x1, x2)
 
 def minimum(x1, x2):
-    if isinstance(x1, ndarray) and isinstance(x2, ndarray):
-        return where(x1 < x2, x1, x2)
-    return x1 if x1 < x2 else x2
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    return where(x1 <= x2, x1, x2)
 
 def logical_and(x1, x2):
     x1 = asarray(x1)
     x2 = asarray(x2)
+    out_shape = broadcast_shapes(x1.shape, x2.shape)
+    x1 = broadcast_to(x1, out_shape)
+    x2 = broadcast_to(x2, out_shape)
     flat1 = x1.flatten().tolist()
     flat2 = x2.flatten().tolist()
-    result = [bool(a) and bool(b) for a, b in zip(flat1, flat2)]
-    return array(result).reshape(x1.shape)
+    result = [1.0 if (bool(a) and bool(b)) else 0.0 for a, b in zip(flat1, flat2)]
+    return array(result).reshape(out_shape)
 
 def logical_or(x1, x2):
     x1 = asarray(x1)
     x2 = asarray(x2)
+    out_shape = broadcast_shapes(x1.shape, x2.shape)
+    x1 = broadcast_to(x1, out_shape)
+    x2 = broadcast_to(x2, out_shape)
     flat1 = x1.flatten().tolist()
     flat2 = x2.flatten().tolist()
-    result = [bool(a) or bool(b) for a, b in zip(flat1, flat2)]
-    return array(result).reshape(x1.shape)
+    result = [1.0 if (bool(a) or bool(b)) else 0.0 for a, b in zip(flat1, flat2)]
+    return array(result).reshape(out_shape)
 
 def logical_not(x):
     if isinstance(x, ndarray):
@@ -5264,7 +5341,28 @@ maximum = _UfuncWithReduce(_maximum_func, lambda a, axis=None: max(a, axis=axis)
 minimum = _UfuncWithReduce(_minimum_func, lambda a, axis=None: min(a, axis=axis), name='minimum')
 add = _UfuncWithReduce(_add_func, lambda a, axis=None: sum(a, axis=axis), name='add')
 multiply = _UfuncWithReduce(_multiply_func, lambda a, axis=None: prod(a, axis=axis), name='multiply')
-subtract = _UfuncWithReduce(_subtract_func, lambda a, axis=None: _subtract_func(a, axis=axis), name='subtract')
+def _subtract_reduce(a, axis=None):
+    a = asarray(a)
+    if axis is None:
+        flat = a.flatten().tolist()
+        if len(flat) == 0:
+            return array(0.0)
+        result = flat[0]
+        for v in flat[1:]:
+            result = result - v
+        return result
+    sh = list(a.shape)
+    n = sh[axis]
+    if n == 0:
+        new_sh = sh[:axis] + sh[axis+1:]
+        return zeros(tuple(new_sh) if new_sh else (1,))
+    slices = [take(a, [i], axis=axis).squeeze(axis=axis) for i in range(n)]
+    result = slices[0]
+    for s in slices[1:]:
+        result = result - s
+    return result
+
+subtract = _UfuncWithReduce(_subtract_func, _subtract_reduce, name='subtract')
 
 
 # --- dtypes module stub -----------------------------------------------------
