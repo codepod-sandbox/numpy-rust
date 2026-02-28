@@ -368,12 +368,12 @@ These items are not yet implemented but may be needed for full compatibility:
 
 ---
 
-## Usage with wasmsand
+## Usage with codepod
 
-This repo is included as a git submodule in wasmsand at `packages/numpy-rust`. The wasmsand Python binary links it via a Cargo feature flag:
+This repo is included as a git submodule in codepod at `packages/numpy-rust`. The codepod Python binary links it via a Cargo feature flag:
 
 ```bash
-cargo build -p wasmsand-python --features numpy --target wasm32-wasip1
+cargo build -p codepod-python --features numpy --target wasm32-wasip1
 ```
 
 ## Development
@@ -391,7 +391,7 @@ cargo build -p wasmsand-python --features numpy --target wasm32-wasip1
 # Build (native)
 cargo build --workspace --all-features
 
-# Build (WASM, as used by wasmsand)
+# Build (WASM, as used by codepod)
 cargo build -p numpy-rust-wasm --target wasm32-wasip1
 
 # Rust unit tests
