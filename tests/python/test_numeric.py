@@ -1997,7 +1997,7 @@ def test_matmul_func():
     assert_close(c[1][0], 43.0)
     assert_close(c[1][1], 50.0)
 
-def test_matmul_operator():
+def test_matmul_operator_v2():
     a = np.array([[1.0, 2.0], [3.0, 4.0]])
     b = np.array([[5.0, 6.0], [7.0, 8.0]])
     c = a @ b
@@ -3543,7 +3543,7 @@ def test_cross_3d_anticommutative():
     assert_close(float(r1[1]), -float(r2[1]))
     assert_close(float(r1[2]), -float(r2[2]))
 
-def test_column_stack():
+def test_column_stack_v2():
     """column_stack of two 1D arrays gives a 2D array."""
     r = np.column_stack(([1,2,3], [4,5,6]))
     assert_eq(r.shape, (3, 2))
@@ -3562,7 +3562,7 @@ def test_column_stack_three():
     assert_close(float(r[0][1]), 3.0)
     assert_close(float(r[0][2]), 5.0)
 
-def test_row_stack():
+def test_row_stack_v2():
     """row_stack is an alias for vstack."""
     assert np.row_stack is np.vstack
 
@@ -3871,7 +3871,7 @@ def test_histogram_custom_bins():
     assert_close(float(edges[0]), 0.0)
     assert_close(float(edges[3]), 6.0)
 
-def test_isin():
+def test_isin_v2():
     """isin checks element membership."""
     r = np.isin(np.array([1, 2, 3, 4]), np.array([2, 4]))
     # Should be [False, True, False, True] -> [0, 1, 0, 1]
@@ -4686,7 +4686,7 @@ def test_random_weibull():
 
 # --- Array manipulation ---
 
-def test_lexsort():
+def test_lexsort_v2():
     # Sort by last key first (surname), then first key (firstname)
     surnames = np.array([1.0, 3.0, 2.0, 1.0])
     firstnames = np.array([4.0, 1.0, 2.0, 3.0])
@@ -4697,7 +4697,7 @@ def test_lexsort():
     assert int(idx_list[0]) == 3 or int(idx_list[1]) == 3  # one of first two has surname=1
     assert int(idx_list[-1]) == 1  # surname=3 is last
 
-def test_partition():
+def test_partition_v2():
     a = np.array([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0])
     p = np.partition(a, 3)
     # Element at index 3 should be the 4th smallest
@@ -4705,7 +4705,7 @@ def test_partition():
     sorted_list = sorted(a.tolist())
     assert_close(float(p[3]), sorted_list[3])
 
-def test_argpartition():
+def test_argpartition_v2():
     a = np.array([3.0, 1.0, 4.0, 1.0, 5.0])
     idx = np.argpartition(a, 2)
     assert len(idx.tolist()) == 5
@@ -4724,7 +4724,7 @@ def test_fill_diagonal_func():
     assert_close(float(r[2][2]), 5.0)
     assert_close(float(r[0][1]), 0.0)
 
-def test_dsplit():
+def test_dsplit_v2():
     a = np.arange(0, 24).reshape((2, 3, 4))
     parts = np.dsplit(a, 2)
     assert len(parts) == 2
@@ -4742,19 +4742,19 @@ def test_array_split_uneven():
 
 # --- Math functions ---
 
-def test_sinc():
+def test_sinc_v2():
     assert_close(float(np.sinc(np.array([0.0]))[0]), 1.0)  # sinc(0) = 1
     # sinc(1) = sin(pi)/pi = 0
     assert abs(float(np.sinc(np.array([1.0]))[0])) < 1e-10
 
-def test_heaviside():
+def test_heaviside_v2():
     a = np.array([-1.0, 0.0, 1.0])
     h = np.heaviside(a, np.array([0.5, 0.5, 0.5]))
     assert_close(float(h[0]), 0.0)
     assert_close(float(h[1]), 0.5)
     assert_close(float(h[2]), 1.0)
 
-def test_modf():
+def test_modf_v2():
     a = np.array([1.5, -2.3])
     frac, intg = np.modf(a)
     assert_close(float(frac[0]), 0.5)
@@ -4762,14 +4762,14 @@ def test_modf():
     assert_close(float(frac[1]), -0.3, tol=1e-5)
     assert_close(float(intg[1]), -2.0)
 
-def test_ediff1d():
+def test_ediff1d_v2():
     a = np.array([1.0, 3.0, 6.0, 10.0])
     d = np.ediff1d(a)
     assert_close(float(d[0]), 2.0)
     assert_close(float(d[1]), 3.0)
     assert_close(float(d[2]), 4.0)
 
-def test_reciprocal():
+def test_reciprocal_v2():
     a = np.array([1.0, 2.0, 4.0])
     r = np.reciprocal(a)
     assert_close(float(r[0]), 1.0)
@@ -4778,30 +4778,30 @@ def test_reciprocal():
 
 # --- Window functions ---
 
-def test_bartlett():
+def test_bartlett_v2():
     w = np.bartlett(5)
     assert len(w.tolist()) == 5
     assert_close(float(w[0]), 0.0)  # starts at 0
     assert_close(float(w[2]), 1.0)  # peak in middle
 
-def test_blackman():
+def test_blackman_v2():
     w = np.blackman(5)
     assert len(w.tolist()) == 5
     # Blackman window starts near 0
     assert abs(float(w[0])) < 0.01
 
-def test_hamming():
+def test_hamming_v2():
     w = np.hamming(5)
     assert len(w.tolist()) == 5
     # Hamming window has non-zero endpoints
     assert float(w[0]) > 0.05
 
-def test_hanning():
+def test_hanning_v2():
     w = np.hanning(5)
     assert len(w.tolist()) == 5
     assert_close(float(w[0]), 0.0)  # starts at 0
 
-def test_kaiser():
+def test_kaiser_v2():
     w = np.kaiser(5, 5.0)
     assert len(w.tolist()) == 5
     # Kaiser window peaks in the middle
@@ -4809,14 +4809,14 @@ def test_kaiser():
 
 # --- Bessel function ---
 
-def test_i0():
+def test_i0_v2():
     # i0(0) = 1.0
     r = np.i0(np.array([0.0]))
     assert_close(float(r[0]), 1.0)
 
 # --- Iteration utilities ---
 
-def test_ndenumerate():
+def test_ndenumerate_v2():
     a = np.array([[1.0, 2.0], [3.0, 4.0]])
     items = list(np.ndenumerate(a))
     assert len(items) == 4
@@ -4825,7 +4825,7 @@ def test_ndenumerate():
     assert idx0 == (0, 0)
     assert_close(float(val0), 1.0)
 
-def test_ndindex():
+def test_ndindex_v2():
     indices = list(np.ndindex(2, 3))
     assert len(indices) == 6
     assert indices[0] == (0, 0)
@@ -4833,14 +4833,14 @@ def test_ndindex():
 
 # --- Polynomial functions ---
 
-def test_roots_quadratic():
+def test_roots_quadratic_v2():
     # x^2 - 5x + 6 = (x-2)(x-3), roots: 2, 3
     r = np.roots(np.array([1.0, -5.0, 6.0]))
     r_list = sorted(r.tolist())
     assert_close(r_list[0], 2.0, tol=0.1)
     assert_close(r_list[1], 3.0, tol=0.1)
 
-def test_polyadd():
+def test_polyadd_v2():
     # (x + 1) + (x + 2) = 2x + 3
     p1 = np.array([1.0, 1.0])
     p2 = np.array([1.0, 2.0])
@@ -4857,7 +4857,7 @@ def test_polysub():
     assert_close(r_list[0], 2.0)
     assert_close(r_list[1], 1.0)
 
-def test_polymul():
+def test_polymul_v2():
     # (x + 1)(x + 1) = x^2 + 2x + 1
     p = np.array([1.0, 1.0])
     r = np.polymul(p, p)
@@ -4866,7 +4866,7 @@ def test_polymul():
     assert_close(r_list[1], 2.0)
     assert_close(r_list[2], 1.0)
 
-def test_polyder():
+def test_polyder_v2():
     # d/dx (x^2 + 2x + 1) = 2x + 2
     p = np.array([1.0, 2.0, 1.0])
     r = np.polyder(p)
@@ -4874,7 +4874,7 @@ def test_polyder():
     assert_close(r_list[0], 2.0)
     assert_close(r_list[1], 2.0)
 
-def test_polyint():
+def test_polyint_v2():
     # integral of (2x + 2) = x^2 + 2x + C (C=0)
     p = np.array([2.0, 2.0])
     r = np.polyint(p)
@@ -4883,7 +4883,7 @@ def test_polyint():
     assert_close(r_list[1], 2.0)
     assert_close(r_list[2], 0.0)
 
-def test_polydiv():
+def test_polydiv_v2():
     # (x^2 + 2x + 1) / (x + 1) = (x + 1), remainder 0
     p1 = np.array([1.0, 2.0, 1.0])
     p2 = np.array([1.0, 1.0])
@@ -4922,7 +4922,7 @@ def test_savez():
 
 # --- Misc ---
 
-def test_real_if_close():
+def test_real_if_close_v2():
     a = np.array([1.0, 2.0])
     # For real arrays, real_if_close should return the array unchanged
     try:
@@ -4930,7 +4930,7 @@ def test_real_if_close():
     except Exception:
         pass  # OK if not fully supported
 
-def test_copyto():
+def test_copyto_v2():
     src = np.array([1.0, 2.0, 3.0])
     dst = np.zeros(3)
     result = np.copyto(dst, src)
@@ -4939,14 +4939,14 @@ def test_copyto():
     assert_close(float(result[1]), 2.0)
     assert_close(float(result[2]), 3.0)
 
-def test_apply_over_axes():
+def test_apply_over_axes_v2():
     a = np.arange(0, 24).reshape((2, 3, 4))
     # Apply sum over axis 0 only (simpler test that works with this implementation)
     r = np.apply_over_axes(np.sum, a, [0])
     # After summing axis 0 of (2,3,4), result should be (3,4)
     assert r.shape == (3, 4)
 
-def test_piecewise():
+def test_piecewise_v2():
     x = np.array([-1.0, 0.0, 1.0, 2.0])
     condlist = [x < np.zeros(4), x >= np.zeros(4)]
     funclist = [-1.0, 1.0]

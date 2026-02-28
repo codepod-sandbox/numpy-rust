@@ -1,287 +1,372 @@
 # numpy-rust
 
-A NumPy implementation in Rust, compiled to WebAssembly. Provides core ndarray operations — array creation, slicing, broadcasting, linear algebra, FFT, and random number generation — for Python code running inside [wasmsand](https://github.com/sunnymar/wasmsand).
+A NumPy implementation in Rust, compiled to WebAssembly. Provides ~95% of the NumPy API surface commonly used in data science and ML code — array creation, manipulation, linear algebra, FFT, random distributions, masked arrays, and more — for Python code running inside sandboxed environments.
+
+**425 Rust + 877 Python = 1,302 tests, 0 failures**
 
 ## How it works
 
 ```
 Python code (import numpy as np)
         │
-   numpy/ package (Python shims + dtype stubs)
+   numpy/ package (Python wrappers + submodules)
         │
    _numpy_native (Rust ← RustPython bindings)
         │
    numpy-rust-core (ndarray, nalgebra, rustfft, rand)
 ```
 
-The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the `ndarray` crate. The Python bindings (`numpy-rust-python`) expose these as a native RustPython module. A thin Python package (`python/numpy/`) provides the familiar `import numpy as np` interface with dtype aliases, constants, and wrapper functions for API coverage.
+The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the `ndarray` crate with support for 8 dtypes, broadcasting, and 400+ operations. The Python bindings (`numpy-rust-python`) expose these as a native RustPython module with 77 ndarray methods. A Python package (`python/numpy/`) provides the familiar `import numpy as np` interface with ~420 functions across 8 submodules.
 
 ## Crates
 
 | Crate | Description |
 |---|---|
-| `numpy-rust-core` | Core ndarray implementation (dtypes, indexing, slicing, math, broadcasting) |
+| `numpy-rust-core` | Core ndarray implementation (dtypes, broadcasting, math, linalg, FFT, random) |
 | `numpy-rust-python` | RustPython bindings — exposes `_numpy_native` module |
 | `numpy-rust-wasm` | Binary entry point (RustPython + numpy, compiles to WASI) |
+
+---
 
 ## Supported features
 
 ### Data types
 
-| Type | Aliases | Notes |
-|------|---------|-------|
-| `bool` | `bool_` | |
-| `int32` | `intc` | |
-| `int64` | `int_`, `intp` | Default integer type |
-| `float32` | `single` | |
-| `float64` | `double`, `float_` | Default float type |
-| `complex64` | `csingle` | |
-| `complex128` | `cdouble` | |
+| Type | Aliases | Storage |
+|------|---------|---------|
+| `bool` | `bool_` | Native bool |
+| `int32` | `intc` | Native i32 |
+| `int64` | `int_`, `intp` | Native i64 (default integer) |
+| `float32` | `single` | Native f32 |
+| `float64` | `double`, `float_` | Native f64 (default float) |
+| `complex64` | `csingle` | Native (f32, f32) |
+| `complex128` | `cdouble` | Native (f64, f64) |
 | `str` | `str_`, `unicode_` | Variable-length strings |
 
-Other dtype aliases (`float16`, `uint8`, `uint16`, etc.) are accepted for API compatibility but are stored internally as the nearest supported type.
+Additional dtype aliases (`float16`, `int8`, `int16`, `uint8`, `uint16`, `uint32`, `uint64`) are accepted and stored as the nearest native type. `iinfo()` and `finfo()` provide type introspection for all numeric types.
 
-### Array creation
+Full type hierarchy for `issubdtype` checks: `generic > number > integer/inexact > signedinteger/unsignedinteger/floating/complexfloating` with concrete types (`int32`, `float64`, etc.) as leaves.
 
-| Function | Status | Notes |
-|----------|--------|-------|
-| `np.array(data)` | Full | Nested lists, mixed int/float |
-| `np.zeros(shape)` | Full | |
-| `np.ones(shape)` | Full | |
-| `np.full(shape, value)` | Full | |
-| `np.arange(start, stop, step)` | Full | `dtype` param supported in core |
-| `np.linspace(start, stop, num)` | Full | `retstep=True` supported |
-| `np.eye(N, M, k)` | Full | Rectangular + diagonal offset |
-| `np.zeros_like(a)` | Full | |
-| `np.ones_like(a)` | Full | |
-| `np.full_like(a, value)` | Full | |
-| `np.copy(a)` | Full | |
-| `np.asarray(a)` | Full | |
-| `np.fromiter(iterable, dtype)` | Full | |
-| `np.empty(shape)` | Stub | Returns zeros |
-| `np.empty_like(a)` | Stub | Returns zeros |
+### Array creation (17 functions)
+
+| Function | Notes |
+|----------|-------|
+| `array`, `asarray`, `ascontiguousarray`, `asarray_chkfinite` | From data/lists |
+| `zeros`, `ones`, `full`, `empty` | Constant fill (`empty` returns zeros) |
+| `zeros_like`, `ones_like`, `full_like`, `empty_like` | Match shape/dtype |
+| `arange` | Evenly spaced values with step |
+| `linspace`, `logspace`, `geomspace` | Linear/log/geometric spacing, `endpoint` and `dtype` params |
+| `eye`, `identity` | Identity matrices with offset |
+| `fromiter`, `fromstring`, `fromfunction`, `frombuffer` | From iterables/strings/callables/bytes |
+| `copy` | Deep copy |
 
 ### Indexing and slicing
 
-| Feature | Status | Example |
-|---------|--------|---------|
-| Integer indexing | Full | `a[0]`, `a[1, 2]` |
-| Slice indexing | Full | `a[1:4]`, `a[::2]`, `a[::-1]` |
-| Boolean mask indexing | Full | `a[a > 3]` |
-| Fancy indexing (list) | Full | `a[[0, 2, 4]]` |
-| Fancy indexing (array) | Full | `a[np.array([1, 3])]` |
-| Assignment | Full | `a[0] = 5`, `a[[0, 2]] = arr` |
+| Feature | Example |
+|---------|---------|
+| Integer indexing | `a[0]`, `a[1, 2]` |
+| Slice indexing | `a[1:4]`, `a[::2]`, `a[::-1]` |
+| Boolean mask indexing | `a[a > 3]` |
+| Fancy indexing (list/array) | `a[[0, 2, 4]]`, `a[np.array([1, 3])]` |
+| Assignment | `a[0] = 5`, `a[a > 0] = 0`, `a[[0, 2]] = arr` |
+| Ellipsis | `a[..., 0]` |
 
-### Arithmetic operators
+### Operators
 
-All operators support broadcasting and in-place variants.
+All operators support broadcasting and in-place variants (`+=`, `-=`, etc.).
 
-| Operator | In-place | Notes |
-|----------|----------|-------|
-| `+` `-` `*` `/` | `+=` `-=` `*=` `/=` | Element-wise |
-| `**` | `**=` | Power |
-| `//` | `//=` | Floor division (toward -inf, NumPy semantics) |
-| `%` | `%=` | Modulo (sign of divisor, NumPy semantics) |
-| `@` | `@=` | Matrix multiplication |
-| `-a` | | Unary negation |
+| Category | Operators |
+|----------|-----------|
+| Arithmetic | `+` `-` `*` `/` `**` `//` `%` `@` (matmul) |
+| Comparison | `==` `!=` `<` `<=` `>` `>=` (return bool arrays) |
+| Bitwise/Logical | `&` `\|` `^` `~` (bool and int arrays) |
+| Unary | `-a`, `+a`, `abs(a)` |
 
-### Comparison operators
+### Reduction operations (31 functions)
 
-`==`, `!=`, `<`, `<=`, `>`, `>=` — all return boolean arrays and support broadcasting.
+All reductions support `axis` (including tuple of axes), `keepdims`, and `ddof` where applicable.
 
-### Bitwise / logical operators
+| Category | Functions |
+|----------|-----------|
+| Basic | `sum`, `prod`, `cumsum`, `cumprod` |
+| Statistics | `mean`, `std`, `var`, `median`, `average` |
+| Extrema | `min`, `max`, `argmin`, `argmax`, `ptp` |
+| Logical | `all`, `any` |
+| NaN-safe | `nansum`, `nanprod`, `nanmean`, `nanstd`, `nanvar`, `nanmin`, `nanmax`, `nanargmin`, `nanargmax`, `nancumsum`, `nancumprod` |
+| Quantiles | `quantile`, `percentile`, `nanquantile`, `nanpercentile`, `nanmedian` |
 
-| Operator | Notes |
-|----------|-------|
-| `&` (and) | Works on boolean arrays |
-| `\|` (or) | Works on boolean arrays |
-| `~` (not) | Works on boolean arrays |
+### Element-wise math (70+ functions)
 
-### Reduction operations
+Available as both `np.func(a)` and `a.func()` methods.
 
-All reductions support `axis` and `keepdims` parameters.
+| Category | Functions |
+|----------|-----------|
+| Trigonometric | `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan`, `arctan2`, `hypot` |
+| Hyperbolic | `sinh`, `cosh`, `tanh`, `arcsinh`, `arccosh`, `arctanh` |
+| Exponential/Log | `exp`, `exp2`, `expm1`, `log`, `log2`, `log10`, `log1p`, `logaddexp`, `logaddexp2` |
+| Rounding | `floor`, `ceil`, `round`, `around`, `rint`, `trunc`, `fix` |
+| Algebraic | `sqrt`, `cbrt`, `square`, `abs`, `fabs`, `sign`, `reciprocal` |
+| Comparison | `maximum`, `minimum`, `fmax`, `fmin`, `clip` |
+| Complex | `real`, `imag`, `conj`, `angle`, `real_if_close` |
+| Angular | `deg2rad`, `rad2deg`, `unwrap`, `sinc` |
+| Bitwise | `bitwise_and`, `bitwise_or`, `bitwise_xor`, `bitwise_not`, `left_shift`, `right_shift` |
+| Logical | `logical_and`, `logical_or`, `logical_xor`, `logical_not` |
+| Special | `copysign`, `heaviside`, `nextafter`, `spacing`, `modf`, `divmod_`, `gcd`, `lcm` |
+| Floating | `isnan`, `isinf`, `isfinite`, `signbit`, `nan_to_num` |
 
-| Function | Method | Notes |
-|----------|--------|-------|
-| `np.sum(a)` | `a.sum()` | |
-| `np.mean(a)` | `a.mean()` | Returns Float64 or Complex128 |
-| `np.min(a)` | `a.min()` | Not supported for complex |
-| `np.max(a)` | `a.max()` | Not supported for complex |
-| `np.std(a, ddof=0)` | `a.std()` | `ddof` for sample std |
-| `np.var(a, ddof=0)` | `a.var()` | `ddof` for sample var |
-| `np.argmin(a)` | `a.argmin()` | Supports `axis` parameter |
-| `np.argmax(a)` | `a.argmax()` | Supports `axis` parameter |
-| `a.all()` | | Boolean test |
-| `a.any()` | | Boolean test |
-| `np.prod(a)` | | Python-level implementation |
+### Shape manipulation (40+ functions)
 
-### Element-wise math
+| Category | Functions |
+|----------|-----------|
+| Reshape | `reshape`, `flatten`, `ravel`, `squeeze`, `expand_dims` |
+| Transpose | `transpose`, `.T`, `swapaxes`, `moveaxis`, `rollaxis` |
+| Join | `concatenate`, `stack`, `vstack`, `hstack`, `dstack`, `column_stack`, `block`, `append` |
+| Split | `split`, `vsplit`, `hsplit`, `dsplit`, `array_split` |
+| Repeat | `tile`, `repeat`, `resize` |
+| Rearrange | `roll`, `flip`, `flipud`, `fliplr`, `rot90` |
+| Dimension | `atleast_1d`, `atleast_2d`, `atleast_3d`, `broadcast_to`, `broadcast_arrays`, `broadcast_shapes` |
+| Selection | `take`, `put`, `putmask`, `place`, `extract`, `compress`, `choose`, `select`, `piecewise` |
+| Insert/Delete | `insert`, `delete`, `trim_zeros` |
+| Padding | `pad` (modes: constant, edge, reflect, wrap, symmetric, linear_ramp, mean, median, minimum, maximum) |
 
-Available as both module functions (`np.sqrt(a)`) and array methods (`a.sqrt()`).
-
-| Function | Notes |
-|----------|-------|
-| `abs` / `absolute` | Returns magnitude for complex |
-| `sqrt` | |
-| `exp` | |
-| `log` | Natural logarithm |
-| `sin`, `cos`, `tan` | |
-| `floor`, `ceil`, `round` | Not supported for complex |
-| `clip(a, min, max)` | |
-
-### Shape manipulation
-
-| Function | Method | Notes |
-|----------|--------|-------|
-| `np.reshape(a, shape)` | `a.reshape(shape)` | |
-| | `a.flatten()` | |
-| `np.ravel(a)` | `a.ravel()` | |
-| `np.squeeze(a, axis)` | `a.squeeze(axis)` | |
-| `np.expand_dims(a, axis)` | `a.expand_dims(axis)` | |
-| `np.transpose(a)` | `a.T` | |
-| `np.concatenate(arrays, axis)` | | |
-| `np.stack(arrays, axis)` | | |
-| `np.vstack(arrays)` | | |
-| `np.hstack(arrays)` | | |
-
-### Sorting and searching
-
-| Function | Method | Notes |
-|----------|--------|-------|
-| `np.sort(a, axis)` | `a.sort(axis)` | Returns new sorted array |
-| `np.argsort(a, axis)` | `a.argsort(axis)` | Returns Int64 indices |
-| `np.searchsorted(a, v, side)` | | Binary search, `"left"` / `"right"` |
-| `np.where(cond, x, y)` | | |
-| `np.nonzero(a)` | | |
-| `np.compress(cond, a, axis)` | | |
-| `np.choose(a, choices)` | | |
-
-### Complex number support
-
-| Feature | Notes |
-|---------|-------|
-| `a.real` | Property — real part |
-| `a.imag` | Property — imaginary part |
-| `a.conj()` / `np.conj(a)` | Complex conjugate |
-| `np.angle(a)` | Phase angle (radians) |
-| Arithmetic (`+`, `-`, `*`, `/`, `**`) | Full support |
-| `abs(a)` | Returns float magnitude |
-| `sum`, `mean` | Work on complex arrays |
-| `exp`, `sqrt`, `log` | Work on complex arrays |
-| `==`, `!=` | Work on complex arrays |
-
-Operations that don't support complex (raise `TypeError`): `min`, `max`, `std`, `var`, `<`, `<=`, `>`, `>=`, `//`, `%`, `floor`, `ceil`, `round`, `sort`, `argsort`, bitwise ops.
-
-### String operations (`np.char`)
+### Sorting and searching (12 functions)
 
 | Function | Notes |
 |----------|-------|
-| `np.char.upper(a)` | |
-| `np.char.lower(a)` | |
-| `np.char.capitalize(a)` | |
-| `np.char.strip(a)` | |
-| `np.char.str_len(a)` | Unicode character count |
-| `np.char.startswith(a, prefix)` | Returns bool array |
-| `np.char.endswith(a, suffix)` | Returns bool array |
-| `np.char.replace(a, old, new)` | |
+| `sort`, `argsort` | Axis support, returns new array / indices |
+| `partition`, `argpartition` | Partial sorting |
+| `searchsorted` | Binary search (`"left"` / `"right"`) |
+| `lexsort` | Multi-key sorting |
+| `nonzero`, `argwhere`, `flatnonzero` | Element location |
+| `count_nonzero` | Count non-zeros |
+| `where` | Conditional selection |
+| `digitize` | Bin indices |
 
-### Einstein summation
+### Set operations
 
-`np.einsum(subscripts, *operands)` — supports explicit subscript notation (`"ij,jk->ik"`).
+`unique`, `intersect1d`, `union1d`, `setdiff1d`, `setxor1d`, `isin`, `in1d`
 
-Works for matrix multiplication, trace, transpose, outer products, and general contractions. All operands are cast to Float64.
-
-### Linear algebra (`np.linalg`) — feature-gated
+### Numerical utilities
 
 | Function | Notes |
 |----------|-------|
-| `np.dot(a, b)` | Dot product / matmul |
-| `np.linalg.matmul(a, b)` | Matrix multiplication |
-| `np.linalg.inv(a)` | Matrix inverse |
-| `np.linalg.solve(a, b)` | Solve Ax = b |
-| `np.linalg.det(a)` | Determinant |
-| `np.linalg.eig(a)` | Eigenvalues + eigenvectors |
-| `np.linalg.svd(a)` | Singular value decomposition |
-| `np.linalg.qr(a)` | QR decomposition |
-| `np.linalg.norm(a)` | Matrix/vector norm |
-| `np.linalg.cholesky(a)` | Cholesky decomposition |
+| `interp` | 1D linear interpolation with `left`/`right` boundary params |
+| `gradient` | Numerical gradient, multi-axis, variable spacing |
+| `trapz`/`trapezoid` | Trapezoidal integration, nD support |
+| `convolve`, `correlate` | 1D convolution/correlation |
+| `diff`, `ediff1d` | Discrete differences |
+| `histogram`, `histogram2d`, `histogramdd` | Binning with weights/range |
+| `bincount` | Integer bin counting |
+| `cov`, `corrcoef` | Covariance/correlation matrices |
+| `cross`, `outer`, `inner`, `kron`, `tensordot` | Vector/tensor products |
+| `einsum` | Einstein summation (explicit subscripts) |
+| `dot`, `vdot`, `matmul` | Dot products and matrix multiplication |
+| `take_along_axis`, `put_along_axis` | Advanced axis indexing (nD) |
+| `apply_along_axis`, `apply_over_axes` | Apply function along axes |
 
-### FFT (`np.fft`) — feature-gated
+### Grid and index utilities
+
+`meshgrid`, `mgrid`, `ogrid` (including complex step `5j`), `indices`, `ix_`, `diag_indices`, `diag_indices_from`, `tril_indices`, `triu_indices`, `ravel_multi_index`, `unravel_index`, `ndindex`, `ndenumerate`, `nditer`
+
+### Matrix utilities
+
+`diag`, `diagonal`, `trace`, `tri`, `tril`, `triu`, `vander`, `fill_diagonal`, `identity`, `eye`
+
+### Window functions
+
+`bartlett`, `blackman`, `hamming`, `hanning`, `kaiser`
+
+### I/O
 
 | Function | Notes |
 |----------|-------|
-| `np.fft.fft(a)` | 1-D FFT |
-| `np.fft.ifft(a)` | 1-D inverse FFT |
-| `np.fft.rfft(a)` | 1-D real FFT |
-| `np.fft.irfft(a, n)` | 1-D inverse real FFT |
-| `np.fft.fftfreq(n, d)` | Frequency bins |
-
-### Random (`np.random`) — feature-gated
-
-| Function | Notes |
-|----------|-------|
-| `np.random.seed(n)` | Set RNG seed |
-| `np.random.rand(*shape)` | Uniform [0, 1) |
-| `np.random.randn(*shape)` | Standard normal |
-| `np.random.randint(low, high, size)` | Random integers |
-| `np.random.normal(loc, scale, size)` | Normal distribution |
-| `np.random.uniform(low, high, size)` | Uniform distribution |
-| `np.random.choice(a, size, replace)` | Random selection |
+| `loadtxt`, `savetxt` | Text format |
+| `genfromtxt` | Flexible text loading with missing value handling |
+| `save`, `load` | Text-based (not binary `.npy`) |
+| `savez` | Compressed text archives |
 
 ### Constants
 
-`np.pi`, `np.e`, `np.inf`, `np.nan`, `np.PINF`, `np.NINF`, `np.PZERO`, `np.NZERO`, `np.newaxis`, `np.True_`, `np.False_`
+`pi`, `e`, `inf`, `nan`, `PINF`, `NINF`, `PZERO`, `NZERO`, `newaxis`, `True_`, `False_`, `__version__` (reports `"1.26.0"`)
 
-### Type introspection
+### Special classes
 
-`np.iinfo(dtype)` — integer type info (min, max, bits)
-`np.finfo(dtype)` — float type info (eps, max, min, tiny, resolution)
+| Class | Notes |
+|-------|-------|
+| `dtype` | Full dtype class with `name`, `kind`, `itemsize`, `char`, `str`, `fields`, `type` |
+| `AxisError` | Subclass of ValueError + IndexError |
+| `matrix` | Deprecated-style matrix class (string parsing, `*` for matmul, `.T`, `.I`) |
+| `poly1d` | Polynomial class |
+| `vectorize` | Function vectorization wrapper |
+| `broadcast` | Broadcasting iterator |
+| `nditer` | N-dimensional iterator with `multi_index` |
+| `iinfo`, `finfo` | Integer/float type introspection |
+| `errstate` | Error state context manager (no-op) |
+
+---
+
+## Submodules
+
+### Linear algebra (`np.linalg`)
+
+| Function | Implementation | Notes |
+|----------|---------------|-------|
+| `matmul` | Rust (nalgebra) | Matrix multiplication |
+| `inv` | Rust (nalgebra) | Matrix inverse |
+| `solve` | Rust (nalgebra) | Solve Ax = b |
+| `det` | Rust (nalgebra) | Determinant |
+| `eig` | Rust (nalgebra) | Eigenvalues + eigenvectors |
+| `svd` | Rust (nalgebra) | Singular value decomposition |
+| `qr` | Rust (nalgebra) | QR decomposition |
+| `norm` | Rust (nalgebra) | Matrix/vector norm |
+| `cholesky` | Rust (nalgebra) | Cholesky decomposition |
+| `lstsq` | Rust (nalgebra) | Least squares |
+| `pinv` | Python | Pseudoinverse via SVD |
+| `matrix_rank` | Python | Via SVD |
+| `matrix_power` | Python | Repeated matmul |
+| `eigh`, `eigvals`, `eigvalsh` | Python | Symmetric/Hermitian eigenproblems |
+| `slogdet` | Python | Sign + log-determinant |
+| `cond` | Python | Condition number |
+| `multi_dot` | Python | Chained multiplication |
+| `trace` | Python | Diagonal sum |
+
+### FFT (`np.fft`)
+
+| Function | Implementation | Notes |
+|----------|---------------|-------|
+| `fft`, `ifft` | Rust (rustfft) | 1D FFT/IFFT |
+| `rfft`, `irfft` | Python | Real FFT (1D only) |
+| `fft2`, `ifft2` | Python | 2D FFT via iterated 1D |
+| `fftn`, `ifftn` | Python | N-D FFT |
+| `fftfreq`, `rfftfreq` | Python | Frequency bins |
+| `fftshift`, `ifftshift` | Python | Frequency reordering |
+
+### Random (`np.random`)
+
+Both legacy API (`np.random.func()`) and new Generator API (`np.random.default_rng().func()`).
+
+| Category | Functions |
+|----------|-----------|
+| Basic | `random`, `rand`, `randn`, `randint`, `seed` |
+| Sampling | `choice`, `shuffle`, `permutation` |
+| Continuous | `normal`, `uniform`, `exponential`, `beta`, `gamma`, `lognormal`, `laplace`, `rayleigh`, `weibull`, `logistic`, `gumbel`, `triangular`, `chisquare`, `vonmises`, `wald`, `power` |
+| Discrete | `poisson`, `binomial`, `geometric`, `negative_binomial`, `zipf` |
+| Multivariate | `multinomial`, `multivariate_normal`, `dirichlet` |
+| Generator | `default_rng()` returns `Generator` with `integers`, `random`, `standard_normal`, and all distribution methods |
+
+All distribution functions return scalars when `size=None` and arrays when `size` is specified.
+
+### Masked arrays (`np.ma`)
+
+| Feature | Notes |
+|---------|-------|
+| `MaskedArray` class | `data`, `mask`, `fill_value`, `shape`, `ndim`, `size`, `dtype` properties |
+| Methods | `filled()`, `compressed()`, `count()`, `sum()`, `mean()`, `tolist()` |
+| Indexing | `ma_arr[0]`, `ma_arr[1:3]` return MaskedArray |
+| Creation | `masked_array()`, `array()` |
+| Masking by value | `masked_equal`, `masked_greater`, `masked_less`, `masked_less_equal`, `masked_greater_equal`, `masked_not_equal` |
+| Masking by range | `masked_inside`, `masked_outside` |
+| Masking by condition | `masked_where`, `masked_invalid` |
+| Utilities | `is_masked`, `getdata`, `getmaskarray`, `fix_invalid` |
+| Constant | `masked` — the masked singleton |
+
+### Polynomial (`np.polynomial`)
+
+`polyval`, `polyfit`, `polyadd`, `polysub`, `polymul`, `polyder`, `polyint`
+
+Also: `np.polyval`, `np.polyfit`, `np.polyadd`, `np.polysub`, `np.polymul`, `np.polyder`, `np.polyint`, `np.roots`, `np.polydiv`, `np.poly1d`
+
+### String operations (`np.char`)
+
+| Category | Functions |
+|----------|-----------|
+| Case | `upper`, `lower`, `capitalize`, `title`, `swapcase` |
+| Testing | `startswith`, `endswith`, `isalpha`, `isdigit`, `isnumeric`, `isupper`, `islower`, `isspace` |
+| Manipulation | `strip`, `replace`, `center`, `ljust`, `rjust`, `zfill`, `split`, `join`, `find`, `count` |
+| Other | `str_len`, `encode`, `decode`, `multiply`, `add` |
+
+### Testing (`np.testing`)
+
+| Function | Notes |
+|----------|-------|
+| `assert_allclose` | Tolerance-based comparison with `rtol`, `atol`, `equal_nan` |
+| `assert_array_equal` | Exact array equality |
+| `assert_array_almost_equal` | Decimal-place comparison |
+| `assert_equal` | General equality |
+| `assert_raises` | Exception assertion |
+| `assert_raises_regex` | Exception + message pattern matching |
+| `assert_warns` | Warning assertion (no-op in this runtime) |
+| `assert_approx_equal` | Significant digit comparison |
+| `assert_array_less` | Element-wise less-than assertion |
+
+---
 
 ## Known limitations
 
 ### Dtype handling
-- Most functions ignore the `dtype` parameter and operate in Float64 internally. `astype()` works for explicit conversion.
-- `result_type()` and `promote_types()` are stubs that return `float64`.
-- Integer arithmetic may promote to Float64 unexpectedly.
+- Most operations convert to Float64 internally. `astype()` works for explicit conversion.
+- Integer arithmetic may promote to Float64.
+- `result_type()` and `promote_types()` have basic implementations.
 
 ### Parameters accepted but ignored
 - `order` (memory layout) — always C-contiguous.
-- `out` (output array) — no in-place output support for functions.
+- `out` (output array) — no in-place output support for ufuncs.
 - `casting`, `subok`, `where` — silently ignored on most functions.
-- `endpoint=False` on `linspace` — endpoint is always included.
 
 ### Complex numbers
-- Scalars extracted from complex arrays are returned as `(re, im)` tuples, not Python `complex` objects (RustPython limitation).
+- Scalars extracted from complex arrays are returned as `(re, im)` tuples (RustPython limitation).
 - `var`/`std` reject complex inputs; use `np.abs(a)` first.
+- Comparison operators (`<`, `>`, etc.), `sort`, `floor`/`ceil`, bitwise ops raise `TypeError` on complex.
 
-### einsum performance
-- Uses brute-force iteration over all index combinations. Fine for small-to-medium arrays; will be slow for large contractions. Only explicit subscript notation supported (no implicit or `->` omission).
+### Performance
+- `einsum` uses brute-force iteration. Fine for small-to-medium arrays.
+- FFT 2D/nD implemented via iterated 1D transforms.
+- `rfft`/`irfft` are pure Python (1D only).
+- No SIMD or parallelism — single-threaded execution.
 
-### Not implemented
-- **Structured / record arrays** — no compound dtypes.
-- **Datetime / timedelta** — dtype aliases exist but no operations.
-- **Advanced fancy indexing** — no multi-axis fancy indexing (`a[[0,1], [2,3]]`).
-- **np.ufunc** — no universal function protocol.
-- **np.nditer** — no multi-array iterator.
-- **np.memmap** — no memory-mapped files.
-- **np.polynomial** — no polynomial module.
-- **np.ma** (masked arrays) — not supported.
-- **Fortran-order arrays** — everything is C-order.
-
-### Stubs (accept calls but return approximate/incorrect results)
-- `empty()` / `empty_like()` — return zeros instead of uninitialized memory.
+### Stubs (accept calls, approximate behavior)
+- `empty()` / `empty_like()` — return zeros.
 - `seterr()` / `geterr()` / `errstate()` — no-ops.
-- `may_share_memory()` / `shares_memory()` — always return False.
-- `moveaxis()` / `rollaxis()` — return input unchanged.
-- `logical_and()` / `logical_or()` — use arithmetic approximation.
+- `ndarray.view()` — returns a copy (no shared memory views).
+- `may_share_memory()` / `shares_memory()` — return False.
+
+---
+
+## Still needs work
+
+These items are not yet implemented but may be needed for full compatibility:
+
+### Would break some code
+- **Structured/record arrays** — no compound dtypes or field access.
+- **Datetime/timedelta** — dtype aliases exist but no operations.
+- **`np.ufunc` protocol** — no universal function objects (`.reduce()`, `.accumulate()`, `.outer()` work via `_UfuncWithReduce` wrapper for `maximum`, `minimum`, `add`, `multiply`).
+- **`rfft`/`irfft` for nD** — currently 1D only.
+
+### Missing submodules
+- **`np.polynomial.chebyshev`**, **`hermite`**, **`laguerre`**, **`legendre`** — only basic polynomial operations.
+- **`np.fft.hfft`/`ihfft`** — Hermitian FFT.
+
+### Edge cases
+- Multi-axis fancy indexing (`a[[0,1], [2,3]]`) — not supported.
+- **Fortran-order arrays** — everything is C-order.
+- **Memory-mapped files** (`np.memmap`) — not supported.
+- **`.npy` binary format** — `save`/`load` use text format.
+- Some `pad` modes not implemented (raises `NotImplementedError` with clear message).
+
+---
 
 ## Test coverage
 
 | Suite | Tests | Description |
 |-------|-------|-------------|
-| Rust unit tests | 229 | Core operations, dtypes, math, sorting, einsum, strings |
-| Python integration | 180 | End-to-end through RustPython (4 test files) |
-| NumPy compat (reference) | 256 | Official NumPy `test_numeric.py` adapted for pytest |
+| Rust unit tests | 425 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
+| Python `test_numeric.py` | 806 | Comprehensive integration: all functions, edge cases, regressions |
+| Python `test_array_creation.py` | 14 | Array creation functions |
+| Python `test_indexing.py` | 38 | Indexing, slicing, assignment |
+| Python `test_linalg.py` | 19 | Linear algebra operations |
+| **Total** | **1,302** | |
+
+---
 
 ## Usage with wasmsand
 
@@ -304,7 +389,7 @@ cargo build -p wasmsand-python --features numpy --target wasm32-wasip1
 
 ```bash
 # Build (native)
-cargo build -p numpy-rust-wasm
+cargo build --workspace --all-features
 
 # Build (WASM, as used by wasmsand)
 cargo build -p numpy-rust-wasm --target wasm32-wasip1
@@ -312,8 +397,11 @@ cargo build -p numpy-rust-wasm --target wasm32-wasip1
 # Rust unit tests
 cargo test --workspace --all-features
 
-# Python integration tests
-./tests/python/run_tests.sh target/debug/numpy-python
+# Python integration tests (all 4 test files)
+./target/debug/numpy-python tests/python/test_numeric.py
+./target/debug/numpy-python tests/python/test_array_creation.py
+./target/debug/numpy-python tests/python/test_indexing.py
+./target/debug/numpy-python tests/python/test_linalg.py
 
 # NumPy compat tests (requires CPython + pytest + numpy)
 uv venv .venv && source .venv/bin/activate
