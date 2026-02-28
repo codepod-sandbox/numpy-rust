@@ -1493,6 +1493,131 @@ impl PyNdArray {
         let inner = self.data.read().unwrap();
         PyNdArray::from_core(inner.flatten())
     }
+
+    // --- Tier 35 Group A methods ---
+
+    #[pymethod]
+    fn put(
+        &self,
+        indices: PyRef<PyNdArray>,
+        values: PyRef<PyNdArray>,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
+        let idx_data = indices.data.read().unwrap();
+        let val_data = values.data.read().unwrap();
+
+        let idx_flat = idx_data.flatten();
+        let val_flat = val_data.flatten();
+        let n_idx = idx_flat.size();
+        let n_val = val_flat.size();
+
+        drop(idx_data);
+        drop(val_data);
+
+        let mut write_guard = self.data.write().unwrap();
+        let total = write_guard.size();
+        let shape = write_guard.shape().to_vec();
+
+        // Flatten to work with flat indices
+        let mut flat = write_guard.flatten();
+
+        for j in 0..n_idx {
+            let idx_s = idx_flat.get(&[j]).map_err(|e| numpy_err(e, vm))?;
+            let idx_val: i64 = match idx_s {
+                Scalar::Int64(v) => v,
+                Scalar::Int32(v) => v as i64,
+                Scalar::Float64(v) => v as i64,
+                Scalar::Float32(v) => v as i64,
+                _ => return Err(vm.new_type_error("indices must be integer".to_owned())),
+            };
+            let resolved = if idx_val < 0 {
+                (total as i64 + idx_val) as usize
+            } else {
+                idx_val as usize
+            };
+            if resolved >= total {
+                return Err(vm.new_index_error(format!(
+                    "index {} is out of bounds for axis with size {}",
+                    idx_val, total
+                )));
+            }
+            let val_s = val_flat.get(&[j % n_val]).map_err(|e| numpy_err(e, vm))?;
+            flat.set(&[resolved], val_s).map_err(|e| numpy_err(e, vm))?;
+        }
+        *write_guard = flat.reshape(&shape).unwrap_or(flat);
+        Ok(())
+    }
+
+    #[pymethod]
+    fn choose(&self, choices: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let list = choices
+            .downcast_ref::<PyList>()
+            .ok_or_else(|| vm.new_type_error("choose requires a list of arrays".to_owned()))?;
+        let items = list.borrow_vec();
+        let py_arrays: Vec<PyRef<PyNdArray>> = items
+            .iter()
+            .map(|item| item.clone().try_into_value::<PyRef<PyNdArray>>(vm))
+            .collect::<PyResult<Vec<_>>>()?;
+        let borrowed: Vec<std::sync::RwLockReadGuard<'_, NdArray>> =
+            py_arrays.iter().map(|c| c.inner()).collect();
+        let refs: Vec<&NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let inner = self.data.read().unwrap();
+        numpy_rust_core::choose(&inner, &refs)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pygetset]
+    fn flags(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let dict = vm.ctx.new_dict();
+        dict.set_item("C_CONTIGUOUS", vm.ctx.new_bool(true).into(), vm)?;
+        dict.set_item("F_CONTIGUOUS", vm.ctx.new_bool(false).into(), vm)?;
+        dict.set_item("OWNDATA", vm.ctx.new_bool(true).into(), vm)?;
+        dict.set_item("WRITEABLE", vm.ctx.new_bool(true).into(), vm)?;
+        dict.set_item("ALIGNED", vm.ctx.new_bool(true).into(), vm)?;
+        dict.set_item("WRITEBACKIFCOPY", vm.ctx.new_bool(false).into(), vm)?;
+        Ok(dict.into())
+    }
+
+    #[pygetset]
+    fn base(&self, vm: &VirtualMachine) -> PyObjectRef {
+        vm.ctx.none() // We always own our data
+    }
+
+    #[pygetset]
+    fn ctypes(&self, vm: &VirtualMachine) -> PyObjectRef {
+        vm.ctx.none() // Not supported in RustPython
+    }
+
+    #[pymethod]
+    fn resize(&self, new_shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let shape = extract_shape(&new_shape, vm)?;
+        let mut total = 1usize;
+        for &s in &shape {
+            total *= s;
+        }
+        let inner = self.data.read().unwrap();
+        let dtype = inner.dtype();
+        if total == 0 {
+            return Ok(PyNdArray::from_core(NdArray::zeros(&shape, dtype)));
+        }
+        let flat = inner.flatten();
+        let n = flat.size();
+        if n == 0 {
+            return Ok(PyNdArray::from_core(NdArray::zeros(&shape, dtype)));
+        }
+        drop(inner);
+        // Build repeated data to fill new_shape
+        let mut result = NdArray::zeros(&[total], dtype);
+        for i in 0..total {
+            let s = flat.get(&[i % n]).map_err(|e| numpy_err(e, vm))?;
+            result.set(&[i], s).map_err(|e| numpy_err(e, vm))?;
+        }
+        result
+            .reshape(&shape)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
+    }
 }
 
 /// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).

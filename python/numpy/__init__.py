@@ -1196,6 +1196,28 @@ def around(a, decimals=0, out=None):
 
 round_ = around
 
+def ldexp(x1, x2):
+    """Return x1 * 2**x2, element-wise."""
+    if isinstance(x1, ndarray) or isinstance(x2, ndarray):
+        x1 = asarray(x1)
+        x2 = asarray(x2)
+        return array([float(a) * (2.0 ** int(b)) for a, b in zip(x1.flatten().tolist(), x2.flatten().tolist())]).reshape(x1.shape)
+    return float(x1) * (2.0 ** int(x2))
+
+def frexp(x):
+    """Decompose elements of x into mantissa and twos exponent."""
+    if isinstance(x, ndarray):
+        flat = x.flatten().tolist()
+        mantissa = []
+        exponent = []
+        for v in flat:
+            m, e = _math.frexp(float(v))
+            mantissa.append(m)
+            exponent.append(e)
+        return array(mantissa).reshape(x.shape), array([float(e) for e in exponent]).reshape(x.shape)
+    m, e = _math.frexp(float(x))
+    return m, e
+
 def allclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
     """Return True if two arrays are element-wise equal within a tolerance."""
     return bool(all(isclose(a, b, rtol=rtol, atol=atol, equal_nan=equal_nan)))
@@ -3942,6 +3964,12 @@ class _char_mod:
         """Return true for each element if all characters are whitespace."""
         data = _char_mod._to_str_list(a)
         return array([1.0 if s.isspace() else 0.0 for s in data]).astype("bool")
+
+    @staticmethod
+    def isdecimal(a):
+        """Return true for each element if all characters are decimal."""
+        a = asarray(a)
+        return array([1.0 if str(s).isdecimal() else 0.0 for s in a.flatten().tolist()]).reshape(a.shape).astype("bool")
 
     @staticmethod
     def encode(a, encoding='utf-8', errors='strict'):
@@ -6853,9 +6881,15 @@ class _Generator:
         return random.randint(low, high, size)
 
     def choice(self, a, size=None, replace=True, p=None):
+        if isinstance(a, int):
+            a = arange(0.0, float(a), 1.0)
+        elif isinstance(a, (list, tuple)):
+            a = array(a)
+        elif not isinstance(a, ndarray):
+            a = asarray(a)
         if size is None:
             size = 1
-        return random.choice(asarray(a), size, replace)
+        return random.choice(a, size, replace)
 
     def normal(self, loc=0.0, scale=1.0, size=None):
         if size is None:
@@ -7267,6 +7301,48 @@ def _random_zipf(a, size=None):
         result = result.reshape(list(size))
     return result
 
+def _random_hypergeometric(ngood, nbad, nsample, size=None):
+    """Hypergeometric distribution."""
+    def _draw_one(ng, nb, ns):
+        count = 0
+        rg = ng
+        rt = ng + nb
+        uniforms = random.uniform(0.0, 1.0, (ns,)).tolist()
+        for u in uniforms:
+            if u < rg / rt:
+                count += 1
+                rg -= 1
+            rt -= 1
+        return count
+    if size is None:
+        return _draw_one(ngood, nbad, nsample)
+    if isinstance(size, int):
+        size = (size,)
+    total_elems = 1
+    for s in size:
+        total_elems *= s
+    result = [float(_draw_one(ngood, nbad, nsample)) for _ in _builtin_range(total_elems)]
+    return array(result).reshape(list(size))
+
+def _random_pareto(a, size=None):
+    """Pareto II (Lomax) distribution."""
+    if size is None:
+        u = float(random.uniform(0.0, 1.0, (1,)).flatten()[0])
+        return (1.0 - u) ** (-1.0 / a) - 1.0
+    if isinstance(size, int):
+        size = (size,)
+    total = 1
+    for s in size:
+        total *= s
+    uniforms = random.uniform(0.0, 1.0, (total,)).tolist()
+    result = [(1.0 - u) ** (-1.0 / a) - 1.0 for u in uniforms]
+    return array(result).reshape(list(size))
+
+def _random_bytes(length):
+    """Return random bytes."""
+    vals = random.uniform(0.0, 1.0, (length,)).tolist()
+    return bytes([int(v * 256) for v in vals])
+
 def _default_rng(seed=None):
     return _Generator(seed)
 
@@ -7317,7 +7393,14 @@ class _RandomState:
         return random.uniform(float(low), float(high), size)
 
     def choice(self, a, size=None, replace=True, p=None):
-        arr = asarray(a) if not isinstance(a, ndarray) else a
+        if isinstance(a, int):
+            arr = arange(0.0, float(a), 1.0)
+        elif isinstance(a, (list, tuple)):
+            arr = array(a)
+        elif not isinstance(a, ndarray):
+            arr = asarray(a)
+        else:
+            arr = a
         if size is None:
             size = 1
         return random.choice(arr, size, replace)
@@ -7364,6 +7447,18 @@ class _RandomState:
     def set_state(self, state):
         pass
 
+# Wrap random.choice to accept lists, tuples, and ints (Rust version requires ndarray)
+_native_random_choice = random.choice
+def _wrapped_random_choice(a, size=None, replace=True, p=None):
+    if isinstance(a, int):
+        a = arange(0.0, float(a), 1.0)
+    elif isinstance(a, (list, tuple)):
+        a = array([float(x) for x in a])
+    if size is None:
+        size = 1
+    return _native_random_choice(a, size, replace)
+random.choice = _wrapped_random_choice
+
 # Monkey-patch random module with extension functions
 random.shuffle = _random_shuffle
 random.permutation = _random_permutation
@@ -7394,6 +7489,9 @@ random.power = _random_power
 random.vonmises = _random_vonmises
 random.wald = _random_wald
 random.zipf = _random_zipf
+random.hypergeometric = _random_hypergeometric
+random.pareto = _random_pareto
+random.bytes = _random_bytes
 random.RandomState = _RandomState
 
 # --- Numerical Utilities (Tier 20C) -----------------------------------------
@@ -7780,6 +7878,19 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
         hist = hist / (total_count * bin_volumes)
 
     return hist, edge_arrays
+
+def mintypecode(typechars, typeset='GDFgdf', default='d'):
+    """Return the character for the minimum-size type to which given types can be safely cast."""
+    _typechar_order = {'?': 0, 'b': 1, 'B': 1, 'h': 2, 'H': 2, 'i': 3, 'I': 3, 'l': 4, 'L': 4,
+                       'q': 4, 'Q': 4, 'f': 5, 'd': 6, 'g': 7, 'F': 8, 'D': 9, 'G': 10}
+    best = default
+    best_rank = _typechar_order.get(default, 6)
+    for tc in typechars:
+        r = _typechar_order.get(tc, 6)
+        if r > best_rank and tc in typeset:
+            best = tc
+            best_rank = r
+    return best
 
 def common_type(*arrays):
     """Return a scalar type common to input arrays."""

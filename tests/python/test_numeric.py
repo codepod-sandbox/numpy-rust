@@ -7310,6 +7310,134 @@ def test_t34_np_astype_function_casting_fail():
     except TypeError:
         pass
 
+# ── Tier 35 ── ndarray methods, math, random, misc ──────────────────────────
+
+def test_t35_flags_property():
+    import numpy as np
+    a = np.array([1.0, 2.0])
+    f = a.flags
+    assert_eq(f['C_CONTIGUOUS'], True)
+    assert_eq(f['OWNDATA'], True)
+    assert_eq(f['WRITEABLE'], True)
+
+def test_t35_base_property():
+    import numpy as np
+    a = np.array([1.0])
+    assert_eq(a.base, None)
+
+def test_t35_ctypes_property():
+    import numpy as np
+    a = np.array([1.0])
+    assert_eq(a.ctypes, None)
+
+def test_t35_put_method():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    a.put(np.array([0.0, 3.0]), np.array([10.0, 40.0]))
+    assert_eq(a.tolist(), [10.0, 2.0, 3.0, 40.0])
+
+def test_t35_put_cycling():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    a.put(np.array([0.0, 1.0, 2.0]), np.array([99.0]))
+    assert_eq(a.tolist(), [99.0, 99.0, 99.0, 4.0])
+
+def test_t35_resize_larger():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0])
+    b = a.resize((2, 3))
+    assert_eq(b.shape, (2, 3))
+    # Data should repeat cyclically
+    flat = b.flatten().tolist()
+    assert_eq(flat[0], 1.0)
+    assert_eq(flat[3], 1.0)
+
+def test_t35_resize_smaller():
+    import numpy as np
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    b = a.resize((2,))
+    assert_eq(b.shape, (2,))
+
+def test_t35_choice_from_list():
+    import numpy as np
+    r = np.random.choice([10, 20, 30], 5)
+    assert_eq(r.shape, (5,))
+    for v in r.tolist():
+        assert v in [10.0, 20.0, 30.0], f"{v} not in choices"
+
+def test_t35_choice_from_int():
+    import numpy as np
+    r = np.random.choice(5, 3)
+    assert_eq(r.shape, (3,))
+    for v in r.tolist():
+        assert 0.0 <= v < 5.0, f"{v} out of range"
+
+def test_t35_choice_from_ndarray():
+    import numpy as np
+    r = np.random.choice(np.array([100.0, 200.0]), 4)
+    assert_eq(r.shape, (4,))
+
+def test_t35_ldexp_scalar():
+    import numpy as np
+    assert_close(np.ldexp(1.5, 3), 12.0, tol=1e-10)
+
+def test_t35_ldexp_array():
+    import numpy as np
+    r = np.ldexp(np.array([1.0, 2.0]), np.array([2.0, 3.0]))
+    assert_close(r.tolist()[0], 4.0, tol=1e-10)
+    assert_close(r.tolist()[1], 16.0, tol=1e-10)
+
+def test_t35_frexp_scalar():
+    import numpy as np
+    m, e = np.frexp(12.0)
+    assert_close(m, 0.75, tol=1e-10)
+    assert_close(float(e), 4.0, tol=1e-10)
+
+def test_t35_frexp_array():
+    import numpy as np
+    m, e = np.frexp(np.array([2.0, 8.0]))
+    assert_close(m.tolist()[0], 0.5, tol=1e-10)
+    assert_close(m.tolist()[1], 0.5, tol=1e-10)
+
+def test_t35_hypergeometric_scalar():
+    import numpy as np
+    r = np.random.hypergeometric(10, 10, 10)
+    assert isinstance(r, int), f"expected int, got {type(r)}"
+    assert 0 <= r <= 10
+
+def test_t35_hypergeometric_array():
+    import numpy as np
+    r = np.random.hypergeometric(10, 10, 10, size=5)
+    assert_eq(r.shape, (5,))
+
+def test_t35_pareto_scalar():
+    import numpy as np
+    r = np.random.pareto(2.0)
+    assert isinstance(r, float)
+    assert r >= 0.0
+
+def test_t35_pareto_array():
+    import numpy as np
+    r = np.random.pareto(2.0, size=(3, 2))
+    assert_eq(r.shape, (3, 2))
+
+def test_t35_random_bytes():
+    import numpy as np
+    b = np.random.bytes(8)
+    assert_eq(len(b), 8)
+    assert isinstance(b, bytes)
+
+def test_t35_mintypecode():
+    import numpy as np
+    assert_eq(np.mintypecode(['d', 'f']), 'd')
+
+def test_t35_char_isdecimal():
+    import numpy as np
+    r = np.char.isdecimal(np.array(['123', 'abc', '4.5']))
+    vals = r.tolist()
+    assert_eq(vals[0], True)
+    assert_eq(vals[1], False)
+
 
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
