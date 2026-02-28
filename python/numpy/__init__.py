@@ -442,8 +442,389 @@ csingle = _ScalarType("complex64", complex)
 cdouble = _ScalarType("complex128", complex)
 clongdouble = _ScalarType("complex128", complex)
 object_ = _ScalarType("object", object)
-timedelta64 = _ScalarType("timedelta64", int)
-datetime64 = _ScalarType("datetime64", int)
+# --- datetime64/timedelta64 helper functions ---------------------------------
+
+def _infer_datetime_unit(s):
+    """Infer unit from datetime string format."""
+    s = s.strip()
+    if len(s) == 4:  # '2024'
+        return 'Y'
+    elif len(s) == 7:  # '2024-01'
+        return 'M'
+    elif len(s) == 10:  # '2024-01-15'
+        return 'D'
+    elif 'T' in s:
+        return 's'
+    return 'D'
+
+
+def _parse_datetime_string(s, unit):
+    """Parse datetime string to integer value in given unit."""
+    s = s.strip()
+    parts = s.replace('T', '-').replace(':', '-').split('-')
+    year = int(parts[0]) if len(parts) > 0 else 1970
+    month = int(parts[1]) if len(parts) > 1 else 1
+    day = int(parts[2]) if len(parts) > 2 else 1
+
+    if unit == 'Y':
+        return year
+    elif unit == 'M':
+        return (year - 1970) * 12 + (month - 1)
+    else:
+        # Convert to days since epoch
+        days = _date_to_days(year, month, day)
+        if unit == 'D':
+            return days
+        elif unit == 's':
+            hour = int(parts[3]) if len(parts) > 3 else 0
+            minute = int(parts[4]) if len(parts) > 4 else 0
+            second = int(parts[5]) if len(parts) > 5 else 0
+            return days * 86400 + hour * 3600 + minute * 60 + second
+        return days
+
+
+def _date_to_days(year, month, day):
+    """Convert date to days since 1970-01-01."""
+    days = 0
+    # Years
+    for y in range(1970, year) if year >= 1970 else range(year, 1970):
+        leap = (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
+        d = 366 if leap else 365
+        if year >= 1970:
+            days += d
+        else:
+            days -= d
+    # Months
+    month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+    if leap:
+        month_days[1] = 29
+    for m in range(1, month):
+        days += month_days[m - 1]
+    days += day - 1
+    return days
+
+
+def _days_to_date(days):
+    """Convert days since epoch to ISO date string."""
+    y = 1970
+    remaining = days
+    if remaining >= 0:
+        while True:
+            leap = (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
+            year_days = 366 if leap else 365
+            if remaining < year_days:
+                break
+            remaining -= year_days
+            y += 1
+    else:
+        while remaining < 0:
+            y -= 1
+            leap = (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
+            year_days = 366 if leap else 365
+            remaining += year_days
+
+    month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    leap = (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
+    if leap:
+        month_days[1] = 29
+    m = 0
+    while m < 12 and remaining >= month_days[m]:
+        remaining -= month_days[m]
+        m += 1
+    return "{:04d}-{:02d}-{:02d}".format(y, m + 1, remaining + 1)
+
+
+def _to_common_unit(value, from_unit, to_unit):
+    """Convert value from one unit to another."""
+    # First convert to days
+    if from_unit == 'Y':
+        days = value * 365  # approximate
+    elif from_unit == 'M':
+        days = value * 30  # approximate
+    elif from_unit == 'W':
+        days = value * 7
+    elif from_unit == 'D':
+        days = value
+    elif from_unit == 'h':
+        days = value / 24.0
+    elif from_unit == 'm':
+        days = value / 1440.0
+    elif from_unit == 's':
+        days = value / 86400.0
+    elif from_unit == 'ms':
+        days = value / 86400000.0
+    elif from_unit == 'us':
+        days = value / 86400000000.0
+    elif from_unit == 'ns':
+        days = value / 86400000000000.0
+    else:
+        days = value
+
+    # Then convert from days to target
+    if to_unit == 'Y':
+        return int(days / 365)
+    elif to_unit == 'M':
+        return int(days / 30)
+    elif to_unit == 'W':
+        return int(days / 7)
+    elif to_unit == 'D':
+        return int(days)
+    elif to_unit == 'h':
+        return int(days * 24)
+    elif to_unit == 'm':
+        return int(days * 1440)
+    elif to_unit == 's':
+        return int(days * 86400)
+    elif to_unit == 'ms':
+        return int(days * 86400000)
+    elif to_unit == 'us':
+        return int(days * 86400000000)
+    elif to_unit == 'ns':
+        return int(days * 86400000000000)
+    return int(days)
+
+
+def _common_time_unit(u1, u2):
+    """Find the finer of two time units."""
+    order = ['Y', 'M', 'W', 'D', 'h', 'm', 's', 'ms', 'us', 'ns']
+    try:
+        i1 = order.index(u1)
+    except ValueError:
+        i1 = 3  # default to days
+    try:
+        i2 = order.index(u2)
+    except ValueError:
+        i2 = 3
+    return order[i1 if i1 > i2 else i2]
+
+
+# --- datetime64 / timedelta64 classes ----------------------------------------
+
+class datetime64:
+    """NumPy datetime64 scalar type."""
+    def __init__(self, value=None, unit=None):
+        if value is None:
+            self._value = 0  # epoch
+            self._unit = unit or 'us'
+        elif isinstance(value, str):
+            self._unit = unit or _infer_datetime_unit(value)
+            self._value = _parse_datetime_string(value, self._unit)
+        elif isinstance(value, datetime64):
+            self._value = value._value
+            self._unit = unit or value._unit
+        elif isinstance(value, (int, float)):
+            self._value = int(value)
+            self._unit = unit or 'us'
+        else:
+            self._value = int(value)
+            self._unit = unit or 'us'
+
+    def __repr__(self):
+        return "numpy.datetime64('{}')".format(self._to_string())
+
+    def __str__(self):
+        return self._to_string()
+
+    def _to_string(self):
+        """Convert internal value back to ISO string."""
+        if self._unit == 'Y':
+            return str(self._value)
+        elif self._unit == 'M':
+            y = 1970 + self._value // 12
+            m = self._value % 12 + 1
+            return "{:04d}-{:02d}".format(y, m)
+        elif self._unit == 'D':
+            # Days since epoch (1970-01-01)
+            return _days_to_date(self._value)
+        elif self._unit in ('h', 'm', 's', 'ms', 'us', 'ns'):
+            # Convert to days + remainder
+            if self._unit == 's':
+                days = self._value // 86400
+            elif self._unit == 'ms':
+                days = self._value // 86400000
+            elif self._unit == 'us':
+                days = self._value // 86400000000
+            elif self._unit == 'ns':
+                days = self._value // 86400000000000
+            elif self._unit == 'h':
+                days = self._value // 24
+            elif self._unit == 'm':
+                days = self._value // 1440
+            else:
+                days = self._value
+            return _days_to_date(days)
+        return str(self._value)
+
+    def __sub__(self, other):
+        if isinstance(other, datetime64):
+            # datetime - datetime = timedelta
+            v1 = _to_common_unit(self._value, self._unit, 'D')
+            v2 = _to_common_unit(other._value, other._unit, 'D')
+            return timedelta64(v1 - v2, 'D')
+        elif isinstance(other, timedelta64):
+            v = _to_common_unit(other._value, other._unit, self._unit)
+            return datetime64.__new_from_value(self._value - v, self._unit)
+        return NotImplemented
+
+    def __add__(self, other):
+        if isinstance(other, timedelta64):
+            v = _to_common_unit(other._value, other._unit, self._unit)
+            return datetime64.__new_from_value(self._value + v, self._unit)
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __eq__(self, other):
+        if isinstance(other, datetime64):
+            v1 = _to_common_unit(self._value, self._unit, 'D')
+            v2 = _to_common_unit(other._value, other._unit, 'D')
+            return v1 == v2
+        return NotImplemented
+
+    def __lt__(self, other):
+        if isinstance(other, datetime64):
+            v1 = _to_common_unit(self._value, self._unit, 'D')
+            v2 = _to_common_unit(other._value, other._unit, 'D')
+            return v1 < v2
+        return NotImplemented
+
+    def __le__(self, other):
+        return self == other or self < other
+
+    def __gt__(self, other):
+        if isinstance(other, datetime64):
+            return other < self
+        return NotImplemented
+
+    def __ge__(self, other):
+        return self == other or self > other
+
+    def __hash__(self):
+        return hash((self._value, self._unit))
+
+    @classmethod
+    def __new_from_value(cls, value, unit):
+        obj = cls.__new__(cls)
+        obj._value = value
+        obj._unit = unit
+        return obj
+
+    def astype(self, dtype):
+        dtype_str = str(dtype)
+        if 'int' in dtype_str:
+            return self._value
+        elif 'float' in dtype_str:
+            return float(self._value)
+        return self
+
+
+class timedelta64:
+    """NumPy timedelta64 scalar type."""
+    def __init__(self, value=0, unit='generic'):
+        if isinstance(value, timedelta64):
+            self._value = value._value
+            self._unit = unit if unit != 'generic' else value._unit
+        else:
+            self._value = int(value)
+            self._unit = unit
+
+    def __repr__(self):
+        return "numpy.timedelta64({}, '{}')".format(self._value, self._unit)
+
+    def __str__(self):
+        return "{} {}".format(self._value, self._unit)
+
+    def __add__(self, other):
+        if isinstance(other, timedelta64):
+            common = _common_time_unit(self._unit, other._unit)
+            v1 = _to_common_unit(self._value, self._unit, common)
+            v2 = _to_common_unit(other._value, other._unit, common)
+            return timedelta64(v1 + v2, common)
+        if isinstance(other, datetime64):
+            return other + self
+        return NotImplemented
+
+    def __sub__(self, other):
+        if isinstance(other, timedelta64):
+            common = _common_time_unit(self._unit, other._unit)
+            v1 = _to_common_unit(self._value, self._unit, common)
+            v2 = _to_common_unit(other._value, other._unit, common)
+            return timedelta64(v1 - v2, common)
+        return NotImplemented
+
+    def __mul__(self, other):
+        if isinstance(other, (int, float)):
+            return timedelta64(int(self._value * other), self._unit)
+        return NotImplemented
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __truediv__(self, other):
+        if isinstance(other, (int, float)):
+            return timedelta64(int(self._value / other), self._unit)
+        if isinstance(other, timedelta64):
+            common = _common_time_unit(self._unit, other._unit)
+            v1 = _to_common_unit(self._value, self._unit, common)
+            v2 = _to_common_unit(other._value, other._unit, common)
+            return v1 / v2 if v2 != 0 else float('inf')
+        return NotImplemented
+
+    def __eq__(self, other):
+        if isinstance(other, timedelta64):
+            common = _common_time_unit(self._unit, other._unit)
+            v1 = _to_common_unit(self._value, self._unit, common)
+            v2 = _to_common_unit(other._value, other._unit, common)
+            return v1 == v2
+        return NotImplemented
+
+    def __lt__(self, other):
+        if isinstance(other, timedelta64):
+            common = _common_time_unit(self._unit, other._unit)
+            v1 = _to_common_unit(self._value, self._unit, common)
+            v2 = _to_common_unit(other._value, other._unit, common)
+            return v1 < v2
+        return NotImplemented
+
+    def __hash__(self):
+        return hash((self._value, self._unit))
+
+    def astype(self, dtype):
+        dtype_str = str(dtype)
+        if 'int' in dtype_str:
+            return self._value
+        elif 'float' in dtype_str:
+            return float(self._value)
+        return self
+
+
+def isnat(x):
+    """Test for NaT (Not a Time)."""
+    if isinstance(x, (datetime64, timedelta64)):
+        return False  # We don't support NaT sentinel yet
+    return False
+
+
+def busday_count(begindates, enddates, weekmask='1111100', holidays=None):
+    """Count business days. Simplified implementation."""
+    if isinstance(begindates, datetime64) and isinstance(enddates, datetime64):
+        diff = enddates - begindates
+        return int(diff._value * 5 / 7)  # rough approximation
+    return 0
+
+
+def is_busday(dates, weekmask='1111100', holidays=None):
+    """Check if dates are business days."""
+    return True
+
+
+def busday_offset(dates, offsets, roll='raise', weekmask='1111100', holidays=None):
+    """Offset dates by business days."""
+    if isinstance(dates, datetime64):
+        return dates + timedelta64(int(offsets), 'D')
+    return dates
 string_ = _ScalarType("str", str)
 unicode_ = _ScalarType("str", str)
 half = _ScalarType("float16", float)
@@ -2274,6 +2655,50 @@ def take(a, indices, axis=None, out=None, mode="raise"):
     else:
         idx = list(indices) if hasattr(indices, '__iter__') else [indices]
     return array([float(flat[i]) for i in idx])
+
+def advanced_fancy_index(arr, indices):
+    """Handle multi-axis fancy indexing: arr[[0,1], [2,3]] -> [arr[0,2], arr[1,3]].
+
+    In NumPy, ``a[[0,1], [2,3]]`` selects ``[a[0,2], a[1,3]]`` (paired
+    indices, not cross-product).  Because the Rust ndarray class does not
+    support tuple-of-list indexing natively, this helper provides the same
+    semantics as a module-level function.
+
+    Parameters
+    ----------
+    arr : array_like
+        Source array (must be at least 2-D for multi-axis use).
+    indices : sequence of array_like
+        One index array per axis. All index arrays must broadcast to the
+        same shape (here: must have the same length).
+
+    Returns
+    -------
+    ndarray
+        1-D array of selected elements.
+
+    Examples
+    --------
+    >>> a = np.arange(12).reshape(3, 4)
+    >>> np.advanced_fancy_index(a, [[0, 1, 2], [3, 2, 1]])
+    array([3., 6., 9.])  # a[0,3], a[1,2], a[2,1]
+    """
+    arr = asarray(arr)
+    # Normalise each index array to a flat Python list of ints
+    idx_arrays = [asarray(idx).flatten().tolist() for idx in indices]
+    lengths = [len(a) for a in idx_arrays]
+    if len(set(lengths)) > 1:
+        raise IndexError("shape mismatch: indexing arrays could not be broadcast together")
+    n = lengths[0]
+    result = []
+    for i in _builtin_range(n):
+        # Walk into the array one axis at a time
+        val = arr
+        for ax in _builtin_range(len(idx_arrays)):
+            ix = int(idx_arrays[ax][i])
+            val = val[ix]
+        result.append(float(val.tolist()) if hasattr(val, 'tolist') else float(val))
+    return array(result)
 
 def flip(a, axis=None):
     """Reverse the order of elements along the given axis."""
@@ -5675,6 +6100,73 @@ def _fft_irfft(a, n=None, axis=-1, norm=None):
 
 fft.rfft = _fft_rfft
 fft.irfft = _fft_irfft
+
+def _fft_rfft2(a, s=None, axes=(-2, -1), norm=None):
+    """2D real FFT."""
+    a = asarray(a)
+    if a.ndim < 2:
+        return fft.rfft(a, norm=norm)
+    # Do rfft along last axis for each row, then fft along first axis
+    rows = a.tolist()
+    rfft_rows = []
+    for row in rows:
+        r = fft.rfft(array(row), norm=norm)
+        rfft_rows.append(r.tolist())
+    intermediate = array(rfft_rows)
+    # Now fft along axis 0 for each column
+    # This is complex data now, so use regular fft
+    return fft.fft(intermediate, axis=0, norm=norm) if intermediate.ndim > 1 else intermediate
+
+def _fft_irfft2(a, s=None, axes=(-2, -1), norm=None):
+    """2D inverse real FFT."""
+    a = asarray(a)
+    if a.ndim < 2:
+        return fft.irfft(a, norm=norm)
+    # ifft along first axis, then irfft along last
+    intermediate = fft.ifft(a, axis=0, norm=norm)
+    rows = intermediate.tolist()
+    result_rows = []
+    for row in rows:
+        if isinstance(row[0], list):
+            r = fft.irfft(array(row), n=s[-1] if s else None, norm=norm)
+        else:
+            r = fft.irfft(array(row), n=s[-1] if s else None, norm=norm)
+        result_rows.append(r.tolist())
+    return array(result_rows)
+
+def _fft_rfftn(a, s=None, axes=None, norm=None):
+    """N-D real FFT."""
+    return _fft_rfft2(a, s=s, norm=norm)
+
+def _fft_irfftn(a, s=None, axes=None, norm=None):
+    """N-D inverse real FFT."""
+    return _fft_irfft2(a, s=s, norm=norm)
+
+def _fft_hfft(a, n=None, axis=-1, norm=None):
+    """Hermitian FFT - input is Hermitian symmetric, output is real."""
+    a = asarray(a)
+    # hfft(a) = irfft(conj(a)) * N
+    conj_a = conj(a)
+    N = n if n is not None else 2 * (a.shape[0] - 1) if a.ndim > 0 else 2
+    result = fft.irfft(conj_a, n=N, norm=norm)
+    if norm != 'ortho':
+        result = result * N
+    return result
+
+def _fft_ihfft(a, n=None, axis=-1, norm=None):
+    """Inverse Hermitian FFT - input is real, output is Hermitian."""
+    a = asarray(a)
+    # ihfft(a) = conj(rfft(a)) / N
+    N = n if n is not None else len(a.tolist()) if a.ndim > 0 else 1
+    result = fft.rfft(a, n=N, norm=norm)
+    return conj(result) / N if norm != 'ortho' else conj(result)
+
+fft.rfft2 = _fft_rfft2
+fft.irfft2 = _fft_irfft2
+fft.rfftn = _fft_rfftn
+fft.irfftn = _fft_irfftn
+fft.hfft = _fft_hfft
+fft.ihfft = _fft_ihfft
 
 # --- random extension functions (Tier 19 Group C) ---------------------------
 

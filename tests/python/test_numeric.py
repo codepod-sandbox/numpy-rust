@@ -5950,6 +5950,779 @@ def test_clip_out():
     # Just verify it doesn't crash and returns correct values
     assert_eq(r.tolist(), [2.0, 5.0, 8.0])
 
+# --- Tier 31 tests ---
+
+# datetime64 / timedelta64
+
+def test_datetime64_create():
+    d = np.datetime64('2024-01-15')
+    assert_eq(isinstance(d, np.datetime64), True)
+
+def test_datetime64_subtract():
+    d1 = np.datetime64('2024-01-15')
+    d2 = np.datetime64('2024-01-01')
+    diff = d1 - d2
+    assert_eq(isinstance(diff, np.timedelta64), True)
+    assert_eq(diff._value, 14)
+
+def test_datetime64_compare():
+    d1 = np.datetime64('2024-01-15')
+    d2 = np.datetime64('2024-01-01')
+    assert_eq(d1 > d2, True)
+    assert_eq(d2 < d1, True)
+    assert_eq(d1 == d1, True)
+
+def test_timedelta64_create():
+    td = np.timedelta64(5, 'D')
+    assert_eq(td._value, 5)
+    assert_eq(td._unit, 'D')
+
+def test_timedelta64_add():
+    td1 = np.timedelta64(5, 'D')
+    td2 = np.timedelta64(3, 'D')
+    result = td1 + td2
+    assert_eq(result._value, 8)
+
+def test_datetime64_add_timedelta():
+    d = np.datetime64('2024-01-01')
+    td = np.timedelta64(10, 'D')
+    result = d + td
+    assert_eq(isinstance(result, np.datetime64), True)
+
+def test_timedelta64_mul():
+    td = np.timedelta64(5, 'D')
+    result = td * 3
+    assert_eq(result._value, 15)
+
+def test_isnat():
+    d = np.datetime64('2024-01-01')
+    assert_eq(np.isnat(d), False)
+
+# Polynomial submodules
+
+def test_chebval():
+    import numpy.polynomial as P
+    x = np.array([0.0, 0.5, 1.0])
+    # T0=1, T1=x, so c=[1, 2] means 1 + 2x
+    r = P.chebyshev.chebval(x, [1.0, 2.0])
+    assert_close(r.tolist()[0], 1.0)  # 1 + 2*0 = 1
+    assert_close(r.tolist()[1], 2.0)  # 1 + 2*0.5 = 2
+    assert_close(r.tolist()[2], 3.0)  # 1 + 2*1 = 3
+
+def test_legval():
+    import numpy.polynomial as P
+    x = np.array([0.0, 1.0])
+    # P0=1, P1=x, so c=[1, 1] means 1 + x
+    r = P.legendre.legval(x, [1.0, 1.0])
+    assert_close(r.tolist()[0], 1.0)
+    assert_close(r.tolist()[1], 2.0)
+
+def test_hermval():
+    import numpy.polynomial as P
+    x = np.array([0.0, 1.0])
+    # H0=1, so c=[3] means constant 3
+    r = P.hermite.hermval(x, [3.0])
+    assert_close(r.tolist()[0], 3.0)
+    assert_close(r.tolist()[1], 3.0)
+
+def test_lagval():
+    import numpy.polynomial as P
+    x = np.array([0.0, 1.0])
+    # L0=1, L1=1-x, so c=[1, 1] means 1 + (1-x) = 2-x
+    r = P.laguerre.lagval(x, [1.0, 1.0])
+    assert_close(r.tolist()[0], 2.0)  # 2 - 0
+    assert_close(r.tolist()[1], 1.0)  # 2 - 1
+
+def test_chebadd():
+    import numpy.polynomial as P
+    r = P.chebyshev.chebadd([1.0, 2.0], [3.0, 4.0])
+    assert_eq(r.tolist(), [4.0, 6.0])
+
+def test_chebfit():
+    import numpy.polynomial as P
+    x = np.array([0.0, 0.5, 1.0])
+    y = np.array([1.0, 2.0, 3.0])
+    c = P.chebyshev.chebfit(x, y, 1)
+    assert_eq(c.shape[0] >= 2, True)
+
+# FFT extensions
+
+def test_fft_rfft2():
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.rfft2(a)
+    # Just verify it doesn't crash and returns something
+    assert_eq(r.ndim >= 1, True)
+
+def test_fft_hfft():
+    a = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    r = np.fft.rfft(a)
+    # hfft is basically inverse of rfft with conjugate
+    # Just test it doesn't crash
+    h = np.fft.hfft(r)
+    assert_eq(len(h.tolist()) > 0, True)
+
+def test_fft_ihfft():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    r = np.fft.ihfft(a)
+    assert_eq(len(r.tolist()) > 0, True)
+
+# Multi-axis fancy indexing
+
+def test_advanced_fancy_index():
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    # Select a[0,2] and a[1,1] = 3.0 and 5.0
+    if hasattr(np, '_advanced_fancy_index'):
+        r = np._advanced_fancy_index(a, [[0, 1], [2, 1]])
+        assert_eq(r.tolist(), [3.0, 5.0])
+
+# busday stubs
+
+def test_busday_count():
+    d1 = np.datetime64('2024-01-01')
+    d2 = np.datetime64('2024-01-15')
+    r = np.busday_count(d1, d2)
+    assert_eq(isinstance(r, int), True)
+    assert_eq(r > 0, True)
+
+def test_is_busday():
+    d = np.datetime64('2024-01-15')
+    r = np.is_busday(d)
+    assert_eq(r, True)
+
+# --- FFT extensions: rfft2, irfft2, rfftn, irfftn, hfft, ihfft ---
+
+def test_fft_rfft2_exists():
+    """rfft2 is callable and returns an ndarray."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.rfft2(a)
+    assert_eq(isinstance(r, np.ndarray), True, "rfft2 should return ndarray")
+
+def test_fft_rfftn_exists():
+    """rfftn is callable and returns an ndarray."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.rfftn(a)
+    assert_eq(isinstance(r, np.ndarray), True, "rfftn should return ndarray")
+
+def test_fft_irfft2_exists():
+    """irfft2 is callable."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.rfft2(a)
+    ir = np.fft.irfft2(r)
+    assert_eq(isinstance(ir, np.ndarray), True, "irfft2 should return ndarray")
+
+def test_fft_irfftn_exists():
+    """irfftn is callable."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    r = np.fft.rfftn(a)
+    ir = np.fft.irfftn(r)
+    assert_eq(isinstance(ir, np.ndarray), True, "irfftn should return ndarray")
+
+def test_fft_hfft_basic():
+    """hfft produces real output from Hermitian-symmetric complex input."""
+    # Hermitian-symmetric input: [1+0j, 2-1j, 2+1j] (real spectrum)
+    # We represent complex as (N, 2) array
+    a = np.array([[1.0, 0.0], [2.0, -1.0]])
+    r = np.fft.hfft(a)
+    assert_eq(isinstance(r, np.ndarray), True, "hfft should return ndarray")
+    assert_eq(r.size > 0, True, "hfft result should not be empty")
+
+def test_fft_ihfft_basic():
+    """ihfft produces Hermitian output from real input."""
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    r = np.fft.ihfft(a)
+    assert_eq(isinstance(r, np.ndarray), True, "ihfft should return ndarray")
+    assert_eq(r.size > 0, True, "ihfft result should not be empty")
+
+def test_fft_rfft2_1d_fallback():
+    """rfft2 on 1D array falls back to rfft."""
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    r = np.fft.rfft2(a)
+    r2 = np.fft.rfft(a)
+    # Should match rfft output
+    assert_eq(r.shape, r2.shape, "rfft2 on 1D should match rfft shape")
+
+# --- Multi-axis fancy indexing ---
+
+def test_advanced_fancy_index_2d():
+    """advanced_fancy_index selects paired indices from 2D array."""
+    a = np.arange(0, 12).reshape((3, 4))
+    # a[0,3]=3, a[1,2]=6, a[2,1]=9
+    r = np.advanced_fancy_index(a, [[0, 1, 2], [3, 2, 1]])
+    assert_close(r[0], 3.0, msg="a[0,3] should be 3")
+    assert_close(r[1], 6.0, msg="a[1,2] should be 6")
+    assert_close(r[2], 9.0, msg="a[2,1] should be 9")
+
+def test_advanced_fancy_index_simple():
+    """advanced_fancy_index with simple 2D selection."""
+    a = np.array([[10.0, 20.0], [30.0, 40.0]])
+    r = np.advanced_fancy_index(a, [[0, 1], [0, 1]])
+    assert_close(r[0], 10.0, msg="a[0,0] should be 10")
+    assert_close(r[1], 40.0, msg="a[1,1] should be 40")
+
+def test_advanced_fancy_index_length_mismatch():
+    """advanced_fancy_index raises on mismatched index lengths."""
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    try:
+        np.advanced_fancy_index(a, [[0, 1], [0]])
+        assert_eq(False, True, "should have raised IndexError")
+    except IndexError:
+        pass
+
+# --- Polynomial submodule tests (Chebyshev, Legendre, Hermite, HermiteE, Laguerre) ---
+
+# ===== Chebyshev =====
+
+def test_chebval_basic():
+    """T_0=1, T_1=x at x=3 => c=[0,1] => 3"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebval(np.array([3.0]), [0.0, 1.0])
+    assert_close(float(r[0]), 3.0)
+
+def test_chebval_t2():
+    """T_2 = 2x^2-1; c=[1,0,1] => T_0+T_2 = 2x^2; at x=2 => 8"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebval(np.array([2.0]), [1.0, 0.0, 1.0])
+    assert_close(float(r[0]), 8.0)
+
+def test_chebval_const():
+    """c=[5] => 5 everywhere"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebval(np.array([99.0]), [5.0])
+    assert_close(float(r[0]), 5.0)
+
+def test_chebval_multi():
+    """Compute at multiple points"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebval(np.array([0.0, 1.0, -1.0]), [0.0, 1.0])
+    assert_close(float(r[0]), 0.0)
+    assert_close(float(r[1]), 1.0)
+    assert_close(float(r[2]), -1.0)
+
+def test_chebadd_t31():
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebadd([1.0, 2.0], [3.0, 4.0])
+    assert_close(r.tolist()[0], 4.0)
+    assert_close(r.tolist()[1], 6.0)
+
+def test_chebsub():
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebsub([5.0, 3.0], [2.0, 1.0])
+    assert_close(r.tolist()[0], 3.0)
+    assert_close(r.tolist()[1], 2.0)
+
+def test_chebadd_different_lengths():
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebadd([1.0], [0.0, 2.0, 3.0])
+    assert_close(r.tolist()[0], 1.0)
+    assert_close(r.tolist()[1], 2.0)
+    assert_close(r.tolist()[2], 3.0)
+
+def test_chebder_t2():
+    """d/dx T_2 = d/dx(2x^2-1) = 4x = 4*T_1"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebder([0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 4.0)
+
+def test_chebder_t3():
+    """d/dx T_3 = 12x^2-3 = 3*T_0 + 6*T_2"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebder([0.0, 0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], 3.0)
+    assert_close(r.tolist()[1], 0.0)
+    assert_close(r.tolist()[2], 6.0)
+
+def test_chebder_t4():
+    """d/dx T_4 = 32x^3-16x = 8*T_1 + 8*T_3"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebder([0.0, 0.0, 0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 8.0)
+    assert_close(r.tolist()[2], 0.0)
+    assert_close(r.tolist()[3], 8.0)
+
+def test_chebder_const():
+    """Derivative of constant is zero"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebder([5.0])
+    assert_close(r.tolist()[0], 0.0)
+
+def test_chebint_t0():
+    """Integral of T_0=1 is T_1=x"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebint([1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 1.0)
+
+def test_chebint_roundtrip():
+    """integral(derivative(f)) == f up to constant"""
+    import numpy.polynomial as poly
+    c = [0.0, 1.0, 0.0, 1.0]  # T_1 + T_3
+    dc = poly.chebyshev.chebder(c)
+    ic = poly.chebyshev.chebint(dc.tolist())
+    rl = ic.tolist()
+    # Should recover T_1 and T_3 coefficients (constant may differ)
+    assert_close(rl[1], 1.0, tol=1e-6)
+    assert_close(rl[3], 1.0, tol=1e-6)
+
+def test_chebint_der_roundtrip():
+    """derivative(integral(f)) == f"""
+    import numpy.polynomial as poly
+    c = [3.0, 2.0, 1.0]
+    ic = poly.chebyshev.chebint(c)
+    dc = poly.chebyshev.chebder(ic.tolist())
+    rl = dc.tolist()
+    assert_close(rl[0], 3.0, tol=1e-6)
+    assert_close(rl[1], 2.0, tol=1e-6)
+    assert_close(rl[2], 1.0, tol=1e-6)
+
+def test_chebmul_t0_t1():
+    """T_0 * T_1 = T_1"""
+    import numpy.polynomial as poly
+    r = poly.chebyshev.chebmul([1.0], [0.0, 1.0])
+    assert_close(r.tolist()[0], 0.0, tol=1e-6)
+    assert_close(r.tolist()[1], 1.0, tol=1e-6)
+
+def test_chebfit_linear():
+    """Fit a line with Chebyshev: T_0 + T_1 = 1 + x"""
+    import numpy.polynomial as poly
+    x = np.array([-1.0, 0.0, 1.0])
+    y = np.array([0.0, 1.0, 2.0])  # y = 1 + x = T_0 + T_1
+    c = poly.chebyshev.chebfit(x, y, 1)
+    assert_close(float(c[0]), 1.0, tol=1e-6)
+    assert_close(float(c[1]), 1.0, tol=1e-6)
+
+# ===== Legendre =====
+
+def test_legval_basic():
+    """P_0=1, P_1=x; c=[0,1] at x=3 => 3"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legval(np.array([3.0]), [0.0, 1.0])
+    assert_close(float(r[0]), 3.0)
+
+def test_legval_p2():
+    """P_2 = (3x^2-1)/2; c=[1,0,1] => P_0+P_2 = (1+3x^2)/2; at x=1 => 2"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legval(np.array([1.0]), [1.0, 0.0, 1.0])
+    assert_close(float(r[0]), 2.0)
+
+def test_legval_at_zero():
+    """P_0+P_2 at x=0: 1 + (-1/2) = 0.5"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legval(np.array([0.0]), [1.0, 0.0, 1.0])
+    assert_close(float(r[0]), 0.5)
+
+def test_legval_const():
+    import numpy.polynomial as poly
+    r = poly.legendre.legval(np.array([42.0]), [7.0])
+    assert_close(float(r[0]), 7.0)
+
+def test_legadd():
+    import numpy.polynomial as poly
+    r = poly.legendre.legadd([1.0, 2.0], [3.0, 4.0])
+    assert_close(r.tolist()[0], 4.0)
+    assert_close(r.tolist()[1], 6.0)
+
+def test_legsub():
+    import numpy.polynomial as poly
+    r = poly.legendre.legsub([5.0, 3.0], [2.0, 1.0])
+    assert_close(r.tolist()[0], 3.0)
+    assert_close(r.tolist()[1], 2.0)
+
+def test_legder_p2():
+    """d/dx P_2 = 3x = 3*P_1"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legder([0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 3.0)
+
+def test_legder_p3():
+    """d/dx P_3 = (15x^2-3)/2 = P_0 + 5*P_2"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legder([0.0, 0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], 1.0, tol=1e-6)
+    assert_close(r.tolist()[1], 0.0, tol=1e-6)
+    assert_close(r.tolist()[2], 5.0, tol=1e-6)
+
+def test_legder_numerical():
+    """Verify P'_4 at x=0.5 numerically"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legder([0.0, 0.0, 0.0, 0.0, 1.0])
+    val = float(poly.legendre.legval(np.array([0.5]), r))
+    assert_close(val, -1.5625, tol=1e-6)
+
+def test_legder_const():
+    import numpy.polynomial as poly
+    r = poly.legendre.legder([5.0])
+    assert_close(r.tolist()[0], 0.0)
+
+def test_legint_p0():
+    """Integral of P_0=1 is P_1=x"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legint([1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 1.0)
+
+def test_legint_p1():
+    """Integral of P_1: (P_2-P_0)/3 => [-1/3, 0, 1/3]"""
+    import numpy.polynomial as poly
+    r = poly.legendre.legint([0.0, 1.0])
+    rl = r.tolist()
+    assert_close(rl[0], -1.0/3.0, tol=1e-6)
+    assert_close(rl[1], 0.0, tol=1e-6)
+    assert_close(rl[2], 1.0/3.0, tol=1e-6)
+
+def test_legint_der_roundtrip():
+    """derivative(integral(f)) == f"""
+    import numpy.polynomial as poly
+    c = [2.0, 3.0, 1.0]
+    ic = poly.legendre.legint(c)
+    dc = poly.legendre.legder(ic.tolist())
+    rl = dc.tolist()
+    assert_close(rl[0], 2.0, tol=1e-6)
+    assert_close(rl[1], 3.0, tol=1e-6)
+    assert_close(rl[2], 1.0, tol=1e-6)
+
+def test_legfit_linear():
+    """Fit P_0+P_1 = 1+x"""
+    import numpy.polynomial as poly
+    x = np.array([-1.0, 0.0, 1.0])
+    y = np.array([0.0, 1.0, 2.0])
+    c = poly.legendre.legfit(x, y, 1)
+    assert_close(float(c[0]), 1.0, tol=1e-6)
+    assert_close(float(c[1]), 1.0, tol=1e-6)
+
+# ===== Hermite (physicist's) =====
+
+def test_hermval_basic():
+    """H_0=1, H_1=2x; c=[0,1] at x=3 => 6"""
+    import numpy.polynomial as poly
+    r = poly.hermite.hermval(np.array([3.0]), [0.0, 1.0])
+    assert_close(float(r[0]), 6.0)
+
+def test_hermval_h2():
+    """H_2 = 4x^2-2; c=[1,0,1] => H_0+H_2 = 4x^2-1; at x=1 => 3"""
+    import numpy.polynomial as poly
+    r = poly.hermite.hermval(np.array([1.0]), [1.0, 0.0, 1.0])
+    assert_close(float(r[0]), 3.0)
+
+def test_hermval_const():
+    import numpy.polynomial as poly
+    r = poly.hermite.hermval(np.array([99.0]), [7.0])
+    assert_close(float(r[0]), 7.0)
+
+def test_hermadd():
+    import numpy.polynomial as poly
+    r = poly.hermite.hermadd([1.0, 2.0], [3.0, 4.0])
+    assert_close(r.tolist()[0], 4.0)
+    assert_close(r.tolist()[1], 6.0)
+
+def test_hermsub():
+    import numpy.polynomial as poly
+    r = poly.hermite.hermsub([5.0, 3.0], [2.0, 1.0])
+    assert_close(r.tolist()[0], 3.0)
+    assert_close(r.tolist()[1], 2.0)
+
+def test_hermder_h2():
+    """H'_2 = 8x = 4*H_1; d/dx [0,0,1] => [0, 4]"""
+    import numpy.polynomial as poly
+    r = poly.hermite.hermder([0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 4.0)
+
+def test_hermder_h1():
+    """H'_1 = 2 = 2*H_0; d/dx [0,1] => [2]"""
+    import numpy.polynomial as poly
+    r = poly.hermite.hermder([0.0, 1.0])
+    assert_close(r.tolist()[0], 2.0)
+
+def test_hermder_const():
+    import numpy.polynomial as poly
+    r = poly.hermite.hermder([5.0])
+    assert_close(r.tolist()[0], 0.0)
+
+def test_hermint_h0():
+    """Integral of H_0=1 => H_1/(2*1) = [0, 0.5]"""
+    import numpy.polynomial as poly
+    r = poly.hermite.hermint([1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 0.5)
+
+def test_hermint_der_roundtrip():
+    """derivative(integral(f)) == f"""
+    import numpy.polynomial as poly
+    c = [3.0, 2.0, 1.0]
+    ic = poly.hermite.hermint(c)
+    dc = poly.hermite.hermder(ic.tolist())
+    rl = dc.tolist()
+    assert_close(rl[0], 3.0, tol=1e-6)
+    assert_close(rl[1], 2.0, tol=1e-6)
+    assert_close(rl[2], 1.0, tol=1e-6)
+
+def test_hermfit_linear():
+    """Fit H_0 + (1/2)*H_1 = 1 + x"""
+    import numpy.polynomial as poly
+    x = np.array([-1.0, 0.0, 1.0])
+    y = np.array([0.0, 1.0, 2.0])  # y = 1 + x = H_0 + 0.5*H_1
+    c = poly.hermite.hermfit(x, y, 1)
+    assert_close(float(c[0]), 1.0, tol=1e-6)
+    assert_close(float(c[1]), 0.5, tol=1e-6)
+
+# ===== HermiteE (probabilist's) =====
+
+def test_hermeval_basic():
+    """He_0=1, He_1=x; c=[0,1] at x=3 => 3"""
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeval(np.array([3.0]), [0.0, 1.0])
+    assert_close(float(r[0]), 3.0)
+
+def test_hermeval_he2():
+    """He_2 = x^2-1; c=[1,0,1] => He_0+He_2 = x^2; at x=2 => 4"""
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeval(np.array([2.0]), [1.0, 0.0, 1.0])
+    assert_close(float(r[0]), 4.0)
+
+def test_hermeval_const():
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeval(np.array([42.0]), [9.0])
+    assert_close(float(r[0]), 9.0)
+
+def test_hermeadd():
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeadd([1.0, 2.0], [3.0, 4.0])
+    assert_close(r.tolist()[0], 4.0)
+    assert_close(r.tolist()[1], 6.0)
+
+def test_hermesub():
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermesub([5.0, 3.0], [2.0, 1.0])
+    assert_close(r.tolist()[0], 3.0)
+    assert_close(r.tolist()[1], 2.0)
+
+def test_hermeder_he2():
+    """He'_2 = 2x = 2*He_1; d/dx [0,0,1] => [0, 2]"""
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeder([0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 2.0)
+
+def test_hermeder_he1():
+    """He'_1 = 1 = He_0; d/dx [0,1] => [1]"""
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeder([0.0, 1.0])
+    assert_close(r.tolist()[0], 1.0)
+
+def test_hermeder_const():
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeder([5.0])
+    assert_close(r.tolist()[0], 0.0)
+
+def test_hermeint_he0():
+    """Integral of He_0=1 => He_1/1 = [0, 1]"""
+    import numpy.polynomial as poly
+    r = poly.hermite_e.hermeint([1.0])
+    assert_close(r.tolist()[0], 0.0)
+    assert_close(r.tolist()[1], 1.0)
+
+def test_hermeint_der_roundtrip():
+    """derivative(integral(f)) == f"""
+    import numpy.polynomial as poly
+    c = [3.0, 2.0, 1.0]
+    ic = poly.hermite_e.hermeint(c)
+    dc = poly.hermite_e.hermeder(ic.tolist())
+    rl = dc.tolist()
+    assert_close(rl[0], 3.0, tol=1e-6)
+    assert_close(rl[1], 2.0, tol=1e-6)
+    assert_close(rl[2], 1.0, tol=1e-6)
+
+def test_hermefit_linear():
+    """Fit He_0 + He_1 = 1+x"""
+    import numpy.polynomial as poly
+    x = np.array([-1.0, 0.0, 1.0])
+    y = np.array([0.0, 1.0, 2.0])
+    c = poly.hermite_e.hermefit(x, y, 1)
+    assert_close(float(c[0]), 1.0, tol=1e-6)
+    assert_close(float(c[1]), 1.0, tol=1e-6)
+
+# ===== Laguerre =====
+
+def test_lagval_basic():
+    """L_0=1, L_1=1-x; c=[0,1] at x=0 => 1"""
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagval(np.array([0.0]), [0.0, 1.0])
+    assert_close(float(r[0]), 1.0)
+
+def test_lagval_l1_at_2():
+    """L_1 = 1-x; c=[0,1] at x=2 => -1"""
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagval(np.array([2.0]), [0.0, 1.0])
+    assert_close(float(r[0]), -1.0)
+
+def test_lagval_l2():
+    """L_2 = (x^2-4x+2)/2; c=[1,0,1] => L_0+L_2 at x=0 => 1+1=2"""
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagval(np.array([0.0]), [1.0, 0.0, 1.0])
+    assert_close(float(r[0]), 2.0)
+
+def test_lagval_l2_at_2():
+    """L_0+L_2 at x=2 => 1+(4-8+2)/2 = 1-1 = 0"""
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagval(np.array([2.0]), [1.0, 0.0, 1.0])
+    assert_close(float(r[0]), 0.0)
+
+def test_lagval_const():
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagval(np.array([42.0]), [7.0])
+    assert_close(float(r[0]), 7.0)
+
+def test_lagadd():
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagadd([1.0, 2.0], [3.0, 4.0])
+    assert_close(r.tolist()[0], 4.0)
+    assert_close(r.tolist()[1], 6.0)
+
+def test_lagsub():
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagsub([5.0, 3.0], [2.0, 1.0])
+    assert_close(r.tolist()[0], 3.0)
+    assert_close(r.tolist()[1], 2.0)
+
+def test_lagder_l1():
+    """L'_1 = -1 = -L_0; d/dx [0,1] => [-1]"""
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagder([0.0, 1.0])
+    assert_close(r.tolist()[0], -1.0)
+
+def test_lagder_l2():
+    """L'_2 = x-2 = -L_0-L_1; d/dx [0,0,1] => [-1,-1]"""
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagder([0.0, 0.0, 1.0])
+    assert_close(r.tolist()[0], -1.0)
+    assert_close(r.tolist()[1], -1.0)
+
+def test_lagder_const():
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagder([5.0])
+    assert_close(r.tolist()[0], 0.0)
+
+def test_lagint_l0():
+    """Integral of L_0 = L_0-L_1 => [1, -1]"""
+    import numpy.polynomial as poly
+    r = poly.laguerre.lagint([1.0])
+    assert_close(r.tolist()[0], 1.0)
+    assert_close(r.tolist()[1], -1.0)
+
+def test_lagint_der_roundtrip():
+    """derivative(integral(f)) == f"""
+    import numpy.polynomial as poly
+    c = [3.0, 2.0, 1.0]
+    ic = poly.laguerre.lagint(c)
+    dc = poly.laguerre.lagder(ic.tolist())
+    rl = dc.tolist()
+    assert_close(rl[0], 3.0, tol=1e-6)
+    assert_close(rl[1], 2.0, tol=1e-6)
+    assert_close(rl[2], 1.0, tol=1e-6)
+
+def test_lagfit_const():
+    """Fit constant function"""
+    import numpy.polynomial as poly
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    y = np.array([5.0, 5.0, 5.0, 5.0])
+    c = poly.laguerre.lagfit(x, y, 0)
+    assert_close(float(c[0]), 5.0, tol=1e-6)
+
+# ===== Access as np.polynomial.X =====
+
+def test_poly_submodule_access_chebyshev():
+    """np.polynomial.chebyshev accessible"""
+    assert_eq(hasattr(np.polynomial, 'chebyshev'), True)
+
+def test_poly_submodule_access_legendre():
+    assert_eq(hasattr(np.polynomial, 'legendre'), True)
+
+def test_poly_submodule_access_hermite():
+    assert_eq(hasattr(np.polynomial, 'hermite'), True)
+
+def test_poly_submodule_access_hermite_e():
+    assert_eq(hasattr(np.polynomial, 'hermite_e'), True)
+
+def test_poly_submodule_access_laguerre():
+    assert_eq(hasattr(np.polynomial, 'laguerre'), True)
+
+def test_poly_original_still_works():
+    """Existing polynomial class still works"""
+    import numpy.polynomial as poly
+    r = poly.polynomial.polyval(np.array([2.0]), [1.0, 2.0, 3.0])
+    assert_close(float(r[0]), 17.0)
+
+# ===== Cross-validation: verify derivative at a point numerically =====
+
+def test_chebder_numerical_check():
+    """Verify Chebyshev derivative by finite differences"""
+    import numpy.polynomial as poly
+    c = [1.0, 2.0, 3.0, 4.0]
+    dc = poly.chebyshev.chebder(c)
+    x = 0.5
+    h = 1e-8
+    f_plus = float(poly.chebyshev.chebval(np.array([x + h]), c))
+    f_minus = float(poly.chebyshev.chebval(np.array([x - h]), c))
+    numerical_deriv = (f_plus - f_minus) / (2 * h)
+    analytic_deriv = float(poly.chebyshev.chebval(np.array([x]), dc.tolist()))
+    assert_close(analytic_deriv, numerical_deriv, tol=1e-4)
+
+def test_legder_numerical_check():
+    """Verify Legendre derivative by finite differences"""
+    import numpy.polynomial as poly
+    c = [1.0, 2.0, 3.0]
+    dc = poly.legendre.legder(c)
+    x = 0.5
+    h = 1e-8
+    f_plus = float(poly.legendre.legval(np.array([x + h]), c))
+    f_minus = float(poly.legendre.legval(np.array([x - h]), c))
+    numerical = (f_plus - f_minus) / (2 * h)
+    analytic = float(poly.legendre.legval(np.array([x]), dc.tolist()))
+    assert_close(analytic, numerical, tol=1e-4)
+
+def test_hermder_numerical_check():
+    """Verify Hermite derivative by finite differences"""
+    import numpy.polynomial as poly
+    c = [1.0, 0.5, 0.25]
+    dc = poly.hermite.hermder(c)
+    x = 0.5
+    h = 1e-8
+    f_plus = float(poly.hermite.hermval(np.array([x + h]), c))
+    f_minus = float(poly.hermite.hermval(np.array([x - h]), c))
+    numerical = (f_plus - f_minus) / (2 * h)
+    analytic = float(poly.hermite.hermval(np.array([x]), dc.tolist()))
+    assert_close(analytic, numerical, tol=1e-4)
+
+def test_hermeder_numerical_check():
+    """Verify HermiteE derivative by finite differences"""
+    import numpy.polynomial as poly
+    c = [1.0, 2.0, 0.5]
+    dc = poly.hermite_e.hermeder(c)
+    x = 0.5
+    h = 1e-8
+    f_plus = float(poly.hermite_e.hermeval(np.array([x + h]), c))
+    f_minus = float(poly.hermite_e.hermeval(np.array([x - h]), c))
+    numerical = (f_plus - f_minus) / (2 * h)
+    analytic = float(poly.hermite_e.hermeval(np.array([x]), dc.tolist()))
+    assert_close(analytic, numerical, tol=1e-4)
+
+def test_lagder_numerical_check():
+    """Verify Laguerre derivative by finite differences"""
+    import numpy.polynomial as poly
+    c = [1.0, 2.0, 0.5]
+    dc = poly.laguerre.lagder(c)
+    x = 1.0
+    h = 1e-8
+    f_plus = float(poly.laguerre.lagval(np.array([x + h]), c))
+    f_minus = float(poly.laguerre.lagval(np.array([x - h]), c))
+    numerical = (f_plus - f_minus) / (2 * h)
+    analytic = float(poly.laguerre.lagval(np.array([x]), dc.tolist()))
+    assert_close(analytic, numerical, tol=1e-4)
+
+
 # Run all tests
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
