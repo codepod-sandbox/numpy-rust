@@ -752,6 +752,11 @@ class _ScalarTypeMeta(type):
 
     def __call__(cls, value=0, *args, **kwargs):
         scalar_name = cls._scalar_name
+        if scalar_name in ('complex64', 'complex128') and len(args) == 1:
+            try:
+                value = complex(value, args[0])
+            except (ValueError, TypeError):
+                return value
         try:
             base_value = cls._python_type(value)
         except (ValueError, TypeError):
@@ -4555,6 +4560,20 @@ def fromiter(iterable, dtype=None, count=-1):
         _dt = _normalize_dtype(str(dtype))
         if _dt in ("str", "bytes") or str(dtype) in ("S", "S0", "V0", "U0"):
             raise ValueError("Must specify length when using variable-length dtypes")
+    subarray_len = None
+    if dtype is not None:
+        # Minimal support for subarray dtype validation, e.g. dtype((int, 2)).
+        if isinstance(dtype, tuple) and len(dtype) == 2 and isinstance(dtype[1], int):
+            subarray_len = int(dtype[1])
+        else:
+            _dtype_name = str(getattr(dtype, "name", dtype))
+            if _dtype_name.startswith("(<class '") and _dtype_name.endswith(")"):
+                _comma = _dtype_name.rfind(",")
+                if _comma != -1:
+                    try:
+                        subarray_len = int(_dtype_name[_comma + 1 : -1].strip())
+                    except (TypeError, ValueError):
+                        subarray_len = None
     if count > 0:
         data = []
         for val in iterable:
@@ -4567,6 +4586,12 @@ def fromiter(iterable, dtype=None, count=-1):
             )
     else:
         data = list(iterable)
+    if subarray_len is not None:
+        for val in data:
+            if not isinstance(val, (list, tuple)):
+                raise ValueError("setting an array element with a sequence")
+            if len(val) != subarray_len:
+                raise ValueError("setting an array element with a sequence")
     return array(data, dtype=dtype)
 
 def fromstring(string, dtype=None, count=-1, sep=''):
@@ -4588,6 +4613,9 @@ def array_equal(a1, a2, equal_nan=False):
         if not isinstance(a2, ndarray):
             a2 = array(a2)
         if a1.shape != a2.shape:
+            return False
+        has_nan = bool(any(logical_or(isnan(a1), isnan(a2))))
+        if not equal_nan and has_nan:
             return False
         if equal_nan:
             try:

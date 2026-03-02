@@ -315,6 +315,11 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "float16" | "f2" => Ok(DType::Float16),
         "float32" | "f32" | "f4" => Ok(DType::Float32),
         "float64" | "f64" | "float" | "<class 'float'>" => Ok(DType::Float64),
+        // Compatibility fallback: map temporal dtypes to float64 until native
+        // datetime/timedelta storage exists in the Rust core.
+        "timedelta64" | "datetime64" | "m8" | "M8" | "<m8" | ">m8" | "<M8" | ">M8" => {
+            Ok(DType::Float64)
+        }
         "complex64" | "c64" | "c8" => Ok(DType::Complex64),
         "complex128" | "c128" | "c16" | "complex" | "<class 'complex'>" => Ok(DType::Complex128),
         "str" | "U" | "<class 'str'>" => Ok(DType::Str),

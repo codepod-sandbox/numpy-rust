@@ -34,12 +34,15 @@ The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the 
 |---|---|
 | `cargo test -q` | `425 passed, 0 failed` |
 | `./tests/python/run_tests.sh` | `1,177 passed, 0 failed` |
-| `./target/debug/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,115 passed, 67 expected failures (xfail), 0 unexpected failures` |
+| `./target/debug/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,177 passed, 65 expected failures (xfail), 0 unexpected failures` |
 
 Recent compatibility improvements:
 - `ndarray.flat` now behaves as a mutable flat iterator view (`x.flat[i] = v` writes through to `x`), removing `TestArgwhere.test_nd[*]` xfails.
 - NumPy scalar dtype identity is preserved in `can_cast` paths, removing all `TestTypes.test_can_cast_scalars[*]` xfails.
 - NumPy scalar wrappers now expose scalar-shape semantics (`shape=()`, `ndim=0`, `size=1`), and `std(..., mean=...)` with `axis=None` now returns scalar-compatible NumPy values.
+- Temporal dtype aliases (`timedelta64`/`datetime64`) are now accepted in Rust dtype parsing (currently backed by float64 storage as a compatibility fallback), unblocking additional compat coverage.
+- `array_equal(..., equal_nan=...)` and complex scalar constructor compatibility were tightened for NaN-heavy comparison cases.
+- `fromiter` now validates fixed-size subarray dtype item shapes and raises `ValueError` on mismatched sequence lengths, matching NumPy behavior more closely.
 
 The project goal is library compatibility first (pandas/sklearn/scipy-style usage), then performance. Work is prioritized toward API correctness, dtype semantics, and edge-case behavior over raw speed.
 

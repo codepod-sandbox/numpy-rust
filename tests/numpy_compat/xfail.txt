@@ -1,6 +1,3 @@
-TestArrayComparisons.test_array_equal_equal_nan
-TestBoolCmp.test_double
-TestBoolCmp.test_float
 TestClip.test_clip_complex
 TestClip.test_clip_invalid_casting
 TestClip.test_clip_nan
@@ -26,7 +23,6 @@ TestFloatExceptions.test_floating_exceptions[4]
 TestFloatExceptions.test_floating_exceptions[5]
 TestFloatExceptions.test_floating_exceptions[6]
 TestFloatExceptions.test_warnings
-TestFromiter.test_failed_itemsetting
 TestIsclose.test_nep50_isclose
 TestKeepdims.test_raise
 TestLikeFuncs.test_dtype_str_bytes[0]
@@ -64,3 +60,5 @@ TestTypes.test_result_type
 TestTypes.test_valid_void_promotion[2]
 TestTypes.test_valid_void_promotion[3]
 TestIndex.test_boolean
+TestBoolCmp.test_double
+TestBoolCmp.test_float
