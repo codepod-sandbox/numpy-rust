@@ -80,6 +80,137 @@ impl IterNext for PyNdArrayIter {
     }
 }
 
+/// Mutable flat iterator/view over an ndarray.
+/// Exposes linear indexing that writes through to the base array.
+#[vm::pyclass(module = "numpy", name = "flatiter")]
+#[derive(Debug, PyPayload)]
+pub struct PyFlatIter {
+    array: PyRef<PyNdArray>,
+    index: std::sync::atomic::AtomicUsize,
+}
+
+#[vm::pyclass(flags(DISALLOW_INSTANTIATION), with(IterNext, Iterable, AsMapping))]
+impl PyFlatIter {
+    #[pymethod]
+    fn __len__(&self) -> usize {
+        self.array.data.read().unwrap().size()
+    }
+
+    #[pymethod]
+    fn __getitem__(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let data = self.array.data.read().unwrap();
+        let total = data.size();
+        let idx = parse_flat_index(&key, total, vm)?;
+        let coord = linear_to_coord(idx, data.shape());
+        let s = data.get(&coord).map_err(|e| numpy_err(e, vm))?;
+        Ok(scalar_to_py(s, vm))
+    }
+
+    #[pymethod]
+    fn __setitem__(
+        &self,
+        key: PyObjectRef,
+        value: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
+        let mut data = self.array.data.write().unwrap();
+        let total = data.size();
+        let idx = parse_flat_index(&key, total, vm)?;
+        let coord = linear_to_coord(idx, data.shape());
+        let scalar = py_obj_to_scalar(&value, data.dtype(), vm)?;
+        data.set(&coord, scalar).map_err(|e| numpy_err(e, vm))
+    }
+
+    #[pymethod]
+    fn tolist(&self, vm: &VirtualMachine) -> PyObjectRef {
+        let data = self.array.data.read().unwrap();
+        let total = data.size();
+        let mut out = Vec::with_capacity(total);
+        for i in 0..total {
+            let coord = linear_to_coord(i, data.shape());
+            let s = data.get(&coord).expect("flat index must be valid");
+            out.push(scalar_to_py(s, vm));
+        }
+        vm.ctx.new_list(out).into()
+    }
+}
+
+impl SelfIter for PyFlatIter {}
+
+impl IterNext for PyFlatIter {
+    fn next(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyIterReturn> {
+        let idx = zelf
+            .index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let data = zelf.array.data.read().unwrap();
+        let total = data.size();
+        if idx >= total {
+            return Ok(PyIterReturn::StopIteration(None));
+        }
+        let coord = linear_to_coord(idx, data.shape());
+        let s = data.get(&coord).map_err(|e| numpy_err(e, vm))?;
+        Ok(PyIterReturn::Return(scalar_to_py(s, vm)))
+    }
+}
+
+impl AsMapping for PyFlatIter {
+    fn as_mapping() -> &'static PyMappingMethods {
+        use once_cell::sync::Lazy;
+        static AS_MAPPING: Lazy<PyMappingMethods> = Lazy::new(|| PyMappingMethods {
+            length: atomic_func!(|mapping, _vm| {
+                let zelf = PyFlatIter::mapping_downcast(mapping);
+                Ok(zelf.__len__())
+            }),
+            subscript: atomic_func!(|mapping, needle: &vm::PyObject, vm| {
+                let zelf = PyFlatIter::mapping_downcast(mapping);
+                zelf.__getitem__(needle.to_owned(), vm)
+            }),
+            ass_subscript: atomic_func!(|mapping, needle: &vm::PyObject, value, vm| {
+                let zelf = PyFlatIter::mapping_downcast(mapping);
+                let value = value.ok_or_else(|| {
+                    vm.new_type_error("flat iterator does not support item deletion".to_owned())
+                })?;
+                zelf.__setitem__(needle.to_owned(), value.to_owned(), vm)?;
+                Ok(())
+            }),
+        });
+        &AS_MAPPING
+    }
+}
+
+fn parse_flat_index(key: &PyObjectRef, total: usize, vm: &VirtualMachine) -> PyResult<usize> {
+    let idx: i64 = key
+        .clone()
+        .try_into_value(vm)
+        .map_err(|_| vm.new_type_error("flat index must be an integer".to_owned()))?;
+    let resolved = if idx < 0 {
+        (total as i64)
+            .checked_add(idx)
+            .ok_or_else(|| vm.new_index_error("index out of bounds".to_owned()))?
+    } else {
+        idx
+    };
+    if resolved < 0 || resolved as usize >= total {
+        return Err(
+            vm.new_index_error(format!("index {} is out of bounds for size {}", idx, total))
+        );
+    }
+    Ok(resolved as usize)
+}
+
+fn linear_to_coord(mut idx: usize, shape: &[usize]) -> Vec<usize> {
+    if shape.is_empty() {
+        return vec![];
+    }
+    let mut coord = vec![0usize; shape.len()];
+    for d in (0..shape.len()).rev() {
+        let dim = shape[d];
+        coord[d] = idx % dim;
+        idx /= dim;
+    }
+    coord
+}
+
 /// Convert a NumpyError to a Python exception.
 fn numpy_err(
     e: numpy_rust_core::NumpyError,
@@ -1381,6 +1512,24 @@ impl PyNdArray {
             Some(ref obj) if vm.is_none(obj) => None,
             Some(ref obj) => Some(py_obj_to_f64(obj, vm)?),
         };
+        if min_val.is_some_and(|v| v.is_nan()) || max_val.is_some_and(|v| v.is_nan()) {
+            let inner = self.data.read().unwrap();
+            let shape = inner.shape().to_vec();
+            let dtype = inner.dtype();
+            drop(inner);
+            let result = PyNdArray::from_core(numpy_rust_core::full(&shape, f64::NAN, dtype));
+            if let Some(out_obj) = args.kwargs.get("out") {
+                if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                    let core_data = result.data.read().unwrap().clone();
+                    {
+                        let mut out_data = out_arr.data.write().unwrap();
+                        *out_data = core_data;
+                    }
+                    return Ok((*out_arr).clone());
+                }
+            }
+            return Ok(result);
+        }
         let result = PyNdArray::from_core(self.data.read().unwrap().clip(min_val, max_val));
 
         // If 'out' is provided, copy data into it
@@ -1587,9 +1736,12 @@ impl PyNdArray {
     }
 
     #[pygetset]
-    fn flat(&self) -> PyNdArray {
-        let inner = self.data.read().unwrap();
-        PyNdArray::from_core(inner.flatten())
+    fn flat(zelf: PyRef<Self>, vm: &VirtualMachine) -> PyObjectRef {
+        PyFlatIter {
+            array: zelf,
+            index: std::sync::atomic::AtomicUsize::new(0),
+        }
+        .into_pyobject(vm)
     }
 
     // --- Tier 35 Group A methods ---
@@ -1830,6 +1982,32 @@ impl PyNdArray {
 pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
     if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
         return Ok(arr.data.read().unwrap().clone());
+    }
+    // Preserve Python bool scalars as bool dtype (not float64).
+    if obj.class().is(vm.ctx.types.bool_type) {
+        let b = obj.to_owned().try_into_value::<bool>(vm)?;
+        let arr = NdArray::from_vec(vec![b]);
+        return arr
+            .reshape(&[])
+            .map_err(|e| vm.new_type_error(e.to_string()));
+    }
+    // Try generic float conversion first (handles large ints via __float__)
+    if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
+        return Ok(NdArray::from_scalar(f));
+    }
+    // Try generic complex conversion
+    if let Ok(c) = obj
+        .to_owned()
+        .try_into_value::<vm::function::ArgIntoComplex>(vm)
+    {
+        let z = c.into_complex();
+        if z.im == 0.0 {
+            return Ok(NdArray::from_scalar(z.re));
+        }
+        let arr = NdArray::from_complex128_vec(vec![num_complex::Complex::new(z.re, z.im)]);
+        return arr
+            .reshape(&[])
+            .map_err(|e| vm.new_type_error(e.to_string()));
     }
     // Try float (PyFloat)
     if let Some(f) = obj.downcast_ref::<vm::builtins::PyFloat>() {

@@ -651,6 +651,93 @@ class _ScalarType:
         return hash(self._name)
 
 
+class _NumpyIntScalar(int):
+    def __new__(cls, value=0, dtype_name="int64"):
+        obj = int.__new__(cls, int(value))
+        obj._numpy_dtype_name = dtype_name
+        return obj
+
+    @property
+    def dtype(self):
+        return dtype(self._numpy_dtype_name)
+
+    @property
+    def shape(self):
+        return ()
+
+    @property
+    def ndim(self):
+        return 0
+
+    @property
+    def size(self):
+        return 1
+
+    def __round__(self, ndigits=None):
+        if ndigits is None:
+            return int(self)
+        return _NumpyIntScalar(__import__("builtins").round(int(self), ndigits), self._numpy_dtype_name)
+
+    def round(self, ndigits=0):
+        return _NumpyIntScalar(__import__("builtins").round(int(self), ndigits), self._numpy_dtype_name)
+
+
+class _NumpyFloatScalar(float):
+    def __new__(cls, value=0.0, dtype_name="float64"):
+        obj = float.__new__(cls, float(value))
+        obj._numpy_dtype_name = dtype_name
+        return obj
+
+    @property
+    def dtype(self):
+        return dtype(self._numpy_dtype_name)
+
+    @property
+    def shape(self):
+        return ()
+
+    @property
+    def ndim(self):
+        return 0
+
+    @property
+    def size(self):
+        return 1
+
+    def __round__(self, ndigits=None):
+        _builtin_round = __import__("builtins").round
+        if ndigits is None:
+            return int(_builtin_round(float(self)))
+        return _NumpyFloatScalar(_builtin_round(float(self), ndigits), self._numpy_dtype_name)
+
+    def round(self, ndigits=0):
+        _builtin_round = __import__("builtins").round
+        return _NumpyFloatScalar(_builtin_round(float(self), ndigits), self._numpy_dtype_name)
+
+
+class _NumpyComplexScalar(complex):
+    def __new__(cls, value=0j, dtype_name="complex128"):
+        obj = complex.__new__(cls, value)
+        obj._numpy_dtype_name = dtype_name
+        return obj
+
+    @property
+    def dtype(self):
+        return dtype(self._numpy_dtype_name)
+
+    @property
+    def shape(self):
+        return ()
+
+    @property
+    def ndim(self):
+        return 0
+
+    @property
+    def size(self):
+        return 1
+
+
 # Metaclass for scalar type classes so the CLASS itself has custom __str__, __eq__, __hash__
 class _ScalarTypeMeta(type):
     """Metaclass for numpy scalar type classes in the type hierarchy."""
@@ -664,10 +751,19 @@ class _ScalarTypeMeta(type):
         super().__init__(name, bases, namespace)
 
     def __call__(cls, value=0, *args, **kwargs):
+        scalar_name = cls._scalar_name
         try:
-            return cls._python_type(value)
+            base_value = cls._python_type(value)
         except (ValueError, TypeError):
             return value
+        if scalar_name in ('bool', 'int8', 'int16', 'int32', 'int64',
+                           'uint8', 'uint16', 'uint32', 'uint64'):
+            return _NumpyIntScalar(base_value, scalar_name)
+        if scalar_name in ('float16', 'float32', 'float64'):
+            return _NumpyFloatScalar(base_value, scalar_name)
+        if scalar_name in ('complex64', 'complex128'):
+            return _NumpyComplexScalar(base_value, scalar_name)
+        return base_value
 
     def __repr__(cls):
         return f"<class 'numpy.{cls._scalar_name}'>"
@@ -1526,20 +1622,30 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
         if 'min' in kwargs or 'max' in kwargs:
             raise ValueError(_conflict_msg)
     # Support min=/max= as aliases for a_min/a_max
+    _min_from_kw = False
+    _max_from_kw = False
     if 'min' in kwargs:
+        _min_from_kw = True
         a_min = kwargs.pop('min')
     if 'max' in kwargs:
+        _max_from_kw = True
         a_max = kwargs.pop('max')
     # np.clip(arr) with no bounds → return copy
     if a_min is _CLIP_UNSET and a_max is _CLIP_UNSET:
         if not isinstance(a, (ndarray, _ObjectArray)):
             a = array(a)
         return a.copy() if isinstance(a, ndarray) else a
-    # Check required args
+    # Check required args. Keyword-only min/max may omit one bound.
     if a_max is _CLIP_UNSET:
-        raise TypeError("clip() missing 1 required positional argument: 'a_max'")
+        if _min_from_kw:
+            a_max = None
+        else:
+            raise TypeError("clip() missing 1 required positional argument: 'a_max'")
     if a_min is _CLIP_UNSET:
-        raise TypeError("clip() missing 1 required positional argument: 'a_min'")
+        if _max_from_kw:
+            a_min = None
+        else:
+            raise TypeError("clip() missing 1 required positional argument: 'a_min'")
     if not isinstance(a, (ndarray, _ObjectArray)):
         a = array(a)
     if a_min is None and a_max is None:
@@ -2345,6 +2451,10 @@ def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
         if isinstance(out, ndarray) and out.size == 1:
             out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
         return out
+    if isinstance(a, ndarray) and axis is None and not keepdims and not isinstance(result, ndarray):
+        if isinstance(result, complex):
+            return complex128(result)
+        return float64(result)
     return result
 
 def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, mean=None, correction=None):
@@ -3138,7 +3248,11 @@ def can_cast(from_=None, to=None, casting="safe"):
     }
 
     # --- NEP 50: reject plain Python scalars ---
-    if isinstance(from_, (int, float, complex)) and not isinstance(from_, bool):
+    if (
+        isinstance(from_, (int, float, complex))
+        and not isinstance(from_, bool)
+        and not hasattr(from_, "_numpy_dtype_name")
+    ):
         raise TypeError("Cannot interpret '{}' as a data type".format(type(from_).__name__))
 
     # --- None check ---
@@ -3221,6 +3335,9 @@ def can_cast(from_=None, to=None, casting="safe"):
     # --- Normalize dtype names ---
     def _to_name(x):
         """Extract canonical dtype name and raw string (for endian checks)."""
+        if hasattr(x, "_numpy_dtype_name"):
+            name = x._numpy_dtype_name
+            return name, name
         if isinstance(x, ndarray):
             return str(x.dtype), str(x.dtype)
         if isinstance(x, dtype):
@@ -3460,6 +3577,10 @@ def seterr(**kwargs):
     global _err_state
     old = dict(_err_state)
     for k, v in kwargs.items():
+        if k == "all":
+            for key in _err_state:
+                _err_state[key] = v
+            continue
         if k not in _err_state:
             raise ValueError("invalid key: %r" % k)
         _err_state[k] = v

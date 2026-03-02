@@ -2,7 +2,7 @@
 
 A NumPy implementation in Rust, compiled to WebAssembly. Provides ~95% of the NumPy API surface commonly used in data science and ML code — array creation, manipulation, linear algebra, FFT, random distributions, masked arrays, and more — for Python code running inside sandboxed environments.
 
-**425 Rust + 877 Python = 1,302 tests, 0 failures**
+**425 Rust + 1,177 Python = 1,602 tests, 0 failures (`2026-03-02`)**
 
 ## How it works
 
@@ -25,6 +25,23 @@ The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the 
 | `numpy-rust-core` | Core ndarray implementation (dtypes, broadcasting, math, linalg, FFT, random) |
 | `numpy-rust-python` | RustPython bindings — exposes `_numpy_native` module |
 | `numpy-rust-wasm` | Binary entry point (RustPython + numpy, compiles to WASI) |
+
+---
+
+## Compatibility snapshot (`2026-03-02`)
+
+| Suite | Result |
+|---|---|
+| `cargo test -q` | `425 passed, 0 failed` |
+| `./tests/python/run_tests.sh` | `1,177 passed, 0 failed` |
+| `./target/debug/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,115 passed, 67 expected failures (xfail), 0 unexpected failures` |
+
+Recent compatibility improvements:
+- `ndarray.flat` now behaves as a mutable flat iterator view (`x.flat[i] = v` writes through to `x`), removing `TestArgwhere.test_nd[*]` xfails.
+- NumPy scalar dtype identity is preserved in `can_cast` paths, removing all `TestTypes.test_can_cast_scalars[*]` xfails.
+- NumPy scalar wrappers now expose scalar-shape semantics (`shape=()`, `ndim=0`, `size=1`), and `std(..., mean=...)` with `axis=None` now returns scalar-compatible NumPy values.
+
+The project goal is library compatibility first (pandas/sklearn/scipy-style usage), then performance. Work is prioritized toward API correctness, dtype semantics, and edge-case behavior over raw speed.
 
 ---
 
@@ -360,11 +377,11 @@ These items are not yet implemented but may be needed for full compatibility:
 | Suite | Tests | Description |
 |-------|-------|-------------|
 | Rust unit tests | 425 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
-| Python `test_numeric.py` | 806 | Comprehensive integration: all functions, edge cases, regressions |
+| Python `test_numeric.py` | 1,106 | Comprehensive integration: all functions, edge cases, regressions |
 | Python `test_array_creation.py` | 14 | Array creation functions |
 | Python `test_indexing.py` | 38 | Indexing, slicing, assignment |
 | Python `test_linalg.py` | 19 | Linear algebra operations |
-| **Total** | **1,302** | |
+| **Total** | **1,602** | |
 
 ---
 
@@ -407,6 +424,9 @@ cargo test --workspace --all-features
 uv venv .venv && source .venv/bin/activate
 uv pip install pytest numpy
 python -m pytest tests/numpy_compat/ -q
+
+# NumPy compat tests in RustPython (tracks known gaps via xfail list)
+./target/debug/numpy-python tests/numpy_compat/run_compat.py --ci
 ```
 
 ### CI

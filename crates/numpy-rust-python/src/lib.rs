@@ -18,7 +18,7 @@ pub fn numpy_module_def(ctx: &vm::Context) -> &'static vm::builtins::PyModuleDef
 pub mod _numpy_native {
     use super::*;
     use crate::py_array::{
-        obj_to_ndarray, parse_optional_axis, PyFlagsObj, PyNdArray, PyNdArrayIter,
+        obj_to_ndarray, parse_optional_axis, PyFlagsObj, PyFlatIter, PyNdArray, PyNdArrayIter,
     };
     use vm::class::PyClassImpl;
     use vm::{PyObjectRef, PyPayload, PyResult, VirtualMachine};
@@ -32,6 +32,11 @@ pub mod _numpy_native {
     #[pyattr]
     fn ndarray_iterator(vm: &VirtualMachine) -> vm::builtins::PyTypeRef {
         PyNdArrayIter::make_class(&vm.ctx)
+    }
+
+    #[pyattr]
+    fn flatiter(vm: &VirtualMachine) -> vm::builtins::PyTypeRef {
+        PyFlatIter::make_class(&vm.ctx)
     }
 
     #[pyattr]
