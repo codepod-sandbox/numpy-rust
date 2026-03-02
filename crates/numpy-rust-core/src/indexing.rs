@@ -356,14 +356,19 @@ impl NdArray {
         macro_rules! do_set_slice {
             ($dst:expr, $src:expr) => {{
                 let mut view = $dst.slice_mut(info.as_slice());
-                if view.shape() != $src.shape() {
+                if view.shape() == $src.shape() {
+                    view.assign($src);
+                } else if $src.len() == 1 {
+                    // Scalar broadcast: fill all elements with the single value
+                    let val = $src.iter().next().unwrap().clone();
+                    view.fill(val);
+                } else {
                     return Err(NumpyError::ShapeMismatch(format!(
                         "could not broadcast input array from shape {:?} into shape {:?}",
                         $src.shape(),
                         view.shape()
                     )));
                 }
-                view.assign($src);
             }};
         }
 

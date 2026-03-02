@@ -5,7 +5,7 @@ use vm::atomic_func;
 use vm::builtins::{PyList, PySlice, PyStr, PyTuple};
 use vm::protocol::{PyIterReturn, PyMappingMethods, PyNumberMethods, PySequenceMethods};
 use vm::types::{AsMapping, AsNumber, AsSequence, IterNext, Iterable, Representable, SelfIter};
-use vm::{Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
+use vm::{AsObject, Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
 use numpy_rust_core::{DType, NdArray};
@@ -172,21 +172,21 @@ pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
 /// Parse a Python dtype string to DType.
 pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
     match s {
-        "bool" => Ok(DType::Bool),
+        "bool" | "<class 'bool'>" => Ok(DType::Bool),
         "int8" | "i1" => Ok(DType::Int8),
         "int16" | "i2" => Ok(DType::Int16),
         "int32" | "i32" | "i4" => Ok(DType::Int32),
-        "int64" | "i64" | "i8" | "int" => Ok(DType::Int64),
+        "int64" | "i64" | "i8" | "int" | "<class 'int'>" => Ok(DType::Int64),
         "uint8" | "u1" => Ok(DType::UInt8),
         "uint16" | "u2" => Ok(DType::UInt16),
         "uint32" | "u4" => Ok(DType::UInt32),
         "uint64" | "u8" => Ok(DType::UInt64),
         "float16" | "f2" => Ok(DType::Float16),
         "float32" | "f32" | "f4" => Ok(DType::Float32),
-        "float64" | "f64" | "float" => Ok(DType::Float64),
+        "float64" | "f64" | "float" | "<class 'float'>" => Ok(DType::Float64),
         "complex64" | "c64" | "c8" => Ok(DType::Complex64),
-        "complex128" | "c128" | "c16" | "complex" => Ok(DType::Complex128),
-        "str" | "U" => Ok(DType::Str),
+        "complex128" | "c128" | "c16" | "complex" | "<class 'complex'>" => Ok(DType::Complex128),
+        "str" | "U" | "<class 'str'>" => Ok(DType::Str),
         _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),
     }
@@ -284,6 +284,27 @@ pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usi
     with(AsNumber, AsMapping, AsSequence, Representable, Iterable)
 )]
 impl PyNdArray {
+    /// ndarray(shape, dtype=float64) constructor – creates a zero-filled array.
+    #[pyslot]
+    fn slot_new(
+        cls: vm::builtins::PyTypeRef,
+        args: vm::function::FuncArgs,
+        vm: &VirtualMachine,
+    ) -> PyResult {
+        // Accept positional shape or keyword shape=
+        let shape_obj = if !args.args.is_empty() {
+            args.args[0].clone()
+        } else if let Some(s) = args.kwargs.get("shape") {
+            s.clone()
+        } else {
+            // Default: scalar (empty shape)
+            vm.ctx.new_tuple(vec![]).into()
+        };
+        let sh = extract_shape(&shape_obj, vm)?;
+        let arr = NdArray::zeros(&sh, DType::Float64);
+        Ok(Self::from_core(arr).into_ref_with_type(vm, cls)?.into())
+    }
+
     // --- Properties ---
 
     #[pygetset]
@@ -314,7 +335,7 @@ impl PyNdArray {
         let numpy_mod = vm.import("numpy", 0)?;
         let dtype_cls = numpy_mod.get_attr("dtype", vm)?;
         let args = vec![vm.ctx.new_str(dtype_str).into()];
-        vm.invoke(&dtype_cls, args)
+        dtype_cls.call(args, vm)
     }
 
     #[pygetset(name = "T")]
@@ -385,8 +406,22 @@ impl PyNdArray {
     // --- Methods ---
 
     #[pymethod]
-    fn reshape(&self, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let raw = extract_shape_i64(&shape, vm)?;
+    fn reshape(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        // Accept reshape(shape) or reshape(*dims) plus optional order= kwarg (ignored)
+        let shape_obj = if args.args.len() == 1 {
+            args.args[0].clone()
+        } else {
+            // Multiple positional args: treat as individual dimensions
+            let dims: Vec<i64> = args
+                .args
+                .iter()
+                .map(|a| a.clone().try_into_value::<i64>(vm))
+                .collect::<PyResult<Vec<_>>>()?;
+            let list: Vec<PyObjectRef> =
+                dims.into_iter().map(|d| vm.ctx.new_int(d).into()).collect();
+            vm.ctx.new_tuple(list).into()
+        };
+        let raw = extract_shape_i64(&shape_obj, vm)?;
         let total = self.data.read().unwrap().size();
         let sh = resolve_shape(&raw, total, vm)?;
         self.data
@@ -448,8 +483,7 @@ impl PyNdArray {
             Ok(s) => s,
             Err(_) => {
                 // Convert to string using Python's str() builtin
-                let s = dtype_obj.str(vm)?;
-                s
+                dtype_obj.str(vm)?
             }
         };
         let dt = parse_dtype(dtype_str.as_str(), vm)?;
@@ -1225,6 +1259,12 @@ impl PyNdArray {
             return Ok(PyNdArray::from_core(result).to_py(vm));
         }
 
+        // Ellipsis -> return a copy/view of the entire array
+        if key.is(&vm.ctx.ellipsis) {
+            let result = data.clone();
+            return Ok(PyNdArray::from_core(result).to_py(vm));
+        }
+
         Err(vm.new_type_error("unsupported index type".to_owned()))
     }
 
@@ -1292,7 +1332,7 @@ impl PyNdArray {
     #[pymethod]
     fn clip(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         // Accept clip(a_min, a_max) or clip(min=, max=, out=)
-        let a_min_obj = if args.args.len() > 0 {
+        let a_min_obj = if !args.args.is_empty() {
             Some(args.args[0].clone())
         } else {
             args.kwargs.get("min").or(args.kwargs.get("a_min")).cloned()
@@ -1318,7 +1358,7 @@ impl PyNdArray {
                     if let Some(ref max_obj) = a_max_obj {
                         call_args.push(max_obj.clone());
                     }
-                    let result_obj = vm.invoke(&clip_fn, call_args)?;
+                    let result_obj = clip_fn.call(call_args, vm)?;
                     let result_arr: PyRef<PyNdArray> = result_obj.try_into_value(vm)?;
                     let out_result = (*result_arr).clone();
                     // Handle out=
@@ -1673,14 +1713,31 @@ impl PyNdArray {
 
     #[pygetset]
     fn flags(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-        let dict = vm.ctx.new_dict();
-        dict.set_item("C_CONTIGUOUS", vm.ctx.new_bool(true).into(), vm)?;
-        dict.set_item("F_CONTIGUOUS", vm.ctx.new_bool(false).into(), vm)?;
-        dict.set_item("OWNDATA", vm.ctx.new_bool(true).into(), vm)?;
-        dict.set_item("WRITEABLE", vm.ctx.new_bool(true).into(), vm)?;
-        dict.set_item("ALIGNED", vm.ctx.new_bool(true).into(), vm)?;
-        dict.set_item("WRITEBACKIFCOPY", vm.ctx.new_bool(false).into(), vm)?;
-        Ok(dict.into())
+        let mut map = HashMap::new();
+        map.insert("C_CONTIGUOUS".into(), true);
+        map.insert("F_CONTIGUOUS".into(), false);
+        map.insert("OWNDATA".into(), true);
+        map.insert("WRITEABLE".into(), true);
+        map.insert("ALIGNED".into(), true);
+        map.insert("WRITEBACKIFCOPY".into(), false);
+        // Short aliases
+        map.insert("C".into(), true);
+        map.insert("F".into(), false);
+        map.insert("O".into(), true);
+        map.insert("W".into(), true);
+        map.insert("A".into(), true);
+        // Additional aliases
+        map.insert("CONTIGUOUS".into(), true);
+        map.insert("FORTRAN".into(), false);
+        map.insert("UPDATEIFCOPY".into(), false);
+        map.insert("FNC".into(), false);
+        map.insert("FORC".into(), true);
+        map.insert("BEHAVED".into(), true);
+        map.insert("CARRAY".into(), true);
+        map.insert("FARRAY".into(), false);
+        // Lowercase aliases are handled by #[pygetset] on PyFlagsObj
+        let obj = PyFlagsObj::new(map).into_ref(&vm.ctx);
+        Ok(obj.into())
     }
 
     #[pygetset]
@@ -1786,6 +1843,37 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
     // Try str (PyStr) — create 0-D string array
     if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
         return Ok(NdArray::from_vec(vec![s.as_str().to_owned()]));
+    }
+    // Try list/tuple → convert to array of floats
+    if let Some(list) = obj.downcast_ref::<vm::builtins::PyList>() {
+        let items = list.borrow_vec();
+        let mut vals = Vec::with_capacity(items.len());
+        for item in items.iter() {
+            if let Some(f) = item.downcast_ref::<vm::builtins::PyFloat>() {
+                vals.push(f.to_f64());
+            } else if let Some(i) = item.downcast_ref::<vm::builtins::PyInt>() {
+                let v: i64 = i.try_to_primitive(vm)?;
+                vals.push(v as f64);
+            } else {
+                return Err(vm.new_type_error("expected ndarray or scalar".to_owned()));
+            }
+        }
+        return Ok(NdArray::from_vec(vals));
+    }
+    if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
+        let items = tuple.as_slice();
+        let mut vals = Vec::with_capacity(items.len());
+        for item in items.iter() {
+            if let Some(f) = item.downcast_ref::<vm::builtins::PyFloat>() {
+                vals.push(f.to_f64());
+            } else if let Some(i) = item.downcast_ref::<vm::builtins::PyInt>() {
+                let v: i64 = i.try_to_primitive(vm)?;
+                vals.push(v as f64);
+            } else {
+                return Err(vm.new_type_error("expected ndarray or scalar".to_owned()));
+            }
+        }
+        return Ok(NdArray::from_vec(vals));
     }
     Err(vm.new_type_error("expected ndarray or scalar".to_owned()))
 }
@@ -2332,6 +2420,13 @@ fn setitem_impl(
     if let Some(slice) = key.downcast_ref::<PySlice>() {
         let arg = py_slice_to_slice_arg(slice, vm)?;
         let value_arr = obj_to_ndarray(&value, vm)?;
+        // Cast value to target dtype if needed
+        let target_dt = zelf.data.read().unwrap().dtype();
+        let value_arr = if value_arr.dtype() != target_dt {
+            value_arr.astype(target_dt)
+        } else {
+            value_arr
+        };
         zelf.data
             .write()
             .unwrap()
@@ -2397,6 +2492,13 @@ fn setitem_impl(
         let arr_data = arr.data.read().unwrap();
         if arr_data.dtype() == DType::Bool {
             let value_arr = obj_to_ndarray(&value, vm)?;
+            // Cast value to target dtype if needed
+            let target_dt = zelf.data.read().unwrap().dtype();
+            let value_arr = if value_arr.dtype() != target_dt {
+                value_arr.astype(target_dt)
+            } else {
+                value_arr
+            };
             let mask_owned = arr_data.clone();
             drop(arr_data);
             zelf.data
@@ -2438,6 +2540,28 @@ fn setitem_impl(
             .write()
             .unwrap()
             .index_set(0, &indices, &value_arr)
+            .map_err(|e| numpy_err(e, vm))?;
+        return Ok(());
+    }
+
+    // Ellipsis key → a[...] = value (set all elements)
+    if key.is(&vm.ctx.ellipsis) {
+        let value_arr = obj_to_ndarray(&value, vm)?;
+        // If value is a scalar (size 1), fill the entire array
+        let val_data = value_arr;
+        let target_dt = zelf.data.read().unwrap().dtype();
+        let val_data = if val_data.dtype() != target_dt {
+            val_data.astype(target_dt)
+        } else {
+            val_data
+        };
+        // Use set_slice with full slice for each dimension
+        let ndim = zelf.data.read().unwrap().ndim();
+        let args: Vec<SliceArg> = (0..ndim).map(|_| SliceArg::Full).collect();
+        zelf.data
+            .write()
+            .unwrap()
+            .set_slice(&args, &val_data)
             .map_err(|e| numpy_err(e, vm))?;
         return Ok(());
     }
@@ -2617,4 +2741,171 @@ fn format_array_inner(data: &NdArray, depth: usize) -> String {
 
     let sep = if ndim == 2 { ",\n" } else { ",\n\n" };
     format!("[{}]", parts.join(sep))
+}
+
+// ---------------------------------------------------------------------------
+// flagsobj – dict-like + attribute-access flags object
+// ---------------------------------------------------------------------------
+use std::collections::HashMap;
+
+#[vm::pyclass(module = "numpy", name = "flagsobj")]
+#[derive(Debug, PyPayload)]
+pub struct PyFlagsObj {
+    map: HashMap<String, bool>,
+}
+
+#[vm::pyclass(with(AsMapping, Representable))]
+impl PyFlagsObj {
+    pub fn new(map: HashMap<String, bool>) -> Self {
+        Self { map }
+    }
+
+    fn get_flag(&self, key: &str) -> bool {
+        self.map.get(key).copied().unwrap_or(false)
+    }
+
+    #[pymethod]
+    fn __getitem__(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<bool> {
+        let k: String = key.try_into_value(vm)?;
+        self.map
+            .get(&k)
+            .copied()
+            .ok_or_else(|| vm.new_key_error(vm.ctx.new_str(k).into()))
+    }
+
+    #[pyslot]
+    fn slot_richcompare(
+        zelf: &vm::PyObject,
+        other: &vm::PyObject,
+        op: vm::types::PyComparisonOp,
+        vm: &VirtualMachine,
+    ) -> PyResult<vm::function::Either<PyObjectRef, vm::function::PyComparisonValue>> {
+        let zelf = zelf
+            .downcast_ref::<PyFlagsObj>()
+            .ok_or_else(|| vm.new_type_error("expected flagsobj".to_owned()))?;
+        if let Some(other_flags) = other.downcast_ref::<PyFlagsObj>() {
+            let keys = [
+                "C_CONTIGUOUS",
+                "F_CONTIGUOUS",
+                "OWNDATA",
+                "WRITEABLE",
+                "ALIGNED",
+                "WRITEBACKIFCOPY",
+            ];
+            let equal = keys
+                .iter()
+                .all(|k| zelf.map.get(*k) == other_flags.map.get(*k));
+            let result = match op {
+                vm::types::PyComparisonOp::Eq => equal,
+                vm::types::PyComparisonOp::Ne => !equal,
+                _ => {
+                    return Ok(vm::function::Either::B(
+                        vm::function::PyComparisonValue::NotImplemented,
+                    ))
+                }
+            };
+            Ok(vm::function::Either::A(vm.ctx.new_bool(result).into()))
+        } else {
+            Ok(vm::function::Either::B(
+                vm::function::PyComparisonValue::NotImplemented,
+            ))
+        }
+    }
+
+    // Lowercase attribute-style accessors (numpy compat)
+    #[pygetset]
+    fn c_contiguous(&self) -> bool {
+        self.get_flag("C_CONTIGUOUS")
+    }
+    #[pygetset]
+    fn f_contiguous(&self) -> bool {
+        self.get_flag("F_CONTIGUOUS")
+    }
+    #[pygetset]
+    fn owndata(&self) -> bool {
+        self.get_flag("OWNDATA")
+    }
+    #[pygetset]
+    fn writeable(&self) -> bool {
+        self.get_flag("WRITEABLE")
+    }
+    #[pygetset]
+    fn aligned(&self) -> bool {
+        self.get_flag("ALIGNED")
+    }
+    #[pygetset]
+    fn writebackifcopy(&self) -> bool {
+        self.get_flag("WRITEBACKIFCOPY")
+    }
+    #[pygetset]
+    fn fnc(&self) -> bool {
+        self.get_flag("FNC")
+    }
+    #[pygetset]
+    fn forc(&self) -> bool {
+        self.get_flag("FORC")
+    }
+    #[pygetset]
+    fn contiguous(&self) -> bool {
+        self.get_flag("CONTIGUOUS")
+    }
+    #[pygetset]
+    fn fortran(&self) -> bool {
+        self.get_flag("FORTRAN")
+    }
+    #[pygetset]
+    fn updateifcopy(&self) -> bool {
+        self.get_flag("UPDATEIFCOPY")
+    }
+    #[pygetset]
+    fn behaved(&self) -> bool {
+        self.get_flag("BEHAVED")
+    }
+    #[pygetset]
+    fn carray(&self) -> bool {
+        self.get_flag("CARRAY")
+    }
+    #[pygetset]
+    fn farray(&self) -> bool {
+        self.get_flag("FARRAY")
+    }
+}
+
+impl AsMapping for PyFlagsObj {
+    fn as_mapping() -> &'static PyMappingMethods {
+        use once_cell::sync::Lazy;
+        static AS_MAPPING: Lazy<PyMappingMethods> = Lazy::new(|| PyMappingMethods {
+            length: atomic_func!(|_mapping, _vm| { Ok(0) }),
+            subscript: atomic_func!(|mapping, needle: &vm::PyObject, vm| {
+                let zelf = PyFlagsObj::mapping_downcast(mapping);
+                let val = zelf.__getitem__(needle.to_owned(), vm)?;
+                Ok(vm.ctx.new_bool(val).into())
+            }),
+            ass_subscript: atomic_func!(|_mapping, _needle: &vm::PyObject, _value, vm| {
+                Err(vm.new_type_error("flagsobj does not support item assignment".to_owned()))
+            }),
+        });
+        &AS_MAPPING
+    }
+}
+
+impl Representable for PyFlagsObj {
+    fn repr_str(zelf: &Py<Self>, _vm: &VirtualMachine) -> PyResult<String> {
+        let mut parts = Vec::new();
+        let display_order = [
+            "C_CONTIGUOUS",
+            "F_CONTIGUOUS",
+            "OWNDATA",
+            "WRITEABLE",
+            "ALIGNED",
+            "WRITEBACKIFCOPY",
+        ];
+        for &k in &display_order {
+            if let Some(&v) = zelf.map.get(k) {
+                let vstr = if v { "True" } else { "False" };
+                parts.push(format!("  {k} : {vstr}"));
+            }
+        }
+        Ok(parts.join("\n"))
+    }
 }

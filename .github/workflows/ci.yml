@@ -47,6 +47,8 @@ jobs:
         run: cargo build -p numpy-rust-wasm --release
       - name: Run vendored Python tests
         run: ./tests/python/run_tests.sh target/release/numpy-python
+      - name: Run NumPy compat tests
+        run: ./target/release/numpy-python tests/numpy_compat/run_compat.py --ci
 
   wasm-build:
     name: WASM Build Check

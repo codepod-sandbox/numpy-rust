@@ -47,13 +47,33 @@ mod _random {
     }
 
     #[pyfunction]
-    fn randint(
-        low: i64,
-        high: i64,
-        shape: PyObjectRef,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
-        let sh = extract_shape(&shape, vm)?;
+    fn randint(args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        // Accept: randint(low, high, size) or randint(low, high, size=N)
+        let low: i64 = args
+            .args
+            .first()
+            .ok_or_else(|| vm.new_type_error("randint() missing argument: 'low'".to_owned()))?
+            .clone()
+            .try_into_value(vm)?;
+        let high: i64 = args
+            .args
+            .get(1)
+            .ok_or_else(|| vm.new_type_error("randint() missing argument: 'high'".to_owned()))?
+            .clone()
+            .try_into_value(vm)?;
+        // size can be positional (3rd arg) or keyword 'size'
+        let size_obj = if let Some(pos) = args.args.get(2) {
+            pos.clone()
+        } else if let Some(kw) = args.kwargs.get("size") {
+            kw.clone()
+        } else {
+            // Scalar: return single value
+            let sh = vec![1usize];
+            return numpy_rust_core::random::randint(low, high, &sh)
+                .map(PyNdArray::from_core)
+                .map_err(|e| err(e, vm));
+        };
+        let sh = extract_shape(&size_obj, vm)?;
         numpy_rust_core::random::randint(low, high, &sh)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))

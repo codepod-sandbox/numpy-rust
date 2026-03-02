@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_full_f64() {
-        let a = NdArray::full_f64(&[2, 2], 3.14);
+        let a = NdArray::full_f64(&[2, 2], 3.125);
         assert_eq!(a.shape(), &[2, 2]);
         assert_eq!(a.dtype(), DType::Float64);
         assert_eq!(a.size(), 4);
