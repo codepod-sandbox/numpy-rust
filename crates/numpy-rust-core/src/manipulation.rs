@@ -17,47 +17,31 @@ impl NdArray {
             });
         }
         let sh = IxDyn(shape);
+        // Helper macro: try into_shape_with_order, fall back to making contiguous copy first
+        macro_rules! reshape_or_copy {
+            ($a:expr, $sh:expr) => {{
+                let arr = $a.clone();
+                match arr.into_shape_with_order($sh.clone()) {
+                    Ok(reshaped) => reshaped,
+                    Err(_) => {
+                        // Non-contiguous layout: make a contiguous copy first
+                        let contiguous = $a.as_standard_layout().into_owned();
+                        contiguous
+                            .into_shape_with_order($sh)
+                            .expect("contiguous reshape must succeed")
+                    }
+                }
+            }};
+        }
         let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
-            ArrayData::Int32(a) => ArrayData::Int32(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
-            ArrayData::Int64(a) => ArrayData::Int64(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
-            ArrayData::Float32(a) => ArrayData::Float32(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
-            ArrayData::Float64(a) => ArrayData::Float64(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
-            ArrayData::Complex64(a) => ArrayData::Complex64(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
-            ArrayData::Complex128(a) => ArrayData::Complex128(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
-            ArrayData::Str(a) => ArrayData::Str(
-                a.clone()
-                    .into_shape_with_order(sh)
-                    .expect("size validated above"),
-            ),
+            ArrayData::Bool(a) => ArrayData::Bool(reshape_or_copy!(a, sh)),
+            ArrayData::Int32(a) => ArrayData::Int32(reshape_or_copy!(a, sh)),
+            ArrayData::Int64(a) => ArrayData::Int64(reshape_or_copy!(a, sh)),
+            ArrayData::Float32(a) => ArrayData::Float32(reshape_or_copy!(a, sh)),
+            ArrayData::Float64(a) => ArrayData::Float64(reshape_or_copy!(a, sh)),
+            ArrayData::Complex64(a) => ArrayData::Complex64(reshape_or_copy!(a, sh)),
+            ArrayData::Complex128(a) => ArrayData::Complex128(reshape_or_copy!(a, sh)),
+            ArrayData::Str(a) => ArrayData::Str(reshape_or_copy!(a, sh)),
         };
         Ok(NdArray::from_data(data))
     }

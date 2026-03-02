@@ -109,6 +109,61 @@ class MaskedArray:
     def __len__(self):
         return len(self.data)
 
+    # Arithmetic operators
+    def _binop(self, other, op):
+        import numpy as np
+        if isinstance(other, MaskedArray):
+            d = op(self.data, other.data)
+            m = np.logical_or(self.mask, other.mask)
+        else:
+            d = op(self.data, other)
+            m = self.mask
+        return MaskedArray(d, mask=m, fill_value=self._fill_value)
+
+    def __add__(self, other): return self._binop(other, lambda a, b: a + b)
+    def __radd__(self, other): return self._binop(other, lambda a, b: b + a)
+    def __sub__(self, other): return self._binop(other, lambda a, b: a - b)
+    def __rsub__(self, other): return self._binop(other, lambda a, b: b - a)
+    def __mul__(self, other): return self._binop(other, lambda a, b: a * b)
+    def __rmul__(self, other): return self._binop(other, lambda a, b: b * a)
+    def __truediv__(self, other): return self._binop(other, lambda a, b: a / b)
+    def __rtruediv__(self, other): return self._binop(other, lambda a, b: b / a)
+    def __pow__(self, other): return self._binop(other, lambda a, b: a ** b)
+    def __neg__(self):
+        import numpy as np
+        return MaskedArray(-self.data, mask=self.mask, fill_value=self._fill_value)
+    def __abs__(self):
+        import numpy as np
+        return MaskedArray(np.abs(self.data), mask=self.mask, fill_value=self._fill_value)
+
+    def sum(self, axis=None, keepdims=False):
+        import numpy as np
+        filled = self.filled(0.0)
+        result = np.sum(filled, axis=axis, keepdims=keepdims)
+        return result
+
+    def mean(self, axis=None, keepdims=False):
+        import numpy as np
+        filled = self.filled(0.0)
+        not_mask = np.logical_not(self.mask).astype("float64")
+        s = np.sum(filled * not_mask, axis=axis, keepdims=keepdims)
+        c = np.sum(not_mask, axis=axis, keepdims=keepdims)
+        return s / c
+
+    def copy(self):
+        import numpy as np
+        return MaskedArray(self.data.copy(), mask=self.mask.copy(), fill_value=self._fill_value)
+
+    def astype(self, dtype):
+        return MaskedArray(self.data.astype(dtype), mask=self.mask, fill_value=self._fill_value)
+
+    def flatten(self):
+        import numpy as np
+        return MaskedArray(self.data.flatten(), mask=self.mask.flatten(), fill_value=self._fill_value)
+
+    def tolist(self):
+        return self.data.tolist()
+
 
 def masked_array(data, mask=None, dtype=None, fill_value=None):
     """Create a masked array."""
@@ -197,6 +252,21 @@ def masked_inside(x, v1, v2):
     mask = np.logical_and(x >= min(v1, v2), x <= max(v1, v2))
     return MaskedArray(x, mask=mask)
 
+
+def zeros(shape, dtype=None):
+    """Return a masked array of zeros."""
+    import numpy as np
+    return MaskedArray(np.zeros(shape, dtype=dtype or "float64"))
+
+def ones(shape, dtype=None):
+    """Return a masked array of ones."""
+    import numpy as np
+    return MaskedArray(np.ones(shape, dtype=dtype or "float64"))
+
+def empty(shape, dtype=None):
+    """Return a masked array of uninitialized data (zeros in practice)."""
+    import numpy as np
+    return MaskedArray(np.zeros(shape, dtype=dtype or "float64"))
 
 def masked_outside(x, v1, v2):
     """Mask where outside v1 and v2."""

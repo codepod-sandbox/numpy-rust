@@ -7,6 +7,24 @@ fn err(e: numpy_rust_core::NumpyError, vm: &VirtualMachine) -> vm::builtins::PyB
     vm.new_value_error(e.to_string())
 }
 
+/// Convert variadic positional args into a shape.
+/// Supports: rand(5, 3) -> (5, 3), rand((5, 3)) -> (5, 3), rand() -> (1,)
+fn shape_from_varargs(args: &vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
+    if args.args.is_empty() {
+        return Ok(vec![1]);
+    }
+    if args.args.len() == 1 {
+        return extract_shape(&args.args[0], vm);
+    }
+    // Multiple positional args: treat each as a dimension
+    let mut shape = Vec::with_capacity(args.args.len());
+    for arg in &args.args {
+        let n: i64 = arg.clone().try_into_value(vm)?;
+        shape.push(n as usize);
+    }
+    Ok(shape)
+}
+
 #[vm::pymodule]
 mod _random {
     use super::*;
@@ -17,14 +35,14 @@ mod _random {
     }
 
     #[pyfunction]
-    fn rand(shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let sh = extract_shape(&shape, vm)?;
+    fn rand(args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let sh = shape_from_varargs(&args, vm)?;
         Ok(PyNdArray::from_core(numpy_rust_core::random::rand(&sh)))
     }
 
     #[pyfunction]
-    fn randn(shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let sh = extract_shape(&shape, vm)?;
+    fn randn(args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let sh = shape_from_varargs(&args, vm)?;
         Ok(PyNdArray::from_core(numpy_rust_core::random::randn(&sh)))
     }
 

@@ -308,8 +308,13 @@ impl PyNdArray {
     }
 
     #[pygetset]
-    fn dtype(&self) -> String {
-        self.data.read().unwrap().dtype().to_string()
+    fn dtype(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let dtype_str = self.data.read().unwrap().dtype().to_string();
+        // Import numpy.dtype and construct a dtype object
+        let numpy_mod = vm.import("numpy", 0)?;
+        let dtype_cls = numpy_mod.get_attr("dtype", vm)?;
+        let args = vec![vm.ctx.new_str(dtype_str).into()];
+        vm.invoke(&dtype_cls, args)
     }
 
     #[pygetset(name = "T")]
@@ -438,10 +443,15 @@ impl PyNdArray {
             .args
             .first()
             .ok_or_else(|| vm.new_type_error("astype() requires a dtype argument".to_owned()))?;
-        let dtype_str: PyRef<PyStr> = dtype_obj
-            .clone()
-            .try_into_value(vm)
-            .map_err(|_| vm.new_type_error("dtype must be a string".to_owned()))?;
+        // Accept either a string or any object convertible via str()
+        let dtype_str: PyRef<PyStr> = match dtype_obj.clone().try_into_value::<PyRef<PyStr>>(vm) {
+            Ok(s) => s,
+            Err(_) => {
+                // Convert to string using Python's str() builtin
+                let s = dtype_obj.str(vm)?;
+                s
+            }
+        };
         let dt = parse_dtype(dtype_str.as_str(), vm)?;
 
         // Extract optional 'casting' keyword argument
@@ -1280,25 +1290,73 @@ impl PyNdArray {
     // --- clip / fill / nonzero methods ---
 
     #[pymethod]
-    fn clip(
-        &self,
-        a_min: vm::function::OptionalArg<PyObjectRef>,
-        a_max: vm::function::OptionalArg<PyObjectRef>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
-        let min_val = match a_min.into_option() {
+    fn clip(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        // Accept clip(a_min, a_max) or clip(min=, max=, out=)
+        let a_min_obj = if args.args.len() > 0 {
+            Some(args.args[0].clone())
+        } else {
+            args.kwargs.get("min").or(args.kwargs.get("a_min")).cloned()
+        };
+        let a_max_obj = if args.args.len() > 1 {
+            Some(args.args[1].clone())
+        } else {
+            args.kwargs.get("max").or(args.kwargs.get("a_max")).cloned()
+        };
+        // 'out' kwarg is accepted but ignored (we always return a new array)
+
+        let min_val = match a_min_obj {
             None => None,
             Some(ref obj) if vm.is_none(obj) => None,
-            Some(obj) => Some(py_obj_to_f64(&obj, vm)?),
+            Some(ref obj) => match py_obj_to_f64(obj, vm) {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    // Array-valued clip: delegate to Python np.clip
+                    let numpy_mod = vm.import("numpy", 0)?;
+                    let clip_fn = numpy_mod.get_attr("clip", vm)?;
+                    let self_obj: PyObjectRef = self.clone().into_pyobject(vm);
+                    let mut call_args = vec![self_obj, a_min_obj.unwrap().clone()];
+                    if let Some(ref max_obj) = a_max_obj {
+                        call_args.push(max_obj.clone());
+                    }
+                    let result_obj = vm.invoke(&clip_fn, call_args)?;
+                    let result_arr: PyRef<PyNdArray> = result_obj.try_into_value(vm)?;
+                    let out_result = (*result_arr).clone();
+                    // Handle out=
+                    if let Some(out_obj) = args.kwargs.get("out") {
+                        if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                            let core_data = out_result.data.read().unwrap().clone();
+                            {
+                                let mut out_data = out_arr.data.write().unwrap();
+                                *out_data = core_data;
+                            }
+                            return Ok((*out_arr).clone());
+                        }
+                    }
+                    return Ok(out_result);
+                }
+            },
         };
-        let max_val = match a_max.into_option() {
+        let max_val = match a_max_obj {
             None => None,
             Some(ref obj) if vm.is_none(obj) => None,
-            Some(obj) => Some(py_obj_to_f64(&obj, vm)?),
+            Some(ref obj) => Some(py_obj_to_f64(obj, vm)?),
         };
-        Ok(PyNdArray::from_core(
-            self.data.read().unwrap().clip(min_val, max_val),
-        ))
+        let result = PyNdArray::from_core(self.data.read().unwrap().clip(min_val, max_val));
+
+        // If 'out' is provided, copy data into it
+        if let Some(out_obj) = args.kwargs.get("out") {
+            if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                let core_data = result.data.read().unwrap().clone();
+                drop(result);
+                {
+                    let mut out_data = out_arr.data.write().unwrap();
+                    *out_data = core_data;
+                }
+                let cloned: PyNdArray = (*out_arr).clone();
+                return Ok(cloned);
+            }
+        }
+        Ok(result)
     }
 
     #[pymethod]
@@ -1549,22 +1607,68 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn choose(&self, choices: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let list = choices
-            .downcast_ref::<PyList>()
-            .ok_or_else(|| vm.new_type_error("choose requires a list of arrays".to_owned()))?;
-        let items = list.borrow_vec();
+    fn choose(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let choices_obj = args
+            .args
+            .first()
+            .ok_or_else(|| vm.new_type_error("choose() requires a choices argument".to_owned()))?;
+
+        // Accept list, tuple, or any iterable
+        let items: Vec<PyObjectRef> = if let Some(list) = choices_obj.downcast_ref::<PyList>() {
+            list.borrow_vec().to_vec()
+        } else if let Some(tuple) = choices_obj.downcast_ref::<PyTuple>() {
+            tuple.as_slice().to_vec()
+        } else {
+            return Err(vm.new_type_error("choose requires a sequence of arrays".to_owned()));
+        };
+
+        // Convert items to PyNdArray, wrapping scalars as needed
+        // and broadcasting to match self's shape
+        let self_shape = self.data.read().unwrap().shape().to_vec();
+        let self_dtype = self.data.read().unwrap().dtype();
         let py_arrays: Vec<PyRef<PyNdArray>> = items
             .iter()
-            .map(|item| item.clone().try_into_value::<PyRef<PyNdArray>>(vm))
+            .map(|item| {
+                match item.clone().try_into_value::<PyRef<PyNdArray>>(vm) {
+                    Ok(arr) => Ok(arr),
+                    Err(_) => {
+                        // Try to convert scalar to a full array matching self's shape
+                        let val = py_obj_to_f64(item, vm)?;
+                        let arr = PyNdArray::from_core(numpy_rust_core::full(
+                            &self_shape,
+                            val,
+                            self_dtype,
+                        ));
+                        let py_obj = arr.into_pyobject(vm);
+                        py_obj.try_into_value::<PyRef<PyNdArray>>(vm)
+                    }
+                }
+            })
             .collect::<PyResult<Vec<_>>>()?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, NdArray>> =
-            py_arrays.iter().map(|c| c.inner()).collect();
-        let refs: Vec<&NdArray> = borrowed.iter().map(|r| &**r).collect();
-        let inner = self.data.read().unwrap();
-        numpy_rust_core::choose(&inner, &refs)
-            .map(PyNdArray::from_core)
-            .map_err(|e| vm.new_value_error(e.to_string()))
+        let result = {
+            let borrowed: Vec<std::sync::RwLockReadGuard<'_, NdArray>> =
+                py_arrays.iter().map(|c| c.inner()).collect();
+            let refs: Vec<&NdArray> = borrowed.iter().map(|r| &**r).collect();
+            let inner = self.data.read().unwrap();
+            numpy_rust_core::choose(&inner, &refs)
+                .map(PyNdArray::from_core)
+                .map_err(|e| vm.new_value_error(e.to_string()))?
+        };
+
+        // Handle out= kwarg
+        if let Some(out_obj) = args.kwargs.get("out") {
+            if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                let core_data = result.data.read().unwrap().clone();
+                drop(result);
+                {
+                    let mut out_data = out_arr.data.write().unwrap();
+                    *out_data = core_data;
+                }
+                let cloned: PyNdArray = (*out_arr).clone();
+                return Ok(cloned);
+            }
+        }
+        Ok(result)
     }
 
     #[pygetset]
