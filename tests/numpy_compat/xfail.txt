@@ -47,7 +47,6 @@ TestNonzero.test_nonzero_twodim
 TestNonzero.test_nonzero_zerodim
 TestNonzero.test_structured_threadsafety
 TestRequire.test_C_and_F_simul
-TestRequire.test_ensure_array
 TestRequire.test_preserve_subtype
 TestRequire.test_require_each
 TestRequire.test_unknown_requirement

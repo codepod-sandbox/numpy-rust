@@ -1353,9 +1353,20 @@ impl PyNdArray {
         // Tuple index -> multi-dimensional indexing (integers and/or slices)
         if let Some(tuple) = key.downcast_ref::<PyTuple>() {
             let items = tuple.as_slice();
+
+            // Check if any element is an ndarray (fancy indexing) or boolean ndarray
+            let has_ndarray = items
+                .iter()
+                .any(|item| item.downcast_ref::<PyNdArray>().is_some());
             let has_slice = items
                 .iter()
                 .any(|item| item.downcast_ref::<PySlice>().is_some());
+
+            if has_ndarray {
+                // Multi-dimensional fancy indexing: a[arr1, arr2, ...]
+                // Also handles mixed: a[:, arr] or a[arr, 3]
+                return multi_dim_fancy_getitem(&data, items, vm);
+            }
 
             if has_slice {
                 let args: Vec<SliceArg> = items
@@ -2493,6 +2504,299 @@ fn extract_int_indices(
     Ok(out)
 }
 
+/// Multi-dimensional fancy indexing: a[arr1, arr2] or a[arr1, 3] or a[:, arr1].
+/// Each item in the tuple can be an ndarray (integer indices), a scalar int, or a slice.
+/// For array indices, they are broadcast together and used for point indexing.
+fn multi_dim_fancy_getitem(
+    data: &NdArray,
+    items: &[PyObjectRef],
+    vm: &VirtualMachine,
+) -> PyResult<PyObjectRef> {
+    let shape = data.shape();
+    let ndim = data.ndim();
+
+    // Classify each index item
+    enum IdxKind {
+        Array(Vec<usize>), // resolved indices for this axis
+        Scalar(usize),     // single index (reduces axis)
+        Slice(SliceArg),   // slice on this axis
+    }
+
+    let mut kinds = Vec::with_capacity(items.len());
+    let mut array_len: Option<usize> = None;
+    let mut array_shape: Option<Vec<usize>> = None; // original shape of index arrays
+
+    for (axis, item) in items.iter().enumerate() {
+        let dim_size = if axis < ndim { shape[axis] } else { 1 };
+
+        if let Some(arr) = item.downcast_ref::<PyNdArray>() {
+            let arr_data = arr.data.read().unwrap();
+            if arr_data.dtype() == DType::Bool {
+                // Boolean mask on this axis → convert to integer indices
+                let mut indices = Vec::new();
+                for i in 0..arr_data.size() {
+                    let s = arr_data.get(&[i]).map_err(|e| numpy_err(e, vm))?;
+                    if let Scalar::Bool(true) = s {
+                        indices.push(i);
+                    }
+                }
+                if let Some(al) = array_len {
+                    if al != indices.len() {
+                        return Err(vm.new_value_error(
+                            "shape mismatch: indexing arrays could not be broadcast together"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                array_len = Some(indices.len());
+                kinds.push(IdxKind::Array(indices));
+            } else {
+                // Capture original shape for reshaping result
+                if array_shape.is_none() {
+                    array_shape = Some(arr_data.shape().to_vec());
+                }
+                let indices = extract_int_indices(&arr_data, dim_size, vm)?;
+                if let Some(al) = array_len {
+                    if al != indices.len() {
+                        return Err(vm.new_value_error(
+                            "shape mismatch: indexing arrays could not be broadcast together"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                array_len = Some(indices.len());
+                kinds.push(IdxKind::Array(indices));
+            }
+        } else if let Some(slice) = item.downcast_ref::<PySlice>() {
+            let arg = py_slice_to_slice_arg(slice, vm)?;
+            kinds.push(IdxKind::Slice(arg));
+        } else if let Ok(i) = item.clone().try_into_value::<i64>(vm) {
+            let resolved = if i < 0 {
+                (dim_size as i64 + i) as usize
+            } else {
+                i as usize
+            };
+            kinds.push(IdxKind::Scalar(resolved));
+        } else {
+            return Err(vm.new_type_error("unsupported index type in tuple".to_owned()));
+        }
+    }
+
+    let n = array_len.unwrap_or(0);
+    if n == 0 {
+        // No array indices — fallback to slice/integer logic
+        let args: Vec<SliceArg> = kinds
+            .into_iter()
+            .map(|k| match k {
+                IdxKind::Scalar(i) => SliceArg::Index(i as isize),
+                IdxKind::Slice(s) => s,
+                _ => unreachable!(),
+            })
+            .collect();
+        let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
+        return Ok(ndarray_or_scalar(result, vm));
+    }
+
+    // Check if we have only array + scalar indices (no slices) — "point indexing"
+    let has_slice = kinds.iter().any(|k| matches!(k, IdxKind::Slice(_)));
+
+    if !has_slice {
+        // Pure point indexing: result shape = (n,) + remaining dims
+        let num_indexed_dims = kinds.len();
+
+        if num_indexed_dims >= ndim {
+            // Full coordinate → collect scalars into a flat 1-d array
+            let mut values = Vec::with_capacity(n);
+            for j in 0..n {
+                let mut coord = Vec::with_capacity(ndim);
+                for kind in &kinds {
+                    match kind {
+                        IdxKind::Array(indices) => coord.push(indices[j]),
+                        IdxKind::Scalar(i) => coord.push(*i),
+                        _ => unreachable!(),
+                    }
+                }
+                let s = data.get(&coord).map_err(|e| numpy_err(e, vm))?;
+                values.push(match s {
+                    Scalar::Float64(v) => v,
+                    Scalar::Float32(v) => v as f64,
+                    Scalar::Int32(v) => v as f64,
+                    Scalar::Int64(v) => v as f64,
+                    Scalar::Bool(v) => {
+                        if v {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    _ => 0.0,
+                });
+            }
+            let result = NdArray::from_vec(values);
+            let result = result.astype(data.dtype());
+            // Reshape to match the original index array shape if multi-dimensional
+            if let Some(ref ashape) = array_shape {
+                if ashape.len() > 1 {
+                    let result = result.reshape(ashape).map_err(|e| numpy_err(e, vm))?;
+                    return Ok(PyNdArray::from_core(result).to_py(vm));
+                }
+            }
+            return Ok(PyNdArray::from_core(result).to_py(vm));
+        } else {
+            // Partial coordinate → collect sub-arrays and stack
+            let mut sub_results = Vec::with_capacity(n);
+            for j in 0..n {
+                let mut slice_args: Vec<SliceArg> = Vec::with_capacity(ndim);
+                for kind in &kinds {
+                    match kind {
+                        IdxKind::Array(indices) => {
+                            slice_args.push(SliceArg::Index(indices[j] as isize));
+                        }
+                        IdxKind::Scalar(i) => {
+                            slice_args.push(SliceArg::Index(*i as isize));
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                let sub = data.slice(&slice_args).map_err(|e| numpy_err(e, vm))?;
+                sub_results.push(sub);
+            }
+            if sub_results.is_empty() {
+                return Ok(PyNdArray::from_core(NdArray::zeros(&[0], data.dtype())).to_py(vm));
+            }
+            let refs: Vec<&NdArray> = sub_results.iter().collect();
+            let result = numpy_rust_core::concatenate(&refs, 0).map_err(|e| numpy_err(e, vm))?;
+            let sub_shape = sub_results[0].shape();
+            if sub_shape.len() > 1 || (sub_shape.len() == 1 && sub_shape[0] > 1) {
+                let mut new_shape = vec![n];
+                new_shape.extend_from_slice(sub_shape);
+                let result = result.reshape(&new_shape).map_err(|e| numpy_err(e, vm))?;
+                return Ok(PyNdArray::from_core(result).to_py(vm));
+            }
+            return Ok(PyNdArray::from_core(result).to_py(vm));
+        }
+    }
+
+    // Mixed slice + array indexing: handle by iterating array indices
+    // and slicing for each, then stacking
+    let mut results = Vec::with_capacity(n);
+    for j in 0..n {
+        let mut slice_args = Vec::with_capacity(items.len());
+        for kind in &kinds {
+            match kind {
+                IdxKind::Array(indices) => {
+                    slice_args.push(SliceArg::Index(indices[j] as isize));
+                }
+                IdxKind::Scalar(i) => {
+                    slice_args.push(SliceArg::Index(*i as isize));
+                }
+                IdxKind::Slice(s) => {
+                    slice_args.push(s.clone());
+                }
+            }
+        }
+        let sub = data.slice(&slice_args).map_err(|e| numpy_err(e, vm))?;
+        results.push(sub);
+    }
+    if results.is_empty() {
+        return Ok(PyNdArray::from_core(NdArray::zeros(&[0], data.dtype())).to_py(vm));
+    }
+    let refs: Vec<&NdArray> = results.iter().collect();
+    let result = numpy_rust_core::concatenate(&refs, 0).map_err(|e| numpy_err(e, vm))?;
+    // Reshape: (n, *sub_shape)
+    let sub_shape = results[0].shape();
+    if sub_shape.len() > 1 || (sub_shape.len() == 1 && sub_shape[0] > 1) {
+        let mut new_shape = vec![n];
+        new_shape.extend_from_slice(sub_shape);
+        let result = result.reshape(&new_shape).map_err(|e| numpy_err(e, vm))?;
+        return Ok(PyNdArray::from_core(result).to_py(vm));
+    }
+    Ok(PyNdArray::from_core(result).to_py(vm))
+}
+
+/// Multi-dimensional fancy setitem: a[arr1, arr2] = values
+fn multi_dim_fancy_setitem(
+    zelf: &PyNdArray,
+    items: &[PyObjectRef],
+    value: &PyObjectRef,
+    vm: &VirtualMachine,
+) -> PyResult<()> {
+    let data = zelf.data.read().unwrap();
+    let shape = data.shape().to_vec();
+    let ndim = data.ndim();
+    let dtype = data.dtype();
+    drop(data);
+
+    // Parse each index item
+    let mut array_indices: Vec<Option<Vec<usize>>> = Vec::new();
+    let mut scalar_indices: Vec<Option<usize>> = Vec::new();
+    let mut array_len: Option<usize> = None;
+
+    for (axis, item) in items.iter().enumerate() {
+        let dim_size = if axis < ndim { shape[axis] } else { 1 };
+        if let Some(arr) = item.downcast_ref::<PyNdArray>() {
+            let arr_data = arr.data.read().unwrap();
+            let indices = extract_int_indices(&arr_data, dim_size, vm)?;
+            if let Some(al) = array_len {
+                if al != indices.len() {
+                    return Err(vm.new_value_error(
+                        "shape mismatch: indexing arrays could not be broadcast together"
+                            .to_owned(),
+                    ));
+                }
+            }
+            array_len = Some(indices.len());
+            array_indices.push(Some(indices));
+            scalar_indices.push(None);
+        } else if let Ok(i) = item.clone().try_into_value::<i64>(vm) {
+            let resolved = if i < 0 {
+                (dim_size as i64 + i) as usize
+            } else {
+                i as usize
+            };
+            array_indices.push(None);
+            scalar_indices.push(Some(resolved));
+        } else {
+            return Err(vm.new_type_error("unsupported index type in fancy setitem".to_owned()));
+        }
+    }
+
+    let n = array_len.unwrap_or(1);
+    let value_arr = obj_to_ndarray(value, vm)?;
+    let value_arr = if value_arr.dtype() != dtype {
+        value_arr.astype(dtype)
+    } else {
+        value_arr
+    };
+
+    let mut write_data = zelf.data.write().unwrap();
+    for j in 0..n {
+        let mut coord = Vec::with_capacity(ndim);
+        for k in 0..items.len() {
+            if let Some(ref indices) = array_indices[k] {
+                coord.push(indices[j]);
+            } else if let Some(idx) = scalar_indices[k] {
+                coord.push(idx);
+            }
+        }
+        // Get value for this position
+        let val = if value_arr.size() == 1 {
+            value_arr
+                .get(&vec![0; value_arr.ndim()])
+                .map_err(|e| numpy_err(e, vm))?
+        } else if value_arr.ndim() == 1 {
+            let idx = j % value_arr.size();
+            value_arr.get(&[idx]).map_err(|e| numpy_err(e, vm))?
+        } else {
+            let idx = j % value_arr.size();
+            let flat_coord = linear_to_coord(idx, value_arr.shape());
+            value_arr.get(&flat_coord).map_err(|e| numpy_err(e, vm))?
+        };
+        write_data.set(&coord, val).map_err(|e| numpy_err(e, vm))?;
+    }
+    Ok(())
+}
+
 /// Convert a RustPython `PySlice` to a core `SliceArg`.
 fn py_slice_to_slice_arg(slice: &PySlice, vm: &VirtualMachine) -> PyResult<SliceArg> {
     let start = match &slice.start {
@@ -2721,6 +3025,15 @@ fn setitem_impl(
     // Tuple key → multi-dimensional assignment
     if let Some(tuple) = key.downcast_ref::<PyTuple>() {
         let items = tuple.as_slice();
+
+        // Check for ndarray indices (multi-dim fancy setitem)
+        let has_ndarray = items
+            .iter()
+            .any(|item| item.downcast_ref::<PyNdArray>().is_some());
+        if has_ndarray {
+            return multi_dim_fancy_setitem(zelf, items, &value, vm);
+        }
+
         let has_slice = items
             .iter()
             .any(|item| item.downcast_ref::<PySlice>().is_some());

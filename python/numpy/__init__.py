@@ -377,6 +377,15 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             dt = str(dtype)
             if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                 result = result.astype(dt)
+        # subok=False means strip subclass to base ndarray
+        if not subok and type(result) is not ndarray:
+            result = _native.array(result.tolist())
+            if dtype is not None:
+                dt = str(dtype)
+                if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                    result = result.astype(dt)
+            elif hasattr(data, 'dtype'):
+                result = result.astype(str(data.dtype))
         return result
     if isinstance(data, (int, float)):
         result = _native.array([float(data)])
@@ -388,10 +397,10 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
     if isinstance(data, str):
         # Single string -> string array
         return _native.array([data])
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], str):
-        # List of strings -> string array
-        return _native.array(data)
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], bool):
+    if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], str):
+        # List/tuple of strings -> string array
+        return _native.array(list(data) if isinstance(data, tuple) else data)
+    if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], bool):
         result = _native.array([1.0 if x else 0.0 for x in data])
         if dtype is not None:
             dt = str(dtype)
@@ -403,9 +412,9 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             if _all(isinstance(x, bool) for x in data):
                 result = result.astype("bool")
         return result
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], complex):
-        return _ObjectArray(data, "complex128")
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], (int, float)):
+    if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], complex):
+        return _ObjectArray(data if isinstance(data, list) else list(data), "complex128")
+    if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (int, float)):
         # Check if any element is complex (mixed int/float/complex list)
         _any_complex = __import__("builtins").any(isinstance(x, complex) for x in data)
         if _any_complex:
@@ -4804,7 +4813,8 @@ def require(a, dtype=None, requirements=None):
     if not isinstance(arr, ndarray):
         arr = asarray(arr)
     # E (ENSUREARRAY) means return base ndarray, not subclass
-    # We always return ndarray from asarray so this is satisfied
+    if 'ENSUREARRAY' in reqs and type(arr) is not ndarray:
+        arr = array(arr, subok=False)
     # W (WRITEABLE) - ensure writable
     if 'WRITEABLE' in reqs:
         if not arr.flags['WRITEABLE']:
