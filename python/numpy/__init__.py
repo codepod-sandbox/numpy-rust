@@ -79,7 +79,14 @@ class _ObjectArray:
     @property
     def ndim(self): return self._ndim
     @property
-    def dtype(self): return self._dtype
+    def dtype(self):
+        # Return a proper dtype object so callers can use .str, .kind, etc.
+        if isinstance(self._dtype, str):
+            try:
+                return dtype(self._dtype)
+            except Exception:
+                pass
+        return self._dtype
     @property
     def size(self):
         n = 1
@@ -108,7 +115,48 @@ class _ObjectArray:
     def all(self): return all(self._data)
     def any(self): return any(self._data)
     def __len__(self): return len(self._data)
+    def _get_structured_field_names(self):
+        """Parse structured dtype string to ordered list of (name, dtype_str) tuples."""
+        import re
+        dt = self._dtype
+        if not isinstance(dt, str):
+            return None
+        # Match patterns like ('name', 'dtype') in a list
+        fields = re.findall(r"\(\s*['\"](\w+)['\"],\s*['\"]([^'\"]+)['\"]", dt)
+        return fields if fields else None
+
     def __getitem__(self, key):
+        if isinstance(key, str):
+            # Structured dtype field access: x['field']
+            fields = self._get_structured_field_names()
+            if fields is not None:
+                names = [f[0] for f in fields]
+                if key in names:
+                    idx = names.index(key)
+                    field_dtype = fields[idx][1]
+                    nd = _normalize_dtype(field_dtype)
+                    # Detect 1D vs 2D structured array
+                    # 1D: _data = [(t1), (t2), ...] where each t is a record tuple
+                    # 2D: _data = [[row1], [row2], ...] where each row is list of record tuples
+                    if len(self._data) > 0 and isinstance(self._data[0], list):
+                        # 2D structured array
+                        out_shape = (len(self._data), len(self._data[0]))
+                        flat = [self._data[i][j][idx]
+                                for i in range(out_shape[0])
+                                for j in range(out_shape[1])]
+                    else:
+                        # 1D structured array
+                        flat = [row[idx] for row in self._data]
+                        out_shape = (len(flat),)
+                    try:
+                        result = _native.array([float(v) for v in flat]).astype(nd)
+                        result = result.reshape(list(out_shape))
+                        # Structured field views are unaligned (interleaved memory semantics)
+                        result._set_unaligned()
+                        return result
+                    except Exception:
+                        return _ObjectArray(flat, field_dtype)
+            raise IndexError("field %r not found in structured dtype" % key)
         result = self._data[key]
         if isinstance(key, slice):
             return _ObjectArray(result, self._dtype)
@@ -412,7 +460,21 @@ def _normalize_dtype(dt):
     if isinstance(dt, type) and isinstance(dt, _DTypeClassMeta):
         return dt._dtype_class_name
     s = str(dt)
-    return _DTYPE_CHAR_MAP.get(s, s)
+    result = _DTYPE_CHAR_MAP.get(s, None)
+    if result is not None:
+        return result
+    # Handle arbitrary byte string dtypes |Sn -> 'bytes'
+    if s.startswith('|S') and len(s) > 2 and s[2:].isdigit():
+        return 'bytes'
+    # Handle arbitrary void dtypes |Vn -> 'void'
+    if s.startswith('|V') and len(s) > 2 and s[2:].isdigit():
+        return 'void'
+    # Handle arbitrary unicode string dtypes <Un, Un -> 'str'
+    if (s.startswith('<U') or s.startswith('>U') or s.startswith('U')) and len(s) > 1:
+        suffix = s[2:] if s[0] in '<>' else s[1:]
+        if suffix.isdigit():
+            return 'str'
+    return s
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
     if dtype is not None:
@@ -1575,7 +1637,14 @@ def full(shape, fill_value, dtype=None, order="C"):
         n = 1
         for s in shape:
             n *= s
-        return _apply_order(_ObjectArray([fill_value] * n, dt, shape=shape), order)
+        # Coerce fill_value to appropriate type for bytes/str dtypes
+        if dt == 'bytes' and not isinstance(fill_value, (bytes, str)):
+            fill_val = str(fill_value)
+        elif dt == 'str' and not isinstance(fill_value, str):
+            fill_val = str(fill_value)
+        else:
+            fill_val = fill_value
+        return _apply_order(_ObjectArray([fill_val] * n, dt, shape=shape), order)
     if dt is not None:
         return _apply_order(_native.full(shape, float(fill_value), dt), order)
     return _apply_order(_native.full(shape, float(fill_value)), order)
@@ -4045,6 +4114,17 @@ class dtype:
                 name = tp._dtype_class_name
             elif isinstance(tp, str):
                 name = _DTYPE_CHAR_MAP.get(tp, tp)
+                # Handle arbitrary |Sn -> 'bytes', |Vn -> 'void', <Un -> 'str'
+                if isinstance(name, str):
+                    if name.startswith('|S') and len(name) > 2 and name[2:].isdigit():
+                        name = 'bytes'
+                    elif name.startswith('|V') and len(name) > 2 and name[2:].isdigit():
+                        name = 'void'
+                    elif len(name) > 1 and (name.startswith('<U') or name.startswith('>U')):
+                        if name[2:].isdigit():
+                            name = 'str'
+                    elif name.startswith('U') and len(name) > 1 and name[1:].isdigit():
+                        name = 'str'
             elif tp is float or tp is float64:
                 name = 'float64'
             elif tp is int or tp is int64:
@@ -4089,6 +4169,19 @@ class dtype:
             self.char = tp.char
         elif isinstance(tp, str):
             tp = _DTYPE_CHAR_MAP.get(tp, tp)
+            # Handle arbitrary |Sn byte strings -> 'bytes'
+            if tp.startswith('|S') and len(tp) > 2 and tp[2:].isdigit():
+                tp = 'bytes'
+            # Handle arbitrary |Vn void dtypes -> 'void'
+            elif tp.startswith('|V') and len(tp) > 2 and tp[2:].isdigit():
+                tp = 'void'
+            # Handle arbitrary <Un / Un unicode strings -> 'str'
+            elif len(tp) > 1 and (tp.startswith('<U') or tp.startswith('>U')):
+                suffix = tp[2:]
+                if suffix.isdigit():
+                    tp = 'str'
+            elif tp.startswith('U') and len(tp) > 1 and tp[1:].isdigit():
+                tp = 'str'
             self.name = tp
             self._init_from_name(tp)
         elif tp is float or tp is float64:
@@ -4134,7 +4227,7 @@ class dtype:
             "uint64": "<u8", "uint32": "<u4", "uint16": "<u2", "uint8": "|u1",
             "bool": "|b1",
             "complex128": "<c16", "complex64": "<c8",
-            "object": "|O", "str": "<U", "bytes": "|S0",
+            "object": "|O", "str": "<U", "bytes": "|S0", "void": "|V0",
         }
         self.str = _typestr.get(self.name, "<f8")
         # names/fields: None for non-structured dtypes
@@ -4150,6 +4243,7 @@ class dtype:
             self.byteorder = '|'
         self.subdtype = None
         self.base = self
+        self.shape = ()  # shape of each element (empty tuple for non-structured)
         self.metadata = metadata
         self.alignment = self.itemsize
         self.isalignedstruct = False
@@ -5110,9 +5204,6 @@ def array_equal(a1, a2, equal_nan=False):
             a2 = array(a2)
         if a1.shape != a2.shape:
             return False
-        has_nan = bool(any(logical_or(isnan(a1), isnan(a2))))
-        if not equal_nan and has_nan:
-            return False
         if equal_nan:
             try:
                 both_nan = logical_and(isnan(a1), isnan(a2))
@@ -5120,6 +5211,12 @@ def array_equal(a1, a2, equal_nan=False):
                 return bool(all(logical_or(both_nan, logical_and(neither_nan, a1 == a2))))
             except Exception:
                 return bool((a1 == a2).all())
+        try:
+            has_nan = bool(any(logical_or(isnan(a1), isnan(a2))))
+        except Exception:
+            has_nan = False
+        if has_nan:
+            return False
         return bool((a1 == a2).all())
     except Exception:
         return False
@@ -10720,6 +10817,24 @@ class _TestingModule:
             return
         actual_a = asarray(actual)
         desired_a = asarray(desired)
+        # Empty array is vacuously equal to any scalar
+        if actual_a.size == 0 and desired_a.size <= 1:
+            return
+        if desired_a.size == 0 and actual_a.size <= 1:
+            return
+        # Handle 0-d scalar comparison: extract element and compare directly
+        if actual_a.shape == () and desired_a.size == 1:
+            a_val = actual_a.flatten()[0]
+            d_val = desired_a.flatten()[0]
+            if a_val != d_val:
+                raise AssertionError(err_msg or "Items are not equal:\n actual: {}\n desired: {}".format(actual, desired))
+            return
+        if desired_a.shape == () and actual_a.size == 1:
+            a_val = actual_a.flatten()[0]
+            d_val = desired_a.flatten()[0]
+            if a_val != d_val:
+                raise AssertionError(err_msg or "Items are not equal:\n actual: {}\n desired: {}".format(actual, desired))
+            return
         # Handle scalar vs array comparison
         if actual_a.shape != desired_a.shape:
             if desired_a.size == 1:

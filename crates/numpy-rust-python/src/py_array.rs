@@ -19,6 +19,7 @@ use numpy_rust_core::{DType, NdArray};
 pub struct PyNdArray {
     data: RwLock<NdArray>,
     is_fortran: AtomicBool,
+    is_aligned: AtomicBool,
 }
 
 impl Clone for PyNdArray {
@@ -26,6 +27,7 @@ impl Clone for PyNdArray {
         Self {
             data: RwLock::new(self.data.read().unwrap().clone()),
             is_fortran: AtomicBool::new(self.is_fortran.load(Ordering::Relaxed)),
+            is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
         }
     }
 }
@@ -35,6 +37,7 @@ impl PyNdArray {
         Self {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(false),
+            is_aligned: AtomicBool::new(true),
         }
     }
 
@@ -42,6 +45,7 @@ impl PyNdArray {
         Self {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(true),
+            is_aligned: AtomicBool::new(true),
         }
     }
 
@@ -553,7 +557,11 @@ impl PyNdArray {
 
     #[pygetset(name = "T")]
     fn transpose_prop(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.read().unwrap().transpose())
+        let result = PyNdArray::from_core(self.data.read().unwrap().transpose());
+        result
+            .is_aligned
+            .store(self.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
+        result
     }
 
     #[pygetset]
@@ -755,6 +763,7 @@ impl PyNdArray {
                 let result = PyNdArray {
                     data: RwLock::new(data.clone()),
                     is_fortran: AtomicBool::new(is_f),
+                    is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
                 };
                 return Ok(result.into_ref_with_type(vm, py_type)?.into());
             }
@@ -2092,28 +2101,29 @@ impl PyNdArray {
     fn flags(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         let is_f = self.is_fortran.load(Ordering::Relaxed);
         let is_c = !is_f;
+        let is_aligned = self.is_aligned.load(Ordering::Relaxed);
         let mut map = HashMap::new();
         map.insert("C_CONTIGUOUS".into(), is_c);
         map.insert("F_CONTIGUOUS".into(), is_f);
         map.insert("OWNDATA".into(), true);
         map.insert("WRITEABLE".into(), true);
-        map.insert("ALIGNED".into(), true);
+        map.insert("ALIGNED".into(), is_aligned);
         map.insert("WRITEBACKIFCOPY".into(), false);
         // Short aliases
         map.insert("C".into(), is_c);
         map.insert("F".into(), is_f);
         map.insert("O".into(), true);
         map.insert("W".into(), true);
-        map.insert("A".into(), true);
+        map.insert("A".into(), is_aligned);
         // Additional aliases
         map.insert("CONTIGUOUS".into(), is_c);
         map.insert("FORTRAN".into(), is_f);
         map.insert("UPDATEIFCOPY".into(), false);
         map.insert("FNC".into(), is_f);
-        map.insert("FORC".into(), true);
-        map.insert("BEHAVED".into(), true);
-        map.insert("CARRAY".into(), is_c);
-        map.insert("FARRAY".into(), is_f);
+        map.insert("FORC".into(), is_aligned);
+        map.insert("BEHAVED".into(), is_aligned);
+        map.insert("CARRAY".into(), is_c && is_aligned);
+        map.insert("FARRAY".into(), is_f && is_aligned);
         // Lowercase aliases are handled by #[pygetset] on PyFlagsObj
         let obj = PyFlagsObj::new(map).into_ref(&vm.ctx);
         Ok(obj.into())
@@ -2127,6 +2137,11 @@ impl PyNdArray {
     #[pymethod]
     fn _mark_c_contiguous(&self) {
         self.is_fortran.store(false, Ordering::Relaxed);
+    }
+
+    #[pymethod]
+    fn _set_unaligned(&self) {
+        self.is_aligned.store(false, Ordering::Relaxed);
     }
 
     #[pygetset]

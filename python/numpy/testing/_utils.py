@@ -43,7 +43,20 @@ def _val_equal(a, b):
 def _as_list(arr):
     """Convert ndarray to flat Python list for element-wise comparison."""
     if isinstance(arr, numpy._ObjectArray):
-        return [complex(v) if isinstance(v, complex) else (float(v) if v is not None else v) for v in arr._data]
+        result = []
+        for v in arr._data:
+            if isinstance(v, complex):
+                result.append(complex(v))
+            elif isinstance(v, (str, bytes)):
+                result.append(v)
+            elif v is None:
+                result.append(v)
+            else:
+                try:
+                    result.append(float(v))
+                except (TypeError, ValueError):
+                    result.append(v)
+        return result
     if isinstance(arr, numpy.ndarray):
         flat = arr.flatten()
         result = []
@@ -52,11 +65,17 @@ def _as_list(arr):
             if isinstance(v, tuple):
                 # Complex value stored as (re, im)
                 result.append(complex(v[0], v[1] if len(v) > 1 else 0))
+            elif isinstance(v, (str, bytes)):
+                result.append(v)
             else:
                 result.append(float(v))
         return result
     return [arr]
 
+
+def _is_array_like(x):
+    """Return True if x is numpy array or _ObjectArray."""
+    return isinstance(x, (numpy.ndarray, numpy._ObjectArray))
 
 def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
     # Handle tuples and lists recursively
@@ -68,7 +87,7 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
         for i, (a, d) in enumerate(zip(actual, desired)):
             assert_equal(a, d, err_msg=err_msg, verbose=verbose, strict=strict)
         return
-    if isinstance(actual, numpy.ndarray) and isinstance(desired, numpy.ndarray):
+    if _is_array_like(actual) and _is_array_like(desired):
         if actual.shape != desired.shape:
             raise AssertionError(
                 f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"
@@ -81,20 +100,20 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
                     f"Arrays not equal at index {i}: {a} != {d}. {err_msg}"
                 )
         return
-    if isinstance(actual, numpy.ndarray) and isinstance(desired, (list, tuple)):
+    if _is_array_like(actual) and isinstance(desired, (list, tuple)):
         desired = numpy.asarray(desired)
         assert_equal(actual, desired, err_msg=err_msg, verbose=verbose, strict=strict)
         return
-    if isinstance(desired, numpy.ndarray) and isinstance(actual, (list, tuple)):
+    if _is_array_like(desired) and isinstance(actual, (list, tuple)):
         actual = numpy.asarray(actual)
         assert_equal(actual, desired, err_msg=err_msg, verbose=verbose, strict=strict)
         return
-    if isinstance(actual, numpy.ndarray) or isinstance(desired, numpy.ndarray):
+    if _is_array_like(actual) or _is_array_like(desired):
         # one is array, one is scalar-like
-        arr = actual if isinstance(actual, numpy.ndarray) else desired
-        scalar = desired if isinstance(actual, numpy.ndarray) else actual
+        arr = actual if _is_array_like(actual) else desired
+        scalar = desired if _is_array_like(actual) else actual
         vals = _as_list(arr)
-        if not isinstance(scalar, numpy.ndarray):
+        if not _is_array_like(scalar):
             # Compare all elements to scalar
             for i, v in enumerate(vals):
                 if not _val_equal(v, scalar):
@@ -104,10 +123,10 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
             if not _val_equal(vals[0], scalar):
                 raise AssertionError(f"{vals[0]} != {scalar}. {err_msg}")
             return
-    if isinstance(actual, numpy.ndarray) or isinstance(desired, numpy.ndarray):
+    if _is_array_like(actual) or _is_array_like(desired):
         # Both arrays but different shapes - try element-wise
-        a_vals = _as_list(actual) if isinstance(actual, numpy.ndarray) else [actual]
-        d_vals = _as_list(desired) if isinstance(desired, numpy.ndarray) else [desired]
+        a_vals = _as_list(actual) if _is_array_like(actual) else [actual]
+        d_vals = _as_list(desired) if _is_array_like(desired) else [desired]
         if len(a_vals) != len(d_vals):
             raise AssertionError(f"Size mismatch: {len(a_vals)} vs {len(d_vals)}. {err_msg}")
         for i, (a, d) in enumerate(zip(a_vals, d_vals)):

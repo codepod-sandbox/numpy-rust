@@ -1,9 +1,4 @@
 TestClip.test_clip_with_out_memory_overlap
-TestCreationFuncs.test_empty
-TestCreationFuncs.test_full
-TestCreationFuncs.test_zeros
 TestIsclose.test_nep50_isclose
 TestNonarrayArgs.test_reshape_copy_arg
-TestNonzero.test_nonzero_onedim
-TestNonzero.test_nonzero_twodim
 TestTypes.test_can_cast_and_promote_usertypes
