@@ -98,47 +98,94 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
 
     let n_choices = choices.len();
 
-    // Flatten all choices to Vec<f64> for O(1) indexing
-    let flat_vecs: Vec<Vec<f64>> = choices
-        .iter()
-        .map(|c| {
-            let f = c.astype(DType::Float64).flatten();
-            let ArrayData::Float64(arr) = &f.data else {
-                unreachable!()
-            };
-            arr.iter().copied().collect()
-        })
-        .collect();
+    // Detect if any choice is complex
+    let any_complex = choices.iter().any(|c| c.dtype().is_complex());
 
-    let mut result = Vec::with_capacity(idx_arr.len());
-    for (pos, &i) in idx_arr.iter().enumerate() {
-        if i < 0 {
-            return Err(NumpyError::ValueError(format!(
-                "invalid entry {i} in choice array (negative indices not supported)"
-            )));
+    if any_complex {
+        // Complex path: cast all to Complex128
+        let flat_vecs: Vec<Vec<num_complex::Complex<f64>>> = choices
+            .iter()
+            .map(|c| {
+                let f = c.astype(DType::Complex128).flatten();
+                match &f.data {
+                    ArrayData::Complex128(arr) => arr.iter().copied().collect(),
+                    _ => unreachable!(),
+                }
+            })
+            .collect();
+
+        let mut result = Vec::with_capacity(idx_arr.len());
+        for (pos, &i) in idx_arr.iter().enumerate() {
+            if i < 0 {
+                return Err(NumpyError::ValueError(format!(
+                    "invalid entry {i} in choice array (negative indices not supported)"
+                )));
+            }
+            let choice_idx = i as usize;
+            if choice_idx >= n_choices {
+                return Err(NumpyError::ValueError(format!(
+                    "invalid entry {i} in choice array (out of range for {n_choices} choices)"
+                )));
+            }
+            let vec = &flat_vecs[choice_idx];
+            if pos >= vec.len() {
+                return Err(NumpyError::ValueError(format!(
+                    "shape mismatch: index array has {} elements but choice {} has {}",
+                    idx_arr.len(),
+                    choice_idx,
+                    vec.len()
+                )));
+            }
+            result.push(vec[pos]);
         }
-        let choice_idx = i as usize;
-        if choice_idx >= n_choices {
-            return Err(NumpyError::ValueError(format!(
-                "invalid entry {i} in choice array (out of range for {n_choices} choices)"
-            )));
+
+        let out_shape = a.shape().to_vec();
+        Ok(NdArray::from_data(ArrayData::Complex128(
+            ArrayD::from_shape_vec(IxDyn(&out_shape), result).expect("shape matches"),
+        )))
+    } else {
+        // Float path: cast all to Float64
+        let flat_vecs: Vec<Vec<f64>> = choices
+            .iter()
+            .map(|c| {
+                let f = c.astype(DType::Float64).flatten();
+                let ArrayData::Float64(arr) = &f.data else {
+                    unreachable!()
+                };
+                arr.iter().copied().collect()
+            })
+            .collect();
+
+        let mut result = Vec::with_capacity(idx_arr.len());
+        for (pos, &i) in idx_arr.iter().enumerate() {
+            if i < 0 {
+                return Err(NumpyError::ValueError(format!(
+                    "invalid entry {i} in choice array (negative indices not supported)"
+                )));
+            }
+            let choice_idx = i as usize;
+            if choice_idx >= n_choices {
+                return Err(NumpyError::ValueError(format!(
+                    "invalid entry {i} in choice array (out of range for {n_choices} choices)"
+                )));
+            }
+            let vec = &flat_vecs[choice_idx];
+            if pos >= vec.len() {
+                return Err(NumpyError::ValueError(format!(
+                    "shape mismatch: index array has {} elements but choice {} has {}",
+                    idx_arr.len(),
+                    choice_idx,
+                    vec.len()
+                )));
+            }
+            result.push(vec[pos]);
         }
-        let vec = &flat_vecs[choice_idx];
-        if pos >= vec.len() {
-            return Err(NumpyError::ValueError(format!(
-                "shape mismatch: index array has {} elements but choice {} has {}",
-                idx_arr.len(),
-                choice_idx,
-                vec.len()
-            )));
-        }
-        result.push(vec[pos]);
+
+        let out_shape = a.shape().to_vec();
+        Ok(NdArray::from_data(ArrayData::Float64(
+            ArrayD::from_shape_vec(IxDyn(&out_shape), result).expect("shape matches"),
+        )))
     }
-
-    let out_shape = a.shape().to_vec();
-    Ok(NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&out_shape), result).expect("shape matches"),
-    )))
 }
 
 /// Return sorted unique values present in both arrays.

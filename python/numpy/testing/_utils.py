@@ -28,13 +28,33 @@ def assert_(val, msg=""):
 def _is_array_like(obj):
     return isinstance(obj, numpy.ndarray) or isinstance(obj, numpy._ObjectArray)
 
+def _val_equal(a, b):
+    """Compare two values, treating NaN as equal to NaN."""
+    try:
+        if isinstance(a, float) and isinstance(b, float):
+            if math.isnan(a) and math.isnan(b):
+                return True
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return a == b
+    except (TypeError, ValueError):
+        pass
+    return a == b
+
 def _as_list(arr):
     """Convert ndarray to flat Python list for element-wise comparison."""
     if isinstance(arr, numpy._ObjectArray):
         return [complex(v) if isinstance(v, complex) else (float(v) if v is not None else v) for v in arr._data]
     if isinstance(arr, numpy.ndarray):
         flat = arr.flatten()
-        return [float(flat[i]) for i in range(flat.size)]
+        result = []
+        for i in range(flat.size):
+            v = flat[i]
+            if isinstance(v, tuple):
+                # Complex value stored as (re, im)
+                result.append(complex(v[0], v[1] if len(v) > 1 else 0))
+            else:
+                result.append(float(v))
+        return result
     return [arr]
 
 
@@ -56,7 +76,7 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
         a_vals = _as_list(actual)
         d_vals = _as_list(desired)
         for i, (a, d) in enumerate(zip(a_vals, d_vals)):
-            if a != d:
+            if not _val_equal(a, d):
                 raise AssertionError(
                     f"Arrays not equal at index {i}: {a} != {d}. {err_msg}"
                 )
@@ -77,11 +97,11 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
         if not isinstance(scalar, numpy.ndarray):
             # Compare all elements to scalar
             for i, v in enumerate(vals):
-                if v != scalar:
+                if not _val_equal(v, scalar):
                     raise AssertionError(f"Arrays not equal at index {i}: {v} != {scalar}. {err_msg}")
             return
         if arr.size == 1:
-            if vals[0] != scalar:
+            if not _val_equal(vals[0], scalar):
                 raise AssertionError(f"{vals[0]} != {scalar}. {err_msg}")
             return
     if isinstance(actual, numpy.ndarray) or isinstance(desired, numpy.ndarray):
@@ -91,10 +111,10 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
         if len(a_vals) != len(d_vals):
             raise AssertionError(f"Size mismatch: {len(a_vals)} vs {len(d_vals)}. {err_msg}")
         for i, (a, d) in enumerate(zip(a_vals, d_vals)):
-            if a != d:
+            if not _val_equal(a, d):
                 raise AssertionError(f"Items not equal at index {i}: {a} != {d}. {err_msg}")
         return
-    if actual != desired:
+    if not _val_equal(actual, desired):
         raise AssertionError(
             f"Items not equal:\n actual: {actual}\n desired: {desired}\n{err_msg}"
         )

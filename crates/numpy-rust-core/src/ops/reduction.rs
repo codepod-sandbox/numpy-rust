@@ -82,11 +82,6 @@ impl NdArray {
 
     /// Minimum element over a given axis, or global minimum.
     pub fn min(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "min not supported for complex arrays".into(),
-            ));
-        }
         let result = match axis {
             None => self.reduce_all_min(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Min),
@@ -96,11 +91,6 @@ impl NdArray {
 
     /// Maximum element over a given axis, or global maximum.
     pub fn max(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "max not supported for complex arrays".into(),
-            ));
-        }
         let result = match axis {
             None => self.reduce_all_max(),
             Some(ax) => self.reduce_axis_fold(ax, ReduceOp::Max),
@@ -334,11 +324,6 @@ impl NdArray {
     }
 
     fn reduce_all_min(&self) -> Result<NdArray> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "min not supported for complex arrays".into(),
-            ));
-        }
         let data = match &self.data {
             ArrayData::Bool(a) => {
                 let v = *a
@@ -377,8 +362,39 @@ impl NdArray {
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
             }
-            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
-                unreachable!("complex rejected above")
+            ArrayData::Complex64(a) => {
+                let v = a
+                    .iter()
+                    .copied()
+                    .reduce(|acc, x| {
+                        if crate::ops::comparison::complex_cmp(&acc, &x) == std::cmp::Ordering::Less
+                            || crate::ops::comparison::complex_cmp(&acc, &x)
+                                == std::cmp::Ordering::Equal
+                        {
+                            acc
+                        } else {
+                            x
+                        }
+                    })
+                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v))
+            }
+            ArrayData::Complex128(a) => {
+                let v = a
+                    .iter()
+                    .copied()
+                    .reduce(|acc, x| {
+                        if crate::ops::comparison::complex_cmp(&acc, &x) == std::cmp::Ordering::Less
+                            || crate::ops::comparison::complex_cmp(&acc, &x)
+                                == std::cmp::Ordering::Equal
+                        {
+                            acc
+                        } else {
+                            x
+                        }
+                    })
+                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v))
             }
             ArrayData::Str(a) => {
                 let v = a
@@ -393,11 +409,6 @@ impl NdArray {
     }
 
     fn reduce_all_max(&self) -> Result<NdArray> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "max not supported for complex arrays".into(),
-            ));
-        }
         let data = match &self.data {
             ArrayData::Bool(a) => {
                 let v = *a
@@ -436,8 +447,35 @@ impl NdArray {
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
                 ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
             }
-            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
-                unreachable!("complex rejected above")
+            ArrayData::Complex64(a) => {
+                let v = a
+                    .iter()
+                    .copied()
+                    .reduce(|acc, x| {
+                        if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less
+                        {
+                            acc
+                        } else {
+                            x
+                        }
+                    })
+                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v))
+            }
+            ArrayData::Complex128(a) => {
+                let v = a
+                    .iter()
+                    .copied()
+                    .reduce(|acc, x| {
+                        if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less
+                        {
+                            acc
+                        } else {
+                            x
+                        }
+                    })
+                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v))
             }
             ArrayData::Str(a) => {
                 let v = a
@@ -609,8 +647,47 @@ impl NdArray {
                 });
                 ArrayData::Str(result)
             }
-            (ArrayData::Complex64(_) | ArrayData::Complex128(_), _) => {
-                unreachable!("complex rejected in min/max before reaching reduce_axis_fold")
+            (ArrayData::Complex64(a), ReduceOp::Min) => {
+                let init = num_complex::Complex::new(f32::INFINITY, 0.0);
+                ArrayData::Complex64(a.fold_axis(ax, init, |&acc, &x| {
+                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Greater
+                    {
+                        acc
+                    } else {
+                        x
+                    }
+                }))
+            }
+            (ArrayData::Complex64(a), ReduceOp::Max) => {
+                let init = num_complex::Complex::new(f32::NEG_INFINITY, 0.0);
+                ArrayData::Complex64(a.fold_axis(ax, init, |&acc, &x| {
+                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less {
+                        acc
+                    } else {
+                        x
+                    }
+                }))
+            }
+            (ArrayData::Complex128(a), ReduceOp::Min) => {
+                let init = num_complex::Complex::new(f64::INFINITY, 0.0);
+                ArrayData::Complex128(a.fold_axis(ax, init, |&acc, &x| {
+                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Greater
+                    {
+                        acc
+                    } else {
+                        x
+                    }
+                }))
+            }
+            (ArrayData::Complex128(a), ReduceOp::Max) => {
+                let init = num_complex::Complex::new(f64::NEG_INFINITY, 0.0);
+                ArrayData::Complex128(a.fold_axis(ax, init, |&acc, &x| {
+                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less {
+                        acc
+                    } else {
+                        x
+                    }
+                }))
             }
         };
         Ok(NdArray::from_data(data))

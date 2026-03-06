@@ -416,6 +416,57 @@ impl NdArray {
         };
         NdArray::from_data(result)
     }
+
+    /// Clip complex array values using lexicographic comparison.
+    pub fn clip_complex(
+        &self,
+        a_min: Option<num_complex::Complex<f64>>,
+        a_max: Option<num_complex::Complex<f64>>,
+    ) -> NdArray {
+        use crate::ops::comparison::complex_cmp;
+        match &self.data {
+            ArrayData::Complex128(a) => {
+                let result = a.mapv(|x| {
+                    let mut v = x;
+                    if let Some(mn) = a_min {
+                        if complex_cmp(&v, &mn) == std::cmp::Ordering::Less {
+                            v = mn;
+                        }
+                    }
+                    if let Some(mx) = a_max {
+                        if complex_cmp(&v, &mx) == std::cmp::Ordering::Greater {
+                            v = mx;
+                        }
+                    }
+                    v
+                });
+                NdArray::from_data(ArrayData::Complex128(result))
+            }
+            ArrayData::Complex64(a) => {
+                let mn32 = a_min.map(|c| num_complex::Complex::new(c.re as f32, c.im as f32));
+                let mx32 = a_max.map(|c| num_complex::Complex::new(c.re as f32, c.im as f32));
+                let result = a.mapv(|x| {
+                    let mut v = x;
+                    if let Some(mn) = mn32 {
+                        if complex_cmp(&v, &mn) == std::cmp::Ordering::Less {
+                            v = mn;
+                        }
+                    }
+                    if let Some(mx) = mx32 {
+                        if complex_cmp(&v, &mx) == std::cmp::Ordering::Greater {
+                            v = mx;
+                        }
+                    }
+                    v
+                });
+                NdArray::from_data(ArrayData::Complex64(result))
+            }
+            _ => {
+                // Non-complex: convert bounds to f64 and use regular clip
+                self.clip(a_min.map(|c| c.re), a_max.map(|c| c.re))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

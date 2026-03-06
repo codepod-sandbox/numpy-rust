@@ -1524,6 +1524,54 @@ impl PyNdArray {
         };
         // 'out' kwarg is accepted but ignored (we always return a new array)
 
+        // Helper to extract complex from Python object (tuple or complex number)
+        fn py_obj_to_complex(
+            obj: &PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> Option<num_complex::Complex<f64>> {
+            // Try as tuple (re, im) - complex values from tolist() are tuples
+            if let Some(tup) = obj.downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+                let elems = tup.as_slice();
+                if elems.len() >= 2 {
+                    let re = py_obj_to_f64(&elems[0], vm).unwrap_or(0.0);
+                    let im = py_obj_to_f64(&elems[1], vm).unwrap_or(0.0);
+                    return Some(num_complex::Complex::new(re, im));
+                }
+            }
+            // Try as f64 (real number → complex with im=0)
+            if let Ok(v) = py_obj_to_f64(obj, vm) {
+                return Some(num_complex::Complex::new(v, 0.0));
+            }
+            None
+        }
+
+        // Check if array is complex dtype - use complex clip path
+        let is_complex = self.data.read().unwrap().dtype().is_complex();
+        if is_complex {
+            let cmin = match &a_min_obj {
+                None => None,
+                Some(obj) if vm.is_none(obj) => None,
+                Some(obj) => py_obj_to_complex(obj, vm),
+            };
+            let cmax = match &a_max_obj {
+                None => None,
+                Some(obj) if vm.is_none(obj) => None,
+                Some(obj) => py_obj_to_complex(obj, vm),
+            };
+            let result = PyNdArray::from_core(self.data.read().unwrap().clip_complex(cmin, cmax));
+            if let Some(out_obj) = args.kwargs.get("out") {
+                if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                    let core_data = result.data.read().unwrap().clone();
+                    {
+                        let mut out_data = out_arr.data.write().unwrap();
+                        *out_data = core_data;
+                    }
+                    return Ok((*out_arr).clone());
+                }
+            }
+            return Ok(result);
+        }
+
         let min_val = match a_min_obj {
             None => None,
             Some(ref obj) if vm.is_none(obj) => None,
@@ -2525,31 +2573,70 @@ fn multi_dim_fancy_getitem(
     let mut kinds = Vec::with_capacity(items.len());
     let mut array_len: Option<usize> = None;
     let mut array_shape: Option<Vec<usize>> = None; // original shape of index arrays
+    let mut data_axis: usize = 0; // track which data axis we're consuming
 
-    for (axis, item) in items.iter().enumerate() {
-        let dim_size = if axis < ndim { shape[axis] } else { 1 };
+    for item in items.iter() {
+        let dim_size = if data_axis < ndim {
+            shape[data_axis]
+        } else {
+            1
+        };
 
         if let Some(arr) = item.downcast_ref::<PyNdArray>() {
             let arr_data = arr.data.read().unwrap();
             if arr_data.dtype() == DType::Bool {
-                // Boolean mask on this axis → convert to integer indices
-                let mut indices = Vec::new();
-                for i in 0..arr_data.size() {
-                    let s = arr_data.get(&[i]).map_err(|e| numpy_err(e, vm))?;
-                    if let Scalar::Bool(true) = s {
-                        indices.push(i);
+                let mask_shape = arr_data.shape().to_vec();
+                if mask_shape.len() > 1 {
+                    // Multi-dim boolean mask: expand to nonzero indices (one per mask dim)
+                    let mask_ndim = mask_shape.len();
+                    let mut coords: Vec<Vec<usize>> = (0..mask_ndim).map(|_| Vec::new()).collect();
+                    // Flatten the mask first so we can iterate with a single index
+                    let flat_mask = arr_data.flatten();
+                    for flat_idx in 0..flat_mask.size() {
+                        let s = flat_mask.get(&[flat_idx]).map_err(|e| numpy_err(e, vm))?;
+                        if let Scalar::Bool(true) = s {
+                            let mut remaining = flat_idx;
+                            for d in (0..mask_ndim).rev() {
+                                coords[d].push(remaining % mask_shape[d]);
+                                remaining /= mask_shape[d];
+                            }
+                        }
                     }
-                }
-                if let Some(al) = array_len {
-                    if al != indices.len() {
-                        return Err(vm.new_value_error(
-                            "shape mismatch: indexing arrays could not be broadcast together"
-                                .to_owned(),
-                        ));
+                    let num_true = coords[0].len();
+                    if let Some(al) = array_len {
+                        if al != num_true {
+                            return Err(vm.new_value_error(
+                                "shape mismatch: indexing arrays could not be broadcast together"
+                                    .to_owned(),
+                            ));
+                        }
                     }
+                    array_len = Some(num_true);
+                    for coord_set in coords {
+                        kinds.push(IdxKind::Array(coord_set));
+                    }
+                    data_axis += mask_ndim;
+                } else {
+                    // 1-D boolean mask on this axis → convert to integer indices
+                    let mut indices = Vec::new();
+                    for i in 0..arr_data.size() {
+                        let s = arr_data.get(&[i]).map_err(|e| numpy_err(e, vm))?;
+                        if let Scalar::Bool(true) = s {
+                            indices.push(i);
+                        }
+                    }
+                    if let Some(al) = array_len {
+                        if al != indices.len() {
+                            return Err(vm.new_value_error(
+                                "shape mismatch: indexing arrays could not be broadcast together"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                    array_len = Some(indices.len());
+                    kinds.push(IdxKind::Array(indices));
+                    data_axis += 1;
                 }
-                array_len = Some(indices.len());
-                kinds.push(IdxKind::Array(indices));
             } else {
                 // Capture original shape for reshaping result
                 if array_shape.is_none() {
@@ -2566,10 +2653,12 @@ fn multi_dim_fancy_getitem(
                 }
                 array_len = Some(indices.len());
                 kinds.push(IdxKind::Array(indices));
+                data_axis += 1;
             }
         } else if let Some(slice) = item.downcast_ref::<PySlice>() {
             let arg = py_slice_to_slice_arg(slice, vm)?;
             kinds.push(IdxKind::Slice(arg));
+            data_axis += 1;
         } else if let Ok(i) = item.clone().try_into_value::<i64>(vm) {
             let resolved = if i < 0 {
                 (dim_size as i64 + i) as usize
@@ -2577,6 +2666,7 @@ fn multi_dim_fancy_getitem(
                 i as usize
             };
             kinds.push(IdxKind::Scalar(resolved));
+            data_axis += 1;
         } else {
             return Err(vm.new_type_error("unsupported index type in tuple".to_owned()));
         }
@@ -2679,6 +2769,16 @@ fn multi_dim_fancy_getitem(
 
     // Mixed slice + array indexing: handle by iterating array indices
     // and slicing for each, then stacking
+    // Count leading non-array dims to determine where n dimension goes
+    let first_array_pos = kinds
+        .iter()
+        .position(|k| matches!(k, IdxKind::Array(_)))
+        .unwrap_or(0);
+    let leading_slice_dims = kinds[..first_array_pos]
+        .iter()
+        .filter(|k| matches!(k, IdxKind::Slice(_)))
+        .count();
+
     let mut results = Vec::with_capacity(n);
     for j in 0..n {
         let mut slice_args = Vec::with_capacity(items.len());
@@ -2703,12 +2803,18 @@ fn multi_dim_fancy_getitem(
     }
     let refs: Vec<&NdArray> = results.iter().collect();
     let result = numpy_rust_core::concatenate(&refs, 0).map_err(|e| numpy_err(e, vm))?;
-    // Reshape: (n, *sub_shape)
+    // Reshape to (n, *sub_shape), then move n to correct position
     let sub_shape = results[0].shape();
     if sub_shape.len() > 1 || (sub_shape.len() == 1 && sub_shape[0] > 1) {
         let mut new_shape = vec![n];
         new_shape.extend_from_slice(sub_shape);
-        let result = result.reshape(&new_shape).map_err(|e| numpy_err(e, vm))?;
+        let mut result = result.reshape(&new_shape).map_err(|e| numpy_err(e, vm))?;
+        // Move n dimension from position 0 to position leading_slice_dims
+        if leading_slice_dims > 0 {
+            for i in 0..leading_slice_dims {
+                result = result.swapaxes(i, i + 1).map_err(|e| numpy_err(e, vm))?;
+            }
+        }
         return Ok(PyNdArray::from_core(result).to_py(vm));
     }
     Ok(PyNdArray::from_core(result).to_py(vm))

@@ -94,30 +94,58 @@ class _ObjectArray:
         if other is None or isinstance(other, (int, float, complex, str)):
             return self._to_bool_array([x != other for x in self._data])
         return NotImplemented
+    @staticmethod
+    def _cmp_complex(a, b):
+        """Lexicographic comparison for complex: (real, imag). Returns -1, 0, or 1."""
+        ar = a.real if isinstance(a, complex) else float(a)
+        ai = a.imag if isinstance(a, complex) else 0.0
+        br = b.real if isinstance(b, complex) else float(b)
+        bi = b.imag if isinstance(b, complex) else 0.0
+        if ar < br: return -1
+        if ar > br: return 1
+        if ai < bi: return -1
+        if ai > bi: return 1
+        return 0
+    def _cmp_lt(self, a, b):
+        if isinstance(a, complex) or isinstance(b, complex):
+            return self._cmp_complex(a, b) < 0
+        return a < b
+    def _cmp_le(self, a, b):
+        if isinstance(a, complex) or isinstance(b, complex):
+            return self._cmp_complex(a, b) <= 0
+        return a <= b
+    def _cmp_gt(self, a, b):
+        if isinstance(a, complex) or isinstance(b, complex):
+            return self._cmp_complex(a, b) > 0
+        return a > b
+    def _cmp_ge(self, a, b):
+        if isinstance(a, complex) or isinstance(b, complex):
+            return self._cmp_complex(a, b) >= 0
+        return a >= b
     def __le__(self, other):
         if isinstance(other, _ObjectArray):
-            return self._to_bool_array([a <= b for a, b in zip(self._data, other._data)])
+            return self._to_bool_array([self._cmp_le(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
-            return self._to_bool_array([a <= b for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([x <= other for x in self._data])
+            return self._to_bool_array([self._cmp_le(a, b) for a, b in zip(self._data, other.flatten().tolist())])
+        return self._to_bool_array([self._cmp_le(x, other) for x in self._data])
     def __lt__(self, other):
         if isinstance(other, _ObjectArray):
-            return self._to_bool_array([a < b for a, b in zip(self._data, other._data)])
+            return self._to_bool_array([self._cmp_lt(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
-            return self._to_bool_array([a < b for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([x < other for x in self._data])
+            return self._to_bool_array([self._cmp_lt(a, b) for a, b in zip(self._data, other.flatten().tolist())])
+        return self._to_bool_array([self._cmp_lt(x, other) for x in self._data])
     def __ge__(self, other):
         if isinstance(other, _ObjectArray):
-            return self._to_bool_array([a >= b for a, b in zip(self._data, other._data)])
+            return self._to_bool_array([self._cmp_ge(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
-            return self._to_bool_array([a >= b for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([x >= other for x in self._data])
+            return self._to_bool_array([self._cmp_ge(a, b) for a, b in zip(self._data, other.flatten().tolist())])
+        return self._to_bool_array([self._cmp_ge(x, other) for x in self._data])
     def __gt__(self, other):
         if isinstance(other, _ObjectArray):
-            return self._to_bool_array([a > b for a, b in zip(self._data, other._data)])
+            return self._to_bool_array([self._cmp_gt(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
-            return self._to_bool_array([a > b for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([x > other for x in self._data])
+            return self._to_bool_array([self._cmp_gt(a, b) for a, b in zip(self._data, other.flatten().tolist())])
+        return self._to_bool_array([self._cmp_gt(x, other) for x in self._data])
     def __sub__(self, other):
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a - b for a, b in zip(self._data, other._data)], self._dtype)
@@ -987,7 +1015,7 @@ class void(flexible, metaclass=_ScalarTypeMeta, scalar_name="void", python_type=
 
 # Aliases using _ScalarType (for types that don't need hierarchy participation)
 float128 = _ScalarType("float128", float)
-intp = _ScalarType("int64", int)
+intp = int64
 intc = _ScalarType("int32", int)
 uintp = _ScalarType("uint64", int)
 byte = _ScalarType("int8", int)
@@ -1423,10 +1451,8 @@ def full(shape, fill_value, dtype=None, order="C"):
 
 def full_like(a, fill_value, dtype=None, order="K", subok=True, shape=None):
     s = shape if shape is not None else a.shape
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
-    if dt is not None:
-        return _native.full(s, float(fill_value), dt)
-    return _native.full(s, float(fill_value))
+    dt = _normalize_dtype(str(dtype)) if dtype is not None else _normalize_dtype(str(a.dtype))
+    return _native.full(s, float(fill_value), dt)
 
 def zeros_like(a, dtype=None, order="K", subok=True, shape=None):
     s = shape if shape is not None else a.shape
@@ -1762,30 +1788,10 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
             _copy_into(out, result)
             return out
         return result
-    # Complex dtype fallback: Rust clip doesn't handle complex properly
+    # Complex dtype: delegate to ndarray.clip which has Rust-level complex support
     dt_name = str(a.dtype) if isinstance(a, ndarray) else ""
-    if "complex" in dt_name:
-        # Extract real parts, clip them as floats, convert back to complex
-        a_flat = a.flatten().tolist()
-        re_vals = []
-        for v in a_flat:
-            if isinstance(v, (tuple, list)):
-                re_vals.append(float(v[0]))
-            else:
-                re_vals.append(float(v))
-        re_arr = array(re_vals)
-        # Clip real parts: minimum(maximum(a, amin), amax)
-        if a_min is not None:
-            mn = float(a_min)
-            re_arr = where(re_arr < mn, full(re_arr.shape, mn), re_arr)
-        if a_max is not None:
-            mx = float(a_max)
-            re_arr = where(re_arr > mx, full(re_arr.shape, mx), re_arr)
-        result = re_arr.reshape(a.shape).astype(dt_name)
-        if out is not None:
-            _copy_into(out, result)
-            return out
-        return result
+    if "complex" in dt_name and isinstance(a, ndarray):
+        return a.clip(a_min, a_max, out=out)
     # For integer dtypes, clamp bounds to dtype range to preserve dtype
     _int_dtypes = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
     _int_dtypes = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
@@ -1817,10 +1823,14 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
     if a_min is None:
         a_min = float('-inf')
     else:
+        if isinstance(a_min, complex):
+            a_min = a_min.real
         a_min = float(a_min)
     if a_max is None:
         a_max = float('inf')
     else:
+        if isinstance(a_max, complex):
+            a_max = a_max.real
         a_max = float(a_max)
     # NaN propagation: if either bound is NaN, result is all NaN
     if _math.isnan(a_min) or _math.isnan(a_max):
@@ -10334,7 +10344,7 @@ class _TestingModule:
                 y = broadcast_to(y.flatten(), x.shape)
             elif x.size == 1:
                 x = broadcast_to(x.flatten(), y.shape)
-        if not array_equal(x, y):
+        if not array_equal(x, y, equal_nan=True):
             raise AssertionError(err_msg or "Arrays are not equal\n x: {}\n y: {}".format(x.tolist(), y.tolist()))
 
     def assert_array_almost_equal(self, x, y, decimal=6, err_msg='', verbose=True):
@@ -10359,7 +10369,7 @@ class _TestingModule:
                 desired_a = broadcast_to(desired_a.flatten(), actual_a.shape)
             elif actual_a.size == 1:
                 actual_a = broadcast_to(actual_a.flatten(), desired_a.shape)
-        if not array_equal(actual_a, desired_a):
+        if not array_equal(actual_a, desired_a, equal_nan=True):
             raise AssertionError(err_msg or "Items are not equal:\n actual: {}\n desired: {}".format(actual, desired))
 
     def assert_raises(self, exception_class, *args, **kwargs):

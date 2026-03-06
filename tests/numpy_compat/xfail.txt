@@ -1,6 +1,4 @@
-TestClip.test_clip_complex
 TestClip.test_clip_invalid_casting
-TestClip.test_clip_nan
 TestClip.test_clip_non_contig
 TestClip.test_clip_with_out_memory_overlap
 TestClip.test_noncontig_inplace
@@ -55,6 +53,5 @@ TestRollaxis.test_results
 TestTypes.test_can_cast_and_promote_usertypes
 TestTypes.test_valid_void_promotion[2]
 TestTypes.test_valid_void_promotion[3]
-TestIndex.test_boolean
 TestBoolCmp.test_double
 TestBoolCmp.test_float

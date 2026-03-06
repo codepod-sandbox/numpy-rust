@@ -3,7 +3,7 @@ use ndarray::ArrayD;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
-use crate::error::{NumpyError, Result};
+use crate::error::Result;
 use crate::NdArray;
 
 /// Prepare two NdArrays for comparison: promote types and broadcast shapes.
@@ -75,16 +75,25 @@ macro_rules! impl_eq_cmp {
 impl_eq_cmp!(eq, ==);
 impl_eq_cmp!(ne, !=);
 
-/// Implement ordering comparisons that do NOT work on complex.
+/// Lexicographic comparison helper for complex numbers: (real, imag).
+pub fn complex_cmp<T: num_traits::Float>(
+    a: &num_complex::Complex<T>,
+    b: &num_complex::Complex<T>,
+) -> std::cmp::Ordering {
+    match a.re.partial_cmp(&b.re) {
+        Some(std::cmp::Ordering::Equal) => {
+            a.im.partial_cmp(&b.im).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        Some(ord) => ord,
+        None => std::cmp::Ordering::Equal,
+    }
+}
+
+/// Implement ordering comparisons with complex support (lexicographic).
 macro_rules! impl_ord_cmp {
-    ($name:ident, $op:tt) => {
+    ($name:ident, $op:tt, $cmp_ord:pat) => {
         impl NdArray {
             pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
-                if self.dtype().is_complex() || other.dtype().is_complex() {
-                    return Err(NumpyError::TypeError(
-                        concat!(stringify!($name), " not supported for complex arrays").into(),
-                    ));
-                }
                 let (a, b) = prepare_cmp(self, other)?;
                 let result: ArrayD<bool> = match (a, b) {
                     (ArrayData::Bool(a), ArrayData::Bool(b)) => {
@@ -102,10 +111,20 @@ macro_rules! impl_ord_cmp {
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => {
                         ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
                     }
+                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| {
+                            matches!(complex_cmp(x, y), $cmp_ord)
+                        })
+                    }
+                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
+                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| {
+                            matches!(complex_cmp(x, y), $cmp_ord)
+                        })
+                    }
                     (ArrayData::Str(a), ArrayData::Str(b)) => {
                         ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y)
                     }
-                    _ => unreachable!("promotion ensures matching types (complex rejected above)"),
+                    _ => unreachable!("promotion ensures matching types"),
                 };
                 Ok(NdArray::from_data(ArrayData::Bool(result)))
             }
@@ -113,10 +132,10 @@ macro_rules! impl_ord_cmp {
     };
 }
 
-impl_ord_cmp!(lt, <);
-impl_ord_cmp!(gt, >);
-impl_ord_cmp!(le, <=);
-impl_ord_cmp!(ge, >=);
+impl_ord_cmp!(lt, <, std::cmp::Ordering::Less);
+impl_ord_cmp!(gt, >, std::cmp::Ordering::Greater);
+impl_ord_cmp!(le, <=, std::cmp::Ordering::Less | std::cmp::Ordering::Equal);
+impl_ord_cmp!(ge, >=, std::cmp::Ordering::Greater | std::cmp::Ordering::Equal);
 
 #[cfg(test)]
 mod tests {
@@ -189,16 +208,18 @@ mod tests {
     }
 
     #[test]
-    fn test_lt_complex_fails() {
+    fn test_lt_complex() {
         let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
         let b = NdArray::from_vec(vec![Complex::new(3.0f64, 4.0)]);
-        assert!(a.lt(&b).is_err());
+        let c = a.lt(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
     }
 
     #[test]
-    fn test_gt_complex_fails() {
-        let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
-        let b = NdArray::from_vec(vec![Complex::new(3.0f64, 4.0)]);
-        assert!(a.gt(&b).is_err());
+    fn test_gt_complex() {
+        let a = NdArray::from_vec(vec![Complex::new(3.0f64, 4.0)]);
+        let b = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
+        let c = a.gt(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
     }
 }
