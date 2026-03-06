@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
 use rustpython_vm as vm;
@@ -17,12 +18,14 @@ use numpy_rust_core::{DType, NdArray};
 #[derive(Debug, PyPayload)]
 pub struct PyNdArray {
     data: RwLock<NdArray>,
+    is_fortran: AtomicBool,
 }
 
 impl Clone for PyNdArray {
     fn clone(&self) -> Self {
         Self {
             data: RwLock::new(self.data.read().unwrap().clone()),
+            is_fortran: AtomicBool::new(self.is_fortran.load(Ordering::Relaxed)),
         }
     }
 }
@@ -31,6 +34,14 @@ impl PyNdArray {
     pub fn from_core(data: NdArray) -> Self {
         Self {
             data: RwLock::new(data),
+            is_fortran: AtomicBool::new(false),
+        }
+    }
+
+    pub fn from_core_fortran(data: NdArray) -> Self {
+        Self {
+            data: RwLock::new(data),
+            is_fortran: AtomicBool::new(true),
         }
     }
 
@@ -285,16 +296,73 @@ fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyR
             _ => unreachable!("storage_dtype maps to canonical types"),
         });
     }
+    // Handle Python complex numbers
+    if let Some(c) = obj.downcast_ref::<vm::builtins::PyComplex>() {
+        let cx = c.to_complex();
+        return Ok(match storage {
+            DType::Complex64 => {
+                Scalar::Complex64(num_complex::Complex::new(cx.re as f32, cx.im as f32))
+            }
+            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(cx.re, cx.im)),
+            DType::Float64 => Scalar::Float64(cx.re),
+            DType::Float32 => Scalar::Float32(cx.re as f32),
+            DType::Int64 => Scalar::Int64(cx.re as i64),
+            DType::Int32 => Scalar::Int32(cx.re as i32),
+            DType::Bool => Scalar::Bool(cx.re != 0.0 || cx.im != 0.0),
+            DType::Str => Scalar::Str(format!("({},{})", cx.re, cx.im)),
+            _ => unreachable!("storage_dtype maps to canonical types"),
+        });
+    }
+    // Handle (re, im) tuples (our complex scalar representation)
+    if let Some(tup) = obj.downcast_ref::<vm::builtins::PyTuple>() {
+        let elems = tup.as_slice();
+        if elems.len() == 2 {
+            let re = elems[0].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
+            let im = elems[1].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
+            return Ok(match storage {
+                DType::Complex64 => {
+                    Scalar::Complex64(num_complex::Complex::new(re as f32, im as f32))
+                }
+                DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(re, im)),
+                DType::Float64 => Scalar::Float64(re),
+                DType::Float32 => Scalar::Float32(re as f32),
+                DType::Int64 => Scalar::Int64(re as i64),
+                DType::Int32 => Scalar::Int32(re as i32),
+                DType::Bool => Scalar::Bool(re != 0.0 || im != 0.0),
+                DType::Str => Scalar::Str(format!("({},{})", re, im)),
+                _ => unreachable!("storage_dtype maps to canonical types"),
+            });
+        }
+    }
+    // Handle str objects for Str dtype
+    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
+        return Ok(match storage {
+            DType::Str => Scalar::Str(s.as_str().to_owned()),
+            DType::Float64 => Scalar::Float64(s.as_str().parse().unwrap_or(0.0)),
+            DType::Float32 => Scalar::Float32(s.as_str().parse().unwrap_or(0.0)),
+            DType::Int64 => Scalar::Int64(s.as_str().parse().unwrap_or(0)),
+            DType::Int32 => Scalar::Int32(s.as_str().parse().unwrap_or(0)),
+            DType::Bool => Scalar::Bool(!s.as_str().is_empty()),
+            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(0.0, 0.0)),
+            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(0.0, 0.0)),
+            _ => unreachable!("storage_dtype maps to canonical types"),
+        });
+    }
     Err(vm.new_type_error("cannot convert value to array scalar".to_owned()))
 }
 
-/// Convert a Python object (int or float) to f64.
+/// Convert a Python object (int, float, or complex) to f64.
+/// For complex numbers, takes the real part.
 fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
     if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
         return Ok(f);
     }
     if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
         return Ok(i as f64);
+    }
+    // Complex number: take the real part
+    if let Some(c) = obj.downcast_ref::<vm::builtins::PyComplex>() {
+        return Ok(c.to_complex().re);
     }
     Err(vm.new_type_error("expected a number".to_owned()))
 }
@@ -672,36 +740,40 @@ impl PyNdArray {
     }
 
     /// Simplified view() – returns a copy (true memory views not supported).
+    /// When passed a Python type (subclass of ndarray), returns an instance of that type.
     #[pymethod]
     fn view(
         &self,
         dtype_arg: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
+    ) -> PyResult<PyObjectRef> {
         let data = self.data.read().unwrap();
+        let is_f = self.is_fortran.load(Ordering::Relaxed);
         if let Some(dtype_obj) = dtype_arg.into_option() {
-            // Try to parse as dtype string; if it fails (e.g. a class is passed), return a copy
-            let dtype_str: String = match dtype_obj.clone().try_into_value::<String>(vm) {
+            // If it's a Python type/class (e.g. MyNDArray subclass), return instance of that type
+            if let Ok(py_type) = dtype_obj.clone().downcast::<vm::builtins::PyType>() {
+                let result = PyNdArray {
+                    data: RwLock::new(data.clone()),
+                    is_fortran: AtomicBool::new(is_f),
+                };
+                return Ok(result.into_ref_with_type(vm, py_type)?.into());
+            }
+            // Try to parse as dtype string
+            let dtype_str: String = match dtype_obj.try_into_value::<String>(vm) {
                 Ok(s) => s,
-                Err(_) => {
-                    // Could be a type/class — just return a clone
-                    return Ok(PyNdArray::from_core(data.clone()));
-                }
+                Err(_) => return Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm)),
             };
             match parse_dtype(dtype_str.as_str(), vm) {
                 Ok(target_dt) => {
                     let result = data
                         .view_as_dtype(target_dt)
                         .map_err(|e| vm.new_value_error(e.to_string()))?;
-                    Ok(PyNdArray::from_core(result))
+                    Ok(PyNdArray::from_core(result).into_pyobject(vm))
                 }
-                Err(_) => {
-                    // Unsupported dtype string — return a clone
-                    Ok(PyNdArray::from_core(data.clone()))
-                }
+                Err(_) => Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm)),
             }
         } else {
-            Ok(PyNdArray::from_core(data.clone()))
+            Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm))
         }
     }
 
@@ -1708,14 +1780,19 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn nonzero(&self, vm: &VirtualMachine) -> PyObjectRef {
+    fn nonzero(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         let inner = self.data.read().unwrap();
+        if inner.ndim() == 0 {
+            return Err(vm.new_value_error(
+                "Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(a).nonzero() instead.".to_owned()
+            ));
+        }
         let result = numpy_rust_core::nonzero(&inner);
         let py_arrays: Vec<PyObjectRef> = result
             .into_iter()
             .map(|arr| PyNdArray::from_core(arr).into_pyobject(vm))
             .collect();
-        PyTuple::new_ref(py_arrays, &vm.ctx).into()
+        Ok(PyTuple::new_ref(py_arrays, &vm.ctx).into())
     }
 
     // --- nbytes / strides / itemsize properties ---
@@ -2013,31 +2090,43 @@ impl PyNdArray {
 
     #[pygetset]
     fn flags(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let is_f = self.is_fortran.load(Ordering::Relaxed);
+        let is_c = !is_f;
         let mut map = HashMap::new();
-        map.insert("C_CONTIGUOUS".into(), true);
-        map.insert("F_CONTIGUOUS".into(), false);
+        map.insert("C_CONTIGUOUS".into(), is_c);
+        map.insert("F_CONTIGUOUS".into(), is_f);
         map.insert("OWNDATA".into(), true);
         map.insert("WRITEABLE".into(), true);
         map.insert("ALIGNED".into(), true);
         map.insert("WRITEBACKIFCOPY".into(), false);
         // Short aliases
-        map.insert("C".into(), true);
-        map.insert("F".into(), false);
+        map.insert("C".into(), is_c);
+        map.insert("F".into(), is_f);
         map.insert("O".into(), true);
         map.insert("W".into(), true);
         map.insert("A".into(), true);
         // Additional aliases
-        map.insert("CONTIGUOUS".into(), true);
-        map.insert("FORTRAN".into(), false);
+        map.insert("CONTIGUOUS".into(), is_c);
+        map.insert("FORTRAN".into(), is_f);
         map.insert("UPDATEIFCOPY".into(), false);
-        map.insert("FNC".into(), false);
+        map.insert("FNC".into(), is_f);
         map.insert("FORC".into(), true);
         map.insert("BEHAVED".into(), true);
-        map.insert("CARRAY".into(), true);
-        map.insert("FARRAY".into(), false);
+        map.insert("CARRAY".into(), is_c);
+        map.insert("FARRAY".into(), is_f);
         // Lowercase aliases are handled by #[pygetset] on PyFlagsObj
         let obj = PyFlagsObj::new(map).into_ref(&vm.ctx);
         Ok(obj.into())
+    }
+
+    #[pymethod]
+    fn _mark_fortran(&self) {
+        self.is_fortran.store(true, Ordering::Relaxed);
+    }
+
+    #[pymethod]
+    fn _mark_c_contiguous(&self) {
+        self.is_fortran.store(false, Ordering::Relaxed);
     }
 
     #[pygetset]

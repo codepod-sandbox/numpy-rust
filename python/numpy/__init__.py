@@ -26,21 +26,53 @@ class AxisError(ValueError, IndexError):
         self.axis = axis
         self.ndim = ndim
 
+# Simple flags object for Python-only array stubs
+class _ArrayFlags:
+    def __init__(self, c_contiguous=True, f_contiguous=False):
+        self.c_contiguous = c_contiguous
+        self.f_contiguous = f_contiguous
+        self.writeable = True
+        self.owndata = True
+        self.aligned = True
+        self.writebackifcopy = False
+    def __getitem__(self, key):
+        k = key.upper()
+        if k in ('C_CONTIGUOUS', 'C', 'CONTIGUOUS'):
+            return self.c_contiguous
+        if k in ('F_CONTIGUOUS', 'F', 'FORTRAN'):
+            return self.f_contiguous
+        if k == 'WRITEABLE':
+            return self.writeable
+        return False
+
 # Wrap creation functions to accept (and currently ignore) dtype keyword
 class _ObjectArray:
     """Lightweight fallback for arrays with non-numeric dtypes (strings, structured, etc.)."""
-    def __init__(self, data, dt=None):
+    def __init__(self, data, dt=None, shape=None, is_fortran=False, itemsize=None):
         if isinstance(data, (list, tuple)):
             self._data = list(data)
         else:
             self._data = [data]
         self._dtype = dt or "object"
-        if isinstance(self._data, list) and len(self._data) > 0 and isinstance(self._data[0], (list, tuple)):
+        self._is_fortran = is_fortran
+        if shape is not None:
+            self._shape = tuple(shape)
+            self._ndim = len(self._shape)
+        elif isinstance(self._data, list) and len(self._data) > 0 and isinstance(self._data[0], (list, tuple)):
             self._shape = (len(self._data), len(self._data[0]))
             self._ndim = 2
         else:
             self._shape = (len(self._data),)
             self._ndim = 1
+        # itemsize for strides computation (unicode=4, bytes=1, default=8)
+        if itemsize is not None:
+            self._itemsize = itemsize
+        elif isinstance(self._dtype, str) and self._dtype == 'str':
+            self._itemsize = 4
+        elif isinstance(self._dtype, str) and self._dtype in ('bytes', 'S1'):
+            self._itemsize = 1
+        else:
+            self._itemsize = 8
 
     @property
     def shape(self): return self._shape
@@ -49,12 +81,27 @@ class _ObjectArray:
     @property
     def dtype(self): return self._dtype
     @property
-    def size(self): return len(self._data)
+    def size(self):
+        n = 1
+        for s in self._shape:
+            n *= s
+        return n
     @property
     def T(self): return self
+    @property
+    def flags(self): return _ArrayFlags(c_contiguous=not self._is_fortran, f_contiguous=self._is_fortran)
+    @property
+    def strides(self):
+        """C-order strides computed from shape and itemsize."""
+        s = [self._itemsize]
+        for dim in reversed(self._shape[1:]):
+            s.insert(0, s[0] * dim)
+        return tuple(s)
+    def _mark_fortran(self):
+        self._is_fortran = True
 
-    def copy(self): return _ObjectArray(list(self._data), self._dtype)
-    def astype(self, dtype): return _ObjectArray(list(self._data), str(dtype))
+    def copy(self): return _ObjectArray(list(self._data), self._dtype, shape=self._shape, is_fortran=self._is_fortran, itemsize=self._itemsize)
+    def astype(self, dtype): return _ObjectArray(list(self._data), str(dtype), shape=self._shape, is_fortran=self._is_fortran)
     def flatten(self): return self
     def ravel(self): return self
     def tolist(self): return list(self._data)
@@ -347,12 +394,23 @@ _DTYPE_CHAR_MAP = {
     '>c8': 'complex64', '>c16': 'complex128',
     '=f4': 'float32', '=f8': 'float64',
     '=i4': 'int32', '=i8': 'int64',
+    # Unicode string aliases (all map to 'str')
+    '<U': 'str', 'U': 'str', '<U1': 'str', '<U2': 'str', '<U4': 'str',
+    '<U8': 'str', '<U16': 'str', '<U32': 'str', '<U64': 'str',
+    '>U1': 'str', '>U2': 'str', '>U4': 'str',
+    # Python type class names for bytes
+    "<class 'bytes'>": 'bytes',
+    # Byte string aliases (all map to 'bytes')
+    '|S0': 'bytes', '|S1': 'bytes', '|S2': 'bytes',
+    '|S4': 'bytes', '|S8': 'bytes',
 }
 
 def _normalize_dtype(dt):
     """Normalize dtype string/type to a canonical name our Rust backend understands."""
     if dt is None:
         return None
+    if isinstance(dt, type) and isinstance(dt, _DTypeClassMeta):
+        return dt._dtype_class_name
     s = str(dt)
     return _DTYPE_CHAR_MAP.get(s, s)
 
@@ -415,6 +473,24 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             elif hasattr(data, 'dtype'):
                 result = result.astype(str(data.dtype))
         return result
+    if isinstance(data, bool):
+        # bool must be checked before int since bool is a subclass of int
+        dt_name = str(dtype) if dtype is not None else 'bool'
+        result = _native.full([], 1.0 if data else 0.0, 'float64').astype(dt_name)
+        return result
+    if isinstance(data, int):
+        dt_name = str(dtype) if dtype is not None else 'int64'
+        result = _native.full([], float(data), 'float64').astype(dt_name)
+        return result
+    if isinstance(data, float):
+        dt_name = str(dtype) if dtype is not None else 'float64'
+        result = _native.full([], data, dt_name)
+        return result
+    if isinstance(data, complex):
+        dt_name = str(dtype) if dtype is not None else 'complex128'
+        result = _native.zeros([1], dt_name)
+        result[0] = (data.real, data.imag)
+        return result.reshape([])
     if isinstance(data, (int, float)):
         result = _native.array([float(data)])
         if dtype is not None:
@@ -567,31 +643,51 @@ def _copy_into(dst, src):
             idx.reverse()
             dst[tuple(idx)] = sf[i]
 
+def _apply_order(arr, order):
+    """Mark arr as Fortran-contiguous if order='F'."""
+    if order == 'F' and hasattr(arr, '_mark_fortran'):
+        arr._mark_fortran()
+    return arr
+
+def _unsupported_numeric_dtype(dt):
+    """True if this dtype can't be handled by the Rust backend."""
+    return dt in ('bytes', 'void')
+
 def zeros(shape, dtype=None, order="C", like=None):
+    if isinstance(shape, int):
+        shape = (shape,)
     dt = _normalize_dtype(str(dtype)) if dtype is not None else None
-    if dt == "object" or dt == "<class 'object'>":
-        if isinstance(shape, int):
-            shape = (shape,)
+    if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
             n *= s
-        return _ObjectArray([0] * n, "object")
+        return _apply_order(_ObjectArray([0] * n, "object", shape=shape), order)
+    if dt is not None and _unsupported_numeric_dtype(dt):
+        n = 1
+        for s in shape:
+            n *= s
+        return _apply_order(_ObjectArray([0] * n, dt, shape=shape), order)
     if dt is not None:
-        return _native.zeros(shape, dt)
-    return _native.zeros(shape)
+        return _apply_order(_native.zeros(shape, dt), order)
+    return _apply_order(_native.zeros(shape), order)
 
 def ones(shape, dtype=None, order="C", like=None):
+    if isinstance(shape, int):
+        shape = (shape,)
     dt = _normalize_dtype(str(dtype)) if dtype is not None else None
-    if dt == "object" or dt == "<class 'object'>":
-        if isinstance(shape, int):
-            shape = (shape,)
+    if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
             n *= s
-        return _ObjectArray([1] * n, "object")
+        return _apply_order(_ObjectArray([1] * n, "object", shape=shape), order)
+    if dt is not None and _unsupported_numeric_dtype(dt):
+        n = 1
+        for s in shape:
+            n *= s
+        return _apply_order(_ObjectArray([1] * n, dt, shape=shape), order)
     if dt is not None:
-        return _native.ones(shape, dt)
-    return _native.ones(shape)
+        return _apply_order(_native.ones(shape, dt), order)
+    return _apply_order(_native.ones(shape), order)
 
 def arange(*args, dtype=None, like=None, **kwargs):
     dt = _normalize_dtype(str(dtype)) if dtype is not None else None
@@ -1429,40 +1525,147 @@ ulong = uint64
 # --- Missing functions (stubs) ----------------------------------------------
 def empty(shape, dtype=None, order="C"):
     """Stub: returns zeros instead of uninitialized."""
-    return zeros(shape, dtype=dtype)
+    return zeros(shape, dtype=dtype, order=order)
 
-def empty_like(a, dtype=None, order="K", subok=True, shape=None):
-    s = shape if shape is not None else a.shape
-    dt = dtype if dtype is not None else (str(a.dtype) if hasattr(a, 'dtype') else None)
-    return zeros(s, dtype=dt)
+def _like_order(arr, source, order):
+    """Apply ordering to result of a like function. K=keep source order, A=fortran if source is, else C."""
+    src_is_f = getattr(getattr(source, 'flags', None), 'f_contiguous', False)
+    if order == 'F':
+        if hasattr(arr, '_mark_fortran'):
+            arr._mark_fortran()
+    elif order == 'K':
+        if src_is_f and hasattr(arr, '_mark_fortran'):
+            arr._mark_fortran()
+    elif order == 'A':
+        if src_is_f and hasattr(arr, '_mark_fortran'):
+            arr._mark_fortran()
+    # order='C' is the default (no fortran)
+    return arr
+
+def _detect_builtin_str_bytes(dtype):
+    """Return ('str', 'bytes', or None) if dtype is Python builtin str or bytes."""
+    import builtins
+    if dtype is builtins.str:
+        return 'str'
+    if dtype is builtins.bytes:
+        return 'bytes'
+    return None
+
+def _make_str_bytes_result(shape, dtype_kind, fill_value=None):
+    """Create an _ObjectArray with correct strides for dtype=str or dtype=bytes."""
+    # itemsize: Unicode char = 4 bytes, byte = 1 byte
+    itemsize = 4 if dtype_kind == 'str' else 1
+    n = 1
+    for s in shape:
+        n *= s
+    data = [fill_value if fill_value is not None else ''] * n
+    dt_name = 'str' if dtype_kind == 'str' else 'bytes'
+    return _ObjectArray(data, dt_name, shape=shape, itemsize=itemsize)
 
 def full(shape, fill_value, dtype=None, order="C"):
+    if isinstance(shape, int):
+        shape = (shape,)
     dt = _normalize_dtype(str(dtype)) if dtype is not None else None
-    if dt == "object" or dt == "<class 'object'>":
-        if isinstance(shape, int):
-            shape = (shape,)
+    if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
             n *= s
-        return _ObjectArray([fill_value] * n, "object")
+        return _apply_order(_ObjectArray([fill_value] * n, "object", shape=shape), order)
+    if dt is not None and _unsupported_numeric_dtype(dt):
+        n = 1
+        for s in shape:
+            n *= s
+        return _apply_order(_ObjectArray([fill_value] * n, dt, shape=shape), order)
     if dt is not None:
-        return _native.full(shape, float(fill_value), dt)
-    return _native.full(shape, float(fill_value))
+        return _apply_order(_native.full(shape, float(fill_value), dt), order)
+    return _apply_order(_native.full(shape, float(fill_value)), order)
 
 def full_like(a, fill_value, dtype=None, order="K", subok=True, shape=None):
-    s = shape if shape is not None else a.shape
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else _normalize_dtype(str(a.dtype))
-    return _native.full(s, float(fill_value), dt)
+    s = tuple(shape) if shape is not None else a.shape
+    # Check for invalid dtype like "S-1"
+    if isinstance(dtype, str) and dtype.startswith('S') and dtype[1:].lstrip('-').isdigit() and int(dtype[1:]) < 0:
+        raise TypeError("Cannot convert to dtype: {}".format(dtype))
+    # Detect Python builtin str/bytes
+    sk = _detect_builtin_str_bytes(dtype)
+    if sk is not None:
+        return _like_order(_make_str_bytes_result(s, sk, fill_value), a, order)
+    # Determine effective dtype
+    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    # OverflowError: check if fill_value (plain Python int) fits in target integer dtype
+    if type(fill_value) is int:
+        _int_dtypes_info = {
+            'int8': (-128, 127), 'int16': (-32768, 32767),
+            'int32': (-2147483648, 2147483647), 'int64': (-9223372036854775808, 9223372036854775807),
+            'uint8': (0, 255), 'uint16': (0, 65535), 'uint32': (0, 4294967295),
+            'uint64': (0, 18446744073709551615),
+        }
+        if dt in _int_dtypes_info:
+            lo, hi = _int_dtypes_info[dt]
+            if fill_value < lo or fill_value > hi:
+                raise OverflowError("Python integer {} out of bounds for {}".format(fill_value, dt))
+    arr = _native.full(s, float(fill_value), dt)
+    arr = _like_order(arr, a, order)
+    if subok and type(a) is not ndarray and isinstance(a, ndarray):
+        try:
+            arr = arr.view(type(a))
+        except Exception:
+            pass
+    return arr
 
 def zeros_like(a, dtype=None, order="K", subok=True, shape=None):
-    s = shape if shape is not None else a.shape
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else _normalize_dtype(str(a.dtype))
-    return _native.zeros(s, dt)
+    s = tuple(shape) if shape is not None else a.shape
+    if isinstance(dtype, str) and dtype.startswith('S') and len(dtype) > 1 and dtype[1:].lstrip('-').isdigit() and int(dtype[1:]) < 0:
+        raise TypeError("Cannot convert to dtype: {}".format(dtype))
+    sk = _detect_builtin_str_bytes(dtype)
+    if sk is not None:
+        return _like_order(_make_str_bytes_result(s, sk), a, order)
+    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    arr = _native.zeros(s, dt)
+    arr = _like_order(arr, a, order)
+    if subok and type(a) is not ndarray and isinstance(a, ndarray):
+        try:
+            arr = arr.view(type(a))
+        except Exception:
+            pass
+    return arr
 
 def ones_like(a, dtype=None, order="K", subok=True, shape=None):
-    s = shape if shape is not None else a.shape
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else _normalize_dtype(str(a.dtype))
-    return _native.ones(s, dt)
+    s = tuple(shape) if shape is not None else a.shape
+    if isinstance(dtype, str) and dtype.startswith('S') and len(dtype) > 1 and dtype[1:].lstrip('-').isdigit() and int(dtype[1:]) < 0:
+        raise TypeError("Cannot convert to dtype: {}".format(dtype))
+    sk = _detect_builtin_str_bytes(dtype)
+    if sk is not None:
+        return _like_order(_make_str_bytes_result(s, sk, 1), a, order)
+    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    arr = _native.ones(s, dt)
+    arr = _like_order(arr, a, order)
+    if subok and type(a) is not ndarray and isinstance(a, ndarray):
+        try:
+            arr = arr.view(type(a))
+        except Exception:
+            pass
+    return arr
+
+def empty_like(a, dtype=None, order="K", subok=True, shape=None):
+    s = tuple(shape) if shape is not None else a.shape
+    if isinstance(dtype, str) and dtype.startswith('S') and len(dtype) > 1 and dtype[1:].lstrip('-').isdigit() and int(dtype[1:]) < 0:
+        raise TypeError("Cannot convert to dtype: {}".format(dtype))
+    sk = _detect_builtin_str_bytes(dtype)
+    if sk is not None:
+        return _like_order(_make_str_bytes_result(s, sk), a, order)
+    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    arr = _native.zeros(s, dt)
+    arr = _like_order(arr, a, order)
+    if subok and type(a) is not ndarray and isinstance(a, ndarray):
+        try:
+            arr = arr.view(type(a))
+        except Exception:
+            pass
+    return arr
 
 def _cmath_isnan(v):
     import cmath
@@ -3813,9 +4016,53 @@ class StructuredDtype:
     def __hash__(self):
         return hash(tuple((n, str(d)) for n, d in self._fields))
 
+# --- Metaclass for per-dtype DType classes ----------------------------------
+# Gives classes like Float64DType a custom __str__ so str(Float64DType)='float64'.
+class _DTypeClassMeta(type):
+    def __str__(cls):
+        return cls._dtype_class_name
+    def __repr__(cls):
+        return f"numpy.dtypes.{cls.__name__}"
+    def __eq__(cls, other):
+        if isinstance(other, _DTypeClassMeta):
+            return cls._dtype_class_name == other._dtype_class_name
+        return NotImplemented
+    def __hash__(cls):
+        return hash(cls._dtype_class_name)
+
+
 # --- dtype class (stub) -----------------------------------------------------
 class dtype:
     """Stub for numpy dtype objects."""
+
+    _dtype_class_map = {}  # filled after DType subclasses are defined below
+
+    def __new__(cls, tp=None, metadata=None):
+        if cls is dtype:
+            # Determine canonical dtype name to pick the right subclass
+            name = None
+            if isinstance(tp, type) and isinstance(tp, _DTypeClassMeta):
+                name = tp._dtype_class_name
+            elif isinstance(tp, str):
+                name = _DTYPE_CHAR_MAP.get(tp, tp)
+            elif tp is float or tp is float64:
+                name = 'float64'
+            elif tp is int or tp is int64:
+                name = 'int64'
+            elif tp is bool or tp is bool_:
+                name = 'bool'
+            elif isinstance(tp, _ScalarType):
+                name = tp._name
+            elif isinstance(tp, type) and isinstance(tp, _ScalarTypeMeta):
+                name = tp._scalar_name
+            elif isinstance(tp, dtype):
+                name = tp.name
+            if name and name in dtype._dtype_class_map:
+                target_cls = dtype._dtype_class_map[name]
+                if target_cls is not cls:
+                    return object.__new__(target_cls)
+        return object.__new__(cls)
+
     def __init__(self, tp=None, metadata=None):
         if isinstance(tp, list):
             # List-of-tuples structured dtype: delegate to StructuredDtype
@@ -3865,6 +4112,9 @@ class dtype:
         elif isinstance(tp, type) and isinstance(tp, _ScalarTypeMeta):
             self.name = tp._scalar_name
             self._init_from_name(tp._scalar_name)
+        elif isinstance(tp, type) and isinstance(tp, _DTypeClassMeta):
+            self.name = tp._dtype_class_name
+            self._init_from_name(tp._dtype_class_name)
         else:
             self.name = str(tp) if tp else "float64"
             self._init_from_name(self.name)
@@ -3874,7 +4124,7 @@ class dtype:
             "int64": int64, "int32": int32, "int16": int16, "int8": int8,
             "uint64": uint64, "uint32": uint32, "uint16": uint16, "uint8": uint8,
             "bool": bool_, "complex128": complex128, "complex64": complex64,
-            "str": str_, "object": object_,
+            "str": str_, "bytes": bytes_, "object": object_,
         }
         self.type = _type_map.get(self.name, float64)
         # self.str: typestring format (e.g., "<f8")
@@ -3884,7 +4134,7 @@ class dtype:
             "uint64": "<u8", "uint32": "<u4", "uint16": "<u2", "uint8": "|u1",
             "bool": "|b1",
             "complex128": "<c16", "complex64": "<c8",
-            "object": "|O", "str": "<U",
+            "object": "|O", "str": "<U", "bytes": "|S0",
         }
         self.str = _typestr.get(self.name, "<f8")
         # names/fields: None for non-structured dtypes
@@ -3965,6 +4215,92 @@ class dtype:
         d = dtype(self.name)
         d.metadata = self.metadata
         return d
+
+# --- Per-dtype DType classes (numpy.dtypes.Float64DType etc.) ---------------
+# Each is a subclass of dtype with metaclass _DTypeClassMeta so that
+# type(np.dtype('float64')) == Float64DType and str(Float64DType) == 'float64'.
+
+class Float64DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'float64'
+    type = float64
+
+class Float32DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'float32'
+    type = float32
+
+class Float16DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'float16'
+    type = float16
+
+class Int8DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'int8'
+    type = int8
+
+class Int16DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'int16'
+    type = int16
+
+class Int32DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'int32'
+    type = int32
+
+class Int64DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'int64'
+    type = int64
+
+class UInt8DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'uint8'
+    type = uint8
+
+class UInt16DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'uint16'
+    type = uint16
+
+class UInt32DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'uint32'
+    type = uint32
+
+class UInt64DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'uint64'
+    type = uint64
+
+class Complex64DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'complex64'
+    type = complex64
+
+class Complex128DType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'complex128'
+    type = complex128
+
+class BoolDType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'bool'
+    type = bool_
+
+class StrDType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'str'
+    type = str_
+
+class BytesDType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'bytes'
+    type = bytes_
+
+class VoidDType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'void'
+    type = void
+
+class ObjectDType(dtype, metaclass=_DTypeClassMeta):
+    _dtype_class_name = 'object'
+    type = object_
+
+# Populate the map so dtype.__new__ can dispatch to the right subclass
+dtype._dtype_class_map = {
+    'float64': Float64DType, 'float32': Float32DType, 'float16': Float16DType,
+    'int8': Int8DType, 'int16': Int16DType, 'int32': Int32DType, 'int64': Int64DType,
+    'uint8': UInt8DType, 'uint16': UInt16DType, 'uint32': UInt32DType, 'uint64': UInt64DType,
+    'complex64': Complex64DType, 'complex128': Complex128DType,
+    'bool': BoolDType, 'str': StrDType, 'bytes': BytesDType,
+    'void': VoidDType, 'object': ObjectDType,
+}
 
 # --- More missing stubs for test_numeric.py ---------------------------------
 True_ = True
@@ -4112,7 +4448,11 @@ def count_nonzero(a, axis=None, *, keepdims=False):
         return result
     # Build a boolean mask (nonzero -> 1.0, zero -> 0.0), then sum along axis
     flat = a.flatten().tolist()
-    mask_data = [1.0 if v != 0.0 else 0.0 for v in flat]
+    def _is_nonzero(v):
+        if isinstance(v, tuple):  # complex (re, im) representation
+            return v[0] != 0.0 or v[1] != 0.0
+        return v != 0.0
+    mask_data = [1.0 if _is_nonzero(v) else 0.0 for v in flat]
     mask = array(mask_data).reshape(a.shape)
     result = mask.sum(axis, keepdims)
     # Convert to integer values
@@ -4210,7 +4550,14 @@ def resize(a, new_shape):
 def choose(a, choices, out=None, mode="raise"):
     if not isinstance(a, ndarray):
         a = asarray(a)
-    choice_arrays = [c if isinstance(c, ndarray) else asarray(c) for c in choices]
+    # Convert choices: complex scalars become float (real part) to match Rust clip behavior
+    def _to_choice_array(c):
+        if isinstance(c, complex):
+            return asarray(c.real)
+        if isinstance(c, ndarray):
+            return c
+        return asarray(c)
+    choice_arrays = [_to_choice_array(c) for c in choices]
     result = _native.choose(a, choice_arrays)
     if out is not None and isinstance(out, ndarray):
         flat = result.flatten().tolist()
@@ -4877,14 +5224,19 @@ def sort(a, axis=-1, kind=None, order=None):
     return result
 
 def argsort(a, axis=-1, kind=None, order=None):
-    if isinstance(a, ndarray):
-        if axis is not None and axis < 0:
-            axis = a.ndim + axis
-        return a.argsort(axis)
-    flat = a.flatten()
-    vals = [float(flat[i]) for i in range(flat.size)]
-    indices = sorted(range(len(vals)), key=lambda i: vals[i])
-    return array([float(i) for i in indices])
+    if isinstance(a, (tuple, list)):
+        if len(a) == 0:
+            return _native.zeros((0,), 'int64')
+        a = _native.array([float(x) for x in a])
+    elif isinstance(a, _ObjectArray):
+        vals = [float(x) if isinstance(x, (int, float)) else 0. for x in (a._data or [])]
+        inds = sorted(range(len(vals)), key=lambda i: vals[i])
+        return _native.array([float(i) for i in inds]) if inds else _native.zeros((0,), 'int64')
+    else:
+        a = asarray(a)
+    if axis is not None and axis < 0:
+        axis = a.ndim + axis
+    return a.argsort(axis)
 
 def size(a, axis=None):
     if not isinstance(a, ndarray):
@@ -10340,7 +10692,12 @@ class _TestingModule:
         y = asarray(y)
         # Handle scalar vs array comparison (NumPy broadcasts)
         if x.shape != y.shape:
-            if y.size == 1:
+            # 0-D vs 1-element: equivalent for comparison purposes
+            if x.ndim == 0 and y.size == 1:
+                y = y.reshape(())
+            elif y.ndim == 0 and x.size == 1:
+                x = x.reshape(())
+            elif y.size == 1:
                 y = broadcast_to(y.flatten(), x.shape)
             elif x.size == 1:
                 x = broadcast_to(x.flatten(), y.shape)
@@ -10472,10 +10829,26 @@ class _AssertRaisesRegexContext:
 
 testing = _TestingModule()
 
-# --- dtypes module stub -----------------------------------------------------
+# --- dtypes module (exposes per-dtype DType classes) ------------------------
 class _dtypes_mod:
-    class VoidDType:
-        pass
+    Float64DType = Float64DType
+    Float32DType = Float32DType
+    Float16DType = Float16DType
+    Int8DType = Int8DType
+    Int16DType = Int16DType
+    Int32DType = Int32DType
+    Int64DType = Int64DType
+    UInt8DType = UInt8DType
+    UInt16DType = UInt16DType
+    UInt32DType = UInt32DType
+    UInt64DType = UInt64DType
+    Complex64DType = Complex64DType
+    Complex128DType = Complex128DType
+    BoolDType = BoolDType
+    StrDType = StrDType
+    BytesDType = BytesDType
+    VoidDType = VoidDType
+    ObjectDType = ObjectDType
 dtypes = _dtypes_mod()
 
 # --- np.rec module (basic stub) ---
@@ -10521,7 +10894,7 @@ def einsum_path(*operands, optimize='greedy'):
     """Evaluate optimal contraction order (stub returns naive path)."""
     # Return a naive path: contract in order
     n = int(len(operands) // 2)  # rough estimate
-    path = [(0, 1)] * int(max(1, n - 1))
+    path = [(0, 1)] * _builtin_max(1, n - 1)
     return path, ""
 
 # --- byte_bounds stub -------------------------------------------------------
