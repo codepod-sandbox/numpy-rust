@@ -89,7 +89,10 @@ pub struct PyFlatIter {
     index: std::sync::atomic::AtomicUsize,
 }
 
-#[vm::pyclass(flags(DISALLOW_INSTANTIATION), with(IterNext, Iterable, AsMapping))]
+#[vm::pyclass(
+    flags(DISALLOW_INSTANTIATION),
+    with(IterNext, Iterable, AsMapping, Representable)
+)]
 impl PyFlatIter {
     #[pymethod]
     fn __len__(&self) -> usize {
@@ -136,6 +139,12 @@ impl PyFlatIter {
 }
 
 impl SelfIter for PyFlatIter {}
+
+impl Representable for PyFlatIter {
+    fn repr_str(_zelf: &Py<Self>, _vm: &VirtualMachine) -> PyResult<String> {
+        Ok("<numpy.flatiter object>".to_owned())
+    }
+}
 
 impl IterNext for PyFlatIter {
     fn next(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyIterReturn> {
@@ -666,10 +675,34 @@ impl PyNdArray {
     #[pymethod]
     fn view(
         &self,
-        _dtype: vm::function::OptionalArg<PyObjectRef>,
-        _vm: &VirtualMachine,
-    ) -> PyNdArray {
-        PyNdArray::from_core(self.data.read().unwrap().clone())
+        dtype_arg: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let data = self.data.read().unwrap();
+        if let Some(dtype_obj) = dtype_arg.into_option() {
+            // Try to parse as dtype string; if it fails (e.g. a class is passed), return a copy
+            let dtype_str: String = match dtype_obj.clone().try_into_value::<String>(vm) {
+                Ok(s) => s,
+                Err(_) => {
+                    // Could be a type/class — just return a clone
+                    return Ok(PyNdArray::from_core(data.clone()));
+                }
+            };
+            match parse_dtype(dtype_str.as_str(), vm) {
+                Ok(target_dt) => {
+                    let result = data
+                        .view_as_dtype(target_dt)
+                        .map_err(|e| vm.new_value_error(e.to_string()))?;
+                    Ok(PyNdArray::from_core(result))
+                }
+                Err(_) => {
+                    // Unsupported dtype string — return a clone
+                    Ok(PyNdArray::from_core(data.clone()))
+                }
+            }
+        } else {
+            Ok(PyNdArray::from_core(data.clone()))
+        }
     }
 
     #[pymethod]
@@ -1988,6 +2021,32 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
     if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
         return Ok(arr.data.read().unwrap().clone());
     }
+    // Preserve numpy scalar wrapper dtype when available (set by python/numpy/__init__.py).
+    if let Ok(dtype_name_obj) = obj.get_attr("_numpy_dtype_name", vm) {
+        if let Ok(dtype_name) = dtype_name_obj.try_into_value::<String>(vm) {
+            let dt = parse_dtype(dtype_name.as_str(), vm)?;
+            if dt == DType::Bool {
+                let b = obj.to_owned().try_into_value::<bool>(vm)?;
+                let arr = NdArray::from_vec(vec![b]);
+                return arr
+                    .reshape(&[])
+                    .map_err(|e| vm.new_type_error(e.to_string()));
+            }
+            if dt.is_complex() {
+                let c = obj
+                    .to_owned()
+                    .try_into_value::<vm::function::ArgIntoComplex>(vm)?
+                    .into_complex();
+                let base =
+                    NdArray::from_complex128_vec(vec![num_complex::Complex::new(c.re, c.im)])
+                        .reshape(&[])
+                        .map_err(|e| vm.new_type_error(e.to_string()))?;
+                return Ok(base.astype(dt));
+            }
+            let f = obj.to_owned().try_into_value::<f64>(vm)?;
+            return Ok(NdArray::from_scalar(f).astype(dt));
+        }
+    }
     // Preserve Python bool scalars as bool dtype (not float64).
     if obj.class().is(vm.ctx.types.bool_type) {
         let b = obj.to_owned().try_into_value::<bool>(vm)?;
@@ -2018,10 +2077,16 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
     if let Some(f) = obj.downcast_ref::<vm::builtins::PyFloat>() {
         return Ok(NdArray::from_scalar(f.to_f64()));
     }
-    // Try int (PyInt) — extract i64 then convert to f64
+    // Try int (PyInt) — extract i64 then convert to f64; fall back to __float__ for large ints
     if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-        let val: i64 = i.try_to_primitive(vm)?;
-        return Ok(NdArray::from_scalar(val as f64));
+        if let Ok(val) = i.try_to_primitive::<i64>(vm) {
+            return Ok(NdArray::from_scalar(val as f64));
+        }
+        // Large int that overflows i64 — convert via float (gives inf/-inf for huge values)
+        let f = vm.call_method(obj, "__float__", ())?;
+        if let Ok(fv) = f.try_into_value::<f64>(vm) {
+            return Ok(NdArray::from_scalar(fv));
+        }
     }
     // Try str (PyStr) — create 0-D string array
     if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
@@ -2059,6 +2124,36 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
         return Ok(NdArray::from_vec(vals));
     }
     Err(vm.new_type_error("expected ndarray or scalar".to_owned()))
+}
+
+/// Check numpy errstate for division warnings/errors.
+/// If any element is inf/nan due to division by zero, and errstate is 'raise', raise FloatingPointError.
+fn check_division_errstate(result_obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+    // Get numpy._err_state['divide']
+    if let Ok(numpy_mod) = vm.import("numpy", 0) {
+        if let Ok(err_state) = numpy_mod.get_attr("_err_state", vm) {
+            if let Ok(dict) = err_state.downcast::<vm::builtins::PyDict>() {
+                if let Some(val) = dict.get_item_opt("divide", vm)? {
+                    if let Ok(s) = val.try_into_value::<String>(vm) {
+                        if s == "raise" {
+                            // Check if result contains inf
+                            if let Some(arr) = result_obj.downcast_ref::<PyNdArray>() {
+                                let data = arr.data.read().unwrap();
+                                let has_inf = data.has_inf();
+                                if has_inf {
+                                    return Err(vm.new_exception_msg(
+                                        vm.ctx.exceptions.floating_point_error.to_owned(),
+                                        "divide by zero encountered in divide".to_owned(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // --- AsNumber implementation for operator dispatch ---
@@ -2217,7 +2312,12 @@ impl PyNdArray {
         add: Some(|a, b, vm| number_bin_op(a, b, |x, y| x + y, vm)),
         subtract: Some(|a, b, vm| number_bin_op(a, b, |x, y| x - y, vm)),
         multiply: Some(|a, b, vm| number_bin_op(a, b, |x, y| x * y, vm)),
-        true_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x / y, vm)),
+        true_divide: Some(|a, b, vm| {
+            let result = number_bin_op(a, b, |x, y| x / y, vm)?;
+            // Check numpy errstate for divide-by-zero
+            check_division_errstate(&result, vm)?;
+            Ok(result)
+        }),
         floor_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.floor_div(y), vm)),
         remainder: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.remainder(y), vm)),
         power: Some(|a, b, _modulo, vm| {

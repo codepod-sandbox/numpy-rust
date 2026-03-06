@@ -53,10 +53,7 @@ TestRequire.test_require_each
 TestRequire.test_unknown_requirement
 TestResize.test_subclass
 TestRollaxis.test_results
-TestSeterr.test_divide_err
 TestTypes.test_can_cast_and_promote_usertypes
-TestTypes.test_coercion
-TestTypes.test_result_type
 TestTypes.test_valid_void_promotion[2]
 TestTypes.test_valid_void_promotion[3]
 TestIndex.test_boolean

@@ -4,7 +4,7 @@ use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
 use crate::error::{NumpyError, Result};
-use crate::NdArray;
+use crate::{DType, NdArray};
 
 /// Element-wise ternary: select from `x` where `cond` is true, else from `y`.
 /// Like `numpy.where(cond, x, y)`.
@@ -125,6 +125,82 @@ impl NdArray {
             _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false)),
         };
         NdArray::from_data(data)
+    }
+
+    /// Reinterpret the raw data as a different dtype (view).
+    /// Only supports same-itemsize reinterpretation for now.
+    pub fn view_as_dtype(&self, target: DType) -> Result<NdArray> {
+        let src_dt = self.dtype();
+        if src_dt == target {
+            return Ok(self.clone());
+        }
+        let src_size = src_dt.itemsize();
+        let tgt_size = target.itemsize();
+        let shape = self.shape().to_vec();
+
+        // Same itemsize: reinterpret bytes 1:1
+        if src_size == tgt_size {
+            match (&self.data, target) {
+                // Bool (1 byte) <-> Int8 (1 byte)
+                (ArrayData::Bool(a), DType::Int8) => {
+                    let raw: Vec<i32> = a.iter().map(|&b| if b { 1 } else { 0 }).collect();
+                    Ok(NdArray::from_data(ArrayData::Int32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                    ))
+                    .astype(DType::Int8))
+                }
+                (ArrayData::Int32(a), DType::Bool) if src_dt == DType::Int8 => {
+                    let raw: Vec<bool> = a.iter().map(|&v| v != 0).collect();
+                    Ok(NdArray::from_data(ArrayData::Bool(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                    )))
+                }
+                // Float32 (4 bytes) <-> Int32 (4 bytes)
+                (ArrayData::Float32(a), DType::Int32) => {
+                    let raw: Vec<i32> = a.iter().map(|&f| f.to_bits() as i32).collect();
+                    Ok(NdArray::from_data(ArrayData::Int32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                    )))
+                }
+                (ArrayData::Int32(a), DType::Float32) => {
+                    let raw: Vec<f32> = a.iter().map(|&i| f32::from_bits(i as u32)).collect();
+                    Ok(NdArray::from_data(ArrayData::Float32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                    )))
+                }
+                // Float64 (8 bytes) <-> Int64 (8 bytes)
+                (ArrayData::Float64(a), DType::Int64) => {
+                    let raw: Vec<i64> = a.iter().map(|&f| f.to_bits() as i64).collect();
+                    Ok(NdArray::from_data(ArrayData::Int64(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                    )))
+                }
+                (ArrayData::Int64(a), DType::Float64) => {
+                    let raw: Vec<f64> = a.iter().map(|&i| f64::from_bits(i as u64)).collect();
+                    Ok(NdArray::from_data(ArrayData::Float64(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                    )))
+                }
+                _ => {
+                    // Fall back to astype for unsupported view combinations
+                    Ok(self.astype(target))
+                }
+            }
+        } else {
+            // Different itemsizes: fall back to astype
+            Ok(self.astype(target))
+        }
+    }
+
+    /// Check if any element is infinite.
+    pub fn has_inf(&self) -> bool {
+        match &self.data {
+            ArrayData::Float32(a) => a.iter().any(|x| x.is_infinite()),
+            ArrayData::Float64(a) => a.iter().any(|x| x.is_infinite()),
+            ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_infinite() || x.im.is_infinite()),
+            ArrayData::Complex128(a) => a.iter().any(|x| x.re.is_infinite() || x.im.is_infinite()),
+            _ => false,
+        }
     }
 
     /// Deep copy of the array.

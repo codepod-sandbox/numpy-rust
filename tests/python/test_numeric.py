@@ -1596,7 +1596,7 @@ def test_full_like_basic():
 
 def test_promote_types():
     r = np.promote_types("int32", "float32")
-    assert_eq(str(r), "float32")
+    assert_eq(str(r), "float64")  # NumPy promotes int32+float32 to float64
 
 def test_promote_types_same():
     r = np.promote_types("float64", "float64")
