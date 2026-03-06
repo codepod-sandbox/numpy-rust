@@ -1511,19 +1511,24 @@ impl PyNdArray {
 
     #[pymethod]
     fn clip(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        // Validate casting kwarg
-        if let Some(casting_obj) = args.kwargs.get("casting") {
-            if !vm.is_none(casting_obj) {
-                let casting_str = casting_obj.str(vm)?;
+        // Parse casting kwarg; None means default ("same_kind")
+        let casting_rule: String = if let Some(casting_obj) = args.kwargs.get("casting") {
+            if vm.is_none(casting_obj) {
+                "same_kind".to_string()
+            } else {
+                let s = casting_obj.str(vm)?.as_str().to_string();
                 let valid = ["no", "equiv", "safe", "same_kind", "unsafe"];
-                if !valid.contains(&casting_str.as_str()) {
+                if !valid.contains(&s.as_str()) {
                     return Err(vm.new_value_error(
                         "casting must be one of 'no', 'equiv', 'safe', 'same_kind', or 'unsafe'"
                             .to_string(),
                     ));
                 }
+                s
             }
-        }
+        } else {
+            "same_kind".to_string()
+        };
         // Accept clip(a_min, a_max) or clip(min=, max=, out=)
         let a_min_obj = if !args.args.is_empty() {
             Some(args.args[0].clone())
@@ -1535,7 +1540,29 @@ impl PyNdArray {
         } else {
             args.kwargs.get("max").or(args.kwargs.get("a_max")).cloned()
         };
-        // 'out' kwarg is accepted but ignored (we always return a new array)
+        // Check if input is integer and bounds are explicitly float-typed.
+        // Used to enforce same_kind casting when writing to integer out array.
+        let self_is_integer = self.data.read().unwrap().dtype().is_integer();
+        let bounds_are_float = {
+            let is_py_float = |obj: &PyObjectRef| -> bool {
+                // _NumpyFloatScalar subclasses float, so downcast_ref::<PyFloat> catches it
+                obj.downcast_ref::<vm::builtins::PyFloat>().is_some()
+                    || obj
+                        .downcast_ref::<PyNdArray>()
+                        .map(|nd| nd.data.read().unwrap().dtype().is_float())
+                        .unwrap_or(false)
+            };
+            a_min_obj
+                .as_ref()
+                .filter(|o| !vm.is_none(o))
+                .map(is_py_float)
+                .unwrap_or(false)
+                || a_max_obj
+                    .as_ref()
+                    .filter(|o| !vm.is_none(o))
+                    .map(is_py_float)
+                    .unwrap_or(false)
+        };
 
         // Helper to extract complex from Python object (tuple or complex number)
         fn py_obj_to_complex(
@@ -1642,9 +1669,20 @@ impl PyNdArray {
         }
         let result = PyNdArray::from_core(self.data.read().unwrap().clip(min_val, max_val));
 
-        // If 'out' is provided, copy data into it
+        // If 'out' is provided, check casting compatibility then copy data into it
         if let Some(out_obj) = args.kwargs.get("out") {
             if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                // Enforce same_kind casting: int input + float bounds → float result,
+                // which cannot be stored in an integer out without "unsafe" casting.
+                if casting_rule != "unsafe" && self_is_integer && bounds_are_float {
+                    let out_dt = out_arr.data.read().unwrap().dtype();
+                    if out_dt.is_integer() {
+                        return Err(vm.new_type_error(format!(
+                            "Cannot cast ufunc 'clip' output from dtype('float64') to dtype('{}') with casting rule '{}'",
+                            out_dt, casting_rule
+                        )));
+                    }
+                }
                 let core_data = result.data.read().unwrap().clone();
                 drop(result);
                 {
