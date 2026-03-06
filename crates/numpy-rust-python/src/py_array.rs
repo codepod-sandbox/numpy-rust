@@ -1511,6 +1511,19 @@ impl PyNdArray {
 
     #[pymethod]
     fn clip(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        // Validate casting kwarg
+        if let Some(casting_obj) = args.kwargs.get("casting") {
+            if !vm.is_none(casting_obj) {
+                let casting_str = casting_obj.str(vm)?;
+                let valid = ["no", "equiv", "safe", "same_kind", "unsafe"];
+                if !valid.contains(&casting_str.as_str()) {
+                    return Err(vm.new_value_error(
+                        "casting must be one of 'no', 'equiv', 'safe', 'same_kind', or 'unsafe'"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
         // Accept clip(a_min, a_max) or clip(min=, max=, out=)
         let a_min_obj = if !args.args.is_empty() {
             Some(args.args[0].clone())

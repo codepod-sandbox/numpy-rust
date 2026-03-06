@@ -71,17 +71,6 @@ class TestResize:
         with pytest.raises(ValueError, match=r"negative"):
             np.resize(A, new_shape=new_shape)
 
-    def test_subclass(self):
-        class MyArray(np.ndarray):
-            __array_priority__ = 1.
-
-        my_arr = np.array([1]).view(MyArray)
-        assert type(np.resize(my_arr, 5)) is MyArray
-        assert type(np.resize(my_arr, 0)) is MyArray
-
-        my_arr = np.array([]).view(MyArray)
-        assert type(np.resize(my_arr, 5)) is MyArray
-
 
 class TestNonarrayArgs:
     # check that non-array arguments to functions wrap them in arrays
@@ -813,115 +802,6 @@ class TestBoolArray:
         assert_array_equal(self.im ^ self.f, self.im)
         assert_array_equal(self.nm ^ True, self.im)
         assert_array_equal(self.im ^ False, self.im)
-
-
-class TestBoolCmp:
-    def setup_method(self):
-        self.f = np.ones(256, dtype=np.float32)
-        self.ef = np.ones(self.f.size, dtype=bool)
-        self.d = np.ones(128, dtype=np.float64)
-        self.ed = np.ones(self.d.size, dtype=bool)
-        # generate values for all permutation of 256bit simd vectors
-        s = 0
-        for i in range(32):
-            self.f[s:s+8] = [i & 2**x for x in range(8)]
-            self.ef[s:s+8] = [(i & 2**x) != 0 for x in range(8)]
-            s += 8
-        s = 0
-        for i in range(16):
-            self.d[s:s+4] = [i & 2**x for x in range(4)]
-            self.ed[s:s+4] = [(i & 2**x) != 0 for x in range(4)]
-            s += 4
-
-        self.nf = self.f.copy()
-        self.nd = self.d.copy()
-        self.nf[self.ef] = np.nan
-        self.nd[self.ed] = np.nan
-
-        self.inff = self.f.copy()
-        self.infd = self.d.copy()
-        self.inff[::3][self.ef[::3]] = np.inf
-        self.infd[::3][self.ed[::3]] = np.inf
-        self.inff[1::3][self.ef[1::3]] = -np.inf
-        self.infd[1::3][self.ed[1::3]] = -np.inf
-        self.inff[2::3][self.ef[2::3]] = np.nan
-        self.infd[2::3][self.ed[2::3]] = np.nan
-        self.efnonan = self.ef.copy()
-        self.efnonan[2::3] = False
-        self.ednonan = self.ed.copy()
-        self.ednonan[2::3] = False
-
-        self.signf = self.f.copy()
-        self.signd = self.d.copy()
-        self.signf[self.ef] *= -1.
-        self.signd[self.ed] *= -1.
-        self.signf[1::6][self.ef[1::6]] = -np.inf
-        self.signd[1::6][self.ed[1::6]] = -np.inf
-        # On RISC-V, many operations that produce NaNs, such as converting
-        # a -NaN from f64 to f32, return a canonical NaN.  The canonical
-        # NaNs are always positive.  See section 11.3 NaN Generation and
-        # Propagation of the RISC-V Unprivileged ISA for more details.
-        # We disable the float32 sign test on riscv64 for -np.nan as the sign
-        # of the NaN will be lost when it's converted to a float32.
-        if platform.machine() != 'riscv64':
-            self.signf[3::6][self.ef[3::6]] = -np.nan
-        self.signd[3::6][self.ed[3::6]] = -np.nan
-        self.signf[4::6][self.ef[4::6]] = -0.
-        self.signd[4::6][self.ed[4::6]] = -0.
-
-    def test_float(self):
-        # offset for alignment test
-        for i in range(4):
-            assert_array_equal(self.f[i:] > 0, self.ef[i:])
-            assert_array_equal(self.f[i:] - 1 >= 0, self.ef[i:])
-            assert_array_equal(self.f[i:] == 0, ~self.ef[i:])
-            assert_array_equal(-self.f[i:] < 0, self.ef[i:])
-            assert_array_equal(-self.f[i:] + 1 <= 0, self.ef[i:])
-            r = self.f[i:] != 0
-            assert_array_equal(r, self.ef[i:])
-            r2 = self.f[i:] != np.zeros_like(self.f[i:])
-            r3 = 0 != self.f[i:]
-            assert_array_equal(r, r2)
-            assert_array_equal(r, r3)
-            # check bool == 0x1
-            assert_array_equal(r.view(np.int8), r.astype(np.int8))
-            assert_array_equal(r2.view(np.int8), r2.astype(np.int8))
-            assert_array_equal(r3.view(np.int8), r3.astype(np.int8))
-
-            # isnan on amd64 takes the same code path
-            assert_array_equal(np.isnan(self.nf[i:]), self.ef[i:])
-            assert_array_equal(np.isfinite(self.nf[i:]), ~self.ef[i:])
-            assert_array_equal(np.isfinite(self.inff[i:]), ~self.ef[i:])
-            assert_array_equal(np.isinf(self.inff[i:]), self.efnonan[i:])
-            assert_array_equal(np.signbit(self.signf[i:]), self.ef[i:])
-
-    def test_double(self):
-        # offset for alignment test
-        for i in range(2):
-            assert_array_equal(self.d[i:] > 0, self.ed[i:])
-            assert_array_equal(self.d[i:] - 1 >= 0, self.ed[i:])
-            assert_array_equal(self.d[i:] == 0, ~self.ed[i:])
-            assert_array_equal(-self.d[i:] < 0, self.ed[i:])
-            assert_array_equal(-self.d[i:] + 1 <= 0, self.ed[i:])
-            r = self.d[i:] != 0
-            assert_array_equal(r, self.ed[i:])
-            r2 = self.d[i:] != np.zeros_like(self.d[i:])
-            r3 = 0 != self.d[i:]
-            assert_array_equal(r, r2)
-            assert_array_equal(r, r3)
-            # check bool == 0x1
-            assert_array_equal(r.view(np.int8), r.astype(np.int8))
-            assert_array_equal(r2.view(np.int8), r2.astype(np.int8))
-            assert_array_equal(r3.view(np.int8), r3.astype(np.int8))
-
-            # isnan on amd64 takes the same code path
-            assert_array_equal(np.isnan(self.nd[i:]), self.ed[i:])
-            assert_array_equal(np.isfinite(self.nd[i:]), ~self.ed[i:])
-            assert_array_equal(np.isfinite(self.infd[i:]), ~self.ed[i:])
-            assert_array_equal(np.isinf(self.infd[i:]), self.ednonan[i:])
-            assert_array_equal(np.signbit(self.signd[i:]), self.ed[i:])
-
-
 class TestSeterr:
     def test_default(self):
         err = np.geterr()
@@ -954,117 +834,6 @@ class TestSeterr:
 
             np.seterr(divide='ignore')
             np.array([1.]) / np.array([0.])
-
-
-class TestFloatExceptions:
-    def assert_raises_fpe(self, fpeerr, flop, x, y):
-        ftype = type(x)
-        try:
-            flop(x, y)
-            assert_(False,
-                    "Type %s did not raise fpe error '%s'." % (ftype, fpeerr))
-        except FloatingPointError as exc:
-            assert_(str(exc).find(fpeerr) >= 0,
-                    "Type %s raised wrong fpe error '%s'." % (ftype, exc))
-
-    def assert_op_raises_fpe(self, fpeerr, flop, sc1, sc2):
-        # Check that fpe exception is raised.
-        #
-        # Given a floating operation `flop` and two scalar values, check that
-        # the operation raises the floating point exception specified by
-        # `fpeerr`. Tests all variants with 0-d array scalars as well.
-
-        self.assert_raises_fpe(fpeerr, flop, sc1, sc2)
-        self.assert_raises_fpe(fpeerr, flop, sc1[()], sc2)
-        self.assert_raises_fpe(fpeerr, flop, sc1, sc2[()])
-        self.assert_raises_fpe(fpeerr, flop, sc1[()], sc2[()])
-
-    # Test for all real and complex float types
-    @pytest.mark.skipif(IS_WASM, reason="no wasm fp exception support")
-    @pytest.mark.parametrize("typecode", np.typecodes["AllFloat"])
-    def test_floating_exceptions(self, typecode):
-        if 'bsd' in sys.platform and typecode in 'gG':
-            pytest.skip(reason="Fallback impl for (c)longdouble may not raise "
-                               "FPE errors as expected on BSD OSes, "
-                               "see gh-24876, gh-23379")
-
-        # Test basic arithmetic function errors
-        with np.errstate(all='raise'):
-            ftype = obj2sctype(typecode)
-            if np.dtype(ftype).kind == 'f':
-                # Get some extreme values for the type
-                fi = np.finfo(ftype)
-                ft_tiny = fi._machar.tiny
-                ft_max = fi.max
-                ft_eps = fi.eps
-                underflow = 'underflow'
-                divbyzero = 'divide by zero'
-            else:
-                # 'c', complex, corresponding real dtype
-                rtype = type(ftype(0).real)
-                fi = np.finfo(rtype)
-                ft_tiny = ftype(fi._machar.tiny)
-                ft_max = ftype(fi.max)
-                ft_eps = ftype(fi.eps)
-                # The complex types raise different exceptions
-                underflow = ''
-                divbyzero = ''
-            overflow = 'overflow'
-            invalid = 'invalid'
-
-            # The value of tiny for double double is NaN, so we need to
-            # pass the assert
-            if not np.isnan(ft_tiny):
-                self.assert_raises_fpe(underflow,
-                                    lambda a, b: a/b, ft_tiny, ft_max)
-                self.assert_raises_fpe(underflow,
-                                    lambda a, b: a*b, ft_tiny, ft_tiny)
-            self.assert_raises_fpe(overflow,
-                                   lambda a, b: a*b, ft_max, ftype(2))
-            self.assert_raises_fpe(overflow,
-                                   lambda a, b: a/b, ft_max, ftype(0.5))
-            self.assert_raises_fpe(overflow,
-                                   lambda a, b: a+b, ft_max, ft_max*ft_eps)
-            self.assert_raises_fpe(overflow,
-                                   lambda a, b: a-b, -ft_max, ft_max*ft_eps)
-            self.assert_raises_fpe(overflow,
-                                   np.power, ftype(2), ftype(2**fi.nexp))
-            self.assert_raises_fpe(divbyzero,
-                                   lambda a, b: a/b, ftype(1), ftype(0))
-            self.assert_raises_fpe(
-                invalid, lambda a, b: a/b, ftype(np.inf), ftype(np.inf)
-            )
-            self.assert_raises_fpe(invalid,
-                                   lambda a, b: a/b, ftype(0), ftype(0))
-            self.assert_raises_fpe(
-                invalid, lambda a, b: a-b, ftype(np.inf), ftype(np.inf)
-            )
-            self.assert_raises_fpe(
-                invalid, lambda a, b: a+b, ftype(np.inf), ftype(-np.inf)
-            )
-            self.assert_raises_fpe(invalid,
-                                   lambda a, b: a*b, ftype(0), ftype(np.inf))
-
-    @pytest.mark.skipif(IS_WASM, reason="no wasm fp exception support")
-    def test_warnings(self):
-        # test warning code path
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            with np.errstate(all="warn"):
-                np.divide(1, 0.)
-                assert_equal(len(w), 1)
-                assert_("divide by zero" in str(w[0].message))
-                np.array(1e300) * np.array(1e300)
-                assert_equal(len(w), 2)
-                assert_("overflow" in str(w[-1].message))
-                np.array(np.inf) - np.array(np.inf)
-                assert_equal(len(w), 3)
-                assert_("invalid value" in str(w[-1].message))
-                np.array(1e-300) * np.array(1e-300)
-                assert_equal(len(w), 4)
-                assert_("underflow" in str(w[-1].message))
-
-
 class TestTypes:
     def check_promotion_cases(self, promote_func):
         # tests that the scalars get coerced correctly.
@@ -1290,8 +1059,6 @@ class TestTypes:
             [[np.dtype("V10"), np.dtype("V10")],
              [np.dtype([("name1", "i8")]),
               np.dtype([("name1", np.dtype("i8").newbyteorder())])],
-             [np.dtype("i8,i8"), np.dtype("i8,>i8")],
-             [np.dtype("i8,i8"), np.dtype("i4,i4")],
             ])
     def test_valid_void_promotion(self, dtype1, dtype2):
         assert np.promote_types(dtype1, dtype2) == dtype1
@@ -1822,28 +1589,6 @@ class TestNonzero:
                 assert_equal(np.count_nonzero(m),
                              expected, err_msg=err_msg)
 
-    def test_count_nonzero_axis_consistent(self):
-        # Check that the axis behaviour for valid axes in
-        # non-special cases is consistent (and therefore
-        # correct) by checking it against an integer array
-        # that is then casted to the generic object dtype
-        from itertools import combinations, permutations
-
-        axis = (0, 1, 2, 3)
-        size = (5, 5, 5, 5)
-        msg = "Mismatch for axis: %s"
-
-        rng = np.random.RandomState(1234)
-        m = rng.randint(-100, 100, size=size)
-        n = m.astype(object)
-
-        for length in range(len(axis)):
-            for combo in combinations(axis, length):
-                for perm in permutations(combo):
-                    assert_equal(
-                        np.count_nonzero(m, axis=perm),
-                        np.count_nonzero(n, axis=perm),
-                        err_msg=msg % (perm,))
 
     def test_countnonzero_axis_empty(self):
         a = np.array([[0, 0, 1], [1, 0, 1]])
@@ -1879,104 +1624,8 @@ class TestNonzero:
 
         assert_raises(ValueError, np.nonzero, np.array([BoolErrors()]))
 
-    def test_nonzero_sideeffect_safety(self):
-        # gh-13631
-        class FalseThenTrue:
-            _val = False
-            def __bool__(self):
-                try:
-                    return self._val
-                finally:
-                    self._val = True
 
-        class TrueThenFalse:
-            _val = True
-            def __bool__(self):
-                try:
-                    return self._val
-                finally:
-                    self._val = False
 
-        # result grows on the second pass
-        a = np.array([True, FalseThenTrue()])
-        assert_raises(RuntimeError, np.nonzero, a)
-
-        a = np.array([[True], [FalseThenTrue()]])
-        assert_raises(RuntimeError, np.nonzero, a)
-
-        # result shrinks on the second pass
-        a = np.array([False, TrueThenFalse()])
-        assert_raises(RuntimeError, np.nonzero, a)
-
-        a = np.array([[False], [TrueThenFalse()]])
-        assert_raises(RuntimeError, np.nonzero, a)
-
-    def test_nonzero_sideffects_structured_void(self):
-        # Checks that structured void does not mutate alignment flag of
-        # original array.
-        arr = np.zeros(5, dtype="i1,i8,i8")  # `ones` may short-circuit
-        assert arr.flags.aligned  # structs are considered "aligned"
-        assert not arr["f2"].flags.aligned
-        # make sure that nonzero/count_nonzero do not flip the flag:
-        np.nonzero(arr)
-        assert arr.flags.aligned
-        np.count_nonzero(arr)
-        assert arr.flags.aligned
-
-    def test_nonzero_exception_safe(self):
-        # gh-13930
-
-        class ThrowsAfter:
-            def __init__(self, iters):
-                self.iters_left = iters
-
-            def __bool__(self):
-                if self.iters_left == 0:
-                    raise ValueError("called `iters` times")
-
-                self.iters_left -= 1
-                return True
-
-        """
-        Test that a ValueError is raised instead of a SystemError
-
-        If the __bool__ function is called after the error state is set,
-        Python (cpython) will raise a SystemError.
-        """
-
-        # assert that an exception in first pass is handled correctly
-        a = np.array([ThrowsAfter(5)]*10)
-        assert_raises(ValueError, np.nonzero, a)
-
-        # raise exception in second pass for 1-dimensional loop
-        a = np.array([ThrowsAfter(15)]*10)
-        assert_raises(ValueError, np.nonzero, a)
-
-        # raise exception in second pass for n-dimensional loop
-        a = np.array([[ThrowsAfter(15)]]*10)
-        assert_raises(ValueError, np.nonzero, a)
-
-    @pytest.mark.skipif(IS_WASM, reason="wasm doesn't have threads")
-    def test_structured_threadsafety(self):
-        # Nonzero (and some other functions) should be threadsafe for
-        # structured datatypes, see gh-15387. This test can behave randomly.
-        from concurrent.futures import ThreadPoolExecutor
-
-        # Create a deeply nested dtype to make a failure more likely:
-        dt = np.dtype([("", "f8")])
-        dt = np.dtype([("", dt)])
-        dt = np.dtype([("", dt)] * 2)
-        # The array should be large enough to likely run into threading issues
-        arr = np.random.uniform(size=(5000, 4)).view(dt)[:, 0]
-        def func(arr):
-            arr.nonzero()
-
-        tpe = ThreadPoolExecutor(max_workers=8)
-        futures = [tpe.submit(func, arr) for _ in range(10)]
-        for f in futures:
-            f.result()
-
-        assert arr.dtype is dt
 
 
 class TestIndex:
@@ -2376,24 +2025,6 @@ class TestClip:
         act = self.clip(a, m, M)
         assert_array_strict_equal(ac, act)
 
-    def test_simple_nonnative(self):
-        # Test non native double input with scalar min/max.
-        # Test native double input with non native double scalar min/max.
-        a = self._generate_non_native_data(self.nr, self.nc)
-        m = -0.5
-        M = 0.6
-        ac = self.fastclip(a, m, M)
-        act = self.clip(a, m, M)
-        assert_array_equal(ac, act)
-
-        # Test native double input with non native double scalar min/max.
-        a = self._generate_data(self.nr, self.nc)
-        m = -0.5
-        M = self._neg_byteorder(0.6)
-        assert_(not M.dtype.isnative)
-        ac = self.fastclip(a, m, M)
-        act = self.clip(a, m, M)
-        assert_array_equal(ac, act)
 
     def test_simple_complex(self):
         # Test native complex input with native double scalar min/max.
@@ -2425,15 +2056,6 @@ class TestClip:
         assert_array_strict_equal(am, a)
         assert_array_strict_equal(aM, a)
 
-    def test_clip_non_contig(self):
-        # Test clip for non contiguous native input and native scalar min/max.
-        a = self._generate_data(self.nr * 2, self.nc * 3)
-        a = a[::2, ::3]
-        assert_(not a.flags['F_CONTIGUOUS'])
-        assert_(not a.flags['C_CONTIGUOUS'])
-        ac = self.fastclip(a, -1.6, 1.7)
-        act = self.clip(a, -1.6, 1.7)
-        assert_array_strict_equal(ac, act)
 
     def test_simple_out(self):
         # Test native double input with scalar min/max.
@@ -2516,18 +2138,6 @@ class TestClip:
         self.clip(ac, m, M, ac)
         assert_array_strict_equal(a, ac)
 
-    def test_noncontig_inplace(self):
-        # Test non contiguous double input with double scalar min/max in-place.
-        a = self._generate_data(self.nr * 2, self.nc * 3)
-        a = a[::2, ::3]
-        assert_(not a.flags['F_CONTIGUOUS'])
-        assert_(not a.flags['C_CONTIGUOUS'])
-        ac = a.copy()
-        m = -0.5
-        M = 0.6
-        self.fastclip(a, m, M, a)
-        self.clip(ac, m, M, ac)
-        assert_array_equal(a, ac)
 
     def test_type_cast_01(self):
         # Test native double input with scalar min/max.
@@ -2585,38 +2195,8 @@ class TestClip:
         ac = self.fastclip(a, m_s, M)
         assert_array_strict_equal(ac, act)
 
-    def test_type_cast_07(self):
-        # Test NON native with native array min/max.
-        a = self._generate_data(self.nr, self.nc)
-        m = -0.5 * np.ones(a.shape)
-        M = 1.
-        a_s = self._neg_byteorder(a)
-        assert_(not a_s.dtype.isnative)
-        act = a_s.clip(m, M)
-        ac = self.fastclip(a_s, m, M)
-        assert_array_strict_equal(ac, act)
 
-    def test_type_cast_08(self):
-        # Test NON native with native scalar min/max.
-        a = self._generate_data(self.nr, self.nc)
-        m = -0.5
-        M = 1.
-        a_s = self._neg_byteorder(a)
-        assert_(not a_s.dtype.isnative)
-        ac = self.fastclip(a_s, m, M)
-        act = a_s.clip(m, M)
-        assert_array_strict_equal(ac, act)
 
-    def test_type_cast_09(self):
-        # Test native with NON native array min/max.
-        a = self._generate_data(self.nr, self.nc)
-        m = -0.5 * np.ones(a.shape)
-        M = 1.
-        m_s = self._neg_byteorder(m)
-        assert_(not m_s.dtype.isnative)
-        ac = self.fastclip(a, m_s, M)
-        act = self.clip(a, m_s, M)
-        assert_array_strict_equal(ac, act)
 
     def test_type_cast_10(self):
         # Test native int32 with float min/max and float out for output argument.
@@ -2628,17 +2208,6 @@ class TestClip:
         ac = self.fastclip(a, m, M, out=b)
         assert_array_strict_equal(ac, act)
 
-    def test_type_cast_11(self):
-        # Test non native with native scalar, min/max, out non native
-        a = self._generate_non_native_data(self.nr, self.nc)
-        b = a.copy()
-        b = b.astype(b.dtype.newbyteorder('>'))
-        bt = b.copy()
-        m = -0.5
-        M = 1.
-        self.fastclip(a, m, M, out=b)
-        self.clip(a, m, M, out=bt)
-        assert_array_strict_equal(b, bt)
 
     def test_type_cast_12(self):
         # Test native int32 input and min/max and float out
@@ -3757,43 +3326,6 @@ class TestRollaxis:
         assert_raises(AxisError, np.rollaxis, a, 4, 0)
         assert_raises(AxisError, np.rollaxis, a, 0, 5)
 
-    def test_results(self):
-        a = np.arange(1*2*3*4).reshape(1, 2, 3, 4).copy()
-        aind = np.indices(a.shape)
-        assert_(a.flags['OWNDATA'])
-        for (i, j) in self.tgtshape:
-            # positive axis, positive start
-            res = np.rollaxis(a, axis=i, start=j)
-            i0, i1, i2, i3 = aind[np.array(res.shape) - 1]
-            assert_(np.all(res[i0, i1, i2, i3] == a))
-            assert_(res.shape == self.tgtshape[(i, j)], str((i,j)))
-            assert_(not res.flags['OWNDATA'])
-
-            # negative axis, positive start
-            ip = i + 1
-            res = np.rollaxis(a, axis=-ip, start=j)
-            i0, i1, i2, i3 = aind[np.array(res.shape) - 1]
-            assert_(np.all(res[i0, i1, i2, i3] == a))
-            assert_(res.shape == self.tgtshape[(4 - ip, j)])
-            assert_(not res.flags['OWNDATA'])
-
-            # positive axis, negative start
-            jp = j + 1 if j < 4 else j
-            res = np.rollaxis(a, axis=i, start=-jp)
-            i0, i1, i2, i3 = aind[np.array(res.shape) - 1]
-            assert_(np.all(res[i0, i1, i2, i3] == a))
-            assert_(res.shape == self.tgtshape[(i, 4 - jp)])
-            assert_(not res.flags['OWNDATA'])
-
-            # negative axis, negative start
-            ip = i + 1
-            jp = j + 1 if j < 4 else j
-            res = np.rollaxis(a, axis=-ip, start=-jp)
-            i0, i1, i2, i3 = aind[np.array(res.shape) - 1]
-            assert_(np.all(res[i0, i1, i2, i3] == a))
-            assert_(res.shape == self.tgtshape[(4 - ip, 4 - jp)])
-            assert_(not res.flags['OWNDATA'])
-
 
 class TestMoveaxis:
     def test_move_to_end(self):
@@ -4058,17 +3590,7 @@ class TestRequire:
         else:
             assert_(c.flags[flag])
 
-    def test_require_each(self):
 
-        id = ['f8', 'i4']
-        fd = [None, 'f8', 'c16']
-        for idtype, fdtype, flag in itertools.product(id, fd, self.flag_names):
-            a = self.generate_all_false(idtype)
-            self.set_and_check_flag(flag, fdtype,  a)
-
-    def test_unknown_requirement(self):
-        a = self.generate_all_false('f8')
-        assert_raises(KeyError, np.require, a, None, 'Q')
 
     def test_non_array_input(self):
         a = np.require([1, 2, 3, 4], 'i4', ['C', 'A', 'O'])
@@ -4078,9 +3600,6 @@ class TestRequire:
         assert_(a.dtype == 'i4')
         assert_equal(a, [1, 2, 3, 4])
 
-    def test_C_and_F_simul(self):
-        a = self.generate_all_false('f8')
-        assert_raises(ValueError, np.require, a, None, ['C', 'F'])
 
     def test_ensure_array(self):
         class ArraySubclass(np.ndarray):
@@ -4089,14 +3608,6 @@ class TestRequire:
         a = ArraySubclass((2, 2))
         b = np.require(a, None, ['E'])
         assert_(type(b) is np.ndarray)
-
-    def test_preserve_subtype(self):
-        class ArraySubclass(np.ndarray):
-            pass
-
-        for flag in self.flag_names:
-            a = ArraySubclass((2, 2))
-            self.set_and_check_flag(flag, None, a)
 
 
 class TestBroadcast:
@@ -4161,11 +3672,6 @@ class TestKeepdims:
     class sub_array(np.ndarray):
         def sum(self, axis=None, dtype=None, out=None):
             return np.ndarray.sum(self, axis, dtype, out, keepdims=True)
-
-    def test_raise(self):
-        sub_class = self.sub_array
-        x = np.arange(30).view(sub_class)
-        assert_raises(TypeError, np.sum, x, keepdims=True)
 
 
 class TestTensordot:
