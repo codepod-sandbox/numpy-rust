@@ -97,16 +97,26 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
     };
 
     let n_choices = choices.len();
+    let target_shape = a.shape();
 
     // Detect if any choice is complex
     let any_complex = choices.iter().any(|c| c.dtype().is_complex());
 
     if any_complex {
-        // Complex path: cast all to Complex128
+        // Complex path: cast all to Complex128, broadcasting to index shape
         let flat_vecs: Vec<Vec<num_complex::Complex<f64>>> = choices
             .iter()
             .map(|c| {
-                let f = c.astype(DType::Complex128).flatten();
+                let c = c.astype(DType::Complex128);
+                let bc = if c.shape() != target_shape {
+                    NdArray::from_data(crate::broadcasting::broadcast_array_data(
+                        &c.data,
+                        target_shape,
+                    ))
+                } else {
+                    c
+                };
+                let f = bc.flatten();
                 match &f.data {
                     ArrayData::Complex128(arr) => arr.iter().copied().collect(),
                     _ => unreachable!(),
@@ -144,11 +154,20 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
             ArrayD::from_shape_vec(IxDyn(&out_shape), result).expect("shape matches"),
         )))
     } else {
-        // Float path: cast all to Float64
+        // Float path: cast all to Float64, broadcasting to index shape
         let flat_vecs: Vec<Vec<f64>> = choices
             .iter()
             .map(|c| {
-                let f = c.astype(DType::Float64).flatten();
+                let c = c.astype(DType::Float64);
+                let bc = if c.shape() != target_shape {
+                    NdArray::from_data(crate::broadcasting::broadcast_array_data(
+                        &c.data,
+                        target_shape,
+                    ))
+                } else {
+                    c
+                };
+                let f = bc.flatten();
                 let ArrayData::Float64(arr) = &f.data else {
                     unreachable!()
                 };

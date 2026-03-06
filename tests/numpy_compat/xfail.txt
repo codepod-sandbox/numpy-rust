@@ -5,7 +5,6 @@ TestClip.test_noncontig_inplace
 TestClip.test_simple_complex
 TestClip.test_simple_int32_inout[0]
 TestClip.test_simple_nonnative
-TestClip.test_type_cast_06
 TestClip.test_type_cast_07
 TestClip.test_type_cast_08
 TestClip.test_type_cast_09
