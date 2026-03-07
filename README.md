@@ -2,7 +2,7 @@
 
 A NumPy implementation in Rust, compiled to WebAssembly. Provides ~95% of the NumPy API surface commonly used in data science and ML code — array creation, manipulation, linear algebra, FFT, random distributions, masked arrays, and more — for Python code running inside sandboxed environments.
 
-**425 Rust + 1,177 Python = 1,602 tests, 0 failures (`2026-03-02`)**
+**v0.1 — 2,313 tests, 0 failures (`2026-03-07`)**
 
 ## How it works
 
@@ -28,21 +28,15 @@ The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the 
 
 ---
 
-## Compatibility snapshot (`2026-03-02`)
+## Compatibility snapshot (`2026-03-07`)
 
 | Suite | Result |
 |---|---|
 | `cargo test -q` | `425 passed, 0 failed` |
-| `./tests/python/run_tests.sh` | `1,177 passed, 0 failed` |
-| `./target/debug/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,177 passed, 65 expected failures (xfail), 0 unexpected failures` |
+| `./tests/python/run_tests.sh` | `1,106 passed, 0 failed` |
+| `./target/release/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,207 passed, 4 expected failures (xfail), 0 unexpected failures` |
 
-Recent compatibility improvements:
-- `ndarray.flat` now behaves as a mutable flat iterator view (`x.flat[i] = v` writes through to `x`), removing `TestArgwhere.test_nd[*]` xfails.
-- NumPy scalar dtype identity is preserved in `can_cast` paths, removing all `TestTypes.test_can_cast_scalars[*]` xfails.
-- NumPy scalar wrappers now expose scalar-shape semantics (`shape=()`, `ndim=0`, `size=1`), and `std(..., mean=...)` with `axis=None` now returns scalar-compatible NumPy values.
-- Temporal dtype aliases (`timedelta64`/`datetime64`) are now accepted in Rust dtype parsing (currently backed by float64 storage as a compatibility fallback), unblocking additional compat coverage.
-- `array_equal(..., equal_nan=...)` and complex scalar constructor compatibility were tightened for NaN-heavy comparison cases.
-- `fromiter` now validates fixed-size subarray dtype item shapes and raises `ValueError` on mismatched sequence lengths, matching NumPy behavior more closely.
+The 4 expected failures are architectural edge cases: overlapping `clip(out=)` with shared memory views (1), NEP50 float32/Python-float promotion (1), C-extension custom dtypes (1), and an upstream pytest-level xfail for NaT propagation in `clip` (1).
 
 The project goal is library compatibility first (pandas/sklearn/scipy-style usage), then performance. Work is prioritized toward API correctness, dtype semantics, and edge-case behavior over raw speed.
 
@@ -62,6 +56,8 @@ The project goal is library compatibility first (pandas/sklearn/scipy-style usag
 | `complex64` | `csingle` | Native (f32, f32) |
 | `complex128` | `cdouble` | Native (f64, f64) |
 | `str` | `str_`, `unicode_` | Variable-length strings |
+| `datetime64` | `M8`, `datetime64[D]`, `datetime64[ns]`, … | Python `datetime64` objects (NaT supported) |
+| `timedelta64` | `m8`, `timedelta64[D]`, `timedelta64[ns]`, … | Python `timedelta64` objects (NaT supported) |
 
 Additional dtype aliases (`float16`, `int8`, `int16`, `uint8`, `uint16`, `uint32`, `uint64`) are accepted and stored as the nearest native type. `iinfo()` and `finfo()` provide type introspection for all numeric types.
 
@@ -329,7 +325,7 @@ Also: `np.polyval`, `np.polyfit`, `np.polyadd`, `np.polysub`, `np.polymul`, `np.
 - `result_type()` and `promote_types()` have basic implementations.
 
 ### Parameters accepted but ignored
-- `order` (memory layout) — always C-contiguous.
+- `order` (memory layout) — F-order flag tracked on arrays, but data is always stored C-contiguous.
 - `out` (output array) — no in-place output support for ufuncs.
 - `casting`, `subok`, `where` — silently ignored on most functions.
 
@@ -348,7 +344,7 @@ Also: `np.polyval`, `np.polyfit`, `np.polyadd`, `np.polysub`, `np.polymul`, `np.
 - `empty()` / `empty_like()` — return zeros.
 - `seterr()` / `geterr()` / `errstate()` — no-ops.
 - `ndarray.view()` — returns a copy (no shared memory views).
-- `may_share_memory()` / `shares_memory()` — return False.
+- `may_share_memory()` / `shares_memory()` — track reshape relationships via memory tags, but slices always return copies.
 
 ---
 
@@ -358,7 +354,6 @@ These items are not yet implemented but may be needed for full compatibility:
 
 ### Would break some code
 - **Structured/record arrays** — no compound dtypes or field access.
-- **Datetime/timedelta** — dtype aliases exist but no operations.
 - **`np.ufunc` protocol** — no universal function objects (`.reduce()`, `.accumulate()`, `.outer()` work via `_UfuncWithReduce` wrapper for `maximum`, `minimum`, `add`, `multiply`).
 - **`rfft`/`irfft` for nD** — currently 1D only.
 
@@ -380,11 +375,9 @@ These items are not yet implemented but may be needed for full compatibility:
 | Suite | Tests | Description |
 |-------|-------|-------------|
 | Rust unit tests | 425 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
-| Python `test_numeric.py` | 1,106 | Comprehensive integration: all functions, edge cases, regressions |
-| Python `test_array_creation.py` | 14 | Array creation functions |
-| Python `test_indexing.py` | 38 | Indexing, slicing, assignment |
-| Python `test_linalg.py` | 19 | Linear algebra operations |
-| **Total** | **1,602** | |
+| Python vendored tests | 1,106 | Comprehensive integration: all functions, edge cases, regressions |
+| NumPy compat tests | 1,207 | Upstream NumPy `test_numeric.py` run via RustPython (4 xfails) |
+| **Total** | **2,738** | |
 
 ---
 
