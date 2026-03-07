@@ -534,6 +534,15 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                     result = result.astype(dt)
             elif hasattr(data, 'dtype'):
                 result = result.astype(str(data.dtype))
+        # Apply order= flag
+        if order == 'F' and hasattr(result, '_mark_fortran'):
+            if result is data:
+                result = result.copy()
+            result._mark_fortran()
+        elif order == 'C' and hasattr(result, '_mark_c_contiguous'):
+            if result is data:
+                result = result.copy()
+            result._mark_c_contiguous()
         return result
     if isinstance(data, bool):
         # bool must be checked before int since bool is a subclass of int
@@ -3249,12 +3258,13 @@ def reshape(a, newshape=None, order="C", *, shape=None, copy=None, **kwargs):
         raise TypeError("reshape() missing 1 required positional argument: 'shape'")
     if not isinstance(a, ndarray):
         a = asarray(a)
-    if copy is True:
-        return a.copy().reshape(newshape)
-    # copy=False means raise if a copy would be needed (for order changes)
-    if copy is False and order is not None and order != "C":
-        raise ValueError("Unable to avoid creating a copy while reshaping.")
-    return a.reshape(newshape)
+    # Delegate copy= and order= to the instance method (which handles memory tagging)
+    kw = {}
+    if order is not None:
+        kw['order'] = order
+    if copy is not None:
+        kw['copy'] = copy
+    return a.reshape(newshape, **kw)
 
 def _transpose_with_axes(a, axes):
     """Transpose ndarray with an arbitrary axis permutation (pure Python).
@@ -5662,12 +5672,18 @@ def any(a, axis=None, out=None, keepdims=False, where=True):
     return array(result).reshape(m.shape)
 
 def may_share_memory(a, b, max_work=None):
-    """Check if arrays may share memory. Returns True if a and b are the same object."""
-    return a is b
+    """Check if arrays may share memory (conservative: same object or same memory tag)."""
+    return shares_memory(a, b, max_work=max_work)
 
 def shares_memory(a, b, max_work=None):
-    """Check if arrays share memory. Returns True if a and b are the same object."""
-    return a is b
+    """Check if arrays share memory via memory tag tracking."""
+    if a is b:
+        return True
+    tag_a = getattr(a, '_memory_tag', -1)
+    tag_b = getattr(b, '_memory_tag', -1)
+    if tag_a >= 0 and tag_b >= 0:
+        return tag_a == tag_b
+    return False
 
 def signbit(x):
     if isinstance(x, ndarray):
