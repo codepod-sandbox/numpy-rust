@@ -433,10 +433,7 @@ sys.modules["numpy.testing"] = _testing
 # dtypes will still fail/skip at runtime.
 # ---------------------------------------------------------------------------
 
-_UNSUPPORTED_DTYPE_STRINGS = {"m8", "M8", "m8[ns]", "M8[ns]", "m8[us]", "M8[us]",
-                               "m8[ms]", "M8[ms]", "m8[s]", "M8[s]",
-                               "timedelta64", "datetime64",
-                               "V0", "V3", "V10", "S", "S0", "U0"}
+_UNSUPPORTED_DTYPE_STRINGS = {"V0", "V3", "V10", "S", "S0", "U0"}
 
 
 def _is_unsupported_dtype(dt):
@@ -444,11 +441,7 @@ def _is_unsupported_dtype(dt):
     if dt is object:
         return True
     if isinstance(dt, str):
-        # Check exact match or prefix match for timedelta/datetime
         if dt in _UNSUPPORTED_DTYPE_STRINGS:
-            return True
-        if dt.startswith(("m8", "M8", "<m8", "<M8", ">m8", ">M8",
-                          "=m8", "=M8", "timedelta", "datetime")):
             return True
         # Void/structured dtypes
         if dt.startswith("V"):

@@ -453,6 +453,47 @@ _DTYPE_CHAR_MAP = {
     '|S4': 'bytes', '|S8': 'bytes',
 }
 
+def _is_temporal_dtype(s):
+    """Return True if dtype string represents datetime64 or timedelta64."""
+    if not isinstance(s, str):
+        return False
+    # Strip byte-order prefix
+    bare = s.lstrip('<>=|')
+    return (bare.startswith('m8') or bare.startswith('M8') or
+            bare.startswith('timedelta64') or bare.startswith('datetime64'))
+
+
+def _temporal_dtype_info(s):
+    """Parse a temporal dtype string and return (kind, unit, canonical_name, str_form).
+    kind: 'm' for timedelta64, 'M' for datetime64.
+    unit: 'ns', 'us', 's', 'ms', 'D', 'generic', etc. (None = no unit specified)
+    canonical_name: e.g. 'timedelta64[ns]' or 'datetime64[ns]'
+    str_form: e.g. '<m8[ns]' or '<M8[ns]'
+    """
+    bare = s.lstrip('<>=|')
+    if bare.startswith('m8') or bare.startswith('timedelta64'):
+        kind = 'm'
+        prefix = 'm8'
+        long_prefix = 'timedelta64'
+        rest = bare[2:] if bare.startswith('m8') else bare[len('timedelta64'):]
+    else:  # M8 / datetime64
+        kind = 'M'
+        prefix = 'M8'
+        long_prefix = 'datetime64'
+        rest = bare[2:] if bare.startswith('M8') else bare[len('datetime64'):]
+    # rest is like '[ns]', '[us]', '' etc.
+    unit = None
+    if rest.startswith('[') and rest.endswith(']'):
+        unit = rest[1:-1]
+    if unit:
+        canonical = '{}[{}]'.format(long_prefix, unit)
+        str_form = '<{}[{}]'.format(prefix, unit)
+    else:
+        canonical = long_prefix
+        str_form = '<{}'.format(prefix)
+    return kind, unit, canonical, str_form
+
+
 def _normalize_dtype(dt):
     """Normalize dtype string/type to a canonical name our Rust backend understands."""
     if dt is None:
@@ -474,7 +515,64 @@ def _normalize_dtype(dt):
         suffix = s[2:] if s[0] in '<>' else s[1:]
         if suffix.isdigit():
             return 'str'
+    # Temporal dtypes: return as-is (handled by _array_core and dtype class)
+    if _is_temporal_dtype(s):
+        _, _, canonical, _ = _temporal_dtype_info(s)
+        return canonical
     return s
+
+def _make_temporal_array(data, dtype_str):
+    """Create an _ObjectArray with datetime64/timedelta64 elements.
+    dtype_str is the canonical form e.g. 'timedelta64[ns]' or 'datetime64[us]'.
+    """
+    kind, unit, canonical, _ = _temporal_dtype_info(dtype_str)
+    is_td = (kind == 'm')
+    unit = unit or 'generic'
+
+    def _convert_element(x):
+        if isinstance(x, str) and x.strip() == 'NaT':
+            return _timedelta64_cls('NaT', unit) if is_td else _datetime64_cls('NaT', unit)
+        if isinstance(x, (_datetime64_cls, _timedelta64_cls)):
+            return x
+        if isinstance(x, (int, float)):
+            return _timedelta64_cls(int(x), unit) if is_td else _datetime64_cls(int(x), unit)
+        # Nested list/tuple: recurse
+        return x
+
+    def _flatten_temporal(d):
+        if isinstance(d, (list, tuple)):
+            result = []
+            for item in d:
+                if isinstance(item, (list, tuple)):
+                    result.extend(_flatten_temporal(item))
+                else:
+                    result.append(_convert_element(item))
+            return result
+        return [_convert_element(d)]
+
+    def _infer_temporal_shape(d):
+        if isinstance(d, (list, tuple)):
+            if len(d) == 0:
+                return (0,)
+            inner = _infer_temporal_shape(d[0])
+            return (len(d),) + inner
+        return ()
+
+    if isinstance(data, (list, tuple)):
+        shape = _infer_temporal_shape(data)
+        flat = _flatten_temporal(data)
+    elif isinstance(data, _ObjectArray):
+        shape = data._shape
+        flat = [_convert_element(v) for v in data._data]
+    elif isinstance(data, ndarray):
+        shape = data.shape
+        flat = [_convert_element(v) for v in data.flatten().tolist()]
+    else:
+        shape = ()
+        flat = [_convert_element(data)]
+
+    return _ObjectArray(flat, canonical, shape=shape if shape != () else (len(flat),))
+
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
     if dtype is not None:
@@ -508,6 +606,9 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
     # Check if dtype forces a non-numeric path
     if dtype is not None:
         dt = str(dtype)
+        # Temporal dtypes (datetime64 / timedelta64): route to _ObjectArray
+        if _is_temporal_dtype(dt):
+            return _make_temporal_array(data, dt)
         # String dtypes: route to Rust native (S-prefixed, U-prefixed, "str")
         if dt.startswith("S") or dt.startswith("U") or dt == "str":
             if isinstance(data, str):
@@ -1200,6 +1301,15 @@ clongdouble = _ScalarType("complex128", complex)
 object_ = _ScalarType("object", object)
 # --- datetime64/timedelta64 helper functions ---------------------------------
 
+# NaT (Not a Time) sentinel: int64 minimum value (matching NumPy's iNaT)
+_NAT_VALUE = -(2**63)  # -9223372036854775808
+
+
+def _is_nat_value(v):
+    """Return True if v is the NaT integer sentinel."""
+    return isinstance(v, int) and v == _NAT_VALUE
+
+
 def _infer_datetime_unit(s):
     """Infer unit from datetime string format."""
     s = s.strip()
@@ -1356,17 +1466,31 @@ def _common_time_unit(u1, u2):
 
 
 # --- datetime64 / timedelta64 classes ----------------------------------------
+# Duck-typing helpers: survive external patching of np.datetime64/np.timedelta64.
+def _is_dt64(x):
+    """Return True if x is a datetime64 instance."""
+    return getattr(x, '_is_datetime64', False)
+
+def _is_td64(x):
+    """Return True if x is a timedelta64 instance."""
+    return getattr(x, '_is_timedelta64', False)
+
 
 class datetime64:
     """NumPy datetime64 scalar type."""
+    _is_datetime64 = True  # duck-typing tag, survives external patching of np.datetime64
+
     def __init__(self, value=None, unit=None):
         if value is None:
             self._value = 0  # epoch
             self._unit = unit or 'us'
+        elif isinstance(value, str) and value.strip() == 'NaT':
+            self._value = _NAT_VALUE
+            self._unit = unit or 'generic'
         elif isinstance(value, str):
             self._unit = unit or _infer_datetime_unit(value)
             self._value = _parse_datetime_string(value, self._unit)
-        elif isinstance(value, datetime64):
+        elif getattr(value, '_is_datetime64', False):
             self._value = value._value
             self._unit = unit or value._unit
         elif isinstance(value, (int, float)):
@@ -1376,6 +1500,10 @@ class datetime64:
             self._value = int(value)
             self._unit = unit or 'us'
 
+    @property
+    def _is_nat(self):
+        return self._value == _NAT_VALUE
+
     def __repr__(self):
         return "numpy.datetime64('{}')".format(self._to_string())
 
@@ -1384,6 +1512,8 @@ class datetime64:
 
     def _to_string(self):
         """Convert internal value back to ISO string."""
+        if self._value == _NAT_VALUE:
+            return 'NaT'
         if self._unit == 'Y':
             return str(self._value)
         elif self._unit == 'M':
@@ -1413,18 +1543,29 @@ class datetime64:
         return str(self._value)
 
     def __sub__(self, other):
-        if isinstance(other, datetime64):
+        if self._is_nat:
+            if _is_dt64(other):
+                return timedelta64(_NAT_VALUE, 'generic')
+            if _is_td64(other):
+                return datetime64.__new_from_value(_NAT_VALUE, self._unit)
+        if _is_dt64(other):
+            if other._is_nat:
+                return timedelta64(_NAT_VALUE, 'generic')
             # datetime - datetime = timedelta
             v1 = _to_common_unit(self._value, self._unit, 'D')
             v2 = _to_common_unit(other._value, other._unit, 'D')
             return timedelta64(v1 - v2, 'D')
-        elif isinstance(other, timedelta64):
+        elif _is_td64(other):
+            if other._is_nat:
+                return datetime64.__new_from_value(_NAT_VALUE, self._unit)
             v = _to_common_unit(other._value, other._unit, self._unit)
             return datetime64.__new_from_value(self._value - v, self._unit)
         return NotImplemented
 
     def __add__(self, other):
-        if isinstance(other, timedelta64):
+        if self._is_nat or (_is_td64(other) and other._is_nat):
+            return datetime64.__new_from_value(_NAT_VALUE, self._unit)
+        if _is_td64(other):
             v = _to_common_unit(other._value, other._unit, self._unit)
             return datetime64.__new_from_value(self._value + v, self._unit)
         return NotImplemented
@@ -1433,28 +1574,41 @@ class datetime64:
         return self.__add__(other)
 
     def __eq__(self, other):
-        if isinstance(other, datetime64):
+        # NaT != NaT (like float nan)
+        if self._is_nat:
+            return False
+        if _is_dt64(other):
+            if other._is_nat:
+                return False
             v1 = _to_common_unit(self._value, self._unit, 'D')
             v2 = _to_common_unit(other._value, other._unit, 'D')
             return v1 == v2
         return NotImplemented
 
     def __lt__(self, other):
-        if isinstance(other, datetime64):
+        if self._is_nat or (_is_dt64(other) and other._is_nat):
+            return False
+        if _is_dt64(other):
             v1 = _to_common_unit(self._value, self._unit, 'D')
             v2 = _to_common_unit(other._value, other._unit, 'D')
             return v1 < v2
         return NotImplemented
 
     def __le__(self, other):
+        if self._is_nat or (_is_dt64(other) and other._is_nat):
+            return False
         return self == other or self < other
 
     def __gt__(self, other):
-        if isinstance(other, datetime64):
+        if self._is_nat or (_is_dt64(other) and other._is_nat):
+            return False
+        if _is_dt64(other):
             return other < self
         return NotImplemented
 
     def __ge__(self, other):
+        if self._is_nat or (_is_dt64(other) and other._is_nat):
+            return False
         return self == other or self > other
 
     def __hash__(self):
@@ -1478,32 +1632,51 @@ class datetime64:
 
 class timedelta64:
     """NumPy timedelta64 scalar type."""
+    _is_timedelta64 = True  # duck-typing tag, survives external patching of np.timedelta64
+
     def __init__(self, value=0, unit='generic'):
-        if isinstance(value, timedelta64):
+        if getattr(value, '_is_timedelta64', False):
             self._value = value._value
             self._unit = unit if unit != 'generic' else value._unit
+        elif isinstance(value, str) and value.strip() == 'NaT':
+            self._value = _NAT_VALUE
+            self._unit = unit
         else:
             self._value = int(value)
             self._unit = unit
 
+    @property
+    def _is_nat(self):
+        return self._value == _NAT_VALUE
+
     def __repr__(self):
+        if self._is_nat:
+            return "numpy.timedelta64('NaT', '{}')".format(self._unit)
         return "numpy.timedelta64({}, '{}')".format(self._value, self._unit)
 
     def __str__(self):
+        if self._is_nat:
+            return 'NaT'
         return "{} {}".format(self._value, self._unit)
 
     def __add__(self, other):
-        if isinstance(other, timedelta64):
+        if self._is_nat or (_is_td64(other) and other._is_nat):
+            common = _common_time_unit(self._unit, other._unit if _is_td64(other) else self._unit)
+            return timedelta64(_NAT_VALUE, common)
+        if _is_td64(other):
             common = _common_time_unit(self._unit, other._unit)
             v1 = _to_common_unit(self._value, self._unit, common)
             v2 = _to_common_unit(other._value, other._unit, common)
             return timedelta64(v1 + v2, common)
-        if isinstance(other, datetime64):
+        if _is_dt64(other):
             return other + self
         return NotImplemented
 
     def __sub__(self, other):
-        if isinstance(other, timedelta64):
+        if self._is_nat or (_is_td64(other) and other._is_nat):
+            common = _common_time_unit(self._unit, other._unit if _is_td64(other) else self._unit)
+            return timedelta64(_NAT_VALUE, common)
+        if _is_td64(other):
             common = _common_time_unit(self._unit, other._unit)
             v1 = _to_common_unit(self._value, self._unit, common)
             v2 = _to_common_unit(other._value, other._unit, common)
@@ -1511,6 +1684,8 @@ class timedelta64:
         return NotImplemented
 
     def __mul__(self, other):
+        if self._is_nat:
+            return timedelta64(_NAT_VALUE, self._unit)
         if isinstance(other, (int, float)):
             return timedelta64(int(self._value * other), self._unit)
         return NotImplemented
@@ -1519,9 +1694,13 @@ class timedelta64:
         return self.__mul__(other)
 
     def __truediv__(self, other):
+        if self._is_nat:
+            return timedelta64(_NAT_VALUE, self._unit)
         if isinstance(other, (int, float)):
             return timedelta64(int(self._value / other), self._unit)
-        if isinstance(other, timedelta64):
+        if _is_td64(other):
+            if other._is_nat:
+                return float('nan')
             common = _common_time_unit(self._unit, other._unit)
             v1 = _to_common_unit(self._value, self._unit, common)
             v2 = _to_common_unit(other._value, other._unit, common)
@@ -1529,7 +1708,12 @@ class timedelta64:
         return NotImplemented
 
     def __eq__(self, other):
-        if isinstance(other, timedelta64):
+        # NaT != NaT
+        if self._is_nat:
+            return False
+        if _is_td64(other):
+            if other._is_nat:
+                return False
             common = _common_time_unit(self._unit, other._unit)
             v1 = _to_common_unit(self._value, self._unit, common)
             v2 = _to_common_unit(other._value, other._unit, common)
@@ -1537,7 +1721,9 @@ class timedelta64:
         return NotImplemented
 
     def __lt__(self, other):
-        if isinstance(other, timedelta64):
+        if self._is_nat or (_is_td64(other) and other._is_nat):
+            return False
+        if _is_td64(other):
             common = _common_time_unit(self._unit, other._unit)
             v1 = _to_common_unit(self._value, self._unit, common)
             v2 = _to_common_unit(other._value, other._unit, common)
@@ -1556,16 +1742,34 @@ class timedelta64:
         return self
 
 
+# Private aliases so external code patching np.datetime64/np.timedelta64
+# doesn't break our internal isinstance checks.
+_datetime64_cls = datetime64
+_timedelta64_cls = timedelta64
+
+
 def isnat(x):
-    """Test for NaT (Not a Time)."""
-    if isinstance(x, (datetime64, timedelta64)):
-        return False  # We don't support NaT sentinel yet
+    """Test element-wise for NaT (Not a Time)."""
+    if isinstance(x, (_datetime64_cls, _timedelta64_cls)):
+        return x._is_nat
+    if isinstance(x, _ObjectArray):
+        results = []
+        for v in x._data:
+            if isinstance(v, (_datetime64_cls, _timedelta64_cls)):
+                results.append(v._is_nat)
+            else:
+                results.append(False)
+        arr = _native.array([1.0 if r else 0.0 for r in results]).astype('bool')
+        return arr.reshape(list(x._shape))
+    if isinstance(x, ndarray):
+        # For ndarray, check element-wise - unlikely to have NaT but handle gracefully
+        return _native.array([0.0] * x.size).astype('bool').reshape(list(x.shape))
     return False
 
 
 def busday_count(begindates, enddates, weekmask='1111100', holidays=None):
     """Count business days. Simplified implementation."""
-    if isinstance(begindates, datetime64) and isinstance(enddates, datetime64):
+    if _is_dt64(begindates) and _is_dt64(enddates):
         diff = enddates - begindates
         return int(diff._value * 5 / 7)  # rough approximation
     return 0
@@ -1578,7 +1782,7 @@ def is_busday(dates, weekmask='1111100', holidays=None):
 
 def busday_offset(dates, offsets, roll='raise', weekmask='1111100', holidays=None):
     """Offset dates by business days."""
-    if isinstance(dates, datetime64):
+    if _is_dt64(dates):
         return dates + timedelta64(int(offsets), 'D')
     return dates
 string_ = _ScalarType("str", str)
@@ -2344,21 +2548,41 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
         result_data = isclose(a_data, b_data, rtol=rtol, atol=atol, equal_nan=equal_nan)
         mask = a.mask if _a_ma else (b.mask if _b_ma else None)
         return _MA(result_data, mask=mask)
-    # Fast path for _ObjectArray (complex, object dtypes)
+    # Fast path for _ObjectArray (complex, object, temporal dtypes)
     if isinstance(a, _ObjectArray) or isinstance(b, _ObjectArray):
         _babs = __import__("builtins").abs
+        a_obj = a if isinstance(a, _ObjectArray) else None
+        b_obj = b if isinstance(b, _ObjectArray) else None
+        out_shape = (a_obj or b_obj)._shape
         a_data = a._data if isinstance(a, _ObjectArray) else (a.flatten().tolist() if isinstance(a, ndarray) else [a])
         b_data = b._data if isinstance(b, _ObjectArray) else (b.flatten().tolist() if isinstance(b, ndarray) else [b])
+        # Broadcast scalar b to match a_data length
+        if len(b_data) == 1 and len(a_data) > 1:
+            b_data = b_data * len(a_data)
+        # Get atol as a numeric value (handle timedelta64 atol)
+        atol_val = atol._value if isinstance(atol, _timedelta64_cls) else atol
         results = []
         for av, bv in zip(a_data, b_data):
-            if equal_nan and _cmath_isnan(av) and _cmath_isnan(bv):
-                results.append(True)
+            # NaT check (treated like NaN)
+            av_nat = isinstance(av, (_datetime64_cls, _timedelta64_cls)) and av._is_nat
+            bv_nat = isinstance(bv, (_datetime64_cls, _timedelta64_cls)) and bv._is_nat
+            if equal_nan and (av_nat or _cmath_isnan(av if not av_nat else 0)) and \
+                             (bv_nat or _cmath_isnan(bv if not bv_nat else 0)):
+                results.append(av_nat and bv_nat)
+            elif av_nat or bv_nat:
+                results.append(False)
             else:
                 try:
-                    results.append(_babs(av - bv) <= atol + rtol * _babs(bv))
+                    diff = av - bv
+                    diff_val = diff._value if isinstance(diff, (_datetime64_cls, _timedelta64_cls)) else diff
+                    bv_val = bv._value if isinstance(bv, (_datetime64_cls, _timedelta64_cls)) else bv
+                    results.append(_babs(diff_val) <= atol_val + rtol * _babs(bv_val))
                 except (TypeError, ValueError):
                     results.append(av == bv)
-        return _native.array([1.0 if r else 0.0 for r in results]).astype("bool")
+        arr = _native.array([1.0 if r else 0.0 for r in results]).astype("bool")
+        if len(out_shape) > 1:
+            arr = arr.reshape(list(out_shape))
+        return arr
     scalar_input = not isinstance(a, ndarray) and not isinstance(b, ndarray) and not isinstance(a, (list, tuple)) and not isinstance(b, (list, tuple))
     if not isinstance(a, ndarray):
         a = array(a) if isinstance(a, (list, tuple)) else array([a])
@@ -4192,6 +4416,29 @@ class dtype:
                     tp = 'str'
             elif tp.startswith('U') and len(tp) > 1 and tp[1:].isdigit():
                 tp = 'str'
+            # Handle temporal dtypes (m8/M8/timedelta64/datetime64)
+            elif _is_temporal_dtype(tp):
+                kind, unit, canonical, str_form = _temporal_dtype_info(tp)
+                self.name = canonical
+                self.kind = kind
+                self.itemsize = 8
+                self.char = kind  # 'm' or 'M'
+                self.str = str_form
+                self.byteorder = '<'
+                self.names = None
+                self.fields = None
+                self.subdtype = None
+                self.base = self
+                self.shape = ()
+                self.metadata = metadata
+                self.alignment = 8
+                self.isalignedstruct = False
+                self.isnative = True
+                self.hasobject = False
+                self.num = 21 if kind == 'm' else 22  # matching numpy loosely
+                self.descr = [('', str_form)]
+                self.type = _timedelta64_cls if kind == 'm' else _datetime64_cls
+                return
             self.name = tp
             self._init_from_name(tp)
         elif tp is float or tp is float64:
