@@ -2,7 +2,7 @@
 
 A NumPy implementation in Rust, compiled to WebAssembly. Provides ~95% of the NumPy API surface commonly used in data science and ML code — array creation, manipulation, linear algebra, FFT, random distributions, masked arrays, and more — for Python code running inside sandboxed environments.
 
-**v0.1 — 2,313 tests, 0 failures (`2026-03-07`)**
+**v0.1.1 — 2,739 tests, 0 failures (`2026-03-07`)**
 
 ## How it works
 
@@ -32,7 +32,7 @@ The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the 
 
 | Suite | Result |
 |---|---|
-| `cargo test -q` | `425 passed, 0 failed` |
+| `cargo test -q` | `426 passed, 0 failed` |
 | `./tests/python/run_tests.sh` | `1,106 passed, 0 failed` |
 | `./target/release/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,207 passed, 4 expected failures (xfail), 0 unexpected failures` |
 
@@ -375,10 +375,10 @@ These items are not yet implemented but may be needed for full compatibility:
 
 | Suite | Tests | Description |
 |-------|-------|-------------|
-| Rust unit tests | 425 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
+| Rust unit tests | 426 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
 | Python vendored tests | 1,106 | Comprehensive integration: all functions, edge cases, regressions |
 | NumPy compat tests | 1,207 | Upstream NumPy `test_numeric.py` run via RustPython (4 xfails) |
-| **Total** | **2,738** | |
+| **Total** | **2,739** | |
 
 ---
 
