@@ -108,7 +108,20 @@ class _ObjectArray:
         self._is_fortran = True
 
     def copy(self): return _ObjectArray(list(self._data), self._dtype, shape=self._shape, is_fortran=self._is_fortran, itemsize=self._itemsize)
-    def astype(self, dtype): return _ObjectArray(list(self._data), str(dtype), shape=self._shape, is_fortran=self._is_fortran)
+    def astype(self, dtype):
+        dtype_str = str(dtype)
+        # Convert temporal types to numeric
+        if dtype_str in ('int64', 'int32', 'int16', 'int8', 'uint64', 'uint32') or dtype_str.startswith('int') or dtype_str.startswith('uint'):
+            if self._data and getattr(self._data[0], '_is_timedelta64', False) or getattr(self._data[0] if self._data else None, '_is_datetime64', False):
+                vals = [v._value if hasattr(v, '_value') else int(v) for v in self._data]
+                result = _native.array([float(v) for v in vals]).astype(dtype_str)
+                if len(self._shape) > 1:
+                    result = result.reshape(list(self._shape))
+                return result
+        # Convert to temporal types
+        if _is_temporal_dtype(dtype_str):
+            return _make_temporal_array(self, dtype_str)
+        return _ObjectArray(list(self._data), dtype_str, shape=self._shape, is_fortran=self._is_fortran)
     def flatten(self): return self
     def ravel(self): return self
     def tolist(self): return list(self._data)
@@ -530,13 +543,23 @@ def _make_temporal_array(data, dtype_str):
     unit = unit or 'generic'
 
     def _convert_element(x):
-        if isinstance(x, str) and x.strip() == 'NaT':
-            return _timedelta64_cls('NaT', unit) if is_td else _datetime64_cls('NaT', unit)
+        if isinstance(x, str):
+            s = x.strip()
+            if s == 'NaT':
+                return _timedelta64_cls('NaT', unit) if is_td else _datetime64_cls('NaT', unit)
+            # Date/time string for datetime64
+            if not is_td:
+                return _datetime64_cls(s, unit)
+            # Timedelta: try int parse, else NaT
+            try:
+                return _timedelta64_cls(int(s), unit)
+            except (ValueError, TypeError):
+                return _timedelta64_cls('NaT', unit)
         if isinstance(x, (_datetime64_cls, _timedelta64_cls)):
             return x
         if isinstance(x, (int, float)):
             return _timedelta64_cls(int(x), unit) if is_td else _datetime64_cls(int(x), unit)
-        # Nested list/tuple: recurse
+        # Unknown: return as-is
         return x
 
     def _flatten_temporal(d):
