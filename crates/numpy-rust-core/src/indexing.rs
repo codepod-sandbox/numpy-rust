@@ -119,7 +119,7 @@ impl NdArray {
         macro_rules! do_slice {
             ($arr:expr) => {{
                 let view = $arr.slice(info.as_slice());
-                view.to_owned()
+                view.to_owned().into_shared()
             }};
         }
 
@@ -153,7 +153,9 @@ impl NdArray {
                     .map(|&i| $arr.index_axis(ndarray::Axis(axis), i))
                     .collect();
                 let view_refs: Vec<_> = views.iter().map(|v| v.view()).collect();
-                ndarray::stack(ndarray::Axis(axis), &view_refs).unwrap()
+                ndarray::stack(ndarray::Axis(axis), &view_refs)
+                    .unwrap()
+                    .into_shared()
             }};
         }
 
@@ -502,7 +504,9 @@ impl NdArray {
                     .collect();
                 let len = selected.len();
                 ArrayData::$variant(
-                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected).unwrap(),
+                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected)
+                        .unwrap()
+                        .into_shared(),
                 )
             }};
         }
@@ -524,7 +528,11 @@ impl NdArray {
                     .map(|(v, _)| v)
                     .collect();
                 let len = selected.len();
-                ArrayData::Str(ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected).unwrap())
+                ArrayData::Str(
+                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected)
+                        .unwrap()
+                        .into_shared(),
+                )
             }
         };
 

@@ -1,5 +1,4 @@
-use ndarray::ArrayD;
-
+use crate::array_data::ArrayD;
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
@@ -19,7 +18,7 @@ impl NdArray {
     pub fn str_upper(&self) -> Result<NdArray> {
         let a = require_string(self)?;
         Ok(NdArray::from_data(ArrayData::Str(
-            a.mapv(|s| s.to_uppercase()),
+            a.mapv(|s| s.to_uppercase()).into_shared(),
         )))
     }
 
@@ -27,30 +26,33 @@ impl NdArray {
     pub fn str_lower(&self) -> Result<NdArray> {
         let a = require_string(self)?;
         Ok(NdArray::from_data(ArrayData::Str(
-            a.mapv(|s| s.to_lowercase()),
+            a.mapv(|s| s.to_lowercase()).into_shared(),
         )))
     }
 
     /// Capitalize the first character of each string element.
     pub fn str_capitalize(&self) -> Result<NdArray> {
         let a = require_string(self)?;
-        Ok(NdArray::from_data(ArrayData::Str(a.mapv(|s| {
-            let mut chars = s.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => {
-                    let upper: String = first.to_uppercase().collect();
-                    upper + &chars.as_str().to_lowercase()
+        Ok(NdArray::from_data(ArrayData::Str(
+            a.mapv(|s| {
+                let mut chars = s.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => {
+                        let upper: String = first.to_uppercase().collect();
+                        upper + &chars.as_str().to_lowercase()
+                    }
                 }
-            }
-        }))))
+            })
+            .into_shared(),
+        )))
     }
 
     /// Strip leading and trailing whitespace from each element.
     pub fn str_strip(&self) -> Result<NdArray> {
         let a = require_string(self)?;
         Ok(NdArray::from_data(ArrayData::Str(
-            a.mapv(|s| s.trim().to_string()),
+            a.mapv(|s| s.trim().to_string()).into_shared(),
         )))
     }
 
@@ -58,7 +60,7 @@ impl NdArray {
     pub fn str_len(&self) -> Result<NdArray> {
         let a = require_string(self)?;
         Ok(NdArray::from_data(ArrayData::Int64(
-            a.mapv(|s| s.chars().count() as i64),
+            a.mapv(|s| s.chars().count() as i64).into_shared(),
         )))
     }
 
@@ -67,7 +69,7 @@ impl NdArray {
         let a = require_string(self)?;
         let prefix = prefix.to_string();
         Ok(NdArray::from_data(ArrayData::Bool(
-            a.mapv(|s| s.starts_with(prefix.as_str())),
+            a.mapv(|s| s.starts_with(prefix.as_str())).into_shared(),
         )))
     }
 
@@ -76,7 +78,7 @@ impl NdArray {
         let a = require_string(self)?;
         let suffix = suffix.to_string();
         Ok(NdArray::from_data(ArrayData::Bool(
-            a.mapv(|s| s.ends_with(suffix.as_str())),
+            a.mapv(|s| s.ends_with(suffix.as_str())).into_shared(),
         )))
     }
 
@@ -86,7 +88,8 @@ impl NdArray {
         let old = old.to_string();
         let new = new.to_string();
         Ok(NdArray::from_data(ArrayData::Str(
-            a.mapv(|s| s.replace(old.as_str(), new.as_str())),
+            a.mapv(|s| s.replace(old.as_str(), new.as_str()))
+                .into_shared(),
         )))
     }
 }

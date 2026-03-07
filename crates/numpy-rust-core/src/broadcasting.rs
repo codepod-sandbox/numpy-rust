@@ -40,14 +40,28 @@ pub fn broadcast_array_data(data: &ArrayData, target_shape: &[usize]) -> ArrayDa
     }
     let target = IxDyn(target_shape);
     match data {
-        ArrayData::Bool(a) => ArrayData::Bool(a.broadcast(target).unwrap().to_owned()),
-        ArrayData::Int32(a) => ArrayData::Int32(a.broadcast(target).unwrap().to_owned()),
-        ArrayData::Int64(a) => ArrayData::Int64(a.broadcast(target).unwrap().to_owned()),
-        ArrayData::Float32(a) => ArrayData::Float32(a.broadcast(target).unwrap().to_owned()),
-        ArrayData::Float64(a) => ArrayData::Float64(a.broadcast(target).unwrap().to_owned()),
-        ArrayData::Complex64(a) => ArrayData::Complex64(a.broadcast(target).unwrap().to_owned()),
-        ArrayData::Complex128(a) => ArrayData::Complex128(a.broadcast(target).unwrap().to_owned()),
-        ArrayData::Str(a) => ArrayData::Str(a.broadcast(target).unwrap().to_owned()),
+        ArrayData::Bool(a) => {
+            ArrayData::Bool(a.broadcast(target).unwrap().to_owned().into_shared())
+        }
+        ArrayData::Int32(a) => {
+            ArrayData::Int32(a.broadcast(target).unwrap().to_owned().into_shared())
+        }
+        ArrayData::Int64(a) => {
+            ArrayData::Int64(a.broadcast(target).unwrap().to_owned().into_shared())
+        }
+        ArrayData::Float32(a) => {
+            ArrayData::Float32(a.broadcast(target).unwrap().to_owned().into_shared())
+        }
+        ArrayData::Float64(a) => {
+            ArrayData::Float64(a.broadcast(target).unwrap().to_owned().into_shared())
+        }
+        ArrayData::Complex64(a) => {
+            ArrayData::Complex64(a.broadcast(target).unwrap().to_owned().into_shared())
+        }
+        ArrayData::Complex128(a) => {
+            ArrayData::Complex128(a.broadcast(target).unwrap().to_owned().into_shared())
+        }
+        ArrayData::Str(a) => ArrayData::Str(a.broadcast(target).unwrap().to_owned().into_shared()),
     }
 }
 

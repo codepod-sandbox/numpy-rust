@@ -26,10 +26,12 @@ macro_rules! float_unary {
             pub fn $name(&self) -> NdArray {
                 let data = ensure_float(&self.data);
                 let result = match data {
-                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op)),
-                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op)),
-                    ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv($c64_op)),
-                    ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv($c128_op)),
+                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
+                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
+                    ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv($c64_op).into_shared()),
+                    ArrayData::Complex128(a) => {
+                        ArrayData::Complex128(a.mapv($c128_op).into_shared())
+                    }
                     _ => unreachable!(),
                 };
                 NdArray::from_data(result)
@@ -50,8 +52,8 @@ macro_rules! float_only_unary {
                 }
                 let data = ensure_float(&self.data);
                 let result = match data {
-                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op)),
-                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op)),
+                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
+                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
                     _ => unreachable!(),
                 };
                 Ok(NdArray::from_data(result))
@@ -198,12 +200,12 @@ impl NdArray {
     pub fn abs(&self) -> NdArray {
         let result = match &self.data {
             ArrayData::Bool(a) => ArrayData::Bool(a.clone()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.abs())),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.abs())),
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.abs())),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.abs())),
-            ArrayData::Complex64(a) => ArrayData::Float32(a.mapv(|x| x.norm())),
-            ArrayData::Complex128(a) => ArrayData::Float64(a.mapv(|x| x.norm())),
+            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.abs()).into_shared()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.abs()).into_shared()),
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.abs()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.abs()).into_shared()),
+            ArrayData::Complex64(a) => ArrayData::Float32(a.mapv(|x| x.norm()).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Float64(a.mapv(|x| x.norm()).into_shared()),
             ArrayData::Str(_) => panic!("abs not supported for string arrays"),
         };
         NdArray::from_data(result)
@@ -212,8 +214,12 @@ impl NdArray {
     /// Return the real part of the array.
     pub fn real(&self) -> NdArray {
         match &self.data {
-            ArrayData::Complex64(a) => NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re))),
-            ArrayData::Complex128(a) => NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.re))),
+            ArrayData::Complex64(a) => {
+                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re).into_shared()))
+            }
+            ArrayData::Complex128(a) => {
+                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.re).into_shared()))
+            }
             // Real arrays are their own real part
             _ => self.clone(),
         }
@@ -222,8 +228,12 @@ impl NdArray {
     /// Return the imaginary part of the array.
     pub fn imag(&self) -> NdArray {
         match &self.data {
-            ArrayData::Complex64(a) => NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im))),
-            ArrayData::Complex128(a) => NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.im))),
+            ArrayData::Complex64(a) => {
+                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im).into_shared()))
+            }
+            ArrayData::Complex128(a) => {
+                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.im).into_shared()))
+            }
             // Real arrays have zero imaginary part
             _ => NdArray::zeros(self.shape(), self.dtype()),
         }
@@ -233,10 +243,10 @@ impl NdArray {
     pub fn conj(&self) -> NdArray {
         match &self.data {
             ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj())))
+                NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj()).into_shared()))
             }
             ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Complex128(a.mapv(|c| c.conj())))
+                NdArray::from_data(ArrayData::Complex128(a.mapv(|c| c.conj()).into_shared()))
             }
             // Conjugate of real is self
             _ => self.clone(),
@@ -246,8 +256,12 @@ impl NdArray {
     /// Return the angle (argument) of complex elements.
     pub fn angle(&self) -> NdArray {
         match &self.data {
-            ArrayData::Complex64(a) => NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()))),
-            ArrayData::Complex128(a) => NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.arg()))),
+            ArrayData::Complex64(a) => {
+                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()).into_shared()))
+            }
+            ArrayData::Complex128(a) => {
+                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.arg()).into_shared()))
+            }
             // Angle of positive real is 0
             _ => NdArray::zeros(self.shape(), DType::Float64),
         }
@@ -264,9 +278,11 @@ impl NdArray {
         let result = match data {
             ArrayData::Float32(a) => {
                 let f = factor as f32;
-                ArrayData::Float32(a.mapv(|x| (x * f).round() / f))
+                ArrayData::Float32(a.mapv(|x| (x * f).round() / f).into_shared())
             }
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| (x * factor).round() / factor)),
+            ArrayData::Float64(a) => {
+                ArrayData::Float64(a.mapv(|x| (x * factor).round() / factor).into_shared())
+            }
             _ => unreachable!(),
         };
         NdArray::from_data(result)
@@ -275,14 +291,17 @@ impl NdArray {
     /// Returns a Bool array: true where sign bit is set (negative).
     pub fn signbit(&self) -> NdArray {
         let data = match &self.data {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_sign_negative())),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_sign_negative())),
-            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x < 0)),
-            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x < 0)),
-            _ => ArrayData::Bool(ndarray::ArrayD::from_elem(
-                ndarray::IxDyn(self.shape()),
-                false,
-            )),
+            ArrayData::Float32(a) => {
+                ArrayData::Bool(a.mapv(|x| x.is_sign_negative()).into_shared())
+            }
+            ArrayData::Float64(a) => {
+                ArrayData::Bool(a.mapv(|x| x.is_sign_negative()).into_shared())
+            }
+            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x < 0).into_shared()),
+            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x < 0).into_shared()),
+            _ => ArrayData::Bool(
+                ndarray::ArrayD::from_elem(ndarray::IxDyn(self.shape()), false).into_shared(),
+            ),
         };
         NdArray::from_data(data)
     }
@@ -290,27 +309,33 @@ impl NdArray {
     /// Element-wise sign function. Returns -1, 0, or 1.
     pub fn sign(&self) -> NdArray {
         let result = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Int32(a.mapv(|x| if x { 1 } else { 0 })),
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.signum())),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.signum())),
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| {
-                if x.is_nan() {
-                    x
-                } else if x == 0.0 {
-                    0.0
-                } else {
-                    x.signum()
-                }
-            })),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| {
-                if x.is_nan() {
-                    x
-                } else if x == 0.0 {
-                    0.0
-                } else {
-                    x.signum()
-                }
-            })),
+            ArrayData::Bool(a) => ArrayData::Int32(a.mapv(|x| if x { 1 } else { 0 }).into_shared()),
+            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.signum()).into_shared()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.signum()).into_shared()),
+            ArrayData::Float32(a) => ArrayData::Float32(
+                a.mapv(|x| {
+                    if x.is_nan() {
+                        x
+                    } else if x == 0.0 {
+                        0.0
+                    } else {
+                        x.signum()
+                    }
+                })
+                .into_shared(),
+            ),
+            ArrayData::Float64(a) => ArrayData::Float64(
+                a.mapv(|x| {
+                    if x.is_nan() {
+                        x
+                    } else if x == 0.0 {
+                        0.0
+                    } else {
+                        x.signum()
+                    }
+                })
+                .into_shared(),
+            ),
             ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
                 // NumPy returns x/|x| for complex, but skip for now — return clone
                 return self.clone();
@@ -327,16 +352,16 @@ impl NdArray {
                 // NumPy: -True == -1, -False == 0 -> cast to i32 then negate
                 let cast = cast_array_data(&self.data, DType::Int32);
                 match cast {
-                    ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x)),
+                    ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x).into_shared()),
                     _ => unreachable!(),
                 }
             }
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x)),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| -x)),
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| -x)),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| -x)),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv(|x| -x)),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|x| -x)),
+            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x).into_shared()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| -x).into_shared()),
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| -x).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| -x).into_shared()),
+            ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv(|x| -x).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|x| -x).into_shared()),
             ArrayData::Str(_) => panic!("negation not supported for string arrays"),
         };
         NdArray::from_data(result)
@@ -384,34 +409,40 @@ impl NdArray {
     pub fn clip(&self, a_min: Option<f64>, a_max: Option<f64>) -> NdArray {
         let data = ensure_float(&self.data);
         let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| {
-                let mut v = x;
-                if let Some(mn) = a_min {
-                    if v < mn as f32 {
-                        v = mn as f32;
+            ArrayData::Float32(a) => ArrayData::Float32(
+                a.mapv(|x| {
+                    let mut v = x;
+                    if let Some(mn) = a_min {
+                        if v < mn as f32 {
+                            v = mn as f32;
+                        }
                     }
-                }
-                if let Some(mx) = a_max {
-                    if v > mx as f32 {
-                        v = mx as f32;
+                    if let Some(mx) = a_max {
+                        if v > mx as f32 {
+                            v = mx as f32;
+                        }
                     }
-                }
-                v
-            })),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| {
-                let mut v = x;
-                if let Some(mn) = a_min {
-                    if v < mn {
-                        v = mn;
+                    v
+                })
+                .into_shared(),
+            ),
+            ArrayData::Float64(a) => ArrayData::Float64(
+                a.mapv(|x| {
+                    let mut v = x;
+                    if let Some(mn) = a_min {
+                        if v < mn {
+                            v = mn;
+                        }
                     }
-                }
-                if let Some(mx) = a_max {
-                    if v > mx {
-                        v = mx;
+                    if let Some(mx) = a_max {
+                        if v > mx {
+                            v = mx;
+                        }
                     }
-                }
-                v
-            })),
+                    v
+                })
+                .into_shared(),
+            ),
             _ => data, // bool/int/string pass through
         };
         NdArray::from_data(result)
@@ -440,7 +471,7 @@ impl NdArray {
                     }
                     v
                 });
-                NdArray::from_data(ArrayData::Complex128(result))
+                NdArray::from_data(ArrayData::Complex128(result.into_shared()))
             }
             ArrayData::Complex64(a) => {
                 let mn32 = a_min.map(|c| num_complex::Complex::new(c.re as f32, c.im as f32));
@@ -459,7 +490,7 @@ impl NdArray {
                     }
                     v
                 });
-                NdArray::from_data(ArrayData::Complex64(result))
+                NdArray::from_data(ArrayData::Complex64(result.into_shared()))
             }
             _ => {
                 // Non-complex: convert bounds to f64 and use regular clip

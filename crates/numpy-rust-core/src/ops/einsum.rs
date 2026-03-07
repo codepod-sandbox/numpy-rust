@@ -1,6 +1,7 @@
+use crate::array_data::ArrayD;
 use std::collections::{HashMap, HashSet};
 
-use ndarray::{ArrayD, IxDyn};
+use ndarray::IxDyn;
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;

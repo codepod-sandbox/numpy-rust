@@ -1,6 +1,7 @@
+use crate::array_data::ArrayD;
 use std::cmp::Ordering;
 
-use ndarray::{ArrayD, Axis, IxDyn};
+use ndarray::{Axis, IxDyn};
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;

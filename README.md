@@ -340,11 +340,12 @@ Also: `np.polyval`, `np.polyfit`, `np.polyadd`, `np.polysub`, `np.polymul`, `np.
 - `rfft`/`irfft` are pure Python (1D only).
 - No SIMD or parallelism — single-threaded execution.
 
-### Stubs (accept calls, approximate behavior)
-- `empty()` / `empty_like()` — return zeros.
-- `seterr()` / `geterr()` / `errstate()` — no-ops.
-- `ndarray.view()` — returns a copy (no shared memory views).
-- `may_share_memory()` / `shares_memory()` — track reshape relationships via memory tags, but slices always return copies.
+### Stubs & intentional deviations
+- `empty()` / `empty_like()` — return zeros (intentionally safer than uninitialized memory).
+- `seterr()` / `geterr()` / `errstate()` — track state correctly but don't affect computation.
+- `ndarray.view()` — returns a true shared view via ArcArray (O(1), shares underlying buffer).
+- `may_share_memory()` / `shares_memory()` — detect shared buffers via ArcArray pointer equality for `view()` and `reshape()`. Slices still return copies (ndarray crate limitation).
+- Array storage uses `ArcArray` (reference-counted): `clone()` is O(1), mutation triggers copy-on-write.
 
 ---
 

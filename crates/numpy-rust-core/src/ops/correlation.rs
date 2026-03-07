@@ -1,4 +1,5 @@
-use ndarray::{ArrayD, IxDyn};
+use crate::array_data::ArrayD;
+use ndarray::IxDyn;
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
@@ -40,7 +41,11 @@ impl NdArray {
                     arr.clone()
                 } else {
                     // columns = variables → transpose so rows = variables
-                    arr.t().to_owned().into_dimensionality().unwrap()
+                    arr.t()
+                        .to_owned()
+                        .into_dimensionality()
+                        .unwrap()
+                        .into_shared()
                 }
             }
             _ => {

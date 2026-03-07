@@ -5942,17 +5942,15 @@ def any(a, axis=None, out=None, keepdims=False, where=True):
     return array(result).reshape(m.shape)
 
 def may_share_memory(a, b, max_work=None):
-    """Check if arrays may share memory (conservative: same object or same memory tag)."""
+    """Check if arrays may share memory (conservative)."""
     return shares_memory(a, b, max_work=max_work)
 
 def shares_memory(a, b, max_work=None):
-    """Check if arrays share memory via memory tag tracking."""
+    """Check if arrays share memory via ArcArray buffer pointer equality."""
     if a is b:
         return True
-    tag_a = getattr(a, '_memory_tag', -1)
-    tag_b = getattr(b, '_memory_tag', -1)
-    if tag_a >= 0 and tag_b >= 0:
-        return tag_a == tag_b
+    if isinstance(a, ndarray) and isinstance(b, ndarray) and hasattr(a, '_shares_memory_with'):
+        return a._shares_memory_with(b)
     return False
 
 def signbit(x):

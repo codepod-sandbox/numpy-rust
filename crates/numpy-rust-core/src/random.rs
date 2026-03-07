@@ -3,9 +3,10 @@
 
 #[cfg(feature = "random")]
 mod inner {
+    use crate::array_data::ArrayD;
     use std::sync::Mutex;
 
-    use ndarray::{ArrayD, IxDyn};
+    use ndarray::IxDyn;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     use rand_distr::{Distribution, Normal, Uniform};

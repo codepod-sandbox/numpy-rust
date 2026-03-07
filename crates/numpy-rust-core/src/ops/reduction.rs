@@ -1,4 +1,5 @@
-use ndarray::{ArrayD, Axis, IxDyn};
+use crate::array_data::ArrayD;
+use ndarray::{Axis, IxDyn};
 use num_complex::Complex;
 
 use crate::array_data::ArrayData;
@@ -113,12 +114,14 @@ impl NdArray {
         let result = match axis {
             None => {
                 let p: f64 = arr.iter().product();
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), p)))
+                NdArray::from_data(ArrayData::Float64(
+                    ArrayD::from_elem(IxDyn(&[]), p).into_shared(),
+                ))
             }
             Some(ax) => {
                 validate_axis(ax, self.ndim())?;
                 let prod_arr = arr.fold_axis(Axis(ax), 1.0, |&acc, &x| acc * x);
-                NdArray::from_data(ArrayData::Float64(prod_arr))
+                NdArray::from_data(ArrayData::Float64(prod_arr.into_shared()))
             }
         };
         Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
@@ -195,10 +198,9 @@ impl NdArray {
         match axis {
             None => {
                 let idx = self.reduce_all_argmin()?;
-                Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
-                    IxDyn(&[]),
-                    idx as i64,
-                ))))
+                Ok(NdArray::from_data(ArrayData::Int64(
+                    ArrayD::from_elem(IxDyn(&[]), idx as i64).into_shared(),
+                )))
             }
             Some(ax) => self.reduce_axis_argmin(ax),
         }
@@ -220,10 +222,9 @@ impl NdArray {
         match axis {
             None => {
                 let idx = self.reduce_all_argmax()?;
-                Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
-                    IxDyn(&[]),
-                    idx as i64,
-                ))))
+                Ok(NdArray::from_data(ArrayData::Int64(
+                    ArrayD::from_elem(IxDyn(&[]), idx as i64).into_shared(),
+                )))
             }
             Some(ax) => self.reduce_axis_argmax(ax),
         }
@@ -268,31 +269,31 @@ impl NdArray {
         let data = match &self.data {
             ArrayData::Bool(a) => {
                 let s: i32 = a.iter().map(|&x| x as i32).sum();
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), s))
+                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
             }
             ArrayData::Int32(a) => {
                 let s: i32 = a.iter().sum();
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), s))
+                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
             }
             ArrayData::Int64(a) => {
                 let s: i64 = a.iter().sum();
-                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), s))
+                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
             }
             ArrayData::Float32(a) => {
                 let s: f32 = a.iter().sum();
-                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), s))
+                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
             }
             ArrayData::Float64(a) => {
                 let s: f64 = a.iter().sum();
-                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), s))
+                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
             }
             ArrayData::Complex64(a) => {
                 let s: Complex<f32> = a.iter().copied().sum();
-                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), s))
+                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
             }
             ArrayData::Complex128(a) => {
                 let s: Complex<f64> = a.iter().copied().sum();
-                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), s))
+                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
             }
             ArrayData::Str(_) => unreachable!(),
         };
@@ -310,14 +311,14 @@ impl NdArray {
         let data = match &self.data {
             ArrayData::Bool(a) => {
                 let int_arr = a.mapv(|x| x as i32);
-                ArrayData::Int32(int_arr.sum_axis(ax))
+                ArrayData::Int32(int_arr.sum_axis(ax).into_shared())
             }
-            ArrayData::Int32(a) => ArrayData::Int32(a.sum_axis(ax)),
-            ArrayData::Int64(a) => ArrayData::Int64(a.sum_axis(ax)),
-            ArrayData::Float32(a) => ArrayData::Float32(a.sum_axis(ax)),
-            ArrayData::Float64(a) => ArrayData::Float64(a.sum_axis(ax)),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.sum_axis(ax)),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.sum_axis(ax)),
+            ArrayData::Int32(a) => ArrayData::Int32(a.sum_axis(ax).into_shared()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.sum_axis(ax).into_shared()),
+            ArrayData::Float32(a) => ArrayData::Float32(a.sum_axis(ax).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.sum_axis(ax).into_shared()),
+            ArrayData::Complex64(a) => ArrayData::Complex64(a.sum_axis(ax).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.sum_axis(ax).into_shared()),
             ArrayData::Str(_) => unreachable!(),
         };
         Ok(NdArray::from_data(data))
@@ -330,21 +331,21 @@ impl NdArray {
                     .iter()
                     .min()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Bool(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Bool(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Int32(a) => {
                 let v = *a
                     .iter()
                     .min()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Int64(a) => {
                 let v = *a
                     .iter()
                     .min()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Float32(a) => {
                 let v = a
@@ -352,7 +353,7 @@ impl NdArray {
                     .copied()
                     .reduce(f32::min)
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Float64(a) => {
                 let v = a
@@ -360,7 +361,7 @@ impl NdArray {
                     .copied()
                     .reduce(f64::min)
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Complex64(a) => {
                 let v = a
@@ -377,7 +378,7 @@ impl NdArray {
                         }
                     })
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Complex128(a) => {
                 let v = a
@@ -394,7 +395,7 @@ impl NdArray {
                         }
                     })
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Str(a) => {
                 let v = a
@@ -402,7 +403,7 @@ impl NdArray {
                     .min()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?
                     .clone();
-                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
         };
         Ok(NdArray::from_data(data))
@@ -415,21 +416,21 @@ impl NdArray {
                     .iter()
                     .max()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Bool(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Bool(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Int32(a) => {
                 let v = *a
                     .iter()
                     .max()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Int64(a) => {
                 let v = *a
                     .iter()
                     .max()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Float32(a) => {
                 let v = a
@@ -437,7 +438,7 @@ impl NdArray {
                     .copied()
                     .reduce(f32::max)
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Float64(a) => {
                 let v = a
@@ -445,7 +446,7 @@ impl NdArray {
                     .copied()
                     .reduce(f64::max)
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Complex64(a) => {
                 let v = a
@@ -460,7 +461,7 @@ impl NdArray {
                         }
                     })
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Complex128(a) => {
                 let v = a
@@ -475,7 +476,7 @@ impl NdArray {
                         }
                     })
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
             ArrayData::Str(a) => {
                 let v = a
@@ -483,7 +484,7 @@ impl NdArray {
                     .max()
                     .ok_or_else(|| NumpyError::ValueError("empty array".into()))?
                     .clone();
-                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v))
+                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
             }
         };
         Ok(NdArray::from_data(data))
@@ -555,7 +556,7 @@ impl NdArray {
             }
             *result_elem = min_idx as i64;
         }
-        Ok(NdArray::from_data(ArrayData::Int64(result)))
+        Ok(NdArray::from_data(ArrayData::Int64(result.into_shared())))
     }
 
     fn reduce_axis_argmax(&self, axis: usize) -> Result<NdArray> {
@@ -584,7 +585,7 @@ impl NdArray {
             }
             *result_elem = max_idx as i64;
         }
-        Ok(NdArray::from_data(ArrayData::Int64(result)))
+        Ok(NdArray::from_data(ArrayData::Int64(result.into_shared())))
     }
 
     fn reduce_axis_fold(&self, axis: usize, op: ReduceOp) -> Result<NdArray> {
@@ -597,34 +598,34 @@ impl NdArray {
         }
         let data = match (&self.data, op) {
             (ArrayData::Int32(a), ReduceOp::Min) => {
-                ArrayData::Int32(fold_axis!(a, i32::MAX, |&acc, &x| acc.min(x)))
+                ArrayData::Int32(fold_axis!(a, i32::MAX, |&acc, &x| acc.min(x)).into_shared())
             }
             (ArrayData::Int32(a), ReduceOp::Max) => {
-                ArrayData::Int32(fold_axis!(a, i32::MIN, |&acc, &x| acc.max(x)))
+                ArrayData::Int32(fold_axis!(a, i32::MIN, |&acc, &x| acc.max(x)).into_shared())
             }
             (ArrayData::Int64(a), ReduceOp::Min) => {
-                ArrayData::Int64(fold_axis!(a, i64::MAX, |&acc, &x| acc.min(x)))
+                ArrayData::Int64(fold_axis!(a, i64::MAX, |&acc, &x| acc.min(x)).into_shared())
             }
             (ArrayData::Int64(a), ReduceOp::Max) => {
-                ArrayData::Int64(fold_axis!(a, i64::MIN, |&acc, &x| acc.max(x)))
+                ArrayData::Int64(fold_axis!(a, i64::MIN, |&acc, &x| acc.max(x)).into_shared())
             }
-            (ArrayData::Float32(a), ReduceOp::Min) => {
-                ArrayData::Float32(fold_axis!(a, f32::INFINITY, |&acc, &x| acc.min(x)))
-            }
-            (ArrayData::Float32(a), ReduceOp::Max) => {
-                ArrayData::Float32(fold_axis!(a, f32::NEG_INFINITY, |&acc, &x| acc.max(x)))
-            }
-            (ArrayData::Float64(a), ReduceOp::Min) => {
-                ArrayData::Float64(fold_axis!(a, f64::INFINITY, |&acc, &x| acc.min(x)))
-            }
-            (ArrayData::Float64(a), ReduceOp::Max) => {
-                ArrayData::Float64(fold_axis!(a, f64::NEG_INFINITY, |&acc, &x| acc.max(x)))
-            }
+            (ArrayData::Float32(a), ReduceOp::Min) => ArrayData::Float32(
+                fold_axis!(a, f32::INFINITY, |&acc, &x| acc.min(x)).into_shared(),
+            ),
+            (ArrayData::Float32(a), ReduceOp::Max) => ArrayData::Float32(
+                fold_axis!(a, f32::NEG_INFINITY, |&acc, &x| acc.max(x)).into_shared(),
+            ),
+            (ArrayData::Float64(a), ReduceOp::Min) => ArrayData::Float64(
+                fold_axis!(a, f64::INFINITY, |&acc, &x| acc.min(x)).into_shared(),
+            ),
+            (ArrayData::Float64(a), ReduceOp::Max) => ArrayData::Float64(
+                fold_axis!(a, f64::NEG_INFINITY, |&acc, &x| acc.max(x)).into_shared(),
+            ),
             (ArrayData::Bool(a), ReduceOp::Min) => {
-                ArrayData::Bool(fold_axis!(a, true, |&acc, &x| acc && x))
+                ArrayData::Bool(fold_axis!(a, true, |&acc, &x| acc && x).into_shared())
             }
             (ArrayData::Bool(a), ReduceOp::Max) => {
-                ArrayData::Bool(fold_axis!(a, false, |&acc, &x| acc || x))
+                ArrayData::Bool(fold_axis!(a, false, |&acc, &x| acc || x).into_shared())
             }
             (ArrayData::Str(a), ReduceOp::Min) => {
                 // fold_axis with String requires Clone-based fold
@@ -635,7 +636,7 @@ impl NdArray {
                         acc.clone()
                     }
                 });
-                ArrayData::Str(result)
+                ArrayData::Str(result.into_shared())
             }
             (ArrayData::Str(a), ReduceOp::Max) => {
                 let result = a.fold_axis(ax, String::new(), |acc, x| {
@@ -645,49 +646,53 @@ impl NdArray {
                         acc.clone()
                     }
                 });
-                ArrayData::Str(result)
+                ArrayData::Str(result.into_shared())
             }
             (ArrayData::Complex64(a), ReduceOp::Min) => {
                 let init = num_complex::Complex::new(f32::INFINITY, 0.0);
-                ArrayData::Complex64(a.fold_axis(ax, init, |&acc, &x| {
+                let result = a.fold_axis(ax, init, |&acc, &x| {
                     if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Greater
                     {
                         acc
                     } else {
                         x
                     }
-                }))
+                });
+                ArrayData::Complex64(result.into_shared())
             }
             (ArrayData::Complex64(a), ReduceOp::Max) => {
                 let init = num_complex::Complex::new(f32::NEG_INFINITY, 0.0);
-                ArrayData::Complex64(a.fold_axis(ax, init, |&acc, &x| {
+                let result = a.fold_axis(ax, init, |&acc, &x| {
                     if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less {
                         acc
                     } else {
                         x
                     }
-                }))
+                });
+                ArrayData::Complex64(result.into_shared())
             }
             (ArrayData::Complex128(a), ReduceOp::Min) => {
                 let init = num_complex::Complex::new(f64::INFINITY, 0.0);
-                ArrayData::Complex128(a.fold_axis(ax, init, |&acc, &x| {
+                let result = a.fold_axis(ax, init, |&acc, &x| {
                     if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Greater
                     {
                         acc
                     } else {
                         x
                     }
-                }))
+                });
+                ArrayData::Complex128(result.into_shared())
             }
             (ArrayData::Complex128(a), ReduceOp::Max) => {
                 let init = num_complex::Complex::new(f64::NEG_INFINITY, 0.0);
-                ArrayData::Complex128(a.fold_axis(ax, init, |&acc, &x| {
+                let result = a.fold_axis(ax, init, |&acc, &x| {
                     if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less {
                         acc
                     } else {
                         x
                     }
-                }))
+                });
+                ArrayData::Complex128(result.into_shared())
             }
         };
         Ok(NdArray::from_data(data))

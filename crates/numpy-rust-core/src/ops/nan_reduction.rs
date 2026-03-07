@@ -1,4 +1,5 @@
-use ndarray::{ArrayD, Axis, IxDyn};
+use crate::array_data::ArrayD;
+use ndarray::{Axis, IxDyn};
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
@@ -64,7 +65,7 @@ impl NdArray {
                 validate_axis(ax, self.ndim())?;
                 let result_arr =
                     arr.map_axis(Axis(ax), |lane| lane.iter().filter(|x| !x.is_nan()).sum());
-                NdArray::from_data(ArrayData::Float64(result_arr))
+                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
             }
         };
         Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
@@ -109,7 +110,7 @@ impl NdArray {
                         sum / count as f64
                     }
                 });
-                NdArray::from_data(ArrayData::Float64(result_arr))
+                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
             }
         };
         Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
@@ -132,7 +133,7 @@ impl NdArray {
                 validate_axis(ax, self.ndim())?;
                 let result_arr =
                     arr.map_axis(Axis(ax), |lane| nanvar_slice(lane.iter().copied(), ddof));
-                NdArray::from_data(ArrayData::Float64(result_arr))
+                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
             }
         };
         Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
@@ -155,7 +156,7 @@ impl NdArray {
                 let result_arr = arr.map_axis(Axis(ax), |lane| {
                     nanvar_slice(lane.iter().copied(), ddof).sqrt()
                 });
-                NdArray::from_data(ArrayData::Float64(result_arr))
+                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
             }
         };
         Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
@@ -410,7 +411,7 @@ impl NdArray {
                         .map(|&x| if x.is_nan() { 1.0 } else { x })
                         .product()
                 });
-                NdArray::from_data(ArrayData::Float64(result_arr))
+                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
             }
         };
         Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
@@ -432,8 +433,9 @@ fn nanvar_slice(values: impl Iterator<Item = f64>, ddof: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::array_data::ArrayD;
     use crate::{ArrayData, DType, NdArray};
-    use ndarray::{ArrayD, IxDyn};
+    use ndarray::IxDyn;
 
     /// Helper to create a 1-D Float64 NdArray from a slice.
     fn arr1(vals: &[f64]) -> NdArray {

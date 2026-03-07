@@ -1,4 +1,5 @@
-use ndarray::{ArrayD, IxDyn};
+use crate::array_data::ArrayD;
+use ndarray::IxDyn;
 use num_complex::Complex;
 
 use crate::array_data::ArrayData;
@@ -131,16 +132,18 @@ pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
     let storage = dtype.storage_dtype();
     let sh = IxDyn(shape);
     let data = match storage {
-        DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, value != 0.0)),
-        DType::Int32 => ArrayData::Int32(ArrayD::from_elem(sh, value as i32)),
-        DType::Int64 => ArrayData::Int64(ArrayD::from_elem(sh, value as i64)),
-        DType::Float32 => ArrayData::Float32(ArrayD::from_elem(sh, value as f32)),
-        DType::Float64 => ArrayData::Float64(ArrayD::from_elem(sh, value)),
-        DType::Complex64 => {
-            ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(value as f32, 0.0)))
+        DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, value != 0.0).into_shared()),
+        DType::Int32 => ArrayData::Int32(ArrayD::from_elem(sh, value as i32).into_shared()),
+        DType::Int64 => ArrayData::Int64(ArrayD::from_elem(sh, value as i64).into_shared()),
+        DType::Float32 => ArrayData::Float32(ArrayD::from_elem(sh, value as f32).into_shared()),
+        DType::Float64 => ArrayData::Float64(ArrayD::from_elem(sh, value).into_shared()),
+        DType::Complex64 => ArrayData::Complex64(
+            ArrayD::from_elem(sh, Complex::new(value as f32, 0.0)).into_shared(),
+        ),
+        DType::Complex128 => {
+            ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(value, 0.0)).into_shared())
         }
-        DType::Complex128 => ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(value, 0.0))),
-        DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string())),
+        DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string()).into_shared()),
         _ => unreachable!("storage_dtype maps to canonical types"),
     };
     NdArray::from_data(data).with_declared_dtype(dtype)
@@ -149,7 +152,9 @@ pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
 /// Create a string array filled with a given string value.
 pub fn full_str(shape: &[usize], value: &str) -> NdArray {
     let sh = IxDyn(shape);
-    NdArray::from_data(ArrayData::Str(ArrayD::from_elem(sh, value.to_string())))
+    NdArray::from_data(ArrayData::Str(
+        ArrayD::from_elem(sh, value.to_string()).into_shared(),
+    ))
 }
 
 /// Create an array of zeros with the same shape and dtype as the given array.

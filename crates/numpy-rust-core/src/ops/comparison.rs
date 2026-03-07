@@ -1,5 +1,4 @@
-use ndarray::ArrayD;
-
+use crate::array_data::ArrayD;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
@@ -41,28 +40,28 @@ macro_rules! impl_eq_cmp {
                 let (a, b) = prepare_cmp(self, other)?;
                 let result: ArrayD<bool> = match (a, b) {
                     (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Float32(a), ArrayData::Float32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Str(a), ArrayData::Str(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y).into_shared()
                     }
                     _ => unreachable!("promotion ensures matching types"),
                 };
@@ -97,32 +96,32 @@ macro_rules! impl_ord_cmp {
                 let (a, b) = prepare_cmp(self, other)?;
                 let result: ArrayD<bool> = match (a, b) {
                     (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Float32(a), ArrayData::Float32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
                     }
                     (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
                         ndarray::Zip::from(&a).and(&b).map_collect(|x, y| {
                             matches!(complex_cmp(x, y), $cmp_ord)
-                        })
+                        }).into_shared()
                     }
                     (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
                         ndarray::Zip::from(&a).and(&b).map_collect(|x, y| {
                             matches!(complex_cmp(x, y), $cmp_ord)
-                        })
+                        }).into_shared()
                     }
                     (ArrayData::Str(a), ArrayData::Str(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y)
+                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y).into_shared()
                     }
                     _ => unreachable!("promotion ensures matching types"),
                 };

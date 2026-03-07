@@ -1,4 +1,5 @@
-use ndarray::{ArrayD, Axis, IxDyn, SliceInfoElem};
+use crate::array_data::ArrayD;
+use ndarray::{Axis, IxDyn, SliceInfoElem};
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
@@ -30,7 +31,8 @@ impl NdArray {
                 }
                 Ok(NdArray::from_data(ArrayData::Float64(
                     ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape"),
+                        .expect("flat vec matches shape")
+                        .into_shared(),
                 )))
             }
             Some(ax) => {
@@ -40,7 +42,7 @@ impl NdArray {
                         ndim: f.ndim(),
                     });
                 }
-                let mut out = arr.clone();
+                let mut out = arr.to_owned();
                 for mut lane in out.lanes_mut(Axis(ax)) {
                     let mut acc = 0.0_f64;
                     for elem in lane.iter_mut() {
@@ -48,7 +50,7 @@ impl NdArray {
                         *elem = acc;
                     }
                 }
-                Ok(NdArray::from_data(ArrayData::Float64(out)))
+                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
             }
         }
     }
@@ -77,7 +79,8 @@ impl NdArray {
                 }
                 Ok(NdArray::from_data(ArrayData::Float64(
                     ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape"),
+                        .expect("flat vec matches shape")
+                        .into_shared(),
                 )))
             }
             Some(ax) => {
@@ -87,7 +90,7 @@ impl NdArray {
                         ndim: f.ndim(),
                     });
                 }
-                let mut out = arr.clone();
+                let mut out = arr.to_owned();
                 for mut lane in out.lanes_mut(Axis(ax)) {
                     let mut acc = 1.0_f64;
                     for elem in lane.iter_mut() {
@@ -95,7 +98,7 @@ impl NdArray {
                         *elem = acc;
                     }
                 }
-                Ok(NdArray::from_data(ArrayData::Float64(out)))
+                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
             }
         }
     }
@@ -124,7 +127,8 @@ impl NdArray {
                 }
                 Ok(NdArray::from_data(ArrayData::Float64(
                     ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape"),
+                        .expect("flat vec matches shape")
+                        .into_shared(),
                 )))
             }
             Some(ax) => {
@@ -134,7 +138,7 @@ impl NdArray {
                         ndim: f.ndim(),
                     });
                 }
-                let mut out = arr.clone();
+                let mut out = arr.to_owned();
                 for mut lane in out.lanes_mut(Axis(ax)) {
                     let mut acc = 0.0_f64;
                     for elem in lane.iter_mut() {
@@ -144,7 +148,7 @@ impl NdArray {
                         *elem = acc;
                     }
                 }
-                Ok(NdArray::from_data(ArrayData::Float64(out)))
+                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
             }
         }
     }
@@ -173,7 +177,8 @@ impl NdArray {
                 }
                 Ok(NdArray::from_data(ArrayData::Float64(
                     ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape"),
+                        .expect("flat vec matches shape")
+                        .into_shared(),
                 )))
             }
             Some(ax) => {
@@ -183,7 +188,7 @@ impl NdArray {
                         ndim: f.ndim(),
                     });
                 }
-                let mut out = arr.clone();
+                let mut out = arr.to_owned();
                 for mut lane in out.lanes_mut(Axis(ax)) {
                     let mut acc = 1.0_f64;
                     for elem in lane.iter_mut() {
@@ -193,7 +198,7 @@ impl NdArray {
                         *elem = acc;
                     }
                 }
-                Ok(NdArray::from_data(ArrayData::Float64(out)))
+                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
             }
         }
     }
@@ -216,8 +221,8 @@ impl NdArray {
             None => {
                 // Flatten to 1-D
                 let flat: Vec<f64> = arr.iter().copied().collect();
-                let flat_arr =
-                    ArrayD::from_shape_vec(IxDyn(&[flat.len()]), flat).expect("flat vec matches");
+                let flat_arr = ndarray::ArrayD::from_shape_vec(IxDyn(&[flat.len()]), flat)
+                    .expect("flat vec matches");
                 (flat_arr, 0)
             }
             Some(ax) => {
@@ -227,12 +232,12 @@ impl NdArray {
                         ndim: f.ndim(),
                     });
                 }
-                (arr.clone(), ax)
+                (arr.to_owned(), ax)
             }
         };
 
         if n == 0 {
-            return Ok(NdArray::from_data(ArrayData::Float64(work)));
+            return Ok(NdArray::from_data(ArrayData::Float64(work.into_shared())));
         }
 
         let mut current = work;
@@ -246,13 +251,15 @@ impl NdArray {
             current = diff_once(&current, ax);
         }
 
-        Ok(NdArray::from_data(ArrayData::Float64(current)))
+        Ok(NdArray::from_data(ArrayData::Float64(
+            current.into_shared(),
+        )))
     }
 }
 
 /// Compute a single discrete difference along axis `ax`.
 /// result[..., i, ...] = arr[..., i+1, ...] - arr[..., i, ...]
-fn diff_once(arr: &ArrayD<f64>, ax: usize) -> ArrayD<f64> {
+fn diff_once(arr: &ndarray::ArrayD<f64>, ax: usize) -> ndarray::ArrayD<f64> {
     let ndim = arr.ndim();
     let len = arr.shape()[ax];
 

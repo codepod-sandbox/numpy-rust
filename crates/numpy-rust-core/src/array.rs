@@ -1,4 +1,5 @@
-use ndarray::{ArrayD, IxDyn};
+use crate::array_data::ArrayD;
+use ndarray::IxDyn;
 use num_complex::Complex;
 
 use crate::array_data::ArrayData;
@@ -36,18 +37,18 @@ impl NdArray {
         let storage = dtype.storage_dtype();
         let sh = IxDyn(shape);
         let data = match storage {
-            DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, false)),
-            DType::Int32 => ArrayData::Int32(ArrayD::zeros(sh)),
-            DType::Int64 => ArrayData::Int64(ArrayD::zeros(sh)),
-            DType::Float32 => ArrayData::Float32(ArrayD::zeros(sh)),
-            DType::Float64 => ArrayData::Float64(ArrayD::zeros(sh)),
+            DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, false).into_shared()),
+            DType::Int32 => ArrayData::Int32(ArrayD::zeros(sh).into_shared()),
+            DType::Int64 => ArrayData::Int64(ArrayD::zeros(sh).into_shared()),
+            DType::Float32 => ArrayData::Float32(ArrayD::zeros(sh).into_shared()),
+            DType::Float64 => ArrayData::Float64(ArrayD::zeros(sh).into_shared()),
             DType::Complex64 => {
-                ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(0.0f32, 0.0)))
+                ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(0.0f32, 0.0)).into_shared())
             }
-            DType::Complex128 => {
-                ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(0.0f64, 0.0)))
-            }
-            DType::Str => ArrayData::Str(ArrayD::from_elem(sh, String::new())),
+            DType::Complex128 => ArrayData::Complex128(
+                ArrayD::from_elem(sh, Complex::new(0.0f64, 0.0)).into_shared(),
+            ),
+            DType::Str => ArrayData::Str(ArrayD::from_elem(sh, String::new()).into_shared()),
             _ => unreachable!("storage_dtype maps to canonical types"),
         };
         Self {
@@ -64,17 +65,17 @@ impl NdArray {
         let storage = dtype.storage_dtype();
         let sh = IxDyn(shape);
         let data = match storage {
-            DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, true)),
-            DType::Int32 => ArrayData::Int32(ArrayD::ones(sh)),
-            DType::Int64 => ArrayData::Int64(ArrayD::ones(sh)),
-            DType::Float32 => ArrayData::Float32(ArrayD::ones(sh)),
-            DType::Float64 => ArrayData::Float64(ArrayD::ones(sh)),
+            DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, true).into_shared()),
+            DType::Int32 => ArrayData::Int32(ArrayD::ones(sh).into_shared()),
+            DType::Int64 => ArrayData::Int64(ArrayD::ones(sh).into_shared()),
+            DType::Float32 => ArrayData::Float32(ArrayD::ones(sh).into_shared()),
+            DType::Float64 => ArrayData::Float64(ArrayD::ones(sh).into_shared()),
             DType::Complex64 => {
-                ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(1.0f32, 0.0)))
+                ArrayData::Complex64(ArrayD::from_elem(sh, Complex::new(1.0f32, 0.0)).into_shared())
             }
-            DType::Complex128 => {
-                ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(1.0f64, 0.0)))
-            }
+            DType::Complex128 => ArrayData::Complex128(
+                ArrayD::from_elem(sh, Complex::new(1.0f64, 0.0)).into_shared(),
+            ),
             DType::Str => unreachable!(),
             _ => unreachable!("storage_dtype maps to canonical types"),
         };
@@ -88,7 +89,7 @@ impl NdArray {
     pub fn full_f64(shape: &[usize], value: f64) -> Self {
         let sh = IxDyn(shape);
         Self {
-            data: ArrayData::Float64(ArrayD::from_elem(sh, value)),
+            data: ArrayData::Float64(ArrayD::from_elem(sh, value).into_shared()),
             declared_dtype: None,
         }
     }
@@ -297,5 +298,20 @@ mod tests {
         let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0), Complex::new(3.0, 4.0)]);
         assert_eq!(a.dtype(), DType::Complex128);
         assert_eq!(a.size(), 2);
+    }
+
+    #[test]
+    fn test_arcarray_shared_clone() {
+        // ArrayD is now ArcArray — clone shares buffer (O(1))
+        let a: ArrayD<f64> =
+            ArrayD::from_shape_vec(IxDyn(&[6]), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let b = a.clone();
+        assert_eq!(a.as_ptr(), b.as_ptr(), "clone shares buffer");
+
+        // Mutation triggers CoW
+        let mut c = a.clone();
+        c[[0]] = 99.0;
+        assert_ne!(c.as_ptr(), a.as_ptr(), "CoW on mutation");
+        assert_eq!(a[[0]], 1.0, "original unchanged");
     }
 }

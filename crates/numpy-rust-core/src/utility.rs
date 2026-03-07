@@ -1,4 +1,5 @@
-use ndarray::{ArrayD, IxDyn};
+use crate::array_data::ArrayD;
+use ndarray::IxDyn;
 
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
@@ -48,7 +49,7 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
                 .and($xa)
                 .and($ya)
                 .map_collect(|&c, &xv, &yv| if c { xv } else { yv });
-            ArrayData::$variant(result)
+            ArrayData::$variant(result.into_shared())
         }};
     }
 
@@ -69,7 +70,7 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
                 .and(&xa)
                 .and(&ya)
                 .map_collect(|&c, xv, yv| if c { xv.clone() } else { yv.clone() });
-            ArrayData::Str(result)
+            ArrayData::Str(result.into_shared())
         }
         _ => unreachable!("promotion ensures matching types"),
     };
@@ -83,11 +84,15 @@ impl NdArray {
     /// For complex types, true if either component is NaN.
     pub fn isnan(&self) -> NdArray {
         let data = match &self.data {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_nan())),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_nan())),
-            ArrayData::Complex64(a) => ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan())),
-            ArrayData::Complex128(a) => ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan())),
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false)),
+            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
+            ArrayData::Complex64(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan()).into_shared())
+            }
+            ArrayData::Complex128(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan()).into_shared())
+            }
+            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false).into_shared()),
         };
         NdArray::from_data(data)
     }
@@ -97,15 +102,17 @@ impl NdArray {
     /// For complex types, true if both components are finite.
     pub fn isfinite(&self) -> NdArray {
         let data = match &self.data {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_finite())),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_finite())),
-            ArrayData::Complex64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_finite() && x.im.is_finite()))
-            }
-            ArrayData::Complex128(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_finite() && x.im.is_finite()))
-            }
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), true)),
+            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
+            ArrayData::Complex64(a) => ArrayData::Bool(
+                a.mapv(|x| x.re.is_finite() && x.im.is_finite())
+                    .into_shared(),
+            ),
+            ArrayData::Complex128(a) => ArrayData::Bool(
+                a.mapv(|x| x.re.is_finite() && x.im.is_finite())
+                    .into_shared(),
+            ),
+            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), true).into_shared()),
         };
         NdArray::from_data(data)
     }
@@ -114,15 +121,17 @@ impl NdArray {
     /// For integer/bool types, always returns all-false.
     pub fn isinf(&self) -> NdArray {
         let data = match &self.data {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite())),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite())),
-            ArrayData::Complex64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_infinite() || x.im.is_infinite()))
-            }
-            ArrayData::Complex128(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_infinite() || x.im.is_infinite()))
-            }
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false)),
+            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
+            ArrayData::Complex64(a) => ArrayData::Bool(
+                a.mapv(|x| x.re.is_infinite() || x.im.is_infinite())
+                    .into_shared(),
+            ),
+            ArrayData::Complex128(a) => ArrayData::Bool(
+                a.mapv(|x| x.re.is_infinite() || x.im.is_infinite())
+                    .into_shared(),
+            ),
+            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false).into_shared()),
         };
         NdArray::from_data(data)
     }
@@ -145,40 +154,52 @@ impl NdArray {
                 (ArrayData::Bool(a), DType::Int8) => {
                     let raw: Vec<i32> = a.iter().map(|&b| if b { 1 } else { 0 }).collect();
                     Ok(NdArray::from_data(ArrayData::Int32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
                     ))
                     .astype(DType::Int8))
                 }
                 (ArrayData::Int32(a), DType::Bool) if src_dt == DType::Int8 => {
                     let raw: Vec<bool> = a.iter().map(|&v| v != 0).collect();
                     Ok(NdArray::from_data(ArrayData::Bool(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
                     )))
                 }
                 // Float32 (4 bytes) <-> Int32 (4 bytes)
                 (ArrayData::Float32(a), DType::Int32) => {
                     let raw: Vec<i32> = a.iter().map(|&f| f.to_bits() as i32).collect();
                     Ok(NdArray::from_data(ArrayData::Int32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
                     )))
                 }
                 (ArrayData::Int32(a), DType::Float32) => {
                     let raw: Vec<f32> = a.iter().map(|&i| f32::from_bits(i as u32)).collect();
                     Ok(NdArray::from_data(ArrayData::Float32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
                     )))
                 }
                 // Float64 (8 bytes) <-> Int64 (8 bytes)
                 (ArrayData::Float64(a), DType::Int64) => {
                     let raw: Vec<i64> = a.iter().map(|&f| f.to_bits() as i64).collect();
                     Ok(NdArray::from_data(ArrayData::Int64(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
                     )))
                 }
                 (ArrayData::Int64(a), DType::Float64) => {
                     let raw: Vec<f64> = a.iter().map(|&i| f64::from_bits(i as u64)).collect();
                     Ok(NdArray::from_data(ArrayData::Float64(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw).unwrap(),
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
                     )))
                 }
                 _ => {
@@ -205,7 +226,15 @@ impl NdArray {
 
     /// Deep copy of the array.
     pub fn copy(&self) -> NdArray {
-        self.clone()
+        NdArray {
+            data: self.data.deep_copy(),
+            declared_dtype: self.declared_dtype,
+        }
+    }
+
+    /// Check if this array shares its underlying buffer with another.
+    pub fn shares_memory_with(&self, other: &NdArray) -> bool {
+        self.data.shares_memory_with(&other.data)
     }
 }
 
@@ -240,7 +269,9 @@ pub fn argwhere(a: &NdArray) -> NdArray {
         vec![count, ndim]
     };
     NdArray::from_data(ArrayData::Int64(
-        ArrayD::from_shape_vec(IxDyn(&result_shape), coords).expect("coords match result shape"),
+        ArrayD::from_shape_vec(IxDyn(&result_shape), coords)
+            .expect("coords match result shape")
+            .into_shared(),
     ))
 }
 
@@ -270,7 +301,9 @@ pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
         .into_iter()
         .map(|idx| {
             NdArray::from_data(ArrayData::Int64(
-                ArrayD::from_shape_vec(IxDyn(&[idx.len()]), idx).unwrap(),
+                ArrayD::from_shape_vec(IxDyn(&[idx.len()]), idx)
+                    .unwrap()
+                    .into_shared(),
             ))
         })
         .collect()
@@ -310,7 +343,7 @@ fn dot_1d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
     macro_rules! do_dot {
         ($a:expr, $b:expr, $variant:ident) => {{
             let s = $a.iter().zip($b.iter()).map(|(&x, &y)| x * y).sum();
-            ArrayData::$variant(ArrayD::from_elem(IxDyn(&[]), s))
+            ArrayData::$variant(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
         }};
     }
 
@@ -331,7 +364,7 @@ fn matmul_2d_2d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
         ($a:expr, $b:expr, $variant:ident) => {{
             let a2 = $a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
             let b2 = $b.view().into_dimensionality::<ndarray::Ix2>().unwrap();
-            let result = a2.dot(&b2).into_dyn();
+            let result = a2.dot(&b2).into_dyn().into_shared();
             ArrayData::$variant(result)
         }};
     }
@@ -353,7 +386,7 @@ fn matmul_2d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
         ($a:expr, $b:expr, $variant:ident) => {{
             let a2 = $a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
             let b1 = $b.view().into_dimensionality::<ndarray::Ix1>().unwrap();
-            let result = a2.dot(&b1).into_dyn();
+            let result = a2.dot(&b1).into_dyn().into_shared();
             ArrayData::$variant(result)
         }};
     }
@@ -391,7 +424,9 @@ pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
 
     if n == 0 {
         return Ok(NdArray::from_data(ArrayData::Float64(
-            ArrayD::from_shape_vec(IxDyn(&[0]), vec![]).unwrap(),
+            ArrayD::from_shape_vec(IxDyn(&[0]), vec![])
+                .unwrap()
+                .into_shared(),
         )));
     }
 
@@ -404,7 +439,9 @@ pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
     let vals: Vec<f64> = (0..n).map(|i| arr2[[start_r + i, start_c + i]]).collect();
 
     Ok(NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&[n]), vals).unwrap(),
+        ArrayD::from_shape_vec(IxDyn(&[n]), vals)
+            .unwrap()
+            .into_shared(),
     )))
 }
 
@@ -428,7 +465,9 @@ pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
         }
     }
     NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&[m, n]), result).unwrap(),
+        ArrayD::from_shape_vec(IxDyn(&[m, n]), result)
+            .unwrap()
+            .into_shared(),
     ))
 }
 

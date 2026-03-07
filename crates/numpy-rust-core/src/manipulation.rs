@@ -1,10 +1,9 @@
-use ndarray::{ArrayD, Axis, IxDyn, Slice};
-
 use crate::array_data::ArrayData;
 use crate::casting::cast_array_data;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
+use ndarray::{Axis, IxDyn, Slice};
 
 impl NdArray {
     /// Return a new array with the given shape. Total size must match.
@@ -22,13 +21,14 @@ impl NdArray {
             ($a:expr, $sh:expr) => {{
                 let arr = $a.clone();
                 match arr.into_shape_with_order($sh.clone()) {
-                    Ok(reshaped) => reshaped,
+                    Ok(reshaped) => reshaped.into_shared(),
                     Err(_) => {
                         // Non-contiguous layout: make a contiguous copy first
                         let contiguous = $a.as_standard_layout().into_owned();
                         contiguous
                             .into_shape_with_order($sh)
                             .expect("contiguous reshape must succeed")
+                            .into_shared()
                     }
                 }
             }};
@@ -49,14 +49,14 @@ impl NdArray {
     /// Transpose the array (reverse axes).
     pub fn transpose(&self) -> NdArray {
         let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(a.t().to_owned()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.t().to_owned()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.t().to_owned()),
-            ArrayData::Float32(a) => ArrayData::Float32(a.t().to_owned()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.t().to_owned()),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.t().to_owned()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.t().to_owned()),
-            ArrayData::Str(a) => ArrayData::Str(a.t().to_owned()),
+            ArrayData::Bool(a) => ArrayData::Bool(a.t().to_owned().into_shared()),
+            ArrayData::Int32(a) => ArrayData::Int32(a.t().to_owned().into_shared()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.t().to_owned().into_shared()),
+            ArrayData::Float32(a) => ArrayData::Float32(a.t().to_owned().into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.t().to_owned().into_shared()),
+            ArrayData::Complex64(a) => ArrayData::Complex64(a.t().to_owned().into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.t().to_owned().into_shared()),
+            ArrayData::Str(a) => ArrayData::Str(a.t().to_owned().into_shared()),
         };
         NdArray::from_data(data)
     }
@@ -80,7 +80,7 @@ impl NdArray {
         macro_rules! do_swap {
             ($arr:expr) => {{
                 let view = $arr.view().permuted_axes(perm.clone());
-                view.to_owned()
+                view.to_owned().into_shared()
             }};
         }
 
@@ -141,6 +141,7 @@ impl NdArray {
                     ($arr:expr) => {
                         $arr.slice_axis(Axis(ax), Slice::new(0, None, -1))
                             .to_owned()
+                            .into_shared()
                     };
                 }
 
@@ -323,7 +324,8 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
                 .collect();
             ArrayData::$variant(
                 ndarray::concatenate(ax, &views)
-                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?,
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?
+                    .into_shared(),
             )
         }};
     }
@@ -599,7 +601,9 @@ pub fn unique(a: &NdArray) -> NdArray {
     vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     vals.dedup();
     NdArray::from_data(ArrayData::Float64(
-        ndarray::ArrayD::from_shape_vec(IxDyn(&[vals.len()]), vals).unwrap(),
+        ndarray::ArrayD::from_shape_vec(IxDyn(&[vals.len()]), vals)
+            .unwrap()
+            .into_shared(),
     ))
 }
 
@@ -659,7 +663,9 @@ pub fn meshgrid(arrays: &[&NdArray], indexing: &str) -> Result<Vec<NdArray>> {
         }
 
         let grid = NdArray::from_data(ArrayData::Float64(
-            ArrayD::from_shape_vec(IxDyn(&output_shape), out).expect("shape matches"),
+            ndarray::ArrayD::from_shape_vec(IxDyn(&output_shape), out)
+                .expect("shape matches")
+                .into_shared(),
         ));
         result.push(grid);
     }
@@ -697,7 +703,7 @@ pub fn pad_constant(
         .collect();
 
     // Create output filled with constant
-    let mut out = ArrayD::<f64>::from_elem(IxDyn(&new_shape), constant_value);
+    let mut out = ndarray::ArrayD::<f64>::from_elem(IxDyn(&new_shape), constant_value);
 
     // Copy original data into the right position using flat iteration
     let old_shape = data.shape().to_vec();
@@ -722,7 +728,7 @@ pub fn pad_constant(
         out[IxDyn(&new_coords)] = data[IxDyn(&old_coords)];
     }
 
-    Ok(NdArray::from_data(ArrayData::Float64(out)))
+    Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
 }
 
 #[cfg(test)]

@@ -1,5 +1,3 @@
-use ndarray::ArrayD;
-
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
@@ -43,15 +41,24 @@ impl NdArray {
         let (a, b) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let r: ArrayD<bool> = ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x && y);
+                let r = ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x && y)
+                    .into_shared();
                 ArrayData::Bool(r)
             }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                ArrayData::Int32(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x & y))
-            }
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                ArrayData::Int64(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x & y))
-            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x & y)
+                    .into_shared(),
+            ),
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x & y)
+                    .into_shared(),
+            ),
             _ => unreachable!("promotion ensures matching types"),
         };
         Ok(NdArray::from_data(result))
@@ -62,15 +69,24 @@ impl NdArray {
         let (a, b) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let r: ArrayD<bool> = ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x || y);
+                let r = ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x || y)
+                    .into_shared();
                 ArrayData::Bool(r)
             }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                ArrayData::Int32(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x | y))
-            }
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                ArrayData::Int64(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x | y))
-            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x | y)
+                    .into_shared(),
+            ),
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x | y)
+                    .into_shared(),
+            ),
             _ => unreachable!("promotion ensures matching types"),
         };
         Ok(NdArray::from_data(result))
@@ -81,15 +97,24 @@ impl NdArray {
         let (a, b) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let r: ArrayD<bool> = ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x ^ y);
+                let r = ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x ^ y)
+                    .into_shared();
                 ArrayData::Bool(r)
             }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                ArrayData::Int32(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x ^ y))
-            }
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                ArrayData::Int64(ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x ^ y))
-            }
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x ^ y)
+                    .into_shared(),
+            ),
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
+                ndarray::Zip::from(&a)
+                    .and(&b)
+                    .map_collect(|&x, &y| x ^ y)
+                    .into_shared(),
+            ),
             _ => unreachable!("promotion ensures matching types"),
         };
         Ok(NdArray::from_data(result))
@@ -107,18 +132,21 @@ impl NdArray {
                 ArrayData::Int64(
                     ndarray::Zip::from(&a)
                         .and(&b)
-                        .map_collect(|&x, &y| x << (y & 63)),
+                        .map_collect(|&x, &y| x << (y & 63))
+                        .into_shared(),
                 )
             }
             (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x << (y & 31)),
+                    .map_collect(|&x, &y| x << (y & 31))
+                    .into_shared(),
             ),
             (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x << (y & 63)),
+                    .map_collect(|&x, &y| x << (y & 63))
+                    .into_shared(),
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
@@ -137,18 +165,21 @@ impl NdArray {
                 ArrayData::Int64(
                     ndarray::Zip::from(&a)
                         .and(&b)
-                        .map_collect(|&x, &y| x >> (y & 63)),
+                        .map_collect(|&x, &y| x >> (y & 63))
+                        .into_shared(),
                 )
             }
             (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x >> (y & 31)),
+                    .map_collect(|&x, &y| x >> (y & 31))
+                    .into_shared(),
             ),
             (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x >> (y & 63)),
+                    .map_collect(|&x, &y| x >> (y & 63))
+                    .into_shared(),
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
@@ -158,14 +189,18 @@ impl NdArray {
     /// Element-wise logical NOT. Returns Bool array (true where element is falsy).
     pub fn logical_not(&self) -> NdArray {
         let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x)),
-            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x == 0)),
-            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x == 0)),
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x == 0.0)),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x == 0.0)),
-            ArrayData::Complex64(a) => ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0)),
-            ArrayData::Complex128(a) => ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0)),
-            ArrayData::Str(a) => ArrayData::Bool(a.mapv(|ref x| x.is_empty())),
+            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x).into_shared()),
+            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
+            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
+            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x == 0.0).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x == 0.0).into_shared()),
+            ArrayData::Complex64(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0).into_shared())
+            }
+            ArrayData::Complex128(a) => {
+                ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0).into_shared())
+            }
+            ArrayData::Str(a) => ArrayData::Bool(a.mapv(|ref x| x.is_empty()).into_shared()),
         };
         NdArray::from_data(data)
     }
@@ -178,9 +213,9 @@ impl NdArray {
             ));
         }
         let result = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x)),
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| !x)),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| !x)),
+            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x).into_shared()),
+            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| !x).into_shared()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| !x).into_shared()),
             ArrayData::Float32(_) | ArrayData::Float64(_) => {
                 return Err(NumpyError::TypeError(
                     "bitwise NOT not supported for float arrays".into(),

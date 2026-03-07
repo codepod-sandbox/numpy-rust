@@ -1,4 +1,4 @@
-use ndarray::ArrayD;
+use crate::array_data::ArrayD;
 use num_complex::Complex;
 
 use crate::array_data::ArrayData;
@@ -30,89 +30,105 @@ pub fn cast_array_data(data: &ArrayData, target: DType) -> ArrayData {
 fn cast_to_bool(data: &ArrayData) -> ArrayD<bool> {
     match data {
         ArrayData::Bool(a) => a.clone(),
-        ArrayData::Int32(a) => a.mapv(|x| x != 0),
-        ArrayData::Int64(a) => a.mapv(|x| x != 0),
-        ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
-        ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-        ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
+        ArrayData::Int32(a) => a.mapv(|x| x != 0).into_shared(),
+        ArrayData::Int64(a) => a.mapv(|x| x != 0).into_shared(),
+        ArrayData::Float32(a) => a.mapv(|x| x != 0.0).into_shared(),
+        ArrayData::Float64(a) => a.mapv(|x| x != 0.0).into_shared(),
+        ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0).into_shared(),
+        ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0).into_shared(),
+        ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()).into_shared(),
     }
 }
 
 fn cast_to_i32(data: &ArrayData) -> ArrayD<i32> {
     match data {
-        ArrayData::Bool(a) => a.mapv(|x| x as i32),
+        ArrayData::Bool(a) => a.mapv(|x| x as i32).into_shared(),
         ArrayData::Int32(a) => a.clone(),
-        ArrayData::Int64(a) => a.mapv(|x| x as i32),
-        ArrayData::Float32(a) => a.mapv(|x| x as i32),
-        ArrayData::Float64(a) => a.mapv(|x| x as i32),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re as i32),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re as i32),
-        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i32>().expect("cannot cast string to i32")),
+        ArrayData::Int64(a) => a.mapv(|x| x as i32).into_shared(),
+        ArrayData::Float32(a) => a.mapv(|x| x as i32).into_shared(),
+        ArrayData::Float64(a) => a.mapv(|x| x as i32).into_shared(),
+        ArrayData::Complex64(a) => a.mapv(|x| x.re as i32).into_shared(),
+        ArrayData::Complex128(a) => a.mapv(|x| x.re as i32).into_shared(),
+        ArrayData::Str(a) => a
+            .mapv(|ref x| x.parse::<i32>().expect("cannot cast string to i32"))
+            .into_shared(),
     }
 }
 
 fn cast_to_i64(data: &ArrayData) -> ArrayD<i64> {
     match data {
-        ArrayData::Bool(a) => a.mapv(|x| x as i64),
-        ArrayData::Int32(a) => a.mapv(|x| x as i64),
+        ArrayData::Bool(a) => a.mapv(|x| x as i64).into_shared(),
+        ArrayData::Int32(a) => a.mapv(|x| x as i64).into_shared(),
         ArrayData::Int64(a) => a.clone(),
-        ArrayData::Float32(a) => a.mapv(|x| x as i64),
-        ArrayData::Float64(a) => a.mapv(|x| x as i64),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re as i64),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re as i64),
-        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i64>().expect("cannot cast string to i64")),
+        ArrayData::Float32(a) => a.mapv(|x| x as i64).into_shared(),
+        ArrayData::Float64(a) => a.mapv(|x| x as i64).into_shared(),
+        ArrayData::Complex64(a) => a.mapv(|x| x.re as i64).into_shared(),
+        ArrayData::Complex128(a) => a.mapv(|x| x.re as i64).into_shared(),
+        ArrayData::Str(a) => a
+            .mapv(|ref x| x.parse::<i64>().expect("cannot cast string to i64"))
+            .into_shared(),
     }
 }
 
 fn cast_to_f32(data: &ArrayData) -> ArrayD<f32> {
     match data {
-        ArrayData::Bool(a) => a.mapv(|x| if x { 1.0 } else { 0.0 }),
-        ArrayData::Int32(a) => a.mapv(|x| x as f32),
-        ArrayData::Int64(a) => a.mapv(|x| x as f32),
+        ArrayData::Bool(a) => a.mapv(|x| if x { 1.0 } else { 0.0 }).into_shared(),
+        ArrayData::Int32(a) => a.mapv(|x| x as f32).into_shared(),
+        ArrayData::Int64(a) => a.mapv(|x| x as f32).into_shared(),
         ArrayData::Float32(a) => a.clone(),
-        ArrayData::Float64(a) => a.mapv(|x| x as f32),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re as f32),
-        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<f32>().expect("cannot cast string to f32")),
+        ArrayData::Float64(a) => a.mapv(|x| x as f32).into_shared(),
+        ArrayData::Complex64(a) => a.mapv(|x| x.re).into_shared(),
+        ArrayData::Complex128(a) => a.mapv(|x| x.re as f32).into_shared(),
+        ArrayData::Str(a) => a
+            .mapv(|ref x| x.parse::<f32>().expect("cannot cast string to f32"))
+            .into_shared(),
     }
 }
 
 fn cast_to_f64(data: &ArrayData) -> ArrayD<f64> {
     match data {
-        ArrayData::Bool(a) => a.mapv(|x| if x { 1.0 } else { 0.0 }),
-        ArrayData::Int32(a) => a.mapv(|x| x as f64),
-        ArrayData::Int64(a) => a.mapv(|x| x as f64),
-        ArrayData::Float32(a) => a.mapv(|x| x as f64),
+        ArrayData::Bool(a) => a.mapv(|x| if x { 1.0 } else { 0.0 }).into_shared(),
+        ArrayData::Int32(a) => a.mapv(|x| x as f64).into_shared(),
+        ArrayData::Int64(a) => a.mapv(|x| x as f64).into_shared(),
+        ArrayData::Float32(a) => a.mapv(|x| x as f64).into_shared(),
         ArrayData::Float64(a) => a.clone(),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re as f64),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re),
-        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<f64>().expect("cannot cast string to f64")),
+        ArrayData::Complex64(a) => a.mapv(|x| x.re as f64).into_shared(),
+        ArrayData::Complex128(a) => a.mapv(|x| x.re).into_shared(),
+        ArrayData::Str(a) => a
+            .mapv(|ref x| x.parse::<f64>().expect("cannot cast string to f64"))
+            .into_shared(),
     }
 }
 
 fn cast_to_complex64(data: &ArrayData) -> ArrayD<Complex<f32>> {
     match data {
-        ArrayData::Bool(a) => a.mapv(|x| Complex::new(if x { 1.0f32 } else { 0.0 }, 0.0)),
-        ArrayData::Int32(a) => a.mapv(|x| Complex::new(x as f32, 0.0)),
-        ArrayData::Int64(a) => a.mapv(|x| Complex::new(x as f32, 0.0)),
-        ArrayData::Float32(a) => a.mapv(|x| Complex::new(x, 0.0)),
-        ArrayData::Float64(a) => a.mapv(|x| Complex::new(x as f32, 0.0)),
+        ArrayData::Bool(a) => a
+            .mapv(|x| Complex::new(if x { 1.0f32 } else { 0.0 }, 0.0))
+            .into_shared(),
+        ArrayData::Int32(a) => a.mapv(|x| Complex::new(x as f32, 0.0)).into_shared(),
+        ArrayData::Int64(a) => a.mapv(|x| Complex::new(x as f32, 0.0)).into_shared(),
+        ArrayData::Float32(a) => a.mapv(|x| Complex::new(x, 0.0)).into_shared(),
+        ArrayData::Float64(a) => a.mapv(|x| Complex::new(x as f32, 0.0)).into_shared(),
         ArrayData::Complex64(a) => a.clone(),
-        ArrayData::Complex128(a) => a.mapv(|x| Complex::new(x.re as f32, x.im as f32)),
+        ArrayData::Complex128(a) => a
+            .mapv(|x| Complex::new(x.re as f32, x.im as f32))
+            .into_shared(),
         ArrayData::Str(_) => panic!("cannot cast string to complex64"),
     }
 }
 
 fn cast_to_complex128(data: &ArrayData) -> ArrayD<Complex<f64>> {
     match data {
-        ArrayData::Bool(a) => a.mapv(|x| Complex::new(if x { 1.0f64 } else { 0.0 }, 0.0)),
-        ArrayData::Int32(a) => a.mapv(|x| Complex::new(x as f64, 0.0)),
-        ArrayData::Int64(a) => a.mapv(|x| Complex::new(x as f64, 0.0)),
-        ArrayData::Float32(a) => a.mapv(|x| Complex::new(x as f64, 0.0)),
-        ArrayData::Float64(a) => a.mapv(|x| Complex::new(x, 0.0)),
-        ArrayData::Complex64(a) => a.mapv(|x| Complex::new(x.re as f64, x.im as f64)),
+        ArrayData::Bool(a) => a
+            .mapv(|x| Complex::new(if x { 1.0f64 } else { 0.0 }, 0.0))
+            .into_shared(),
+        ArrayData::Int32(a) => a.mapv(|x| Complex::new(x as f64, 0.0)).into_shared(),
+        ArrayData::Int64(a) => a.mapv(|x| Complex::new(x as f64, 0.0)).into_shared(),
+        ArrayData::Float32(a) => a.mapv(|x| Complex::new(x as f64, 0.0)).into_shared(),
+        ArrayData::Float64(a) => a.mapv(|x| Complex::new(x, 0.0)).into_shared(),
+        ArrayData::Complex64(a) => a
+            .mapv(|x| Complex::new(x.re as f64, x.im as f64))
+            .into_shared(),
         ArrayData::Complex128(a) => a.clone(),
         ArrayData::Str(_) => panic!("cannot cast string to complex128"),
     }
@@ -120,25 +136,29 @@ fn cast_to_complex128(data: &ArrayData) -> ArrayD<Complex<f64>> {
 
 fn cast_to_str(data: &ArrayData) -> ArrayD<String> {
     match data {
-        ArrayData::Bool(a) => a.mapv(|x| x.to_string()),
-        ArrayData::Int32(a) => a.mapv(|x| x.to_string()),
-        ArrayData::Int64(a) => a.mapv(|x| x.to_string()),
-        ArrayData::Float32(a) => a.mapv(|x| x.to_string()),
-        ArrayData::Float64(a) => a.mapv(|x| x.to_string()),
-        ArrayData::Complex64(a) => a.mapv(|x| {
-            if x.im >= 0.0 {
-                format!("({}+{}j)", x.re, x.im)
-            } else {
-                format!("({}{}j)", x.re, x.im)
-            }
-        }),
-        ArrayData::Complex128(a) => a.mapv(|x| {
-            if x.im >= 0.0 {
-                format!("({}+{}j)", x.re, x.im)
-            } else {
-                format!("({}{}j)", x.re, x.im)
-            }
-        }),
+        ArrayData::Bool(a) => a.mapv(|x| x.to_string()).into_shared(),
+        ArrayData::Int32(a) => a.mapv(|x| x.to_string()).into_shared(),
+        ArrayData::Int64(a) => a.mapv(|x| x.to_string()).into_shared(),
+        ArrayData::Float32(a) => a.mapv(|x| x.to_string()).into_shared(),
+        ArrayData::Float64(a) => a.mapv(|x| x.to_string()).into_shared(),
+        ArrayData::Complex64(a) => a
+            .mapv(|x| {
+                if x.im >= 0.0 {
+                    format!("({}+{}j)", x.re, x.im)
+                } else {
+                    format!("({}{}j)", x.re, x.im)
+                }
+            })
+            .into_shared(),
+        ArrayData::Complex128(a) => a
+            .mapv(|x| {
+                if x.im >= 0.0 {
+                    format!("({}+{}j)", x.re, x.im)
+                } else {
+                    format!("({}{}j)", x.re, x.im)
+                }
+            })
+            .into_shared(),
         ArrayData::Str(a) => a.clone(),
     }
 }

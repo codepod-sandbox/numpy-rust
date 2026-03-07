@@ -1,19 +1,29 @@
-use ndarray::ArrayD;
+use ndarray::{ArcArray, IxDyn};
 use num_complex::Complex;
 
 use crate::dtype::DType;
 
-/// Type-erased array storage. Each variant holds a concrete `ArrayD<T>`.
+/// Shared (reference-counted) dynamic-dimensional array.
+/// `clone()` is O(1) (Arc refcount increment). Mutation triggers copy-on-write.
+/// Re-exported as `ArrayD` so existing code compiles without changes.
+pub type ArrayD<T> = ArcArray<T, IxDyn>;
+
+/// Alias for clarity in contexts where sharing semantics matter.
+pub type SharedArrayD<T> = ArrayD<T>;
+
+/// Type-erased array storage. Each variant holds a shared `ArcArray<T, IxDyn>`.
+/// Clone is O(1) — arrays share their underlying buffer via Arc.
+/// Mutation automatically triggers copy-on-write when the buffer is shared.
 #[derive(Debug, Clone)]
 pub enum ArrayData {
-    Bool(ArrayD<bool>),
-    Int32(ArrayD<i32>),
-    Int64(ArrayD<i64>),
-    Float32(ArrayD<f32>),
-    Float64(ArrayD<f64>),
-    Complex64(ArrayD<Complex<f32>>),
-    Complex128(ArrayD<Complex<f64>>),
-    Str(ArrayD<String>),
+    Bool(SharedArrayD<bool>),
+    Int32(SharedArrayD<i32>),
+    Int64(SharedArrayD<i64>),
+    Float32(SharedArrayD<f32>),
+    Float64(SharedArrayD<f64>),
+    Complex64(SharedArrayD<Complex<f32>>),
+    Complex128(SharedArrayD<Complex<f64>>),
+    Str(SharedArrayD<String>),
 }
 
 impl ArrayData {
@@ -58,6 +68,39 @@ impl ArrayData {
 
     pub fn size(&self) -> usize {
         self.shape().iter().product()
+    }
+
+    /// Deep copy: creates an independent copy of the data (not just Arc refcount++).
+    pub fn deep_copy(&self) -> Self {
+        match self {
+            ArrayData::Bool(a) => ArrayData::Bool(a.to_owned().into_shared()),
+            ArrayData::Int32(a) => ArrayData::Int32(a.to_owned().into_shared()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.to_owned().into_shared()),
+            ArrayData::Float32(a) => ArrayData::Float32(a.to_owned().into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.to_owned().into_shared()),
+            ArrayData::Complex64(a) => ArrayData::Complex64(a.to_owned().into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.to_owned().into_shared()),
+            ArrayData::Str(a) => ArrayData::Str(a.to_owned().into_shared()),
+        }
+    }
+
+    /// Check if two ArrayData share the same underlying buffer (Arc pointer equality).
+    pub fn shares_memory_with(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ArrayData::Bool(a), ArrayData::Bool(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            (ArrayData::Float32(a), ArrayData::Float32(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            (ArrayData::Float64(a), ArrayData::Float64(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
+                std::ptr::eq(a.as_ptr(), b.as_ptr())
+            }
+            (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
+                std::ptr::eq(a.as_ptr(), b.as_ptr())
+            }
+            (ArrayData::Str(a), ArrayData::Str(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            _ => false, // different dtypes can't share memory
+        }
     }
 }
 

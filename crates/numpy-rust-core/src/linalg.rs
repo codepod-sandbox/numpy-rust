@@ -3,8 +3,9 @@
 
 #[cfg(feature = "linalg")]
 mod inner {
+    use crate::array_data::ArrayD;
     use nalgebra::DMatrix;
-    use ndarray::{ArrayD, IxDyn};
+    use ndarray::IxDyn;
 
     use crate::array_data::ArrayData;
     use crate::casting::cast_array_data;

@@ -3,10 +3,11 @@
 
 #[cfg(feature = "fft")]
 mod inner {
+    use crate::array_data::ArrayD;
     use rustfft::num_complex::Complex;
     use rustfft::FftPlanner;
 
-    use ndarray::{ArrayD, IxDyn};
+    use ndarray::IxDyn;
 
     use crate::array_data::ArrayData;
     use crate::casting::cast_array_data;

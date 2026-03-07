@@ -1,8 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
-
-/// Global counter for allocating unique memory tags.
-static MEMORY_TAG_COUNTER: AtomicI64 = AtomicI64::new(0);
 
 use rustpython_vm as vm;
 use vm::atomic_func;
@@ -23,8 +20,6 @@ pub struct PyNdArray {
     data: RwLock<NdArray>,
     is_fortran: AtomicBool,
     is_aligned: AtomicBool,
-    /// Memory sharing tag: -1 = untagged (fresh copy), >= 0 = shares memory with same tag.
-    memory_tag: AtomicI64,
 }
 
 impl Clone for PyNdArray {
@@ -33,7 +28,6 @@ impl Clone for PyNdArray {
             data: RwLock::new(self.data.read().unwrap().clone()),
             is_fortran: AtomicBool::new(self.is_fortran.load(Ordering::Relaxed)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
-            memory_tag: AtomicI64::new(-1),
         }
     }
 }
@@ -44,7 +38,6 @@ impl PyNdArray {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(false),
             is_aligned: AtomicBool::new(true),
-            memory_tag: AtomicI64::new(-1),
         }
     }
 
@@ -53,19 +46,7 @@ impl PyNdArray {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(true),
             is_aligned: AtomicBool::new(true),
-            memory_tag: AtomicI64::new(-1),
         }
-    }
-
-    /// Return this array's memory tag, allocating a new one if untagged.
-    fn ensure_memory_tag(&self) -> i64 {
-        let tag = self.memory_tag.load(Ordering::Relaxed);
-        if tag >= 0 {
-            return tag;
-        }
-        let new_tag = MEMORY_TAG_COUNTER.fetch_add(1, Ordering::SeqCst);
-        self.memory_tag.store(new_tag, Ordering::Relaxed);
-        new_tag
     }
 
     pub fn inner(&self) -> std::sync::RwLockReadGuard<'_, NdArray> {
@@ -703,25 +684,24 @@ impl PyNdArray {
         let total = self.data.read().unwrap().size();
         let sh = resolve_shape(&raw, total, vm)?;
 
-        // Perform the actual reshape (always copies data in our implementation)
-        let result_data = self
+        // Perform the actual reshape
+        let mut result_data = self
             .data
             .read()
             .unwrap()
             .reshape(&sh)
             .map_err(|e| numpy_err(e, vm))?;
+
+        // Force deep copy when: copy=True explicitly, or order change requires copy
+        if copy_is_true || !would_be_view {
+            result_data = result_data.copy();
+        }
+
         let result = PyNdArray {
             data: RwLock::new(result_data),
             is_fortran: AtomicBool::new(order_str == "F" || (order_str == "A" && is_f)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
-            memory_tag: AtomicI64::new(-1),
         };
-
-        // Propagate memory tag unless copy=True (forced copy has no shared tag)
-        if !copy_is_true && would_be_view {
-            let tag = self.ensure_memory_tag();
-            result.memory_tag.store(tag, Ordering::Relaxed);
-        }
 
         Ok(result)
     }
@@ -820,7 +800,8 @@ impl PyNdArray {
         Ok(PyNdArray::from_core(inner.astype(dt)))
     }
 
-    /// Simplified view() – returns a copy (true memory views not supported).
+    /// Returns a view of the array sharing the same underlying buffer.
+    /// Clone is O(1) via ArcArray reference counting.
     /// When passed a Python type (subclass of ndarray), returns an instance of that type.
     #[pymethod]
     fn view(
@@ -837,7 +818,6 @@ impl PyNdArray {
                     data: RwLock::new(data.clone()),
                     is_fortran: AtomicBool::new(is_f),
                     is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
-                    memory_tag: AtomicI64::new(-1),
                 };
                 return Ok(result.into_ref_with_type(vm, py_type)?.into());
             }
@@ -2218,15 +2198,12 @@ impl PyNdArray {
         self.is_aligned.store(false, Ordering::Relaxed);
     }
 
-    /// Python-readable memory tag (-1 = untagged, >= 0 = shares with same tag).
-    #[pygetset]
-    fn _memory_tag(&self) -> i64 {
-        self.memory_tag.load(Ordering::Relaxed)
-    }
-
+    /// Check if this array shares its underlying buffer with another ndarray.
     #[pymethod]
-    fn _set_memory_tag(&self, tag: i64) {
-        self.memory_tag.store(tag, Ordering::Relaxed);
+    fn _shares_memory_with(&self, other: PyRef<PyNdArray>) -> bool {
+        let a = self.data.read().unwrap();
+        let b = other.data.read().unwrap();
+        a.shares_memory_with(&b)
     }
 
     #[pygetset]
