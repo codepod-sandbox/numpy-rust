@@ -10946,6 +10946,12 @@ def fabs(x):
 class ufunc:
     """Universal function (minimal subset of NumPy's ufunc protocol)."""
     def __init__(self, func, name='', nin=0, nout=0, identity=None, doc=None, signature=None, types=None):
+        # Allow construction like np.ufunc('add', 2, 1)
+        if isinstance(func, str):
+            name = func
+            def _not_callable(*args, **kwargs):
+                raise NotImplementedError("ufunc '{}' is not callable".format(name))
+            func = _not_callable
         self._func = func
         self.__name__ = name or getattr(func, '__name__', 'ufunc')
         self.nin = nin
