@@ -10948,6 +10948,10 @@ class ufunc:
     def __init__(self, func, name='', nin=0, nout=0, identity=None, doc=None, signature=None, types=None):
         # Allow construction like np.ufunc('add', 2, 1)
         if isinstance(func, str):
+            if isinstance(name, int) and isinstance(nin, int) and nout == 0:
+                nout = nin
+                nin = name
+                name = func
             name = func
             def _not_callable(*args, **kwargs):
                 raise NotImplementedError("ufunc '{}' is not callable".format(name))
