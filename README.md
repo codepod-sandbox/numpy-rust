@@ -28,15 +28,17 @@ The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the 
 
 ---
 
-## Compatibility snapshot (`2026-03-07`)
+## Compatibility snapshot (`2026-03-10`)
 
 | Suite | Result |
 |---|---|
 | `cargo test -q` | `426 passed, 0 failed` |
 | `./tests/python/run_tests.sh` | `1,106 passed, 0 failed` |
 | `./target/release/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,207 passed, 4 expected failures (xfail), 0 unexpected failures` |
+| `./target/release/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci` | `43 passed, 405 expected failures (xfail), 54 skipped, 0 unexpected failures` |
 
 The 4 expected failures are architectural edge cases: overlapping `clip(out=)` with shared memory views (1), NEP50 float32/Python-float promotion (1), C-extension custom dtypes (1), and an upstream pytest-level xfail for NaT propagation in `clip` (1).
+The ufunc upstream suite currently has 405 expected failures, primarily due to missing low-level ufunc APIs (`resolve_dtypes`, `.at`, gufunc core signature handling), C-extension test helpers, and full dtype casting rules.
 
 The project goal is library compatibility first (pandas/sklearn/scipy-style usage), then performance. Work is prioritized toward API correctness, dtype semantics, and edge-case behavior over raw speed.
 
@@ -421,6 +423,7 @@ python -m pytest tests/numpy_compat/ -q
 
 # NumPy compat tests in RustPython (tracks known gaps via xfail list)
 ./target/debug/numpy-python tests/numpy_compat/run_compat.py --ci
+./target/debug/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci
 ```
 
 ### CI
