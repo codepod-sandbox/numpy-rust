@@ -1628,6 +1628,28 @@ class TestNonzero:
 
 
 
+class TestRFFT:
+    def test_rfft_irfft_roundtrip_2d(self):
+        x = np.arange(12, dtype=float).reshape(3, 4)
+        y = np.fft.rfft(x)
+        z = np.fft.irfft(y, n=x.shape[-1])
+        assert_array_almost_equal(z, x)
+
+    def test_rfft_irfft_roundtrip_axis0(self):
+        x = np.arange(12, dtype=float).reshape(3, 4)
+        y = np.fft.rfft(x, axis=0)
+        z = np.fft.irfft(y, n=x.shape[0], axis=0)
+        assert_array_almost_equal(z, x)
+
+    def test_rfft_irfft_n_parameter(self):
+        x = np.arange(6, dtype=float).reshape(2, 3)
+        y = np.fft.rfft(x, n=5)
+        z = np.fft.irfft(y, n=5)
+        expected = np.zeros((2, 5))
+        expected[:, :3] = x
+        assert_array_almost_equal(z, expected)
+
+
 class TestIndex:
     def test_boolean(self):
         a = rand(3, 5, 8)

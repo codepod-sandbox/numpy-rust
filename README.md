@@ -337,7 +337,7 @@ Also: `np.polyval`, `np.polyfit`, `np.polyadd`, `np.polysub`, `np.polymul`, `np.
 ### Performance
 - `einsum` uses brute-force iteration. Fine for small-to-medium arrays.
 - FFT 2D/nD implemented via iterated 1D transforms.
-- `rfft`/`irfft` are pure Python (1D only).
+- `rfft`/`irfft` are pure Python.
 - No SIMD or parallelism — single-threaded execution.
 
 ### Stubs & intentional deviations
@@ -355,12 +355,9 @@ These items are not yet implemented but may be needed for full compatibility:
 
 ### Would break some code
 - **Structured/record arrays** — no compound dtypes or field access.
-- **`np.ufunc` protocol** — no universal function objects (`.reduce()`, `.accumulate()`, `.outer()` work via `_UfuncWithReduce` wrapper for `maximum`, `minimum`, `add`, `multiply`).
-- **`rfft`/`irfft` for nD** — currently 1D only.
 
 ### Missing submodules
 - **`np.polynomial.chebyshev`**, **`hermite`**, **`laguerre`**, **`legendre`** — only basic polynomial operations.
-- **`np.fft.hfft`/`ihfft`** — Hermitian FFT.
 
 ### Edge cases
 - Multi-axis fancy indexing (`a[[0,1], [2,3]]`) — not supported.
@@ -377,8 +374,8 @@ These items are not yet implemented but may be needed for full compatibility:
 |-------|-------|-------------|
 | Rust unit tests | 426 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
 | Python vendored tests | 1,106 | Comprehensive integration: all functions, edge cases, regressions |
-| NumPy compat tests | 1,207 | Upstream NumPy `test_numeric.py` run via RustPython (4 xfails) |
-| **Total** | **2,739** | |
+| NumPy compat tests | 1,218 | Upstream NumPy `test_numeric.py` run via RustPython (4 xfails) |
+| **Total** | **2,750** | |
 
 ---
 

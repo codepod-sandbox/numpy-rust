@@ -124,6 +124,15 @@ class _ObjectArray:
         return _ObjectArray(list(self._data), dtype_str, shape=self._shape, is_fortran=self._is_fortran)
     def flatten(self): return self
     def ravel(self): return self
+    def reshape(self, shape):
+        if isinstance(shape, int):
+            shape = (shape,)
+        n = 1
+        for s in shape:
+            n *= s
+        if n != len(self._data):
+            raise ValueError("cannot reshape array of size {} into shape {}".format(len(self._data), shape))
+        return _ObjectArray(list(self._data), self._dtype, shape=shape, is_fortran=self._is_fortran, itemsize=self._itemsize)
     def tolist(self): return list(self._data)
     def all(self): return all(self._data)
     def any(self): return any(self._data)
@@ -170,11 +179,24 @@ class _ObjectArray:
                     except Exception:
                         return _ObjectArray(flat, field_dtype)
             raise IndexError("field %r not found in structured dtype" % key)
+        if isinstance(key, tuple):
+            _ball = __import__("builtins").all
+            if _ball(isinstance(k, int) for k in key):
+                idx = self._flat_index(key)
+                return self._data[idx]
+            raise TypeError("tuple indices with slices are not supported for object arrays")
         result = self._data[key]
         if isinstance(key, slice):
             return _ObjectArray(result, self._dtype)
         return result
     def __setitem__(self, key, value):
+        if isinstance(key, tuple):
+            _ball = __import__("builtins").all
+            if _ball(isinstance(k, int) for k in key):
+                idx = self._flat_index(key)
+                self._data[idx] = value
+                return
+            raise TypeError("tuple indices with slices are not supported for object arrays")
         if isinstance(key, slice):
             if isinstance(value, (list, tuple)):
                 self._data[key] = value
@@ -184,6 +206,21 @@ class _ObjectArray:
                 self._data[key] = [value] * len(range(*key.indices(len(self._data))))
         else:
             self._data[key] = value
+    def _flat_index(self, idx):
+        if len(idx) != self._ndim:
+            raise IndexError("index has wrong number of dimensions")
+        flat = 0
+        mult = 1
+        for i in range(self._ndim - 1, -1, -1):
+            k = idx[i]
+            dim = self._shape[i]
+            if k < 0:
+                k += dim
+            if k < 0 or k >= dim:
+                raise IndexError("index out of bounds")
+            flat += k * mult
+            mult *= dim
+        return flat
     def _to_bool_array(self, data):
         return _native.array([1.0 if x else 0.0 for x in data]).astype("bool")
     def __eq__(self, other):
@@ -461,6 +498,8 @@ _DTYPE_CHAR_MAP = {
     '>U1': 'str', '>U2': 'str', '>U4': 'str',
     # Python type class names for bytes
     "<class 'bytes'>": 'bytes',
+    # Object dtype aliases
+    'O': 'object', '|O': 'object',
     # Byte string aliases (all map to 'bytes')
     '|S0': 'bytes', '|S1': 'bytes', '|S2': 'bytes',
     '|S4': 'bytes', '|S8': 'bytes',
@@ -520,19 +559,44 @@ def _normalize_dtype(dt):
     # Handle arbitrary byte string dtypes |Sn -> 'bytes'
     if s.startswith('|S') and len(s) > 2 and s[2:].isdigit():
         return 'bytes'
+    # Handle arbitrary byte string dtypes Sn -> 'bytes'
+    if s.startswith('S') and len(s) > 1 and s[1:].isdigit():
+        return 'bytes'
+    if s == 'S':
+        return 'bytes'
     # Handle arbitrary void dtypes |Vn -> 'void'
     if s.startswith('|V') and len(s) > 2 and s[2:].isdigit():
+        return 'void'
+    # Handle arbitrary void dtypes Vn -> 'void'
+    if s.startswith('V') and len(s) > 1 and s[1:].isdigit():
+        return 'void'
+    if s == 'V':
         return 'void'
     # Handle arbitrary unicode string dtypes <Un, Un -> 'str'
     if (s.startswith('<U') or s.startswith('>U') or s.startswith('U')) and len(s) > 1:
         suffix = s[2:] if s[0] in '<>' else s[1:]
         if suffix.isdigit():
             return 'str'
+    if s == 'U':
+        return 'str'
     # Temporal dtypes: return as-is (handled by _array_core and dtype class)
     if _is_temporal_dtype(s):
         _, _, canonical, _ = _temporal_dtype_info(s)
         return canonical
     return s
+
+def _normalize_dtype_with_size(dt):
+    """Normalize dtype, preserving size for string/void dtype objects."""
+    if isinstance(dt, dtype):
+        if getattr(dt, 'kind', None) == 'S':
+            return 'S{}'.format(dt.itemsize)
+        if getattr(dt, 'kind', None) == 'U':
+            chars = dt.itemsize // 4 if dt.itemsize else 0
+            return 'U{}'.format(chars)
+        if getattr(dt, 'kind', None) == 'V':
+            return 'V{}'.format(dt.itemsize)
+        return _normalize_dtype(str(dt))
+    return _normalize_dtype(str(dt)) if dt is not None else None
 
 def _make_temporal_array(data, dtype_str):
     """Create an _ObjectArray with datetime64/timedelta64 elements.
@@ -639,7 +703,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             if isinstance(data, (list, tuple)):
                 return _native.array([str(x) for x in data])
             return _native.array(data)
-        if dt == "object" or "," in dt:
+        if dt == "object" or dt == "void" or dt.startswith("V") or "," in dt:
             return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], dt)
     if isinstance(data, _ObjectArray):
         return data.copy() if copy else data
@@ -846,12 +910,49 @@ def _apply_order(arr, order):
 
 def _unsupported_numeric_dtype(dt):
     """True if this dtype can't be handled by the Rust backend."""
-    return dt in ('bytes', 'void')
+    if dt in ('bytes', 'str', 'void', 'S1'):
+        return True
+    if isinstance(dt, str):
+        s = dt.lstrip('<>=|')
+        if s.startswith('V'):
+            return True
+        if s.startswith('S') or s.startswith('U'):
+            return True
+    return False
+
+def _string_dtype_info(dt):
+    """Return (kind, itemsize) for string/bytes dtype strings, else (None, None)."""
+    if not isinstance(dt, str):
+        return None, None
+    s = dt.lstrip('<>=|')
+    if s.startswith('S'):
+        n = s[1:]
+        if n.isdigit():
+            return 'bytes', int(n)
+        if s == 'S':
+            return 'bytes', 1
+    if s.startswith('U'):
+        n = s[1:]
+        if n.isdigit():
+            return 'str', 4 * int(n)
+        if s == 'U':
+            return 'str', 4
+    if s == 'str':
+        return 'str', 4
+    if s == 'bytes':
+        return 'bytes', 1
+    if s.startswith('V'):
+        n = s[1:]
+        if n.isdigit():
+            return 'void', int(n)
+        if s == 'V':
+            return 'void', 0
+    return None, None
 
 def zeros(shape, dtype=None, order="C", like=None):
     if isinstance(shape, int):
         shape = (shape,)
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -861,7 +962,11 @@ def zeros(shape, dtype=None, order="C", like=None):
         n = 1
         for s in shape:
             n *= s
-        return _apply_order(_ObjectArray([0] * n, dt, shape=shape), order)
+        kind, itemsize = _string_dtype_info(dt)
+        if kind == 'void':
+            return _apply_order(_make_void_result(shape, dt, 0, itemsize=itemsize), order)
+        fill = '' if kind == 'str' else b'' if kind == 'bytes' else 0
+        return _apply_order(_ObjectArray([fill] * n, dt, shape=shape, itemsize=itemsize), order)
     if dt is not None:
         return _apply_order(_native.zeros(shape, dt), order)
     return _apply_order(_native.zeros(shape), order)
@@ -869,7 +974,7 @@ def zeros(shape, dtype=None, order="C", like=None):
 def ones(shape, dtype=None, order="C", like=None):
     if isinstance(shape, int):
         shape = (shape,)
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -879,7 +984,11 @@ def ones(shape, dtype=None, order="C", like=None):
         n = 1
         for s in shape:
             n *= s
-        return _apply_order(_ObjectArray([1] * n, dt, shape=shape), order)
+        kind, itemsize = _string_dtype_info(dt)
+        if kind == 'void':
+            return _apply_order(_make_void_result(shape, dt, 1, itemsize=itemsize), order)
+        fill = '1' if kind == 'str' else b'1' if kind == 'bytes' else 1
+        return _apply_order(_ObjectArray([fill] * n, dt, shape=shape, itemsize=itemsize), order)
     if dt is not None:
         return _apply_order(_native.ones(shape, dt), order)
     return _apply_order(_native.ones(shape), order)
@@ -1105,6 +1214,17 @@ class _NumpyComplexScalar(complex):
     def size(self):
         return 1
 
+# Void scalar placeholder
+class _NumpyVoidScalar:
+    def __init__(self, value=None):
+        self._value = value
+        self._numpy_dtype_name = "void"
+        self._is_void = True
+    def __bool__(self):
+        return False
+    def __repr__(self):
+        return "numpy.void()"
+
 
 # Metaclass for scalar type classes so the CLASS itself has custom __str__, __eq__, __hash__
 class _ScalarTypeMeta(type):
@@ -1136,6 +1256,8 @@ class _ScalarTypeMeta(type):
             return _NumpyFloatScalar(base_value, scalar_name)
         if scalar_name in ('complex64', 'complex128'):
             return _NumpyComplexScalar(base_value, scalar_name)
+        if scalar_name == 'void':
+            return _NumpyVoidScalar(value)
         return base_value
 
     def __repr__(cls):
@@ -1849,10 +1971,11 @@ def _detect_builtin_str_bytes(dtype):
         return 'bytes'
     return None
 
-def _make_str_bytes_result(shape, dtype_kind, fill_value=None):
+def _make_str_bytes_result(shape, dtype_kind, fill_value=None, itemsize=None):
     """Create an _ObjectArray with correct strides for dtype=str or dtype=bytes."""
     # itemsize: Unicode char = 4 bytes, byte = 1 byte
-    itemsize = 4 if dtype_kind == 'str' else 1
+    if itemsize is None:
+        itemsize = 4 if dtype_kind == 'str' else 1
     n = 1
     for s in shape:
         n *= s
@@ -1860,10 +1983,18 @@ def _make_str_bytes_result(shape, dtype_kind, fill_value=None):
     dt_name = 'str' if dtype_kind == 'str' else 'bytes'
     return _ObjectArray(data, dt_name, shape=shape, itemsize=itemsize)
 
+def _make_void_result(shape, dtype_str, fill_value=0, itemsize=None):
+    """Create an _ObjectArray for void/record dtypes (no field support)."""
+    n = 1
+    for s in shape:
+        n *= s
+    data = [_NumpyVoidScalar(fill_value)] * n
+    return _ObjectArray(data, dtype_str, shape=shape, itemsize=itemsize)
+
 def full(shape, fill_value, dtype=None, order="C"):
     if isinstance(shape, int):
         shape = (shape,)
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -1873,14 +2004,17 @@ def full(shape, fill_value, dtype=None, order="C"):
         n = 1
         for s in shape:
             n *= s
+        kind, itemsize = _string_dtype_info(dt)
+        if kind == 'void':
+            return _apply_order(_make_void_result(shape, dt, fill_value, itemsize=itemsize), order)
         # Coerce fill_value to appropriate type for bytes/str dtypes
-        if dt == 'bytes' and not isinstance(fill_value, (bytes, str)):
+        if kind == 'bytes' and not isinstance(fill_value, (bytes, str)):
             fill_val = str(fill_value)
-        elif dt == 'str' and not isinstance(fill_value, str):
+        elif kind == 'str' and not isinstance(fill_value, str):
             fill_val = str(fill_value)
         else:
             fill_val = fill_value
-        return _apply_order(_ObjectArray([fill_val] * n, dt, shape=shape), order)
+        return _apply_order(_ObjectArray([fill_val] * n, dt, shape=shape, itemsize=itemsize), order)
     if dt is not None:
         return _apply_order(_native.full(shape, float(fill_value), dt), order)
     return _apply_order(_native.full(shape, float(fill_value)), order)
@@ -1895,8 +2029,13 @@ def full_like(a, fill_value, dtype=None, order="K", subok=True, shape=None):
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk, fill_value), a, order)
     # Determine effective dtype
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, fill_value, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, fill_value, itemsize=itemsize), a, order)
     # OverflowError: check if fill_value (plain Python int) fits in target integer dtype
     if type(fill_value) is int:
         _int_dtypes_info = {
@@ -1925,8 +2064,13 @@ def zeros_like(a, dtype=None, order="K", subok=True, shape=None):
     sk = _detect_builtin_str_bytes(dtype)
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk), a, order)
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, 0, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, itemsize=itemsize), a, order)
     arr = _native.zeros(s, dt)
     arr = _like_order(arr, a, order)
     if subok and type(a) is not ndarray and isinstance(a, ndarray):
@@ -1943,8 +2087,13 @@ def ones_like(a, dtype=None, order="K", subok=True, shape=None):
     sk = _detect_builtin_str_bytes(dtype)
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk, 1), a, order)
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, 1, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, 1, itemsize=itemsize), a, order)
     arr = _native.ones(s, dt)
     arr = _like_order(arr, a, order)
     if subok and type(a) is not ndarray and isinstance(a, ndarray):
@@ -1961,8 +2110,13 @@ def empty_like(a, dtype=None, order="K", subok=True, shape=None):
     sk = _detect_builtin_str_bytes(dtype)
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk), a, order)
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, 0, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, itemsize=itemsize), a, order)
     arr = _native.zeros(s, dt)
     arr = _like_order(arr, a, order)
     if subok and type(a) is not ndarray and isinstance(a, ndarray):
@@ -4120,7 +4274,7 @@ def promote_types(type1, type2):
     t1_meta = getattr(type1, 'metadata', None)
     t2_meta = getattr(type2, 'metadata', None)
 
-    # Fast-path: identical types -> return directly (preserves metadata for V, O, etc.)
+    # Fast-path: identical types -> return directly (preserves metadata for strings/void)
     if type1.name == type2.name:
         # For structured/void dtypes, check full equality (field names must match)
         t1_names = getattr(type1, 'names', None)
@@ -4129,16 +4283,21 @@ def promote_types(type1, type2):
             # Structured: must be fully equal
             if type1 != type2:
                 raise TypeError("invalid type promotion")
-        # Also check itemsize for void types (V6 vs V10)
         t1_is = getattr(type1, 'itemsize', 0)
         t2_is = getattr(type2, 'itemsize', 0)
-        if type1.kind == 'V' and t1_is != t2_is:
-            raise TypeError("invalid type promotion")
-        result = dtype(type1.name)
-        # Only preserve metadata when both are identical
-        if t1_meta is not None and t1_meta == t2_meta:
-            result.metadata = t1_meta
-        return result
+        if type1.name in ('bytes', 'str'):
+            if t1_is == t2_is:
+                return type1
+        elif type1.kind == 'V':
+            if t1_is != t2_is:
+                raise TypeError("invalid type promotion")
+            return type1
+        else:
+            result = dtype(type1.name)
+            # Only preserve metadata when both are identical
+            if t1_meta is not None and t1_meta == t2_meta:
+                result.metadata = t1_meta
+            return result
 
     # Strip endian prefixes for Rust backend
     s1 = type1.name
@@ -4152,10 +4311,106 @@ def promote_types(type1, type2):
 
     # If names match after normalization
     if s1 == s2:
-        result = dtype(s1)
-        if t1_meta is not None and t1_meta == t2_meta:
-            result.metadata = t1_meta
-        return result
+        if s1 in ('bytes', 'str', 'void'):
+            t1_is = getattr(type1, 'itemsize', 0)
+            t2_is = getattr(type2, 'itemsize', 0)
+            if t1_is != t2_is:
+                # Defer to string/void promotion logic to handle sizing
+                pass
+            else:
+                return type1
+        else:
+            result = dtype(s1)
+            if t1_meta is not None and t1_meta == t2_meta:
+                result.metadata = t1_meta
+            return result
+
+    # Object dtype wins
+    if getattr(type1, "kind", None) == "O" or getattr(type2, "kind", None) == "O" or s1 == "object" or s2 == "object":
+        return dtype("object")
+
+    def _is_str_dt(dt):
+        return getattr(dt, "kind", None) in ("S", "U") or getattr(dt, "name", None) in ("str", "bytes")
+
+    def _str_kind(dt):
+        if getattr(dt, "kind", None) in ("S", "U"):
+            return dt.kind
+        if getattr(dt, "name", None) == "str":
+            return "U"
+        if getattr(dt, "name", None) == "bytes":
+            return "S"
+        return None
+
+    def _str_len(dt):
+        if getattr(dt, "kind", None) == "U" or getattr(dt, "name", None) == "str":
+            size = getattr(dt, "itemsize", 0) or 0
+            return int(size // 4) if size else 0
+        if getattr(dt, "kind", None) == "S" or getattr(dt, "name", None) == "bytes":
+            return getattr(dt, "itemsize", 0) or 0
+        return 0
+
+    if _is_str_dt(type1) or _is_str_dt(type2):
+        # Disallow promotion between strings and structured/void/user dtypes
+        def _is_structured_name(dt):
+            return isinstance(getattr(dt, 'name', None), str) and ',' in dt.name
+        def _is_user_dtype(dt):
+            return isinstance(getattr(dt, 'name', None), str) and dt.name.startswith("<class ")
+        if getattr(type1, 'names', None) is not None or getattr(type2, 'names', None) is not None:
+            raise TypeError("invalid type promotion")
+        if _is_structured_name(type1) or _is_structured_name(type2):
+            raise TypeError("invalid type promotion")
+        if getattr(type1, 'kind', None) == 'V' or getattr(type2, 'kind', None) == 'V':
+            raise TypeError("invalid type promotion")
+        if _is_user_dtype(type1) or _is_user_dtype(type2):
+            raise TypeError("invalid type promotion")
+        # Promote strings (bytes/unicode) with strings or numerics
+        _bmax = __import__("builtins").max
+        _str_len_map = {
+            "bool": 5, "int8": 4, "uint8": 3, "int16": 6, "uint16": 5,
+            "int32": 11, "uint32": 10, "int64": 21, "uint64": 20,
+            "float16": 8, "float32": 15, "float64": 25,
+            "complex64": 32, "complex128": 64,
+        }
+
+        def _numeric_len(name):
+            return _str_len_map.get(name, 0)
+
+        kind1 = _str_kind(type1)
+        kind2 = _str_kind(type2)
+        out_kind = "U" if (kind1 == "U" or kind2 == "U") else "S"
+        base_len = 0
+        if _is_str_dt(type1):
+            base_len = _bmax(base_len, _str_len(type1))
+        if _is_str_dt(type2):
+            base_len = _bmax(base_len, _str_len(type2))
+
+        num_len = 0
+        if not _is_str_dt(type1):
+            num_len = _bmax(num_len, _numeric_len(s1))
+        if not _is_str_dt(type2):
+            num_len = _bmax(num_len, _numeric_len(s2))
+
+        final_len = _bmax(base_len, num_len)
+        def _matches(dt, allow_equal_num_len=False):
+            if not _is_str_dt(dt):
+                return False
+            if _str_kind(dt) != out_kind or _str_len(dt) != final_len:
+                return False
+            # If numeric inputs drive the size, do not preserve metadata unless
+            # the string dtype is larger than required.
+            if num_len > 0:
+                return _str_len(dt) > num_len or (allow_equal_num_len and _str_len(dt) == num_len)
+            return True
+        mixed_kinds_equal = (
+            _is_str_dt(type1) and _is_str_dt(type2)
+            and _str_kind(type1) != _str_kind(type2)
+            and _str_len(type1) == _str_len(type2) == final_len
+        )
+        if _matches(type1, allow_equal_num_len=True):
+            return type1
+        if _matches(type2) and not mixed_kinds_equal:
+            return type2
+        return dtype(("U" if out_kind == "U" else "S") + str(final_len))
 
     _int_bits = {
         "bool": 1,
@@ -4239,10 +4494,6 @@ def promote_types(type1, type2):
     # Preserve metadata only when both have identical metadata
     if t1_meta is not None and t1_meta == t2_meta:
         result.metadata = t1_meta
-    elif t1_meta is not None and t2_meta is None:
-        result.metadata = t1_meta
-    elif t2_meta is not None and t1_meta is None:
-        result.metadata = t2_meta
     return result
 
 def find_common_type(array_types, scalar_types):
@@ -4373,6 +4624,13 @@ class dtype:
                 name = _DTYPE_CHAR_MAP.get(tp, tp)
                 # Handle arbitrary |Sn -> 'bytes', |Vn -> 'void', <Un -> 'str'
                 if isinstance(name, str):
+                    kind, _itemsize = _string_dtype_info(name)
+                    if kind == 'bytes':
+                        name = 'bytes'
+                    elif kind == 'str':
+                        name = 'str'
+                    elif kind == 'void':
+                        name = 'void'
                     if name.startswith('|S') and len(name) > 2 and name[2:].isdigit():
                         name = 'bytes'
                     elif name.startswith('|V') and len(name) > 2 and name[2:].isdigit():
@@ -4425,7 +4683,43 @@ class dtype:
             self.itemsize = tp.itemsize
             self.char = tp.char
         elif isinstance(tp, str):
+            raw = tp
             tp = _DTYPE_CHAR_MAP.get(tp, tp)
+            kind, itemsize = _string_dtype_info(raw)
+            if kind is not None:
+                if kind == 'str':
+                    self.name = 'str'
+                    self.kind = 'U'
+                    self.itemsize = itemsize
+                    self.char = 'U'
+                    self.str = '|U{}'.format(itemsize // 4 if itemsize else 0)
+                elif kind == 'bytes':
+                    self.name = 'bytes'
+                    self.kind = 'S'
+                    self.itemsize = itemsize
+                    self.char = 'S'
+                    self.str = '|S{}'.format(itemsize)
+                else:  # void
+                    self.name = 'void'
+                    self.kind = 'V'
+                    self.itemsize = itemsize
+                    self.char = 'V'
+                    self.str = '|V{}'.format(itemsize)
+                self.byteorder = '|'
+                self.names = None
+                self.fields = None
+                self.subdtype = None
+                self.base = self
+                self.shape = ()
+                self.metadata = metadata
+                self.alignment = self.itemsize if self.itemsize else 0
+                self.isalignedstruct = False
+                self.isnative = True
+                self.hasobject = False
+                self.num = 19 if kind == 'str' else 18 if kind == 'bytes' else 21
+                self.descr = [('', self.str)]
+                self.type = str_ if kind == 'str' else bytes_ if kind == 'bytes' else void
+                return
             # Handle arbitrary |Sn byte strings -> 'bytes'
             if tp.startswith('|S') and len(tp) > 2 and tp[2:].isdigit():
                 tp = 'bytes'
@@ -4552,6 +4846,8 @@ class dtype:
             "uint32": ("u", 4, "L"), "uint16": ("u", 2, "H"),
             "uint8": ("u", 1, "B"), "bool": ("b", 1, "?"),
             "complex128": ("c", 16, "D"), "complex64": ("c", 8, "F"),
+            "str": ("U", 4, "U"), "bytes": ("S", 1, "S"),
+            "void": ("V", 0, "V"), "object": ("O", 8, "O"),
         }
         if name in _info:
             self.kind, self.itemsize, self.char = _info[name]
@@ -4570,6 +4866,8 @@ class dtype:
         if isinstance(other, dtype):
             if hasattr(self, '_structured') and hasattr(other, '_structured'):
                 return self._structured == other._structured
+            if self.name in ('bytes', 'str', 'void') or other.name in ('bytes', 'str', 'void'):
+                return self.name == other.name and getattr(self, 'itemsize', None) == getattr(other, 'itemsize', None)
             return self.name == other.name
         if isinstance(other, str):
             return self.name == other or self.name == _normalize_dtype(other)
@@ -4583,10 +4881,21 @@ class dtype:
         return NotImplemented
 
     def __hash__(self):
+        if self.name in ('bytes', 'str', 'void'):
+            return hash((self.name, getattr(self, 'itemsize', None)))
         return hash(self.name)
 
     def newbyteorder(self, new_order="S"):
-        d = dtype(self.name)
+        if self.name in ('bytes', 'str', 'void'):
+            if self.name == 'bytes':
+                spec = 'S{}'.format(self.itemsize)
+            elif self.name == 'str':
+                spec = 'U{}'.format(self.itemsize // 4 if self.itemsize else 0)
+            else:
+                spec = 'V{}'.format(self.itemsize)
+            d = dtype(spec)
+        else:
+            d = dtype(self.name)
         d.metadata = self.metadata
         return d
 
@@ -4780,6 +5089,8 @@ def nonzero(a):
         a = asarray(a)
     if a.ndim == 0:
         raise ValueError("Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(a).nonzero() instead.")
+    if a.size == 0:
+        return tuple(array([], dtype="int64") for _ in range(a.ndim))
     # Rust nonzero only handles float64; cast integer/bool arrays
     dt = str(a.dtype)
     if dt in ("int32", "int64", "int8", "int16", "uint8", "uint16", "uint32", "uint64", "bool"):
@@ -4816,7 +5127,17 @@ def count_nonzero(a, axis=None, *, keepdims=False):
     if dt in ("int32", "int64", "int8", "int16", "uint8", "uint16", "uint32", "uint64", "bool"):
         a = a.astype("float64")
     if axis is None:
-        result = _native.count_nonzero(a)
+        if isinstance(a, _ObjectArray):
+            flat = a.flatten().tolist()
+            def _is_nonzero_obj(v):
+                if isinstance(v, (str, bytes)):
+                    return len(v) != 0
+                if isinstance(v, void) or getattr(v, "_is_void", False) or type(v).__name__ == "void":
+                    return False
+                return bool(v)
+            result = sum(1 for v in flat if _is_nonzero_obj(v))
+        else:
+            result = _native.count_nonzero(a)
         if keepdims:
             return array([float(result)]).reshape((1,) * a.ndim).astype("int64")
         return result
@@ -4825,6 +5146,10 @@ def count_nonzero(a, axis=None, *, keepdims=False):
     def _is_nonzero(v):
         if isinstance(v, tuple):  # complex (re, im) representation
             return v[0] != 0.0 or v[1] != 0.0
+        if isinstance(v, (str, bytes)):
+            return len(v) != 0
+        if isinstance(v, void) or getattr(v, "_is_void", False) or type(v).__name__ == "void":
+            return False
         return v != 0.0
     mask_data = [1.0 if _is_nonzero(v) else 0.0 for v in flat]
     mask = array(mask_data).reshape(a.shape)
@@ -8837,7 +9162,8 @@ savez_compressed = savez  # alias, same behavior in our sandbox
 def frompyfunc(func, nin, nout):
     """Takes an arbitrary Python function and returns a NumPy ufunc-like object.
     Returns a vectorize wrapper."""
-    return vectorize(func)
+    vec = vectorize(func)
+    return ufunc(vec, name=getattr(func, "__name__", "pyfunc"), nin=nin, nout=nout)
 
 # --- take_along_axis / put_along_axis (Tier 18A) ----------------------------
 
@@ -9250,21 +9576,15 @@ def _fft_ifftn(a, s=None, axes=None):
 fft.fftn = _fft_fftn
 fft.ifftn = _fft_ifftn
 
-def _fft_rfft(a, n=None, axis=-1, norm=None):
-    """Real FFT - only positive frequencies."""
-    a = asarray(a).astype("float64")
-    if a.ndim == 0:
-        a = a.reshape([1])
-    data = a.tolist()
-    if isinstance(data[0], list):
-        raise NotImplementedError("rfft only supports 1D")
+def _fft_rfft_1d(data, n=None, norm=None):
+    """1D real FFT - returns (out_len, 2) complex-pair array."""
+    if not isinstance(data, list):
+        data = [data]
     N = n if n is not None else len(data)
-    # Pad or truncate
     if len(data) < N:
         data = data + [0.0] * (N - len(data))
     elif len(data) > N:
         data = data[:N]
-    # Compute full DFT - only first N//2 + 1 frequencies
     import cmath
     result = []
     out_len = N // 2 + 1
@@ -9276,20 +9596,54 @@ def _fft_rfft(a, n=None, axis=-1, norm=None):
         if norm == "ortho":
             s /= N ** 0.5
         result.append([s.real, s.imag])
-    # Return as (out_len, 2) shaped array matching native fft format
     return array(result)
 
-def _fft_irfft(a, n=None, axis=-1, norm=None):
-    """Inverse real FFT."""
+def _fft_rfft(a, n=None, axis=-1, norm=None):
+    """Real FFT - only positive frequencies."""
+    a = asarray(a).astype("float64")
+    if a.ndim == 0:
+        a = a.reshape([1])
+    if a.ndim == 1:
+        return _fft_rfft_1d(a.tolist(), n=n, norm=norm)
+    if axis < 0:
+        axis = a.ndim + axis
+    moved = moveaxis(a, axis, -1)
+    outer_shape = moved.shape[:-1]
+    if len(outer_shape) == 0:
+        return _fft_rfft_1d(moved.tolist(), n=n, norm=norm)
+    n_outer = 1
+    for s in outer_shape:
+        n_outer *= s
+    results = []
+    for flat_idx in range(n_outer):
+        idx = []
+        rem = flat_idx
+        for s in reversed(outer_shape):
+            idx.append(rem % s)
+            rem = rem // s
+        idx.reverse()
+        # Extract 1D slice along last axis
+        slice_vals = []
+        for k in range(moved.shape[-1]):
+            elem = moved
+            for fi in idx:
+                elem = elem[fi]
+            elem = elem[k]
+            slice_vals.append(float(elem))
+        results.append(_fft_rfft_1d(slice_vals, n=n, norm=norm))
+    stacked = stack(results)
+    out_len = (n if n is not None else moved.shape[-1]) // 2 + 1
+    reshaped = stacked.reshape(outer_shape + (out_len, 2))
+    return moveaxis(reshaped, -2, axis)
+
+def _fft_irfft_1d(a, n=None, norm=None):
+    """Inverse real FFT for 1D (M,2) or real-only list."""
     a = asarray(a)
-    # Handle (M, 2) complex format from rfft
     data_list = a.tolist()
     if a.ndim == 2 and a.shape[1] == 2:
-        # Complex format: [[real, imag], ...]
         data_r = [row[0] for row in data_list]
         data_i = [row[1] for row in data_list]
     elif a.ndim == 1:
-        # Real-only input
         data_r = data_list
         data_i = [0.0] * len(data_r)
     else:
@@ -9300,16 +9654,13 @@ def _fft_irfft(a, n=None, axis=-1, norm=None):
         data_i = [data_i]
     m = len(data_r)
     N = n if n is not None else 2 * (m - 1)
-    # Reconstruct full spectrum using Hermitian symmetry
     import math as _math_mod
     full_spectrum = []
     for i in _builtin_range(m):
         full_spectrum.append(complex(data_r[i], data_i[i]))
-    # Mirror for negative frequencies
     for i in _builtin_range(m, N):
         mirror = N - i
         full_spectrum.append(complex(data_r[mirror], -data_i[mirror]))
-    # IDFT
     result = []
     for n_idx in _builtin_range(N):
         s = 0.0
@@ -9322,6 +9673,49 @@ def _fft_irfft(a, n=None, axis=-1, norm=None):
             s /= N
         result.append(s)
     return array(result)
+
+def _fft_irfft(a, n=None, axis=-1, norm=None):
+    """Inverse real FFT."""
+    a = asarray(a)
+    if a.ndim == 0:
+        return _fft_irfft_1d(a, n=n, norm=norm)
+    # Complex-pair last axis: treat frequency axis as last-1
+    if a.ndim >= 2 and a.shape[-1] == 2:
+        freq_axis = axis
+        if freq_axis < 0:
+            freq_axis = a.ndim + freq_axis
+        if freq_axis == a.ndim - 1:
+            freq_axis = a.ndim - 2
+        moved = moveaxis(a, freq_axis, -2)
+        outer_shape = moved.shape[:-2]
+        if len(outer_shape) == 0:
+            return _fft_irfft_1d(moved, n=n, norm=norm)
+        n_outer = 1
+        for s in outer_shape:
+            n_outer *= s
+        results = []
+        for flat_idx in range(n_outer):
+            idx = []
+            rem = flat_idx
+            for s in reversed(outer_shape):
+                idx.append(rem % s)
+                rem = rem // s
+            idx.reverse()
+            # Extract (M,2) slice
+            slice_vals = []
+            for k in range(moved.shape[-2]):
+                elem = moved
+                for fi in idx:
+                    elem = elem[fi]
+                elem = elem[k]
+                slice_vals.append([float(elem[0]), float(elem[1])])
+            results.append(_fft_irfft_1d(array(slice_vals), n=n, norm=norm))
+        stacked = stack(results)
+        out_len = n if n is not None else 2 * (moved.shape[-2] - 1)
+        reshaped = stacked.reshape(outer_shape + (out_len,))
+        return moveaxis(reshaped, -1, freq_axis)
+    # Fallback to 1D behavior
+    return _fft_irfft_1d(a, n=n, norm=norm)
 
 fft.rfft = _fft_rfft
 fft.irfft = _fft_irfft
@@ -10547,17 +10941,50 @@ def fabs(x):
     return abs(asarray(x))
 
 
-# --- ufunc-like wrappers with .reduce() / .accumulate() --------------------
+# --- ufunc ---------------------------------------------------------------
 
-class _UfuncWithReduce:
-    """Wraps a binary element-wise function to add .reduce() and .accumulate()."""
-    def __init__(self, func, reduce_func, name=None):
+class ufunc:
+    """Universal function (minimal subset of NumPy's ufunc protocol)."""
+    def __init__(self, func, name='', nin=0, nout=0, identity=None, doc=None, signature=None, types=None):
         self._func = func
-        self._reduce = reduce_func
         self.__name__ = name or getattr(func, '__name__', 'ufunc')
+        self.nin = nin
+        self.nout = nout
+        self.identity = identity
+        self.signature = signature
+        self.types = types or []
+        if doc is not None:
+            self.__doc__ = doc
 
     def __call__(self, *args, **kwargs):
         return self._func(*args, **kwargs)
+
+    def reduce(self, a, axis=0, **kwargs):
+        raise NotImplementedError("ufunc.reduce not implemented")
+
+    def accumulate(self, a, axis=0, **kwargs):
+        raise NotImplementedError("ufunc.accumulate not implemented")
+
+    def outer(self, a, b, **kwargs):
+        raise NotImplementedError("ufunc.outer not implemented")
+
+    def reduceat(self, a, indices, axis=0, **kwargs):
+        raise NotImplementedError("ufunc.reduceat not implemented")
+
+    def at(self, a, indices, b=None):
+        raise NotImplementedError("ufunc.at not implemented")
+
+    def __repr__(self):
+        return f"<ufunc '{self.__name__}'>"
+
+
+# --- ufunc-like wrappers with .reduce() / .accumulate() --------------------
+
+class _UfuncWithReduce(ufunc):
+    """Wraps a binary element-wise function to add .reduce() and .accumulate()."""
+    def __init__(self, func, reduce_func, name=None, nin=2, nout=1, identity=None):
+        super().__init__(func, name=name or getattr(func, '__name__', 'ufunc'), nin=nin, nout=nout, identity=identity)
+        self._reduce = reduce_func
 
     def reduce(self, a, axis=None, **kwargs):
         return self._reduce(a, axis=axis)
@@ -10584,9 +11011,6 @@ class _UfuncWithReduce:
                 result.append(float(self._func(va, vb)))
         return array(result).reshape((len(fa), len(fb)))
 
-    def __repr__(self):
-        return f"<ufunc '{self.__name__}'>"
-
 # Save original function references before wrapping
 _maximum_func = maximum
 _minimum_func = minimum
@@ -10597,8 +11021,8 @@ _subtract_func = subtract
 # Wrap them as ufunc-like objects
 maximum = _UfuncWithReduce(_maximum_func, lambda a, axis=None: max(a, axis=axis), name='maximum')
 minimum = _UfuncWithReduce(_minimum_func, lambda a, axis=None: min(a, axis=axis), name='minimum')
-add = _UfuncWithReduce(_add_func, lambda a, axis=None: sum(a, axis=axis), name='add')
-multiply = _UfuncWithReduce(_multiply_func, lambda a, axis=None: prod(a, axis=axis), name='multiply')
+add = _UfuncWithReduce(_add_func, lambda a, axis=None: sum(a, axis=axis), name='add', identity=0)
+multiply = _UfuncWithReduce(_multiply_func, lambda a, axis=None: prod(a, axis=axis), name='multiply', identity=1)
 def _subtract_reduce(a, axis=None):
     a = asarray(a)
     if axis is None:
@@ -11384,16 +11808,6 @@ class memmap:
     """Memory-mapped file stub (not supported in sandboxed environment)."""
     def __new__(cls, filename, dtype=None, mode='r+', offset=0, shape=None, order='C'):
         raise NotImplementedError("memmap not supported in sandboxed environment")
-
-# --- ufunc class stub -------------------------------------------------------
-class ufunc:
-    """Universal function stub."""
-    def __init__(self, name='', nin=0, nout=0):
-        self.__name__ = name
-        self.nin = nin
-        self.nout = nout
-    def __repr__(self):
-        return f"<ufunc '{self.__name__}'>"
 
 # --- Misc stubs -------------------------------------------------------------
 def seterrcall(func):

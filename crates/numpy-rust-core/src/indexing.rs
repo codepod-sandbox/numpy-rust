@@ -185,10 +185,19 @@ impl NdArray {
 
         macro_rules! do_set {
             ($dst:expr, $src:expr) => {{
-                for (pos, &idx) in indices.iter().enumerate() {
-                    let src_view = $src.index_axis(ndarray::Axis(axis), pos);
-                    let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
-                    dst_view.assign(&src_view);
+                if $src.len() == 1 {
+                    // Scalar broadcast: fill each indexed slice with the single value
+                    let val = $src.iter().next().unwrap().clone();
+                    for &idx in indices.iter() {
+                        let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
+                        dst_view.fill(val.clone());
+                    }
+                } else {
+                    for (pos, &idx) in indices.iter().enumerate() {
+                        let src_view = $src.index_axis(ndarray::Axis(axis), pos);
+                        let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
+                        dst_view.assign(&src_view);
+                    }
                 }
             }};
         }

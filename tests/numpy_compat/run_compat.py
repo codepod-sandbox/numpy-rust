@@ -643,6 +643,11 @@ class _TestTimeoutError(Exception):
 
 def _run_with_timeout(fn, args, timeout):
     """Run fn(*args) with a timeout. Returns (result, exception) tuple."""
+    # RustPython does not fully support threading init in all environments.
+    # Avoid spawning threads there to prevent VM panics.
+    if getattr(sys, "implementation", None) and sys.implementation.name == "rustpython":
+        result = fn(*args)
+        return result
     result = [None]
     exc = [None]
 
