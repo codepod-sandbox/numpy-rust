@@ -10979,7 +10979,29 @@ class ufunc:
         raise NotImplementedError("ufunc.outer not implemented")
 
     def reduceat(self, a, indices, axis=0, **kwargs):
-        raise NotImplementedError("ufunc.reduceat not implemented")
+        a = asarray(a)
+        if a.ndim != 1 or axis not in (0, -1):
+            raise NotImplementedError("ufunc.reduceat only supports 1-D axis=0")
+        data = a.flatten().tolist()
+        n = len(data)
+        idx = asarray(indices).flatten().tolist()
+        results = []
+        for i, start in enumerate(idx):
+            if not isinstance(start, int):
+                start = int(start)
+            if start < 0 or start >= n:
+                raise IndexError("index out of bounds")
+            end = idx[i + 1] if i + 1 < len(idx) else n
+            if not isinstance(end, int):
+                end = int(end)
+            if end <= start:
+                results.append(float(data[start]))
+                continue
+            acc = float(data[start])
+            for v in data[start + 1:end]:
+                acc = float(self._func(acc, v))
+            results.append(acc)
+        return array(results)
 
     def at(self, a, indices, b=None):
         raise NotImplementedError("ufunc.at not implemented")
