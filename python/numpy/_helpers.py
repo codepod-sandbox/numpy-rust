@@ -465,7 +465,7 @@ def _make_temporal_array(data, dtype_str):
                 return _timedelta64_cls(int(s), unit)
             except (ValueError, TypeError):
                 return _timedelta64_cls('NaT', unit)
-        if isinstance(x, (_datetime64_cls, _timedelta64_cls)):
+        if getattr(x, '_is_datetime64', False) or getattr(x, '_is_timedelta64', False):
             return x
         if isinstance(x, (int, float)):
             return _timedelta64_cls(int(x), unit) if is_td else _datetime64_cls(int(x), unit)
