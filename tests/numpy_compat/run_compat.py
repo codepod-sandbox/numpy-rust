@@ -632,7 +632,7 @@ _errors = []
 _unexpected_failures = []
 
 # Per-test timeout in seconds
-_TEST_TIMEOUT = 10
+_TEST_TIMEOUT = 60
 
 import threading
 

@@ -7630,10 +7630,18 @@ def test_t37_memmap_stub():
 
 def test_t37_ufunc_class():
     import numpy as np
-    u = np.ufunc('add', 2, 1)
-    assert_eq(u.__name__, 'add')
-    assert_eq(u.nin, 2)
-    assert_eq(u.nout, 1)
+    # Direct instantiation raises TypeError (matching NumPy)
+    try:
+        np.ufunc('add', 2, 1)
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+    # np.add is a proper ufunc instance
+    assert isinstance(np.add, np.ufunc)
+    assert_eq(np.add.__name__, 'add')
+    assert_eq(np.add.nin, 2)
+    assert_eq(np.add.nout, 1)
+    assert_eq(repr(np.add), "<ufunc 'add'>")
 
 def test_t37_seterrcall_geterrcall():
     import numpy as np
