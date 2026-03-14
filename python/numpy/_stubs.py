@@ -16,7 +16,7 @@ from ._creation import array, asarray, _make_complex_array
 
 __all__ = [
     # error handling
-    'seterr', 'geterr', 'errstate',
+    '_err_state', 'seterr', 'geterr', 'errstate',
     # print formatting
     'set_printoptions', 'get_printoptions', 'printoptions',
     # string/char module

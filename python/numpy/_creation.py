@@ -557,7 +557,8 @@ def fromiter(iterable, dtype=None, count=-1):
                 raise ValueError("setting an array element with a sequence")
             if len(val) != subarray_len:
                 raise ValueError("setting an array element with a sequence")
-    return array(data, dtype=dtype)
+    import numpy as _np
+    return _np.array(data, dtype=dtype)
 
 def fromstring(string, dtype=None, count=-1, sep=''):
     """Parse array from a string."""
