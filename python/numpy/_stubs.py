@@ -3,7 +3,7 @@ import sys as _sys
 import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray, AxisError, _builtin_max
+from ._helpers import _ObjectArray, AxisError, _builtin_max, _copy_into
 from ._core_types import (
     dtype, _normalize_dtype, StructuredDtype,
     Float64DType, Float32DType, Float16DType,
@@ -47,6 +47,18 @@ __all__ = [
     'NumpyVersion',
     # constants
     'tracemalloc_domain', 'use_hugepage', 'nested_iters',
+    # linear algebra / product functions
+    'outer', 'cross', 'tensordot', 'inner', 'kron', 'matmul', 'vdot', 'einsum',
+    # bit manipulation
+    'packbits', 'unpackbits',
+    # misc numeric
+    'binary_repr', 'base_repr', 'frompyfunc',
+    # indexing helpers
+    'take_along_axis', 'put_along_axis',
+    # matrix class
+    'matrix',
+    # internal helper
+    '_has_complex',
 ]
 
 # ---------------------------------------------------------------------------
@@ -999,3 +1011,491 @@ def get_include():
 tracemalloc_domain = 0
 use_hugepage = 0
 nested_iters = None  # Not supported
+
+
+# ---------------------------------------------------------------------------
+# Linear algebra / product functions
+# ---------------------------------------------------------------------------
+
+def outer(a, b, out=None):
+    """Compute outer product."""
+    a = asarray(a).flatten()
+    b = asarray(b).flatten()
+    result = _native.outer(a, b)
+    if out is not None:
+        _copy_into(out, result)
+        return out
+    return result
+
+
+def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
+    """Cross product of two arrays."""
+    from ._manipulation import moveaxis, broadcast_shapes, broadcast_to
+    _a_scalar = not isinstance(a, (ndarray, list, tuple))
+    _b_scalar = not isinstance(b, (ndarray, list, tuple))
+    a = asarray(a) if not isinstance(a, ndarray) else a
+    b = asarray(b) if not isinstance(b, ndarray) else b
+    if a.ndim == 0 or b.ndim == 0 or _a_scalar or _b_scalar:
+        raise ValueError("At least one array has zero dimension")
+    if axis is not None:
+        axisa = axisb = axisc = axis
+    if axisa < -a.ndim or axisa >= a.ndim:
+        raise AxisError(axisa, a.ndim, "axisa")
+    if axisb < -b.ndim or axisb >= b.ndim:
+        raise AxisError(axisb, b.ndim, "axisb")
+    if a.ndim > 1 and axisa != -1 and axisa != a.ndim - 1:
+        a = moveaxis(a, axisa, -1)
+    if b.ndim > 1 and axisb != -1 and axisb != b.ndim - 1:
+        b = moveaxis(b, axisb, -1)
+    if a.ndim >= 2 and b.ndim == 1:
+        b = b.reshape((1,) * (a.ndim - 1) + (b.shape[0],))
+        b_shape = list(a.shape[:-1]) + [b.shape[-1]]
+        b_flat = b.flatten().tolist()
+        b_new = []
+        batch = 1
+        for s in a.shape[:-1]:
+            batch *= s
+        vec_len = b.shape[-1]
+        for i in range(batch):
+            b_new.extend(b_flat[:vec_len])
+        b = array(b_new).reshape(b_shape)
+    elif b.ndim >= 2 and a.ndim == 1:
+        a = a.reshape((1,) * (b.ndim - 1) + (a.shape[0],))
+        a_shape = list(b.shape[:-1]) + [a.shape[-1]]
+        a_flat = a.flatten().tolist()
+        a_new = []
+        batch = 1
+        for s in b.shape[:-1]:
+            batch *= s
+        vec_len = a.shape[-1]
+        for i in range(batch):
+            a_new.extend(a_flat[:vec_len])
+        a = array(a_new).reshape(a_shape)
+    if a.ndim == 1 and b.ndim == 1:
+        af = a.flatten().tolist()
+        bf = b.flatten().tolist()
+        la, lb = len(af), len(bf)
+        if la not in (2, 3) or lb not in (2, 3):
+            raise ValueError("incompatible vector sizes for cross product")
+        if la == 2:
+            af = [af[0], af[1], 0.0]
+        if lb == 2:
+            bf = [bf[0], bf[1], 0.0]
+        cx = af[1]*bf[2] - af[2]*bf[1]
+        cy = af[2]*bf[0] - af[0]*bf[2]
+        cz = af[0]*bf[1] - af[1]*bf[0]
+        if la == 2 and lb == 2:
+            return array(cz)
+        return array([cx, cy, cz])
+    if a.ndim >= 2 and b.ndim >= 2:
+        a_batch = a.shape[:-1]
+        b_batch = b.shape[:-1]
+        try:
+            out_batch = broadcast_shapes(a_batch, b_batch)
+        except Exception:
+            out_batch = a_batch
+        a_bc = broadcast_to(a, tuple(out_batch) + (a.shape[-1],))
+        b_bc = broadcast_to(b, tuple(out_batch) + (b.shape[-1],))
+        la = a_bc.shape[-1]
+        lb = b_bc.shape[-1]
+        batch_size = 1
+        for s in out_batch:
+            batch_size *= s
+        af = a_bc.flatten().tolist()
+        bf = b_bc.flatten().tolist()
+        results = []
+        for i in range(batch_size):
+            ai = af[i * la:(i + 1) * la]
+            bi = bf[i * lb:(i + 1) * lb]
+            if la == 2:
+                ai = [ai[0], ai[1], 0.0]
+            if lb == 2:
+                bi = [bi[0], bi[1], 0.0]
+            cx = ai[1]*bi[2] - ai[2]*bi[1]
+            cy = ai[2]*bi[0] - ai[0]*bi[2]
+            cz = ai[0]*bi[1] - ai[1]*bi[0]
+            if la == 2 and lb == 2:
+                results.append(cz)
+            else:
+                results.extend([cx, cy, cz])
+        if la == 2 and lb == 2:
+            result = array(results).reshape(out_batch)
+        else:
+            result = array(results).reshape(list(out_batch) + [3])
+        if axisc != -1 and axisc != result.ndim - 1 and result.ndim > 1 and not (la == 2 and lb == 2):
+            result = moveaxis(result, -1, axisc)
+        return result
+
+
+def tensordot(a, b, axes=2):
+    """Compute tensor dot product along specified axes."""
+    from ._manipulation import _transpose_with_axes
+    from _numpy_native import dot
+    a = asarray(a) if not isinstance(a, ndarray) else a
+    b = asarray(b) if not isinstance(b, ndarray) else b
+    if isinstance(axes, int):
+        axes_a = list(range(a.ndim - axes, a.ndim))
+        axes_b = list(range(0, axes))
+    else:
+        axes_a = list(axes[0]) if not isinstance(axes[0], int) else [axes[0]]
+        axes_b = list(axes[1]) if not isinstance(axes[1], int) else [axes[1]]
+    na = a.ndim
+    nb = b.ndim
+    axes_a = [ax if ax >= 0 else ax + na for ax in axes_a]
+    axes_b = [ax if ax >= 0 else ax + nb for ax in axes_b]
+    free_a = [i for i in range(na) if i not in axes_a]
+    free_b = [i for i in range(nb) if i not in axes_b]
+    perm_a = free_a + axes_a
+    perm_b = axes_b + free_b
+    at = _transpose_with_axes(a, perm_a)
+    bt = _transpose_with_axes(b, perm_b)
+    free_a_shape = [a.shape[i] for i in free_a]
+    free_b_shape = [b.shape[i] for i in free_b]
+    contract_size = 1
+    for ax in axes_a:
+        contract_size *= a.shape[ax]
+    rows = 1
+    for s in free_a_shape:
+        rows *= s
+    cols = 1
+    for s in free_b_shape:
+        cols *= s
+    at2 = at.reshape([rows, contract_size])
+    bt2 = bt.reshape([contract_size, cols])
+    result = dot(at2, bt2)
+    out_shape = free_a_shape + free_b_shape
+    if len(out_shape) == 0:
+        return result
+    return result.reshape(out_shape)
+
+
+def inner(a, b):
+    """Inner product of two arrays."""
+    from _numpy_native import dot
+    a = asarray(a)
+    b = asarray(b)
+    if a.ndim <= 1 and b.ndim <= 1:
+        return dot(a, b)
+    if a.ndim == 2 and b.ndim == 2:
+        return dot(a, b.T)
+    return tensordot(a, b, axes=([-1], [-1]))
+
+
+def kron(a, b):
+    """Kronecker product of two arrays."""
+    a = asarray(a)
+    b = asarray(b)
+    if a.ndim == 1:
+        a = a.reshape((1, a.size))
+    if b.ndim == 1:
+        b = b.reshape((1, b.size))
+    ar, ac = a.shape[0], a.shape[1]
+    br, bc = b.shape[0], b.shape[1]
+    rows = []
+    for i in range(ar):
+        for bi in range(br):
+            row = []
+            for j in range(ac):
+                for bj in range(bc):
+                    row.append(a[i][j] * b[bi][bj])
+            rows.append(row)
+    return array(rows)
+
+
+def matmul(x1, x2):
+    """Matrix product of two arrays (same as the @ operator)."""
+    from _numpy_native import dot
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    return dot(x1, x2)
+
+
+def vdot(a, b):
+    """Conjugate dot product of two arrays (flattened)."""
+    from _numpy_native import dot
+    a = asarray(a).flatten()
+    b = asarray(b).flatten()
+    return dot(a, b)
+
+
+def einsum(*operands, **kwargs):
+    """Evaluates the Einstein summation convention on the operands."""
+    if len(operands) < 2:
+        raise ValueError("einsum requires at least a subscript string and one operand")
+    subscripts = operands[0]
+    arrays = operands[1:]
+    if '->' not in subscripts:
+        input_subs = subscripts.replace(' ', '')
+        parts = input_subs.split(',')
+        from collections import Counter
+        counts = Counter()
+        for p in parts:
+            counts.update(p)
+        output = ''.join(sorted(c for c, n in counts.items() if n == 1))
+        subscripts = input_subs + '->' + output
+    return _native.einsum(subscripts, *arrays)
+
+
+# ---------------------------------------------------------------------------
+# Bit manipulation
+# ---------------------------------------------------------------------------
+
+def packbits(a, axis=None, bitorder='big'):
+    """Pack a binary-valued array into uint8."""
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    vals = a.flatten().tolist()
+    if bitorder == 'little':
+        result = []
+        for i in range(0, len(vals), 8):
+            chunk = vals[i:i+8]
+            byte = 0
+            for j in range(len(chunk)):
+                if int(chunk[j]):
+                    byte |= (1 << j)
+            result.append(byte)
+        return array(result)
+    else:
+        result = []
+        for i in range(0, len(vals), 8):
+            chunk = vals[i:i+8]
+            byte = 0
+            for j in range(len(chunk)):
+                if int(chunk[j]):
+                    byte |= (1 << (7 - j))
+            result.append(byte)
+        return array(result)
+
+
+def unpackbits(a, axis=None, count=None, bitorder='big'):
+    """Unpack elements of a uint8 array into a binary-valued output array."""
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    vals = a.flatten().tolist()
+    result = []
+    for v in vals:
+        byte = int(v)
+        if bitorder == 'little':
+            for j in range(8):
+                result.append((byte >> j) & 1)
+        else:
+            for j in range(7, -1, -1):
+                result.append((byte >> j) & 1)
+    if count is not None:
+        count = int(count)
+        if count < len(result):
+            result = result[:count]
+        else:
+            result = result + [0] * (count - len(result))
+    return array(result)
+
+
+# ---------------------------------------------------------------------------
+# Misc numeric
+# ---------------------------------------------------------------------------
+
+def binary_repr(num, width=None):
+    if num >= 0:
+        s = bin(num)[2:]
+        if width is not None:
+            s = s.zfill(width)
+        return s
+    else:
+        if width is not None:
+            s = bin(2**width + num)[2:]
+            return s.zfill(width)
+        else:
+            return '-' + bin(-num)[2:]
+
+
+def base_repr(number, base=2, padding=0):
+    if base < 2 or base > 36:
+        raise ValueError("Bases greater than 36 not handled in base_repr.")
+    if number == 0:
+        return "0" * (padding + 1)
+    digits = []
+    n = __import__("builtins").abs(number)
+    while n:
+        digits.append(str(n % base) if n % base < 10 else chr(ord('A') + n % base - 10))
+        n //= base
+    s = "".join(reversed(digits))
+    s = "0" * padding + s
+    if number < 0:
+        s = "-" + s
+    return s
+
+
+def frompyfunc(func, nin, nout):
+    """Takes an arbitrary Python function and returns a NumPy ufunc-like object."""
+    from ._manipulation import vectorize
+    return vectorize(func)
+
+
+# ---------------------------------------------------------------------------
+# Indexing helpers
+# ---------------------------------------------------------------------------
+
+def take_along_axis(arr, indices, axis):
+    """Take values from the input array by matching 1-d index and data slices along the given axis."""
+    from ._manipulation import moveaxis
+    arr = asarray(arr)
+    indices = asarray(indices)
+    if arr.ndim == 1:
+        result = []
+        for i in range(indices.size):
+            result.append(arr[int(indices[i])])
+        return array(result)
+    if arr.ndim == 2:
+        if axis == 0:
+            rows = []
+            for j in range(arr.shape[1]):
+                col = []
+                for i in range(indices.shape[0]):
+                    col.append(arr[int(indices[i][j])][j])
+                rows.append(col)
+            result = []
+            for i in range(indices.shape[0]):
+                row = [rows[j][i] for j in range(arr.shape[1])]
+                result.append(row)
+            return array(result)
+        else:
+            rows = []
+            for i in range(arr.shape[0]):
+                row = []
+                for j in range(indices.shape[1]):
+                    row.append(arr[i][int(indices[i][j])])
+                rows.append(row)
+            return array(rows)
+    if axis < 0:
+        axis = arr.ndim + axis
+    arr_m = moveaxis(arr, axis, -1)
+    ind_m = moveaxis(indices, axis, -1)
+    out_shape = ind_m.shape
+    n_axis = arr_m.shape[-1]
+    lead = 1
+    for s in arr_m.shape[:-1]:
+        lead *= s
+    arr_flat = arr_m.reshape((lead, n_axis))
+    ind_flat = ind_m.reshape((lead, ind_m.shape[-1]))
+    arr_list = arr_flat.tolist()
+    ind_list = ind_flat.tolist()
+    result = []
+    for i in range(lead):
+        row = arr_list[i]
+        idxs = ind_list[i]
+        result.append([row[int(j)] for j in idxs])
+    result_arr = array(result).reshape(out_shape)
+    return moveaxis(result_arr, -1, axis)
+
+
+def put_along_axis(arr, indices, values, axis):
+    """Put values into the destination array by matching 1-d index and data slices along the given axis."""
+    from ._manipulation import moveaxis
+    arr = asarray(arr)
+    indices = asarray(indices)
+    values = asarray(values)
+    if arr.ndim == 1:
+        result = [arr[i] for i in range(arr.size)]
+        vals_flat = values.flatten()
+        for i in range(indices.size):
+            result[int(indices[i])] = vals_flat[i % vals_flat.size]
+        return array(result)
+    if arr.ndim == 2 and axis == 1:
+        rows = []
+        for i in range(arr.shape[0]):
+            row = [arr[i][j] for j in range(arr.shape[1])]
+            for j in range(indices.shape[1]):
+                idx = int(indices[i][j])
+                row[idx] = values[i][j] if values.ndim == 2 else values[j]
+            rows.append(row)
+        return array(rows)
+    if axis < 0:
+        axis = arr.ndim + axis
+    arr_m = moveaxis(arr, axis, -1)
+    ind_m = moveaxis(indices, axis, -1)
+    val_m = moveaxis(values, axis, -1)
+    out_shape = arr_m.shape
+    lead = 1
+    for s in arr_m.shape[:-1]:
+        lead *= s
+    n_axis = arr_m.shape[-1]
+    arr_flat = arr_m.reshape((lead, n_axis)).tolist()
+    ind_flat = ind_m.reshape((lead, ind_m.shape[-1])).tolist()
+    val_flat = val_m.reshape((lead, val_m.shape[-1])).tolist()
+    for i in range(lead):
+        for j in range(len(ind_flat[i])):
+            arr_flat[i][int(ind_flat[i][j])] = val_flat[i][j]
+    result = array(arr_flat).reshape(out_shape)
+    return moveaxis(result, -1, axis)
+
+
+# ---------------------------------------------------------------------------
+# matrix class
+# ---------------------------------------------------------------------------
+
+def _has_complex(result):
+    """Check if any element in result is complex."""
+    for r in result:
+        if isinstance(r, complex):
+            return True
+    return False
+
+
+class matrix:
+    """Simplified matrix class (deprecated in NumPy, but still used)."""
+    def __init__(self, data, dtype=None, copy=True):
+        from ._manipulation import atleast_2d
+        if isinstance(data, str):
+            rows = data.split(";")
+            parsed = []
+            for row in rows:
+                parsed.append([float(x) for x in row.strip().split()])
+            self.A = array(parsed)
+        else:
+            self.A = atleast_2d(asarray(data))
+        if dtype is not None:
+            self.A = self.A.astype(str(dtype))
+
+    @property
+    def T(self):
+        return matrix(self.A.T)
+
+    @property
+    def I(self):
+        from _numpy_native import linalg as _linalg
+        return matrix(_linalg.inv(self.A))
+
+    @property
+    def shape(self):
+        return self.A.shape
+
+    @property
+    def ndim(self):
+        return self.A.ndim
+
+    def __mul__(self, other):
+        from _numpy_native import dot
+        if isinstance(other, matrix):
+            return matrix(dot(self.A, other.A))
+        return matrix(self.A * asarray(other))
+
+    def __add__(self, other):
+        if isinstance(other, matrix):
+            return matrix(self.A + other.A)
+        return matrix(self.A + asarray(other))
+
+    def __sub__(self, other):
+        if isinstance(other, matrix):
+            return matrix(self.A - other.A)
+        return matrix(self.A - asarray(other))
+
+    def __getitem__(self, key):
+        return self.A[key]
+
+    def tolist(self):
+        return self.A.tolist()
+
+    def __repr__(self):
+        return "matrix({})".format(self.A.tolist())
+
+

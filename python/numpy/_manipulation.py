@@ -7,7 +7,7 @@ from ._helpers import (
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
-from ._creation import array, asarray, zeros, ones, empty, arange, concatenate
+from ._creation import array, asarray, zeros, ones, empty, arange, concatenate, linspace
 from ._math import isnan, isfinite
 
 _builtin_divmod = divmod
@@ -38,8 +38,16 @@ __all__ = [
     'trim_zeros', 'apply_along_axis', 'apply_over_axes', 'vectorize',
     # Size / block
     'size', 'block',
-    # Internal helper (used by tensordot etc in __init__.py)
+    # Internal helper (used by tensordot)
     '_transpose_with_axes',
+    # Array padding
+    'pad',
+    # Vandermonde matrix
+    'vander',
+    # Interpolation
+    'interp',
+    # Bin counting
+    'bincount',
 ]
 
 
@@ -1359,3 +1367,203 @@ def trim_zeros(filt, trim='fb'):
         else:
             return array([])
     return array(data[first:last])
+
+
+# ---------------------------------------------------------------------------
+# pad
+# ---------------------------------------------------------------------------
+
+def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
+    if not isinstance(a, ndarray):
+        a = array(a)
+    # Normalise pad_width to list of (before, after) per axis
+    if isinstance(pad_width, int):
+        pw = [(pad_width, pad_width)] * a.ndim
+    elif isinstance(pad_width, (list, tuple)):
+        if isinstance(pad_width[0], int):
+            if len(pad_width) == 2:
+                pw = [(pad_width[0], pad_width[1])] * a.ndim
+            else:
+                pw = [(pad_width[0], pad_width[0])] * a.ndim
+        else:
+            pw = [(p[0], p[1]) for p in pad_width]
+    else:
+        pw = [(pad_width, pad_width)] * a.ndim
+
+    if mode == 'constant':
+        if isinstance(constant_values, (list, tuple)):
+            constant_values = constant_values[0] if isinstance(constant_values[0], (int, float)) else constant_values[0][0]
+        import _numpy_native as _nat
+        return _nat.pad(a, pad_width, float(constant_values))
+
+    # Pure-Python implementation for 'edge', 'reflect', 'wrap'
+    def _pad_1d(data_list, before, after, mode_str):
+        """Pad a 1D Python list with the given mode."""
+        n = len(data_list)
+        result = []
+        if mode_str == 'edge':
+            result = [data_list[0]] * before + list(data_list) + [data_list[-1]] * after
+        elif mode_str == 'reflect':
+            left = []
+            for i in range(before):
+                idx = (i + 1) % (2 * (n - 1)) if n > 1 else 0
+                if idx >= n:
+                    idx = 2 * (n - 1) - idx
+                left.insert(0, data_list[idx])
+            right = []
+            for i in range(after):
+                idx = (i + 1) % (2 * (n - 1)) if n > 1 else 0
+                if idx >= n:
+                    idx = 2 * (n - 1) - idx
+                right.append(data_list[n - 1 - idx])
+            result = left + list(data_list) + right
+        elif mode_str == 'wrap':
+            left = []
+            for i in range(before):
+                left.insert(0, data_list[-(i + 1) % n])
+            right = []
+            for i in range(after):
+                right.append(data_list[i % n])
+            result = left + list(data_list) + right
+        elif mode_str == 'symmetric':
+            left = []
+            for i in range(before):
+                idx = i % (2 * n) if n > 0 else 0
+                if idx >= n:
+                    idx = 2 * n - 1 - idx
+                left.insert(0, data_list[idx])
+            right = []
+            for i in range(after):
+                idx = i % (2 * n) if n > 0 else 0
+                if idx >= n:
+                    idx = 2 * n - 1 - idx
+                right.append(data_list[n - 1 - idx])
+            result = left + list(data_list) + right
+        elif mode_str == 'linear_ramp':
+            end_val = kwargs.get('end_values', 0)
+            if isinstance(end_val, (list, tuple)):
+                end_val = end_val[0] if isinstance(end_val[0], (int, float)) else end_val[0][0]
+            left = []
+            for i in range(before):
+                frac = float(i + 1) / float(before + 1) if before > 0 else 1.0
+                left.append(end_val + (data_list[0] - end_val) * frac)
+            right = []
+            for i in range(after):
+                frac = float(i + 1) / float(after + 1) if after > 0 else 1.0
+                right.append(data_list[-1] + (end_val - data_list[-1]) * frac)
+            result = left + list(data_list) + right
+        elif mode_str == 'mean':
+            mean_val = sum(data_list) / len(data_list) if len(data_list) > 0 else 0.0
+            result = [mean_val] * before + list(data_list) + [mean_val] * after
+        elif mode_str == 'median':
+            sorted_data = sorted(data_list)
+            mid = len(sorted_data) // 2
+            if len(sorted_data) % 2 == 0 and len(sorted_data) > 0:
+                median_val = (sorted_data[mid - 1] + sorted_data[mid]) / 2.0
+            elif len(sorted_data) > 0:
+                median_val = sorted_data[mid]
+            else:
+                median_val = 0.0
+            result = [median_val] * before + list(data_list) + [median_val] * after
+        elif mode_str == 'minimum':
+            min_val = min(data_list) if len(data_list) > 0 else 0.0
+            result = [min_val] * before + list(data_list) + [min_val] * after
+        elif mode_str == 'maximum':
+            max_val = max(data_list) if len(data_list) > 0 else 0.0
+            result = [max_val] * before + list(data_list) + [max_val] * after
+        else:
+            raise NotImplementedError("pad mode '{}' is not supported".format(mode_str))
+        return result
+
+    if a.ndim == 1:
+        data = [float(a[i]) for i in range(a.shape[0])]
+        padded = _pad_1d(data, pw[0][0], pw[0][1], mode)
+        return array(padded)
+
+    def _to_nested(arr):
+        """Convert ndarray to nested Python lists."""
+        if arr.ndim == 1:
+            return [float(arr[i]) for i in range(arr.shape[0])]
+        return [_to_nested(arr[i]) for i in range(arr.shape[0])]
+
+    def _pad_axis(nested, axis, before, after, mode_str, current_depth=0):
+        """Recursively pad along a specific axis of nested lists."""
+        if current_depth == axis:
+            return _pad_1d(nested, before, after, mode_str)
+        else:
+            return [_pad_axis(sub, axis, before, after, mode_str, current_depth + 1) for sub in nested]
+
+    nested = _to_nested(a)
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before > 0 or after > 0:
+            nested = _pad_axis(nested, ax, before, after, mode)
+    return array(nested)
+
+
+# ---------------------------------------------------------------------------
+# vander
+# ---------------------------------------------------------------------------
+
+def vander(x, N=None, increasing=False):
+    """Generate a Vandermonde matrix."""
+    x = asarray(x).flatten()
+    n = x.size
+    if N is None:
+        N = n
+    if increasing:
+        cols = []
+        for j in range(N):
+            col = []
+            for i in range(n):
+                col.append(x[i] ** j)
+            cols.append(array(col))
+    else:
+        cols = []
+        for j in range(N):
+            col = []
+            for i in range(n):
+                col.append(x[i] ** (N - 1 - j))
+            cols.append(array(col))
+    return stack(cols, axis=1)
+
+
+# ---------------------------------------------------------------------------
+# interp
+# ---------------------------------------------------------------------------
+
+def interp(x, xp, fp, left=None, right=None, period=None):
+    import _numpy_native as _nat
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if not isinstance(xp, ndarray):
+        xp = array(xp)
+    if not isinstance(fp, ndarray):
+        fp = array(fp)
+    result = _nat.interp(x, xp, fp)
+    if left is not None or right is not None:
+        x_arr = asarray(x).flatten().tolist()
+        xp_arr = asarray(xp).flatten().tolist()
+        result_list = result.flatten().tolist()
+        xp_min = _builtin_min(xp_arr)
+        xp_max = _builtin_max(xp_arr)
+        for i, xi in enumerate(x_arr):
+            if left is not None and xi < xp_min:
+                result_list[i] = float(left)
+            if right is not None and xi > xp_max:
+                result_list[i] = float(right)
+        result = array(result_list)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# bincount
+# ---------------------------------------------------------------------------
+
+def bincount(x, weights=None, minlength=0):
+    import _numpy_native as _nat
+    if not isinstance(x, ndarray):
+        x = array(x)
+    if weights is not None and not isinstance(weights, ndarray):
+        weights = array(weights)
+    return _nat.bincount(x, weights, minlength)
