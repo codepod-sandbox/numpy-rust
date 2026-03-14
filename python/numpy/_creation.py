@@ -101,7 +101,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             dtype = cur
             converted = []
             for x, w in zip(data, wrapped):
-                wn = _normalize_dtype(str(w))
+                wn = _normalize_dtype(str(w)) or ""
                 if wn == "bool":
                     converted.append(bool(x))
                 elif wn.startswith("int") or wn.startswith("uint"):

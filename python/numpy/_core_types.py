@@ -121,6 +121,8 @@ class _ScalarType:
 
 
 class _NumpyIntScalar(int):
+    _numpy_dtype_name: str
+
     def __new__(cls, value=0, dtype_name="int64"):
         obj = int.__new__(cls, int(value))
         obj._numpy_dtype_name = dtype_name
@@ -156,6 +158,8 @@ class _NumpyIntScalar(int):
 
 
 class _NumpyFloatScalar(float):
+    _numpy_dtype_name: str
+
     def __new__(cls, value=0.0, dtype_name="float64"):
         obj = float.__new__(cls, float(value))
         obj._numpy_dtype_name = dtype_name
@@ -201,6 +205,8 @@ class _NumpyFloatScalar(float):
 
 
 class _NumpyComplexScalar(complex):
+    _numpy_dtype_name: str
+
     def __new__(cls, value=0j, dtype_name="complex128"):
         obj = complex.__new__(cls, value)
         obj._numpy_dtype_name = dtype_name
@@ -238,6 +244,9 @@ class _NumpyVoidScalar:
 # Metaclass for scalar type classes so the CLASS itself has custom __str__, __eq__, __hash__
 class _ScalarTypeMeta(type):
     """Metaclass for numpy scalar type classes in the type hierarchy."""
+    _scalar_name: str
+    _python_type: type
+
     def __new__(mcs, name, bases, namespace, scalar_name=None, python_type=float):
         cls = super().__new__(mcs, name, bases, namespace)
         cls._scalar_name = scalar_name or name
