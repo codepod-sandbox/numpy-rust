@@ -12,8 +12,8 @@ After splitting the monolithic `__init__.py` into 18 submodules, the Python math
 
 - **Python element-wise loops** in `_math.py`: `copysign`, `frexp`, `ldexp`, `nextafter`, `spacing`, `nan_to_num`, `gamma`/`lgamma`, `erf`/`erfc`, `j0`/`j1`/`y0`/`y1`, `i0`
 - **Python composites** (chain multiple Rust ops): `cbrt`, `hypot`, `fmod`, `modf`, `maximum`/`minimum`, `fmax`/`fmin`, `logaddexp`/`logaddexp2`
-- **Python loops in `_reductions.py`**: `trapz`, `cumulative_trapezoid`, `gradient`
-- **Python loops in `_ScimathModule`** (`_stubs.py`): complex-safe `sqrt`, `log`, `log2`, `log10`, `power`, `arcsin`, `arccos`, `arctanh`
+- **Python loops in `_reductions.py`**: `trapz`, `cumulative_trapezoid` (`gradient` already delegates to `_native.gradient`)
+- **Python loops in `_ScimathModule`** (`_stubs.py`): complex-safe `sqrt`, `log`, `log2`, `log10`, `power`, `arcsin`, `arccos` (existing); `arctanh` added as new functionality
 
 In WASM there is no JIT — every Python loop is expensive. This work pushes all element-wise computation into Rust.
 
@@ -53,35 +53,36 @@ Core layer  (crates/numpy-rust-core/src/ops/math.rs)
 All new Rust implementations land here, grouped by pattern:
 
 **Group 1 — `libm_unary!` macro** (new macro, float32/float64 only, calls libm):
-- `cbrt` → `libm::cbrt` / `libm::cbrtf`
+- `cbrt` → `libm::cbrt` / `libm::cbrtf`  *(currently a Python composite: `sign * power(abs, 1/3)`)*
 - `gamma` → `libm::tgamma` / `libm::tgammaf`
 - `lgamma` → `libm::lgamma` / `libm::lgammaf`
 - `erf` → `libm::erf` / `libm::erff`
 - `erfc` → `libm::erfc` / `libm::erfcf`
-- `j0` → `libm::j0` / `libm::j0f`
-- `j1` → `libm::j1` / `libm::j1f`
-- `y0` → `libm::y0` / `libm::y0f`
-- `y1` → `libm::y1` / `libm::y1f`
+- `j0` → `libm::j0` / `libm::j0f`  *(confirmed present in libm 0.2.11)*
+- `j1` → `libm::j1` / `libm::j1f`  *(confirmed present)*
+- `y0` → `libm::y0` / `libm::y0f`  *(confirmed present)*
+- `y1` → `libm::y1` / `libm::y1f`  *(confirmed present)*
 
 **Group 2 — `math_binary!` macro** (new macro, mirrors `prepare_binary` → broadcast → match dtype):
 - `copysign` → `libm::copysign` / `libm::copysignf`
 - `hypot` → `libm::hypot` / `libm::hypotf`
 - `fmod` → `libm::fmod` / `libm::fmodf`
-- `ldexp` → `libm::ldexp` / `libm::ldexpf`
 - `nextafter` → `libm::nextafter` / `libm::nextafterf`
-- `logaddexp` → `(a.max(b) + (-(a - b).abs()).exp().ln_1p())`
-- `logaddexp2` → logaddexp in base 2
-- `maximum` → `f64::max(a, b)` (NaN-propagating)
-- `minimum` → `f64::min(a, b)` (NaN-propagating)
-- `fmax` → `a.max(b)` where NaN is ignored (returns other operand)
-- `fmin` → `a.min(b)` where NaN is ignored
+- `logaddexp` → `max(a,b) + ln(1 + exp(-|a-b|))` (numerically stable)
+- `logaddexp2` → same formula in base 2: `max(a,b) + log2(1 + 2^(-|a-b|))`
+- `maximum` → NaN-propagating max: `if a >= b { a } else if b > a { b } else { NaN }` (i.e. NaN if either operand is NaN)
+- `minimum` → NaN-propagating min: same logic, `≤` / `<`
+- `fmax` → NaN-ignoring max: `f64::max(a, b)` / `f32::max` (returns the non-NaN operand)
+- `fmin` → NaN-ignoring min: `f64::min(a, b)` / `f32::min`
+
+**`ldexp` — handled separately** (not via `math_binary!`): libm signature is `ldexp(x: f64, n: i32) -> f64` — the exponent is `i32`, not float. The Rust binding casts the second array to Int32 before dispatch. Use a dedicated `impl NdArray` method rather than the float×float `math_binary!` macro.
 
 **Group 3 — Tuple-return ops** (manual `impl NdArray`):
-- `frexp(x) → (NdArray, NdArray)`: mantissa (Float64) + exponent (Int32) arrays
-- `modf(x) → (NdArray, NdArray)`: fractional + integer parts, both Float64
+- `frexp(x) → (NdArray, NdArray)`: mantissa (Float64) + exponent (Int32) arrays. The Python wrapper preserves the existing scalar branch: if input is a Python scalar (not ndarray/list), call `math.frexp` and return Python floats directly. Only ndarray inputs go through `_native.frexp`.
+- `modf(x) → (NdArray, NdArray)`: fractional part first, integer part second (matches NumPy/C convention). Both outputs preserve input dtype (Float32 in → Float32 out; integer input upcast to Float64).
 
 **Group 4 — Multi-param ops** (manual `impl NdArray`):
-- `nan_to_num(x, nan: f64, posinf: f64, neginf: f64) → NdArray`: replaces NaN/±Inf in-place on a copy
+- `nan_to_num(x, nan: f64, posinf: f64, neginf: f64) → NdArray`: replaces NaN/±Inf element-wise on a copy. Integer-dtype input is returned unchanged (integers cannot represent NaN/Inf — this matches NumPy's behavior). Float input is processed normally.
 - `spacing(x) → NdArray`: `nextafter(|x|, +∞) - |x|` element-wise
 - `i0(x) → NdArray`: Rust port of series expansion `Σ((x/2)^k / k!)²`
 
@@ -89,13 +90,14 @@ All new Rust implementations land here, grouped by pattern:
 - Input scanned for out-of-domain values; if found, entire array cast to Complex128 before compute
 - `scimath_sqrt`, `scimath_log`, `scimath_log2`, `scimath_log10`: negative → complex
 - `scimath_arcsin`, `scimath_arccos`: |x| > 1 → complex
-- `scimath_arctanh`: |x| > 1 → complex
+- `scimath_arctanh`: |x| > 1 → complex  *(new addition — not currently in `_ScimathModule`)*
 - `scimath_power(x, p)`: negative base → complex via `exp(p * ln(x))`
 
-**Group 6 — Reductions** (new functions in `ops/numerical.rs` or `ops/reduction.rs`):
+**Group 6 — Reductions** (new functions in `ops/numerical.rs`):
 - `trapz(y, x_or_dx, axis) → NdArray`: trapezoidal integration
 - `cumulative_trapezoid(y, x_or_dx, axis) → NdArray`: cumulative trapezoidal
-- `gradient(f, spacing, axis) → NdArray`: finite differences (central/forward/backward)
+
+`gradient` is already implemented in Rust (`ops/numerical.rs` via `gradient_1d`/`gradient_nd`) and already called via `_native.gradient`. Only the Python wrapper cleanup is needed — no new Rust required.
 
 ### `crates/numpy-rust-python/src/lib.rs`
 
@@ -166,7 +168,7 @@ np.lib.scimath.sqrt(x)
 - **Domain errors** (log of negative, sqrt of negative for real ops): libm returns `NaN` naturally — no special handling needed.
 - **scimath ops**: out-of-domain triggers full upcast to Complex128 before computation, matching NumPy `lib.scimath` contract.
 - **Division by zero in `fmod`**: follows C `fmod` semantics (returns `NaN`).
-- **`nan_to_num`**: `posinf=None` / `neginf=None` in Python wrapper maps to `f64::MAX` / `f64::MIN`.
+- **`nan_to_num`**: `posinf=None` maps to `f64::MAX` (= `1.7976931348623157e308`); `neginf=None` maps to `-f64::MAX` (= `-1.7976931348623157e308`). Note: in Rust, `f64::MIN` is `-f64::MAX` (most negative finite value) — use `-f64::MAX` in code to avoid confusion with `f64::MIN_POSITIVE`.
 - No panics in any new code.
 
 ---
@@ -197,7 +199,7 @@ np.lib.scimath.sqrt(x)
 4. Add Group 3 tuple-return functions (`frexp`, `modf`)
 5. Add Group 4 multi-param functions (`nan_to_num`, `spacing`, `i0`)
 6. Add Group 5 scimath functions
-7. Add Group 6 reductions (`trapz`, `gradient`, `cumulative_trapezoid`)
+7. Add Group 6 reductions (`trapz`, `cumulative_trapezoid`; `gradient` wrapper cleanup only)
 8. Wire all in `lib.rs`
 9. Simplify Python wrappers
 10. Write tests, run full suite
