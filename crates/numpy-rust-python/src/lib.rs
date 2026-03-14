@@ -458,6 +458,94 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn bitwise_and(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.bitwise_and(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn bitwise_or(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.bitwise_or(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn bitwise_xor(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.bitwise_xor(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn left_shift(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.left_shift(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn right_shift(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.right_shift(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn bitwise_not(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let arr = obj_to_ndarray(&a, vm)?;
+        arr.bitwise_not()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn invert(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let arr = obj_to_ndarray(&a, vm)?;
+        arr.bitwise_not()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn logical_and(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.logical_and(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn logical_or(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.logical_or(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn logical_xor(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.logical_xor(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
     fn power(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult {
         let a = obj_to_ndarray(&x1, vm)?;
         let b = obj_to_ndarray(&x2, vm)?;
