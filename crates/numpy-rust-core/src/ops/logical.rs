@@ -35,6 +35,15 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
     Ok((a, b))
 }
 
+
+/// Prepare two NdArrays for logical ops: broadcast shapes. All dtypes allowed.
+fn prepare_logical(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
+    let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
+    let a = broadcast_array_data(&lhs.data, &out_shape);
+    let b = broadcast_array_data(&rhs.data, &out_shape);
+    Ok((a, b))
+}
+
 impl NdArray {
     /// Element-wise bitwise AND. For Bool arrays: logical AND. For integers: bitwise &.
     pub fn bitwise_and(&self, other: &NdArray) -> Result<NdArray> {
@@ -205,6 +214,79 @@ impl NdArray {
         NdArray::from_data(data)
     }
 
+
+    /// Element-wise logical AND. Returns Bool array. Works on all dtypes (truthy check).
+    pub fn logical_and(&self, other: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_logical(self, other)?;
+        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
+            match data {
+                ArrayData::Bool(a) => a.mapv(|x| x),
+                ArrayData::Int32(a) => a.mapv(|x| x != 0),
+                ArrayData::Int64(a) => a.mapv(|x| x != 0),
+                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
+                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
+                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
+                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
+                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
+            }
+        };
+        let ba = to_bool(&a);
+        let bb = to_bool(&b);
+        let result = ndarray::Zip::from(&ba)
+            .and(&bb)
+            .map_collect(|&x, &y| x && y)
+            .into_shared();
+        Ok(NdArray::from_data(ArrayData::Bool(result)))
+    }
+
+    /// Element-wise logical OR. Returns Bool array. Works on all dtypes (truthy check).
+    pub fn logical_or(&self, other: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_logical(self, other)?;
+        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
+            match data {
+                ArrayData::Bool(a) => a.mapv(|x| x),
+                ArrayData::Int32(a) => a.mapv(|x| x != 0),
+                ArrayData::Int64(a) => a.mapv(|x| x != 0),
+                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
+                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
+                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
+                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
+                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
+            }
+        };
+        let ba = to_bool(&a);
+        let bb = to_bool(&b);
+        let result = ndarray::Zip::from(&ba)
+            .and(&bb)
+            .map_collect(|&x, &y| x || y)
+            .into_shared();
+        Ok(NdArray::from_data(ArrayData::Bool(result)))
+    }
+
+    /// Element-wise logical XOR. Returns Bool array. Works on all dtypes (truthy check).
+    pub fn logical_xor(&self, other: &NdArray) -> Result<NdArray> {
+        let (a, b) = prepare_logical(self, other)?;
+        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
+            match data {
+                ArrayData::Bool(a) => a.mapv(|x| x),
+                ArrayData::Int32(a) => a.mapv(|x| x != 0),
+                ArrayData::Int64(a) => a.mapv(|x| x != 0),
+                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
+                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
+                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
+                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
+                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
+            }
+        };
+        let ba = to_bool(&a);
+        let bb = to_bool(&b);
+        let result = ndarray::Zip::from(&ba)
+            .and(&bb)
+            .map_collect(|&x, &y| x ^ y)
+            .into_shared();
+        Ok(NdArray::from_data(ArrayData::Bool(result)))
+    }
+
     /// Element-wise bitwise NOT. For Bool arrays: logical NOT. For integers: bitwise !.
     pub fn bitwise_not(&self) -> Result<NdArray> {
         if self.dtype().is_complex() {
@@ -349,4 +431,56 @@ mod tests {
         assert_eq!(f.dtype(), DType::Bool);
         assert_eq!(f.shape(), &[3]);
     }
+
+    #[test]
+    fn test_logical_and() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![true, true, false, false]);
+        let b = NdArray::from_vec(vec![true, false, true, false]);
+        let c = a.logical_and(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
+        assert_eq!(c.shape(), &[4]);
+        if let ArrayData::Bool(arr) = &c.data {
+            assert_eq!(arr.as_slice().unwrap(), &[true, false, false, false]);
+        } else { panic!("expected Bool"); }
+    }
+
+    #[test]
+    fn test_logical_or() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![true, true, false, false]);
+        let b = NdArray::from_vec(vec![true, false, true, false]);
+        let c = a.logical_or(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
+        assert_eq!(c.shape(), &[4]);
+        if let ArrayData::Bool(arr) = &c.data {
+            assert_eq!(arr.as_slice().unwrap(), &[true, true, true, false]);
+        } else { panic!("expected Bool"); }
+    }
+
+    #[test]
+    fn test_logical_xor() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![true, true, false, false]);
+        let b = NdArray::from_vec(vec![true, false, true, false]);
+        let c = a.logical_xor(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
+        assert_eq!(c.shape(), &[4]);
+        if let ArrayData::Bool(arr) = &c.data {
+            assert_eq!(arr.as_slice().unwrap(), &[false, true, true, false]);
+        } else { panic!("expected Bool"); }
+    }
+
+    #[test]
+    fn test_logical_and_int() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![1_i32, 0, 2]);
+        let b = NdArray::from_vec(vec![1_i32, 1, 0]);
+        let c = a.logical_and(&b).unwrap();
+        assert_eq!(c.dtype(), DType::Bool);
+        if let ArrayData::Bool(arr) = &c.data {
+            assert_eq!(arr.as_slice().unwrap(), &[true, false, false]);
+        } else { panic!("expected Bool"); }
+    }
+
 }
