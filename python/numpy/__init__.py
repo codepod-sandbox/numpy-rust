@@ -79,53 +79,6 @@ special = type('special', (), {
 })()
 
 
-def diagonal(a, offset=0, axis1=0, axis2=1):
-    """Extract diagonal from array."""
-    a = asarray(a)
-    if a.ndim < 2:
-        raise ValueError("diagonal requires at least a 2-d array")
-    # For 2D with default axes, delegate directly
-    if a.ndim == 2:
-        if axis1 == 1 and axis2 == 0:
-            return _native.diagonal(a.T, offset)
-        return _native.diagonal(a, offset)
-    # For nD, move the two axes to the end and extract diagonals
-    # along the last two axes
-    ax1 = axis1 if axis1 >= 0 else a.ndim + axis1
-    ax2 = axis2 if axis2 >= 0 else a.ndim + axis2
-    a = moveaxis(a, (ax1, ax2), (-2, -1))
-    # Now extract diagonal from last two dims for each "batch" index
-    shape = a.shape
-    batch_shape = shape[:-2]
-    m, n = shape[-2], shape[-1]
-    if offset >= 0:
-        diag_len = _builtin_min(m, n - offset)
-    else:
-        diag_len = _builtin_min(m + offset, n)
-    if diag_len <= 0:
-        out_shape = list(batch_shape) + [0]
-        return zeros(out_shape)
-    flat = a.flatten().tolist()
-    batch_size = 1
-    for s in batch_shape:
-        batch_size *= s
-    mn = m * n
-    result = []
-    for b in range(batch_size):
-        base = b * mn
-        for k in range(diag_len):
-            if offset >= 0:
-                result.append(flat[base + k * n + (k + offset)])
-            else:
-                result.append(flat[base + (k - offset) * n + k])
-    out_shape = list(batch_shape) + [diag_len]
-    return array(result).reshape(out_shape)
-
-
-def trace(a, offset=0, axis1=0, axis2=1):
-    d = diagonal(a, offset=offset, axis1=axis1, axis2=axis2)
-    return d.sum()
-
 def outer(a, b, out=None):
     """Compute outer product."""
     a = asarray(a).flatten()
@@ -299,10 +252,6 @@ def tensordot(a, b, axes=2):
         return result
     return result.reshape(out_shape)
 
-def meshgrid(*xi, indexing='xy'):
-    arrays = [a if isinstance(a, ndarray) else array(a) for a in xi]
-    return _native.meshgrid(arrays, indexing)
-
 def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
     if not isinstance(a, ndarray):
         a = array(a)
@@ -433,53 +382,6 @@ def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
             nested = _pad_axis(nested, ax, before, after, mode)
     return array(nested)
 
-def indices(dimensions, dtype=None, sparse=False):
-    """Return an array representing the indices of a grid."""
-    ndim = len(dimensions)
-    _dt = str(dtype) if dtype is not None else None
-    if _dt is not None:
-        _dt = _normalize_dtype(_dt)
-    if ndim == 0:
-        if sparse:
-            return []
-        return array([], dtype=_dt)
-
-    if sparse:
-        result = []
-        for i in range(ndim):
-            shape = [1] * ndim
-            shape[i] = dimensions[i]
-            idx = arange(0, dimensions[i])
-            if _dt is not None:
-                idx = idx.astype(_dt)
-            idx = idx.reshape(shape)
-            result.append(idx)
-        return result
-
-    # Dense: result shape is (ndim, *dimensions)
-    grids = []
-    for axis in range(ndim):
-        # For each axis, create index array
-        idx = arange(0, dimensions[axis])
-        if _dt is not None:
-            idx = idx.astype(_dt)
-        # Reshape to broadcast: shape is [1,...,1,dim_axis,1,...,1]
-        shape = [1] * ndim
-        shape[axis] = dimensions[axis]
-        idx = idx.reshape(shape)
-        # Tile to fill all dimensions
-        reps = list(dimensions)
-        reps[axis] = 1
-        grid = tile(idx, reps)
-        grids.append(grid)
-
-    # Force contiguous layout before stacking to avoid memory layout issues
-    contiguous = [asarray(g.tolist()) for g in grids]
-    result = stack(contiguous)
-    if _dt is not None:
-        result = result.astype(_dt)
-    return result
-
 def binary_repr(num, width=None):
     if num >= 0:
         s = bin(num)[2:]
@@ -510,73 +412,13 @@ def base_repr(number, base=2, padding=0):
         s = "-" + s
     return s
 
-def advanced_fancy_index(arr, indices):
-    """Handle multi-axis fancy indexing: arr[[0,1], [2,3]] -> [arr[0,2], arr[1,3]].
-
-    In NumPy, ``a[[0,1], [2,3]]`` selects ``[a[0,2], a[1,3]]`` (paired
-    indices, not cross-product).  Because the Rust ndarray class does not
-    support tuple-of-list indexing natively, this helper provides the same
-    semantics as a module-level function.
-
-    Parameters
-    ----------
-    arr : array_like
-        Source array (must be at least 2-D for multi-axis use).
-    indices : sequence of array_like
-        One index array per axis. All index arrays must broadcast to the
-        same shape (here: must have the same length).
-
-    Returns
-    -------
-    ndarray
-        1-D array of selected elements.
-
-    Examples
-    --------
-    >>> a = np.arange(12).reshape(3, 4)
-    >>> np.advanced_fancy_index(a, [[0, 1, 2], [3, 2, 1]])
-    array([3., 6., 9.])  # a[0,3], a[1,2], a[2,1]
-    """
-    arr = asarray(arr)
-    # Normalise each index array to a flat Python list of ints
-    idx_arrays = [asarray(idx).flatten().tolist() for idx in indices]
-    lengths = [len(a) for a in idx_arrays]
-    if len(set(lengths)) > 1:
-        raise IndexError("shape mismatch: indexing arrays could not be broadcast together")
-    n = lengths[0]
-    result = []
-    for i in _builtin_range(n):
-        # Walk into the array one axis at a time
-        val = arr
-        for ax in _builtin_range(len(idx_arrays)):
-            ix = int(idx_arrays[ax][i])
-            val = val[ix]
-        result.append(float(val.tolist()) if hasattr(val, 'tolist') else float(val))
-    return array(result)
-
-def matrix_transpose(a):
-    a = asarray(a) if not isinstance(a, ndarray) else a
-    return a.T
-
 conjugate = conj
 
-def histogram_bin_edges(a, bins=10, range=None, weights=None):
-    """Compute the bin edges for a histogram without computing the histogram itself."""
-    a = asarray(a)
-    if isinstance(bins, int):
-        flat = a.flatten().tolist()
-        if range is not None:
-            lo, hi = float(range[0]), float(range[1])
-        else:
-            lo, hi = _builtin_min(flat), _builtin_max(flat)
-        edges = linspace(lo, hi, bins + 1)
-        return edges
-    else:
-        return asarray(bins)
+if False:
+    def histogram(a, bins=10, range=None, density=None, weights=None):
+        pass  # removed; imported from _indexing
 
-def histogram(a, bins=10, range=None, density=None, weights=None):
-    if not isinstance(a, ndarray):
-        a = array(a)
+def _histogram_placeholder_start():
     if isinstance(bins, (list, tuple, ndarray)):
         # Custom bin edges
         edges = asarray(bins).flatten()
@@ -714,8 +556,6 @@ def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
     hist = array(flat_hist).reshape((nbins_x, nbins_y))
     xedges = array(xedges_list)
     yedges = array(yedges_list)
-    return hist, xedges, yedges
-
 def bincount(x, weights=None, minlength=0):
     if not isinstance(x, ndarray):
         x = array(x)
@@ -1879,36 +1719,6 @@ class matrix:
 
     def __repr__(self):
         return "matrix({})".format(self.A.tolist())
-
-
-# --- Tier 30 Group C: array2string, lib.stride_tricks, info, who -----------
-
-def array2string(a, max_line_width=None, precision=None, suppress_small=None,
-                 separator=' ', prefix='', style=None, formatter=None,
-                 threshold=None, edgeitems=None, sign=None, floatmode=None,
-                 suffix='', legacy=None):
-    """Return a string representation of an array."""
-    a = asarray(a)
-    return repr(a)
-
-
-def info(object=None, maxwidth=76, output=None, toplevel='numpy'):
-    """Display documentation for numpy objects."""
-    if object is not None:
-        doc = getattr(object, '__doc__', None)
-        if doc:
-            print(doc)
-        else:
-            print("No documentation available for {}".format(object))
-
-
-def who(vardict=None):
-    """Print info about variables in the given dictionary."""
-    if vardict is None:
-        return
-    for name, val in vardict.items():
-        if hasattr(val, 'shape'):
-            print("{}: shape={}, dtype={}".format(name, val.shape, val.dtype))
 
 
 class _LibModule:
