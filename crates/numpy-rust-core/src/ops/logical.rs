@@ -35,7 +35,6 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
     Ok((a, b))
 }
 
-
 /// Prepare two NdArrays for logical ops: broadcast shapes. All dtypes allowed.
 fn prepare_logical(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
@@ -213,7 +212,6 @@ impl NdArray {
         };
         NdArray::from_data(data)
     }
-
 
     /// Element-wise logical AND. Returns Bool array. Works on all dtypes (truthy check).
     pub fn logical_and(&self, other: &NdArray) -> Result<NdArray> {
@@ -442,7 +440,9 @@ mod tests {
         assert_eq!(c.shape(), &[4]);
         if let ArrayData::Bool(arr) = &c.data {
             assert_eq!(arr.as_slice().unwrap(), &[true, false, false, false]);
-        } else { panic!("expected Bool"); }
+        } else {
+            panic!("expected Bool");
+        }
     }
 
     #[test]
@@ -455,7 +455,9 @@ mod tests {
         assert_eq!(c.shape(), &[4]);
         if let ArrayData::Bool(arr) = &c.data {
             assert_eq!(arr.as_slice().unwrap(), &[true, true, true, false]);
-        } else { panic!("expected Bool"); }
+        } else {
+            panic!("expected Bool");
+        }
     }
 
     #[test]
@@ -468,7 +470,9 @@ mod tests {
         assert_eq!(c.shape(), &[4]);
         if let ArrayData::Bool(arr) = &c.data {
             assert_eq!(arr.as_slice().unwrap(), &[false, true, true, false]);
-        } else { panic!("expected Bool"); }
+        } else {
+            panic!("expected Bool");
+        }
     }
 
     #[test]
@@ -480,7 +484,8 @@ mod tests {
         assert_eq!(c.dtype(), DType::Bool);
         if let ArrayData::Bool(arr) = &c.data {
             assert_eq!(arr.as_slice().unwrap(), &[true, false, false]);
-        } else { panic!("expected Bool"); }
+        } else {
+            panic!("expected Bool");
+        }
     }
-
 }

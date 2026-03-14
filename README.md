@@ -28,15 +28,17 @@ The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the 
 
 ---
 
-## Compatibility snapshot (`2026-03-07`)
+## Compatibility snapshot (`2026-03-10`)
 
 | Suite | Result |
 |---|---|
 | `cargo test -q` | `426 passed, 0 failed` |
 | `./tests/python/run_tests.sh` | `1,106 passed, 0 failed` |
 | `./target/release/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,207 passed, 4 expected failures (xfail), 0 unexpected failures` |
+| `./target/release/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci` | `43 passed, 405 expected failures (xfail), 54 skipped, 0 unexpected failures` |
 
 The 4 expected failures are architectural edge cases: overlapping `clip(out=)` with shared memory views (1), NEP50 float32/Python-float promotion (1), C-extension custom dtypes (1), and an upstream pytest-level xfail for NaT propagation in `clip` (1).
+The ufunc upstream suite currently has 405 expected failures, primarily due to missing low-level ufunc APIs (`resolve_dtypes`, `.at`, gufunc core signature handling), C-extension test helpers, and full dtype casting rules.
 
 The project goal is library compatibility first (pandas/sklearn/scipy-style usage), then performance. Work is prioritized toward API correctness, dtype semantics, and edge-case behavior over raw speed.
 
@@ -337,7 +339,7 @@ Also: `np.polyval`, `np.polyfit`, `np.polyadd`, `np.polysub`, `np.polymul`, `np.
 ### Performance
 - `einsum` uses brute-force iteration. Fine for small-to-medium arrays.
 - FFT 2D/nD implemented via iterated 1D transforms.
-- `rfft`/`irfft` are pure Python (1D only).
+- `rfft`/`irfft` are pure Python.
 - No SIMD or parallelism — single-threaded execution.
 
 ### Stubs & intentional deviations
@@ -355,12 +357,9 @@ These items are not yet implemented but may be needed for full compatibility:
 
 ### Would break some code
 - **Structured/record arrays** — no compound dtypes or field access.
-- **`np.ufunc` protocol** — no universal function objects (`.reduce()`, `.accumulate()`, `.outer()` work via `_UfuncWithReduce` wrapper for `maximum`, `minimum`, `add`, `multiply`).
-- **`rfft`/`irfft` for nD** — currently 1D only.
 
 ### Missing submodules
 - **`np.polynomial.chebyshev`**, **`hermite`**, **`laguerre`**, **`legendre`** — only basic polynomial operations.
-- **`np.fft.hfft`/`ihfft`** — Hermitian FFT.
 
 ### Edge cases
 - Multi-axis fancy indexing (`a[[0,1], [2,3]]`) — not supported.
@@ -377,8 +376,8 @@ These items are not yet implemented but may be needed for full compatibility:
 |-------|-------|-------------|
 | Rust unit tests | 426 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
 | Python vendored tests | 1,106 | Comprehensive integration: all functions, edge cases, regressions |
-| NumPy compat tests | 1,207 | Upstream NumPy `test_numeric.py` run via RustPython (4 xfails) |
-| **Total** | **2,739** | |
+| NumPy compat tests | 1,218 | Upstream NumPy `test_numeric.py` run via RustPython (4 xfails) |
+| **Total** | **2,750** | |
 
 ---
 
@@ -424,6 +423,7 @@ python -m pytest tests/numpy_compat/ -q
 
 # NumPy compat tests in RustPython (tracks known gaps via xfail list)
 ./target/debug/numpy-python tests/numpy_compat/run_compat.py --ci
+./target/debug/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci
 ```
 
 ### CI

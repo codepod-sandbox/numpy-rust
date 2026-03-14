@@ -545,8 +545,6 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
-
-
     #[pyfunction]
     fn power(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult {
         let a = obj_to_ndarray(&x1, vm)?;

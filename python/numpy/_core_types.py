@@ -18,7 +18,7 @@ __all__ = [
     'inexact', 'floating', 'complexfloating', 'character', 'flexible',
     # Metaclass and base
     '_ScalarType', '_NumpyIntScalar', '_NumpyFloatScalar', '_NumpyComplexScalar',
-    '_ScalarTypeMeta',
+    '_NumpyVoidScalar', '_ScalarTypeMeta',
     # dtype
     'dtype', 'StructuredDtype', '_DTypeClassMeta',
     # Per-dtype DType classes
@@ -31,7 +31,8 @@ __all__ = [
     'finfo', 'iinfo', '_MachAr',
     # Type casting + dtype normalization
     'can_cast', 'result_type', 'promote_types', 'find_common_type',
-    'common_type', 'mintypecode', '_normalize_dtype', '_DTYPE_CHAR_MAP',
+    'common_type', 'mintypecode', '_normalize_dtype', '_normalize_dtype_with_size',
+    '_string_dtype_info', '_DTYPE_CHAR_MAP',
     # Constants and aliases
     'True_', 'False_', 'int_', 'typecodes', 'sctypes', 'sctypeDict',
     'float128', 'intp', 'intc', 'uintp', 'byte', 'ubyte', 'short', 'ushort',
@@ -75,6 +76,8 @@ _DTYPE_CHAR_MAP = {
     '>U1': 'str', '>U2': 'str', '>U4': 'str',
     # Python type class names for bytes
     "<class 'bytes'>": 'bytes',
+    # Object dtype aliases
+    'O': 'object', '|O': 'object',
     # Byte string aliases (all map to 'bytes')
     '|S0': 'bytes', '|S1': 'bytes', '|S2': 'bytes',
     '|S4': 'bytes', '|S8': 'bytes',
@@ -220,6 +223,18 @@ class _NumpyComplexScalar(complex):
         return 1
 
 
+# Void scalar placeholder
+class _NumpyVoidScalar:
+    def __init__(self, value=None):
+        self._value = value
+        self._numpy_dtype_name = "void"
+        self._is_void = True
+    def __bool__(self):
+        return False
+    def __repr__(self):
+        return "numpy.void()"
+
+
 # Metaclass for scalar type classes so the CLASS itself has custom __str__, __eq__, __hash__
 class _ScalarTypeMeta(type):
     """Metaclass for numpy scalar type classes in the type hierarchy."""
@@ -250,6 +265,8 @@ class _ScalarTypeMeta(type):
             return _NumpyFloatScalar(base_value, scalar_name)
         if scalar_name in ('complex64', 'complex128'):
             return _NumpyComplexScalar(base_value, scalar_name)
+        if scalar_name == 'void':
+            return _NumpyVoidScalar(value)
         return base_value
 
     def __repr__(cls):
@@ -858,6 +875,50 @@ def _normalize_dtype(dt):
         _, _, canonical, _ = _temporal_dtype_info(s)
         return canonical
     return s
+
+
+def _normalize_dtype_with_size(dt):
+    """Normalize dtype, preserving size for string/void dtype objects."""
+    if isinstance(dt, dtype):
+        if getattr(dt, 'kind', None) == 'S':
+            return 'S{}'.format(dt.itemsize)
+        if getattr(dt, 'kind', None) == 'U':
+            chars = dt.itemsize // 4 if dt.itemsize else 0
+            return 'U{}'.format(chars)
+        if getattr(dt, 'kind', None) == 'V':
+            return 'V{}'.format(dt.itemsize)
+        return _normalize_dtype(str(dt))
+    return _normalize_dtype(str(dt)) if dt is not None else None
+
+
+def _string_dtype_info(dt):
+    """Return (kind, itemsize) for string/bytes dtype strings, else (None, None)."""
+    if not isinstance(dt, str):
+        return None, None
+    s = dt.lstrip('<>=|')
+    if s.startswith('S'):
+        n = s[1:]
+        if n.isdigit():
+            return 'bytes', int(n)
+        if s == 'S':
+            return 'bytes', 1
+    if s.startswith('U'):
+        n = s[1:]
+        if n.isdigit():
+            return 'str', 4 * int(n)
+        if s == 'U':
+            return 'str', 4
+    if s == 'str':
+        return 'str', 4
+    if s == 'bytes':
+        return 'bytes', 1
+    if s.startswith('V'):
+        n = s[1:]
+        if n.isdigit():
+            return 'void', int(n)
+        if s == 'V':
+            return 'void', 0
+    return None, None
 
 
 # ---------------------------------------------------------------------------

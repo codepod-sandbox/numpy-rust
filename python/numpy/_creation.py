@@ -11,13 +11,16 @@ from ._helpers import (
     _temporal_dtype_info, _make_temporal_array, _CLIP_UNSET, _builtin_range,
     _unsupported_numeric_dtype,
 )
-from ._core_types import dtype, _ScalarType, _normalize_dtype, _DTypeClassMeta
+from ._core_types import (
+    dtype, _ScalarType, _normalize_dtype, _normalize_dtype_with_size,
+    _string_dtype_info, _NumpyVoidScalar, _DTypeClassMeta,
+)
 from ._datetime import datetime64, timedelta64
 
 __all__ = [
     # internal helpers
     '_array_core', '_make_complex_array', '_detect_builtin_str_bytes',
-    '_make_str_bytes_result', '_like_order',
+    '_make_str_bytes_result', '_make_void_result', '_like_order',
     # core creation
     'array', 'concatenate',
     # zeros/ones family
@@ -240,7 +243,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
 def zeros(shape, dtype=None, order="C", like=None):
     if isinstance(shape, int):
         shape = (shape,)
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -250,7 +253,11 @@ def zeros(shape, dtype=None, order="C", like=None):
         n = 1
         for s in shape:
             n *= s
-        return _apply_order(_ObjectArray([0] * n, dt, shape=shape), order)
+        kind, itemsize = _string_dtype_info(dt)
+        if kind == 'void':
+            return _apply_order(_make_void_result(shape, dt, 0, itemsize=itemsize), order)
+        fill = '' if kind == 'str' else b'' if kind == 'bytes' else 0
+        return _apply_order(_ObjectArray([fill] * n, dt, shape=shape, itemsize=itemsize), order)
     if dt is not None:
         return _apply_order(_native.zeros(shape, dt), order)
     return _apply_order(_native.zeros(shape), order)
@@ -258,7 +265,7 @@ def zeros(shape, dtype=None, order="C", like=None):
 def ones(shape, dtype=None, order="C", like=None):
     if isinstance(shape, int):
         shape = (shape,)
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -268,7 +275,11 @@ def ones(shape, dtype=None, order="C", like=None):
         n = 1
         for s in shape:
             n *= s
-        return _apply_order(_ObjectArray([1] * n, dt, shape=shape), order)
+        kind, itemsize = _string_dtype_info(dt)
+        if kind == 'void':
+            return _apply_order(_make_void_result(shape, dt, 1, itemsize=itemsize), order)
+        fill = '1' if kind == 'str' else b'1' if kind == 'bytes' else 1
+        return _apply_order(_ObjectArray([fill] * n, dt, shape=shape, itemsize=itemsize), order)
     if dt is not None:
         return _apply_order(_native.ones(shape, dt), order)
     return _apply_order(_native.ones(shape), order)
@@ -380,10 +391,11 @@ def _detect_builtin_str_bytes(dtype):
         return 'bytes'
     return None
 
-def _make_str_bytes_result(shape, dtype_kind, fill_value=None):
+def _make_str_bytes_result(shape, dtype_kind, fill_value=None, itemsize=None):
     """Create an _ObjectArray with correct strides for dtype=str or dtype=bytes."""
     # itemsize: Unicode char = 4 bytes, byte = 1 byte
-    itemsize = 4 if dtype_kind == 'str' else 1
+    if itemsize is None:
+        itemsize = 4 if dtype_kind == 'str' else 1
     n = 1
     for s in shape:
         n *= s
@@ -391,10 +403,18 @@ def _make_str_bytes_result(shape, dtype_kind, fill_value=None):
     dt_name = 'str' if dtype_kind == 'str' else 'bytes'
     return _ObjectArray(data, dt_name, shape=shape, itemsize=itemsize)
 
+def _make_void_result(shape, dtype_str, fill_value=0, itemsize=None):
+    """Create an _ObjectArray for void/record dtypes (no field support)."""
+    n = 1
+    for s in shape:
+        n *= s
+    data = [_NumpyVoidScalar(fill_value)] * n
+    return _ObjectArray(data, dtype_str, shape=shape, itemsize=itemsize)
+
 def full(shape, fill_value, dtype=None, order="C"):
     if isinstance(shape, int):
         shape = (shape,)
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -404,14 +424,17 @@ def full(shape, fill_value, dtype=None, order="C"):
         n = 1
         for s in shape:
             n *= s
+        kind, itemsize = _string_dtype_info(dt)
+        if kind == 'void':
+            return _apply_order(_make_void_result(shape, dt, fill_value, itemsize=itemsize), order)
         # Coerce fill_value to appropriate type for bytes/str dtypes
-        if dt == 'bytes' and not isinstance(fill_value, (bytes, str)):
+        if kind == 'bytes' and not isinstance(fill_value, (bytes, str)):
             fill_val = str(fill_value)
-        elif dt == 'str' and not isinstance(fill_value, str):
+        elif kind == 'str' and not isinstance(fill_value, str):
             fill_val = str(fill_value)
         else:
             fill_val = fill_value
-        return _apply_order(_ObjectArray([fill_val] * n, dt, shape=shape), order)
+        return _apply_order(_ObjectArray([fill_val] * n, dt, shape=shape, itemsize=itemsize), order)
     if dt is not None:
         return _apply_order(_native.full(shape, float(fill_value), dt), order)
     return _apply_order(_native.full(shape, float(fill_value)), order)
@@ -426,8 +449,13 @@ def full_like(a, fill_value, dtype=None, order="K", subok=True, shape=None):
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk, fill_value), a, order)
     # Determine effective dtype
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, fill_value, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, fill_value, itemsize=itemsize), a, order)
     # OverflowError: check if fill_value (plain Python int) fits in target integer dtype
     if type(fill_value) is int:
         _int_dtypes_info = {
@@ -456,8 +484,13 @@ def zeros_like(a, dtype=None, order="K", subok=True, shape=None):
     sk = _detect_builtin_str_bytes(dtype)
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk), a, order)
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, 0, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, itemsize=itemsize), a, order)
     arr = _native.zeros(s, dt)
     arr = _like_order(arr, a, order)
     if subok and type(a) is not ndarray and isinstance(a, ndarray):
@@ -474,8 +507,13 @@ def ones_like(a, dtype=None, order="K", subok=True, shape=None):
     sk = _detect_builtin_str_bytes(dtype)
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk, 1), a, order)
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, 1, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, 1, itemsize=itemsize), a, order)
     arr = _native.ones(s, dt)
     arr = _like_order(arr, a, order)
     if subok and type(a) is not ndarray and isinstance(a, ndarray):
@@ -492,8 +530,13 @@ def empty_like(a, dtype=None, order="K", subok=True, shape=None):
     sk = _detect_builtin_str_bytes(dtype)
     if sk is not None:
         return _like_order(_make_str_bytes_result(s, sk), a, order)
-    src_dt = _normalize_dtype(str(a.dtype)) if hasattr(a, 'dtype') else 'float64'
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else src_dt
+    src_dt = _normalize_dtype_with_size(a.dtype) if hasattr(a, 'dtype') else 'float64'
+    dt = _normalize_dtype_with_size(dtype) if dtype is not None else src_dt
+    kind, itemsize = _string_dtype_info(dt)
+    if kind == 'void':
+        return _like_order(_make_void_result(s, dt, 0, itemsize=itemsize), a, order)
+    if kind is not None:
+        return _like_order(_make_str_bytes_result(s, kind, itemsize=itemsize), a, order)
     arr = _native.zeros(s, dt)
     arr = _like_order(arr, a, order)
     if subok and type(a) is not ndarray and isinstance(a, ndarray):

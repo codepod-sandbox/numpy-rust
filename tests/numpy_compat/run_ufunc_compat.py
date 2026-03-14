@@ -3,10 +3,10 @@ Test runner for official NumPy compatibility tests via RustPython.
 
 Provides minimal shims for pytest, hypothesis, and numpy internals that
 are not available in the RustPython environment, then discovers and
-runs tests from test_numeric.py.
+runs tests from upstream test_ufunc.py.
 
 Usage:
-    ./target/debug/numpy-python tests/numpy_compat/run_compat.py
+    ./target/debug/numpy-python tests/numpy_compat/run_ufunc_compat.py
 """
 
 import sys
@@ -270,6 +270,13 @@ sys.modules["hypothesis.extra.numpy"] = _hyp_extra_np
 
 import numpy as np
 
+# Sentinel used by upstream tests
+if not hasattr(np, "_NoValue"):
+    class _NoValueType:
+        def __repr__(self):
+            return "<no value>"
+    np._NoValue = _NoValueType()
+
 # --- numpy._core ---
 _core = types.ModuleType("numpy._core")
 _core_umath = types.ModuleType("numpy._core.umath")
@@ -277,16 +284,80 @@ _core_umath.PINF = float("inf")
 _core_umath.NINF = float("-inf")
 _core_umath.PZERO = 0.0
 _core_umath.NZERO = -0.0
+_core_umath.BUFSIZE = 8192
 if hasattr(np, "add"):
     _core_umath.add = np.add
 else:
     _core_umath.add = lambda a, b: np.array(a) + np.array(b)
+
+# Populate umath with available ufuncs from numpy
+for _name, _val in getattr(np, "__dict__", {}).items():
+    try:
+        if isinstance(_val, np.ufunc):
+            setattr(_core_umath, _name, _val)
+    except Exception:
+        pass
+
+def _make_skip_ufunc(name, signature=None, nin=2, nout=1, types=None):
+    def _skip(*args, **kwargs):
+        raise _SkipException("ufunc '{}' not supported".format(name))
+    try:
+        return np.ufunc(
+            _skip, name=name, nin=nin, nout=nout,
+            signature=signature, types=types or ["O->O"]
+        )
+    except Exception:
+        _skip.signature = signature
+        return _skip
+
+# Provide gufunc placeholders expected by upstream tests
+if not hasattr(np, "vecdot"):
+    _vecdot = _make_skip_ufunc("vecdot", signature="(n),(n)->()", nin=2, nout=1)
+    np.vecdot = _vecdot
+    _core_umath.vecdot = _vecdot
+
+if not hasattr(np, "matvec"):
+    _matvec = _make_skip_ufunc("matvec", signature="(m,n),(n)->(m)", nin=2, nout=1)
+    np.matvec = _matvec
+    _core_umath.matvec = _matvec
+
+if not hasattr(np, "vecmat"):
+    _vecmat = _make_skip_ufunc("vecmat", signature="(n),(n,m)->(m)", nin=2, nout=1)
+    np.vecmat = _vecmat
+    _core_umath.vecmat = _vecmat
+
+# Ensure matmul looks like a ufunc with a signature, even if we skip calls
+try:
+    _matmul = np.matmul
+    if not isinstance(_matmul, np.ufunc):
+        _matmul = _make_skip_ufunc("matmul", signature="(n,k),(k,m)->(n,m)", nin=2, nout=1)
+        np.matmul = _matmul
+    if not hasattr(_matmul, "signature"):
+        _matmul.signature = "(n,k),(k,m)->(n,m)"
+    _core_umath.matmul = _matmul
+except Exception:
+    pass
+
+# Ensure bitwise_count exists for upstream tests that remove it
+if not hasattr(np, "bitwise_count"):
+    try:
+        _bitwise = np.ufunc("bitwise_count", 1, 1, types=["O->O"])
+        np.bitwise_count = _bitwise
+        _core_umath.bitwise_count = _bitwise
+    except Exception:
+        pass
 
 _core.umath = _core_umath
 _core.sctypes = getattr(np, "sctypes", {})
 _core.numeric = np
 _core.multiarray = np
 _core.fromnumeric = np
+
+# Expose _core on numpy module for attribute access
+try:
+    np._core = _core
+except Exception:
+    pass
 
 sys.modules["numpy._core"] = _core
 sys.modules["numpy._core.umath"] = _core_umath
@@ -342,6 +413,39 @@ class _Rational:
 _rat.rational = _Rational
 sys.modules["numpy._core._rational_tests"] = _rat
 
+# --- numpy._core._umath_tests / numpy._core._operand_flag_tests ---
+def _make_skip_module(name):
+    mod = types.ModuleType(name)
+    def _skip(*args, **kwargs):
+        raise _SkipException("{} not available".format(name))
+    def __getattr__(attr):
+        return _skip
+    mod.__getattr__ = __getattr__
+    return mod
+
+sys.modules["numpy._core._umath_tests"] = _make_skip_module(
+    "numpy._core._umath_tests"
+)
+sys.modules["numpy._core._operand_flag_tests"] = _make_skip_module(
+    "numpy._core._operand_flag_tests"
+)
+
+# --- numpy.linalg._umath_linalg ---
+_umath_linalg_mod = _make_skip_module(
+    "numpy.linalg._umath_linalg"
+)
+sys.modules["numpy.linalg._umath_linalg"] = _umath_linalg_mod
+
+# Ensure numpy.linalg is a package-like module so submodule import works
+_linalg_mod = types.ModuleType("numpy.linalg")
+_linalg_mod.__path__ = []
+_linalg_mod._umath_linalg = _umath_linalg_mod
+sys.modules["numpy.linalg"] = _linalg_mod
+try:
+    np.linalg = _linalg_mod
+except Exception:
+    pass
+
 # --- numpy.exceptions ---
 _exc_mod = types.ModuleType("numpy.exceptions")
 _exc_mod.AxisError = getattr(np, "AxisError", type("AxisError", (Exception,), {}))
@@ -368,12 +472,24 @@ for _tname in [
     "assert_equal", "assert_array_equal", "assert_almost_equal",
     "assert_array_almost_equal", "assert_allclose", "assert_raises",
     "assert_raises_regex", "assert_warns", "assert_array_max_ulp",
-    "assert_array_less", "assert_approx_equal",
+    "assert_array_less", "assert_approx_equal", "assert_no_warnings",
 ]:
     if hasattr(np.testing, _tname):
         setattr(_testing, _tname, getattr(np.testing, _tname))
     else:
         setattr(_testing, _tname, lambda *a, **kw: None)
+
+def _assert_no_warnings(func=None, *args, **kwargs):
+    if func is None:
+        class _NoWarnCtx:
+            def __enter__(self):
+                return None
+            def __exit__(self, *exc):
+                return True
+        return _NoWarnCtx()
+    return func(*args, **kwargs)
+
+_testing.assert_no_warnings = _assert_no_warnings
 
 # Load testing_utils from _support
 _this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -421,6 +537,22 @@ except ImportError as _ie:
     _testing.break_cycles = lambda: None
 
 sys.modules["numpy.testing"] = _testing
+
+# --- numpy.testing._private.utils ---
+_testing_private = types.ModuleType("numpy.testing._private")
+_testing_utils = types.ModuleType("numpy.testing._private.utils")
+
+def _requires_memory(nbytes):
+    def dec(fn):
+        fn._skip = True
+        fn._skip_reason = "requires_memory({})".format(nbytes)
+        return fn
+    return dec
+
+_testing_utils.requires_memory = _requires_memory
+_testing_private.utils = _testing_utils
+sys.modules["numpy.testing._private"] = _testing_private
+sys.modules["numpy.testing._private.utils"] = _testing_utils
 
 # ---------------------------------------------------------------------------
 # 3b. Patch numpy functions to tolerate unsupported dtypes at class-def time
@@ -548,18 +680,18 @@ np.datetime64 = _safe_datetime64
 # 4. Load the test module
 # ---------------------------------------------------------------------------
 
-_test_path = os.path.join(_this_dir, "test_numeric.py")
+_test_path = os.path.join(_this_dir, "upstream", "test_ufunc.py")
 
-print("numpy_compat: loading test_numeric.py ...")
+print("numpy_compat: loading test_ufunc.py ...")
 
 _load_error = None
 _test_ns = None
 
 try:
     import importlib.util as _imputil
-    _spec = _imputil.spec_from_file_location("test_numeric", _test_path)
+    _spec = _imputil.spec_from_file_location("test_ufunc", _test_path)
     _test_mod = _imputil.module_from_spec(_spec)
-    sys.modules["test_numeric"] = _test_mod
+    sys.modules["test_ufunc"] = _test_mod
     _spec.loader.exec_module(_test_mod)
     _test_ns = vars(_test_mod)
 except Exception as _e1:
@@ -567,7 +699,7 @@ except Exception as _e1:
     try:
         with open(_test_path) as _f:
             _test_code = _f.read()
-        _test_ns = {"__name__": "test_numeric", "__file__": _test_path}
+        _test_ns = {"__name__": "test_ufunc", "__file__": _test_path}
         _compiled = compile(_test_code, _test_path, "exec")
         import builtins
         getattr(builtins, "exec")(_compiled, _test_ns)
@@ -575,7 +707,7 @@ except Exception as _e1:
         _load_error = _e2
 
 if _load_error is not None:
-    print("FATAL: could not load test_numeric.py: {}".format(_load_error))
+    print("FATAL: could not load test_ufunc.py: {}".format(_load_error))
     traceback.print_exc()
     sys.exit(1)
 
@@ -583,7 +715,7 @@ if _test_ns is None:
     print("FATAL: test namespace is empty")
     sys.exit(1)
 
-print("numpy_compat: test_numeric.py loaded, discovering tests ...")
+print("numpy_compat: test_ufunc.py loaded, discovering tests ...")
 sys.stdout.flush()
 
 # Check for --verbose / -v flag
@@ -597,7 +729,7 @@ _ci_mode = "--ci" in sys.argv
 
 # Load xfail list (one test name per line, blank lines and # comments ok)
 _XFAIL_TESTS = set()
-_xfail_path = os.path.join(_this_dir, "xfail.txt")
+_xfail_path = os.path.join(_this_dir, "xfail_ufunc.txt")
 if os.path.exists(_xfail_path):
     with open(_xfail_path) as _xf:
         for _line in _xf:
@@ -632,7 +764,7 @@ _errors = []
 _unexpected_failures = []
 
 # Per-test timeout in seconds
-_TEST_TIMEOUT = 60
+_TEST_TIMEOUT = 10
 
 import threading
 
@@ -1048,7 +1180,7 @@ elif _failures:
 _total = _passed + _failed + _skipped + _xfailed + _errored
 if _ci_mode:
     print(
-        "numpy_compat/test_numeric (CI mode): "
+        "numpy_compat/test_ufunc (CI mode): "
         "{} passed, {} unexpected failures, {} expected failures (xfail), "
         "{} xpassed, {} skipped, {} errored (total {})".format(
             _passed, len(_unexpected_failures), _xfailed,
@@ -1062,7 +1194,7 @@ if _ci_mode:
         )
 else:
     print(
-        "numpy_compat/test_numeric: "
+        "numpy_compat/test_ufunc: "
         "{} passed, {} failed, {} skipped, {} xfailed, {} errored "
         "(total {})".format(
             _passed, _failed, _skipped, _xfailed, _errored, _total

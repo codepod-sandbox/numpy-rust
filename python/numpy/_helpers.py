@@ -180,11 +180,24 @@ class _ObjectArray:
                     except Exception:
                         return _ObjectArray(flat, field_dtype)
             raise IndexError("field %r not found in structured dtype" % key)
+        if isinstance(key, tuple):
+            _ball = __import__("builtins").all
+            if _ball(isinstance(k, int) for k in key):
+                idx = self._flat_index(key)
+                return self._data[idx]
+            raise TypeError("tuple indices with slices are not supported for object arrays")
         result = self._data[key]
         if isinstance(key, slice):
             return _ObjectArray(result, self._dtype)
         return result
     def __setitem__(self, key, value):
+        if isinstance(key, tuple):
+            _ball = __import__("builtins").all
+            if _ball(isinstance(k, int) for k in key):
+                idx = self._flat_index(key)
+                self._data[idx] = value
+                return
+            raise TypeError("tuple indices with slices are not supported for object arrays")
         if isinstance(key, slice):
             if isinstance(value, (list, tuple)):
                 self._data[key] = value
@@ -194,6 +207,21 @@ class _ObjectArray:
                 self._data[key] = [value] * len(range(*key.indices(len(self._data))))
         else:
             self._data[key] = value
+    def _flat_index(self, idx):
+        if len(idx) != self._ndim:
+            raise IndexError("index has wrong number of dimensions")
+        flat = 0
+        mult = 1
+        for i in range(self._ndim - 1, -1, -1):
+            k = idx[i]
+            dim = self._shape[i]
+            if k < 0:
+                k += dim
+            if k < 0 or k >= dim:
+                raise IndexError("index out of bounds")
+            flat += k * mult
+            mult *= dim
+        return flat
     def _to_bool_array(self, data):
         return _native.array([1.0 if x else 0.0 for x in data]).astype("bool")
     def __eq__(self, other):
@@ -600,6 +628,14 @@ def _apply_order(arr, order):
 
 def _unsupported_numeric_dtype(dt):
     """True if this dtype can't be handled by the Rust backend."""
-    return dt in ('bytes', 'void')
+    if dt in ('bytes', 'str', 'void', 'S1'):
+        return True
+    if isinstance(dt, str):
+        s = dt.lstrip('<>=|')
+        if s.startswith('V'):
+            return True
+        if s.startswith('S') or s.startswith('U'):
+            return True
+    return False
 
 _CLIP_UNSET = object()
