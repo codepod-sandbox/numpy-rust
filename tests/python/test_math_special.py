@@ -78,6 +78,16 @@ import math as _m
 expected = _m.log(_m.exp(1.0) + _m.exp(2.0))
 check("logaddexp(1,2)", float(np.logaddexp(np.array([1.0]), np.array([2.0])).flatten().tolist()[0]), expected)
 
+# frexp
+m, e = np.frexp(np.array([12.0]))
+check("frexp mantissa", float(m.flatten().tolist()[0]), 0.75)
+check("frexp exponent", float(e.flatten().tolist()[0]), 4.0)
+
+# modf
+frac, intg = np.modf(np.array([3.7, -2.5]))
+check("modf frac[0]", float(frac.flatten().tolist()[0]), 0.7)
+check("modf int[0]", float(intg.flatten().tolist()[0]), 3.0)
+
 print(f"test_math_special: {passed} passed, {failed} failed")
 if failed:
     raise SystemExit(1)

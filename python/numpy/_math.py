@@ -652,18 +652,16 @@ def ldexp(x1, x2):
     return _native.ldexp(asarray(x1), asarray(x2))
 
 def frexp(x):
-    """Decompose elements of x into mantissa and twos exponent."""
-    if isinstance(x, ndarray):
-        flat = x.flatten().tolist()
-        mantissa = []
-        exponent = []
-        for v in flat:
-            m, e = _math.frexp(float(v))
-            mantissa.append(m)
-            exponent.append(e)
-        return array(mantissa).reshape(x.shape), array([float(e) for e in exponent]).reshape(x.shape)
-    m, e = _math.frexp(float(x))
-    return m, e
+    """Decompose elements into mantissa and twos exponent."""
+    if isinstance(x, (int, float)):
+        return _math.frexp(float(x))
+    return _native.frexp(asarray(x))
+
+def modf(x):
+    """Return the fractional and integral parts of an array, element-wise."""
+    if isinstance(x, (int, float)):
+        return _math.modf(float(x))
+    return _native.modf(asarray(x))
 
 # --- logaddexp ---------------------------------------------------------------
 

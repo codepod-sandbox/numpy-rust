@@ -645,6 +645,114 @@ impl NdArray {
     }
 }
 
+impl NdArray {
+    /// Decomposes each element into mantissa and base-2 exponent.
+    /// Returns (mantissa: Float64, exponent: Int32), both same shape as input.
+    pub fn frexp(&self) -> Result<(NdArray, NdArray)> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "frexp not supported for complex arrays".into(),
+            ));
+        }
+        let data = ensure_float(&self.data);
+        let shape: Vec<usize> = self.shape().to_vec();
+        match data {
+            ArrayData::Float64(a) => {
+                let mut mantissas = Vec::with_capacity(a.len());
+                let mut exponents = Vec::with_capacity(a.len());
+                for &x in a.iter() {
+                    let (m, e) = libm::frexp(x);
+                    mantissas.push(m);
+                    exponents.push(e);
+                }
+                let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
+                    .unwrap()
+                    .into_shared();
+                let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
+                    .unwrap()
+                    .into_shared();
+                Ok((
+                    NdArray::from_data(ArrayData::Float64(m)),
+                    NdArray::from_data(ArrayData::Int32(e)),
+                ))
+            }
+            ArrayData::Float32(a) => {
+                let mut mantissas = Vec::with_capacity(a.len());
+                let mut exponents = Vec::with_capacity(a.len());
+                for &x in a.iter() {
+                    let (m, e) = libm::frexpf(x);
+                    mantissas.push(m);
+                    exponents.push(e);
+                }
+                let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
+                    .unwrap()
+                    .into_shared();
+                let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
+                    .unwrap()
+                    .into_shared();
+                Ok((
+                    NdArray::from_data(ArrayData::Float32(m)),
+                    NdArray::from_data(ArrayData::Int32(e)),
+                ))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Splits each element into fractional and integer parts.
+    /// Returns (fractional, integer), both same dtype as input (float).
+    pub fn modf(&self) -> Result<(NdArray, NdArray)> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "modf not supported for complex arrays".into(),
+            ));
+        }
+        let data = ensure_float(&self.data);
+        let shape: Vec<usize> = self.shape().to_vec();
+        match data {
+            ArrayData::Float64(a) => {
+                let mut fracs = Vec::with_capacity(a.len());
+                let mut ints = Vec::with_capacity(a.len());
+                for &x in a.iter() {
+                    let (frac, int_part) = libm::modf(x);
+                    fracs.push(frac);
+                    ints.push(int_part);
+                }
+                let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
+                    .unwrap()
+                    .into_shared();
+                let i = ndarray::ArrayD::from_shape_vec(shape, ints)
+                    .unwrap()
+                    .into_shared();
+                Ok((
+                    NdArray::from_data(ArrayData::Float64(f)),
+                    NdArray::from_data(ArrayData::Float64(i)),
+                ))
+            }
+            ArrayData::Float32(a) => {
+                let mut fracs = Vec::with_capacity(a.len());
+                let mut ints = Vec::with_capacity(a.len());
+                for &x in a.iter() {
+                    let (frac, int_part) = libm::modff(x);
+                    fracs.push(frac);
+                    ints.push(int_part);
+                }
+                let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
+                    .unwrap()
+                    .into_shared();
+                let i = ndarray::ArrayD::from_shape_vec(shape, ints)
+                    .unwrap()
+                    .into_shared();
+                Ok((
+                    NdArray::from_data(ArrayData::Float32(f)),
+                    NdArray::from_data(ArrayData::Float32(i)),
+                ))
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{DType, NdArray};
@@ -1028,5 +1136,34 @@ mod tests {
         let vals = f64_vals(&r);
         let expected = (1.0_f64.exp() + 2.0_f64.exp()).ln();
         assert!((vals[0] - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_frexp() {
+        use crate::array_data::ArrayData;
+        let a = arr(vec![12.0, 0.5]);
+        let (m, e) = a.frexp().unwrap();
+        let mv = f64_vals(&m);
+        // Exponent array is Int32; extract values via ArrayData pattern match
+        let ArrayData::Int32(e_arr) = e.data() else {
+            panic!("expected Int32")
+        };
+        let ev: Vec<i32> = e_arr.iter().copied().collect();
+        assert!((mv[0] - 0.75).abs() < 1e-10); // 12 = 0.75 * 2^4
+        assert_eq!(ev[0], 4_i32);
+        assert!((mv[1] - 0.5).abs() < 1e-10); // 0.5 = 0.5 * 2^0
+        assert_eq!(ev[1], 0_i32);
+    }
+
+    #[test]
+    fn test_modf() {
+        let a = arr(vec![3.7, -2.5, 0.0]);
+        let (frac, intg) = a.modf().unwrap();
+        let fv = f64_vals(&frac);
+        let iv = f64_vals(&intg);
+        assert!((fv[0] - 0.7).abs() < 1e-10);
+        assert_eq!(iv[0], 3.0);
+        assert!((fv[1] - (-0.5)).abs() < 1e-10);
+        assert_eq!(iv[1], -2.0);
     }
 }

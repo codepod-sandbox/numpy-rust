@@ -570,6 +570,27 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn frexp(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<(PyNdArray, PyNdArray)> {
+        let (mantissa, exponent) = a
+            .inner()
+            .frexp()
+            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        Ok((
+            PyNdArray::from_core(mantissa),
+            PyNdArray::from_core(exponent),
+        ))
+    }
+
+    #[pyfunction]
+    fn modf(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<(PyNdArray, PyNdArray)> {
+        let (frac, int_part) = a
+            .inner()
+            .modf()
+            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        Ok((PyNdArray::from_core(frac), PyNdArray::from_core(int_part)))
+    }
+
+    #[pyfunction]
     fn nextafter(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let a = obj_to_ndarray(&x1, vm)?;
         let b = obj_to_ndarray(&x2, vm)?;
