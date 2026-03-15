@@ -25,6 +25,10 @@ check_arr("cbrt", np.cbrt([8.0, -27.0, 1.0]), [2.0, -3.0, 1.0])
 check("gamma(1)", float(np.gamma(np.array([1.0])).flatten().tolist()[0]), 1.0)
 check("gamma(5)", float(np.gamma(np.array([5.0])).flatten().tolist()[0]), 24.0)
 
+# lgamma
+check("lgamma(1)", float(np.lgamma(np.array([1.0])).flatten().tolist()[0]), 0.0)
+check("lgamma(5)", float(np.lgamma(np.array([5.0])).flatten().tolist()[0]), math.log(24.0))
+
 # erf
 check("erf(0)", float(np.erf(np.array([0.0])).flatten().tolist()[0]), 0.0)
 check("erf(1)", float(np.erf(np.array([1.0])).flatten().tolist()[0]), 0.8427007929, tol=1e-6)

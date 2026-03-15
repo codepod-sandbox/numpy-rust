@@ -700,8 +700,7 @@ def square(x):
 
 def cbrt(x):
     """Return the element-wise cube root."""
-    x = asarray(x)
-    return _native.cbrt(x)
+    return _native.cbrt(asarray(x))
 
 def reciprocal(x):
     """Return the reciprocal of the argument, element-wise."""
