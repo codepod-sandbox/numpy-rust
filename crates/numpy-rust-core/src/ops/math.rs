@@ -207,6 +207,138 @@ float_only_unary!(j1, libm::j1f, libm::j1);
 float_only_unary!(y0, libm::y0f, libm::y0);
 float_only_unary!(y1, libm::y1f, libm::y1);
 
+// --- Binary float math macro ---
+macro_rules! math_binary {
+    ($name:ident, $f32_fn:expr, $f64_fn:expr) => {
+        impl NdArray {
+            pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
+                if self.dtype().is_complex() || other.dtype().is_complex() {
+                    return Err(NumpyError::TypeError(
+                        concat!(stringify!($name), " not supported for complex arrays").into(),
+                    ));
+                }
+                let data_a = ensure_float(&self.data);
+                let data_b = ensure_float(&other.data);
+                // Unify dtypes: Float32 only if BOTH inputs are Float32; otherwise Float64.
+                let out_dtype = match (&data_a, &data_b) {
+                    (ArrayData::Float32(_), ArrayData::Float32(_)) => DType::Float32,
+                    _ => DType::Float64,
+                };
+                let data_a = cast_array_data(&data_a, out_dtype);
+                let data_b = cast_array_data(&data_b, out_dtype);
+                let out_shape = broadcast_shape(self.shape(), other.shape())?;
+                let data_a = broadcast_array_data(&data_a, &out_shape);
+                let data_b = broadcast_array_data(&data_b, &out_shape);
+                let result = match (data_a, data_b) {
+                    (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(
+                        ndarray::Zip::from(&a)
+                            .and(&b)
+                            .map_collect(|&x, &y| $f32_fn(x, y))
+                            .into_shared(),
+                    ),
+                    (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(
+                        ndarray::Zip::from(&a)
+                            .and(&b)
+                            .map_collect(|&x, &y| $f64_fn(x, y))
+                            .into_shared(),
+                    ),
+                    _ => unreachable!(),
+                };
+                Ok(NdArray::from_data(result))
+            }
+        }
+    };
+}
+
+math_binary!(copysign, libm::copysignf, libm::copysign);
+math_binary!(hypot, libm::hypotf, libm::hypot);
+math_binary!(fmod, libm::fmodf, libm::fmod);
+math_binary!(nextafter, libm::nextafterf, libm::nextafter);
+math_binary!(
+    logaddexp,
+    |a: f32, b: f32| {
+        let mx = a.max(b);
+        mx + (1.0_f32 + (-(a - b).abs()).exp()).ln()
+    },
+    |a: f64, b: f64| {
+        let mx = a.max(b);
+        mx + (1.0_f64 + (-(a - b).abs()).exp()).ln()
+    }
+);
+math_binary!(
+    logaddexp2,
+    |a: f32, b: f32| {
+        let mx = a.max(b);
+        mx + (1.0_f32 + (-(a - b).abs()).exp2()).log2()
+    },
+    |a: f64, b: f64| {
+        let mx = a.max(b);
+        mx + (1.0_f64 + (-(a - b).abs()).exp2()).log2()
+    }
+);
+// fmax/fmin: NaN-ignoring (f32::max / f64::max returns non-NaN operand)
+math_binary!(fmax, f32::max, f64::max);
+math_binary!(fmin, f32::min, f64::min);
+// maximum/minimum: NaN-propagating
+math_binary!(
+    maximum,
+    |a: f32, b: f32| if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else {
+        a.max(b)
+    },
+    |a: f64, b: f64| if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+);
+math_binary!(
+    minimum,
+    |a: f32, b: f32| if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else {
+        a.min(b)
+    },
+    |a: f64, b: f64| if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
+);
+
+impl NdArray {
+    /// ldexp(x, n) = x * 2^n, element-wise. n is cast to Int32.
+    pub fn ldexp(&self, exp_arr: &NdArray) -> Result<NdArray> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "ldexp not supported for complex arrays".into(),
+            ));
+        }
+        let data_a = ensure_float(&self.data);
+        let exp_i32 = cast_array_data(&exp_arr.data, DType::Int32);
+        let out_shape = broadcast_shape(self.shape(), exp_arr.shape())?;
+        let data_a = broadcast_array_data(&data_a, &out_shape);
+        let exp_i32 = broadcast_array_data(&exp_i32, &out_shape);
+        let result = match (data_a, exp_i32) {
+            (ArrayData::Float32(a), ArrayData::Int32(e)) => ArrayData::Float32(
+                ndarray::Zip::from(&a)
+                    .and(&e)
+                    .map_collect(|&x, &n| libm::ldexpf(x, n))
+                    .into_shared(),
+            ),
+            (ArrayData::Float64(a), ArrayData::Int32(e)) => ArrayData::Float64(
+                ndarray::Zip::from(&a)
+                    .and(&e)
+                    .map_collect(|&x, &n| libm::ldexp(x, n))
+                    .into_shared(),
+            ),
+            _ => unreachable!(),
+        };
+        Ok(NdArray::from_data(result))
+    }
+}
+
 impl NdArray {
     /// Element-wise absolute value. Works on int and float types.
     /// For complex types, returns the magnitude (norm) as a float.
@@ -844,5 +976,57 @@ mod tests {
         assert!((arr[[1]] - 5.0).abs() < 1e-10);
         assert!((arr[[2]] - 7.0).abs() < 1e-10);
         assert!((arr[[3]] - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_copysign() {
+        let a = arr(vec![1.0, -2.0, 3.0]);
+        let b = arr(vec![-1.0, 1.0, -1.0]);
+        let r = a.copysign(&b).unwrap();
+        let vals = f64_vals(&r);
+        assert_eq!(vals, vec![-1.0, 2.0, -3.0]);
+    }
+
+    #[test]
+    fn test_hypot() {
+        let a = arr(vec![3.0, 0.0]);
+        let b = arr(vec![4.0, 5.0]);
+        let r = a.hypot(&b).unwrap();
+        let vals = f64_vals(&r);
+        assert!((vals[0] - 5.0).abs() < 1e-10);
+        assert!((vals[1] - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_maximum_nan_propagation() {
+        let a = arr(vec![f64::NAN, 1.0, 3.0]);
+        let b = arr(vec![1.0, f64::NAN, 2.0]);
+        let r = a.maximum(&b).unwrap();
+        let vals = f64_vals(&r);
+        assert!(vals[0].is_nan()); // NAN propagates
+        assert!(vals[1].is_nan()); // NAN propagates
+        assert_eq!(vals[2], 3.0);
+    }
+
+    #[test]
+    fn test_fmax_nan_ignoring() {
+        let a = arr(vec![f64::NAN, 1.0, 3.0]);
+        let b = arr(vec![1.0, f64::NAN, 2.0]);
+        let r = a.fmax(&b).unwrap();
+        let vals = f64_vals(&r);
+        assert_eq!(vals[0], 1.0); // NaN ignored
+        assert_eq!(vals[1], 1.0); // NaN ignored
+        assert_eq!(vals[2], 3.0);
+    }
+
+    #[test]
+    fn test_logaddexp() {
+        // logaddexp(1, 2) = log(e^1 + e^2) ≈ 2.3132617
+        let a = arr(vec![1.0]);
+        let b = arr(vec![2.0]);
+        let r = a.logaddexp(&b).unwrap();
+        let vals = f64_vals(&r);
+        let expected = (1.0_f64.exp() + 2.0_f64.exp()).ln();
+        assert!((vals[0] - expected).abs() < 1e-10);
     }
 }
