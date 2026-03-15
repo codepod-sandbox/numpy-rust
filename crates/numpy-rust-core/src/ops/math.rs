@@ -518,6 +518,20 @@ mod tests {
     use crate::{DType, NdArray};
     use num_complex::Complex;
 
+    /// Extract f64 values from a Float64 NdArray for assertions.
+    fn f64_vals(r: &NdArray) -> Vec<f64> {
+        use crate::array_data::ArrayData;
+        let ArrayData::Float64(a) = r.data() else {
+            panic!("expected Float64, got {:?}", r.dtype())
+        };
+        a.iter().copied().collect()
+    }
+
+    /// Create a Float64 NdArray from a vector of f64 values.
+    fn arr(v: Vec<f64>) -> NdArray {
+        NdArray::from_vec(v)
+    }
+
     #[test]
     fn test_sqrt() {
         let a = NdArray::from_vec(vec![4.0_f64, 9.0, 16.0]);
@@ -767,13 +781,9 @@ mod tests {
 
     #[test]
     fn test_cbrt() {
-        use crate::array_data::ArrayData;
-        let a = NdArray::from_vec(vec![8.0_f64, -27.0, 0.0]);
+        let a = arr(vec![8.0_f64, -27.0, 0.0]);
         let r = a.cbrt().unwrap();
-        let ArrayData::Float64(arr) = r.data() else {
-            panic!("expected Float64, got {:?}", r.dtype())
-        };
-        let vals: Vec<f64> = arr.iter().copied().collect();
+        let vals = f64_vals(&r);
         assert!((vals[0] - 2.0).abs() < 1e-10, "cbrt(8) = {}", vals[0]);
         assert!((vals[1] - (-3.0)).abs() < 1e-10, "cbrt(-27) = {}", vals[1]);
         assert_eq!(vals[2], 0.0);
@@ -781,13 +791,9 @@ mod tests {
 
     #[test]
     fn test_gamma() {
-        use crate::array_data::ArrayData;
-        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 5.0]);
+        let a = arr(vec![1.0_f64, 2.0, 5.0]);
         let r = a.gamma().unwrap();
-        let ArrayData::Float64(arr) = r.data() else {
-            panic!("expected Float64, got {:?}", r.dtype())
-        };
-        let vals: Vec<f64> = arr.iter().copied().collect();
+        let vals = f64_vals(&r);
         assert!((vals[0] - 1.0).abs() < 1e-10); // gamma(1) = 1
         assert!((vals[1] - 1.0).abs() < 1e-10); // gamma(2) = 1
         assert!((vals[2] - 24.0).abs() < 1e-10); // gamma(5) = 24
@@ -795,13 +801,9 @@ mod tests {
 
     #[test]
     fn test_erf() {
-        use crate::array_data::ArrayData;
-        let a = NdArray::from_vec(vec![0.0_f64, 1.0, -1.0]);
+        let a = arr(vec![0.0_f64, 1.0, -1.0]);
         let r = a.erf().unwrap();
-        let ArrayData::Float64(arr) = r.data() else {
-            panic!("expected Float64, got {:?}", r.dtype())
-        };
-        let vals: Vec<f64> = arr.iter().copied().collect();
+        let vals = f64_vals(&r);
         assert_eq!(vals[0], 0.0);
         assert!((vals[1] - 0.842_700_792_9).abs() < 1e-8);
         assert!((vals[2] + 0.842_700_792_9).abs() < 1e-8);
@@ -809,13 +811,9 @@ mod tests {
 
     #[test]
     fn test_j0() {
-        use crate::array_data::ArrayData;
-        let a = NdArray::from_vec(vec![0.0_f64, 1.0]);
+        let a = arr(vec![0.0_f64, 1.0]);
         let r = a.j0().unwrap();
-        let ArrayData::Float64(arr) = r.data() else {
-            panic!("expected Float64, got {:?}", r.dtype())
-        };
-        let vals: Vec<f64> = arr.iter().copied().collect();
+        let vals = f64_vals(&r);
         assert!((vals[0] - 1.0).abs() < 1e-10); // j0(0) = 1
         assert!((vals[1] - 0.765_197_686_6).abs() < 1e-8);
     }
