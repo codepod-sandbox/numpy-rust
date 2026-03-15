@@ -194,6 +194,19 @@ float_only_unary!(deg2rad, |x: f32| x.to_radians(), |x: f64| x.to_radians());
 float_only_unary!(rad2deg, |x: f32| x.to_degrees(), |x: f64| x.to_degrees());
 float_only_unary!(trunc, |x: f32| x.trunc(), |x: f64| x.trunc());
 
+// --- libm-backed unary functions ---
+// These use float_only_unary! (no complex support).
+// libm functions return NaN for out-of-domain inputs; no panics.
+float_only_unary!(cbrt, libm::cbrtf, libm::cbrt);
+float_only_unary!(gamma, libm::tgammaf, libm::tgamma);
+float_only_unary!(lgamma, libm::lgammaf, libm::lgamma);
+float_only_unary!(erf, libm::erff, libm::erf);
+float_only_unary!(erfc, libm::erfcf, libm::erfc);
+float_only_unary!(j0, libm::j0f, libm::j0);
+float_only_unary!(j1, libm::j1f, libm::j1);
+float_only_unary!(y0, libm::y0f, libm::y0);
+float_only_unary!(y1, libm::y1f, libm::y1);
+
 impl NdArray {
     /// Element-wise absolute value. Works on int and float types.
     /// For complex types, returns the magnitude (norm) as a float.
@@ -750,6 +763,61 @@ mod tests {
     fn test_trunc_complex_fails() {
         let a = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
         assert!(a.trunc().is_err());
+    }
+
+    #[test]
+    fn test_cbrt() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![8.0_f64, -27.0, 0.0]);
+        let r = a.cbrt().unwrap();
+        let ArrayData::Float64(arr) = r.data() else {
+            panic!("expected Float64, got {:?}", r.dtype())
+        };
+        let vals: Vec<f64> = arr.iter().copied().collect();
+        assert!((vals[0] - 2.0).abs() < 1e-10, "cbrt(8) = {}", vals[0]);
+        assert!((vals[1] - (-3.0)).abs() < 1e-10, "cbrt(-27) = {}", vals[1]);
+        assert_eq!(vals[2], 0.0);
+    }
+
+    #[test]
+    fn test_gamma() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 5.0]);
+        let r = a.gamma().unwrap();
+        let ArrayData::Float64(arr) = r.data() else {
+            panic!("expected Float64, got {:?}", r.dtype())
+        };
+        let vals: Vec<f64> = arr.iter().copied().collect();
+        assert!((vals[0] - 1.0).abs() < 1e-10); // gamma(1) = 1
+        assert!((vals[1] - 1.0).abs() < 1e-10); // gamma(2) = 1
+        assert!((vals[2] - 24.0).abs() < 1e-10); // gamma(5) = 24
+    }
+
+    #[test]
+    fn test_erf() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0, -1.0]);
+        let r = a.erf().unwrap();
+        let ArrayData::Float64(arr) = r.data() else {
+            panic!("expected Float64, got {:?}", r.dtype())
+        };
+        let vals: Vec<f64> = arr.iter().copied().collect();
+        assert_eq!(vals[0], 0.0);
+        assert!((vals[1] - 0.842_700_792_9).abs() < 1e-8);
+        assert!((vals[2] + 0.842_700_792_9).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_j0() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_vec(vec![0.0_f64, 1.0]);
+        let r = a.j0().unwrap();
+        let ArrayData::Float64(arr) = r.data() else {
+            panic!("expected Float64, got {:?}", r.dtype())
+        };
+        let vals: Vec<f64> = arr.iter().copied().collect();
+        assert!((vals[0] - 1.0).abs() < 1e-10); // j0(0) = 1
+        assert!((vals[1] - 0.765_197_686_6).abs() < 1e-8);
     }
 
     #[test]
