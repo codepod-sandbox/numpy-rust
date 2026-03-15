@@ -596,9 +596,7 @@ def arctanh(x):
 
 def hypot(x1, x2):
     """Element-wise sqrt(x1**2 + x2**2)."""
-    x1 = asarray(x1) if not isinstance(x1, ndarray) else x1
-    x2 = asarray(x2) if not isinstance(x2, ndarray) else x2
-    return sqrt(x1 * x1 + x2 * x2)
+    return _native.hypot(asarray(x1), asarray(x2))
 
 # --- Rounding ----------------------------------------------------------------
 
@@ -651,11 +649,7 @@ def fix(x):
 
 def ldexp(x1, x2):
     """Return x1 * 2**x2, element-wise."""
-    if isinstance(x1, ndarray) or isinstance(x2, ndarray):
-        x1 = asarray(x1)
-        x2 = asarray(x2)
-        return array([float(a) * (2.0 ** int(b)) for a, b in zip(x1.flatten().tolist(), x2.flatten().tolist())]).reshape(x1.shape)
-    return float(x1) * (2.0 ** int(x2))
+    return _native.ldexp(asarray(x1), asarray(x2))
 
 def frexp(x):
     """Decompose elements of x into mantissa and twos exponent."""
@@ -675,15 +669,11 @@ def frexp(x):
 
 def logaddexp(x1, x2):
     """Logarithm of the sum of exponentiations of the inputs."""
-    x1, x2 = asarray(x1), asarray(x2)
-    mx = maximum(x1, x2)
-    return mx + log1p(exp(-abs(x1 - x2)))
+    return _native.logaddexp(asarray(x1), asarray(x2))
 
 def logaddexp2(x1, x2):
     """Logarithm base 2 of the sum of exponentiations of the inputs in base 2."""
-    x1, x2 = asarray(x1), asarray(x2)
-    ln2 = 0.6931471805599453
-    return logaddexp(x1 * ln2, x2 * ln2) / ln2
+    return _native.logaddexp2(asarray(x1), asarray(x2))
 
 # --- Power / square / cbrt / reciprocal -------------------------------------
 
@@ -711,12 +701,7 @@ def reciprocal(x):
 
 def copysign(x1, x2):
     """Change the sign of x1 to that of x2, element-wise."""
-    x1 = asarray(x1)
-    x2 = asarray(x2)
-    f1 = x1.flatten().tolist()
-    f2 = x2.flatten().tolist()
-    result = [_math.copysign(a, b) for a, b in zip(f1, f2)]
-    return array(result).reshape(x1.shape)
+    return _native.copysign(asarray(x1), asarray(x2))
 
 def heaviside(x1, x2):
     """Compute the Heaviside step function.
@@ -935,37 +920,18 @@ def less_equal(x1, x2):
 # --- Extrema -----------------------------------------------------------------
 
 def maximum(x1, x2):
-    x1 = asarray(x1)
-    x2 = asarray(x2)
-    return where(x1 >= x2, x1, x2)
+    return _native.maximum(asarray(x1), asarray(x2))
 
 def minimum(x1, x2):
-    x1 = asarray(x1)
-    x2 = asarray(x2)
-    return where(x1 <= x2, x1, x2)
+    return _native.minimum(asarray(x1), asarray(x2))
 
 def fmax(x1, x2):
     """Element-wise maximum, ignoring NaNs."""
-    x1 = asarray(x1)
-    x2 = asarray(x2)
-    # where x1 is nan, use x2; where x2 is nan, use x1; otherwise max
-    x1_nan = isnan(x1)
-    x2_nan = isnan(x2)
-    result = where(x1 > x2, x1, x2)
-    result = where(x1_nan, x2, result)
-    result = where(x2_nan, x1, result)
-    return result
+    return _native.fmax(asarray(x1), asarray(x2))
 
 def fmin(x1, x2):
     """Element-wise minimum, ignoring NaNs."""
-    x1 = asarray(x1)
-    x2 = asarray(x2)
-    x1_nan = isnan(x1)
-    x2_nan = isnan(x2)
-    result = where(x1 < x2, x1, x2)
-    result = where(x1_nan, x2, result)
-    result = where(x2_nan, x1, result)
-    return result
+    return _native.fmin(asarray(x1), asarray(x2))
 
 # --- signbit -----------------------------------------------------------------
 
@@ -1078,10 +1044,8 @@ def positive(x):
     return asarray(x) * 1
 
 def fmod(x1, x2):
-    """Return the element-wise remainder of division (C-style, sign of dividend)."""
-    x1 = asarray(x1)
-    x2 = asarray(x2)
-    return x1 - trunc(x1 / x2) * x2
+    """Return the element-wise remainder of division (C-style)."""
+    return _native.fmod(asarray(x1), asarray(x2))
 
 def modf(x):
     """Return the fractional and integral parts of an array, element-wise."""
@@ -1098,19 +1062,7 @@ def fabs(x):
 
 def nextafter(x1, x2):
     """Return the next floating-point value after x1 towards x2, element-wise."""
-    if isinstance(x1, (int, float)) and isinstance(x2, (int, float)):
-        return _math.nextafter(float(x1), float(x2))
-    x1 = asarray(x1)
-    x2 = asarray(x2)
-    v1 = x1.flatten().tolist()
-    v2 = x2.flatten().tolist()
-    # Broadcast: if one is scalar-like (len 1), expand
-    if len(v1) == 1 and len(v2) > 1:
-        v1 = v1 * len(v2)
-    elif len(v2) == 1 and len(v1) > 1:
-        v2 = v2 * len(v1)
-    result = [_math.nextafter(float(a), float(b)) for a, b in zip(v1, v2)]
-    return array(result)
+    return _native.nextafter(asarray(x1), asarray(x2))
 
 def spacing(x):
     """Return the distance between x and the nearest adjacent number."""

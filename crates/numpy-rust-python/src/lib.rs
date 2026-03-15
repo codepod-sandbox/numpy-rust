@@ -531,6 +531,107 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    // --- Binary math functions ---
+
+    #[pyfunction]
+    fn copysign(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.copysign(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn hypot(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.hypot(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn fmod(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.fmod(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn ldexp(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.ldexp(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn nextafter(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.nextafter(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn logaddexp(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.logaddexp(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn logaddexp2(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.logaddexp2(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn maximum(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.maximum(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn minimum(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.minimum(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn fmax(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.fmax(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn fmin(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.fmin(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     #[pyfunction]
     fn bitwise_and(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let a = obj_to_ndarray(&x1, vm)?;

@@ -48,6 +48,36 @@ check("y0(1)", float(np.y0(np.array([1.0])).flatten().tolist()[0]), 0.0882569642
 # y1: y1(1) ≈ -0.7812128213
 check("y1(1)", float(np.y1(np.array([1.0])).flatten().tolist()[0]), -0.7812128213, tol=1e-4)
 
+# copysign
+a = np.copysign(np.array([1.0, -2.0, 3.0]), np.array([-1.0, 1.0, -1.0]))
+check_arr("copysign", a, [-1.0, 2.0, -3.0])
+
+# hypot
+check("hypot(3,4)", float(np.hypot(np.array([3.0]), np.array([4.0])).flatten().tolist()[0]), 5.0)
+
+# fmod
+check("fmod(7,3)", float(np.fmod(np.array([7.0]), np.array([3.0])).flatten().tolist()[0]), 1.0)
+
+# ldexp
+check("ldexp(1,3)", float(np.ldexp(np.array([1.0]), np.array([3])).flatten().tolist()[0]), 8.0)
+
+# maximum (NaN-propagating)
+r = np.maximum(np.array([float('nan'), 1.0, 3.0]), np.array([1.0, float('nan'), 2.0]))
+vals = r.flatten().tolist()
+assert vals[0] != vals[0], f"maximum NaN propagation failed: {vals[0]}"  # NaN != NaN
+passed += 1
+
+# fmax (NaN-ignoring)
+r = np.fmax(np.array([float('nan'), 1.0, 3.0]), np.array([1.0, float('nan'), 2.0]))
+vals = r.flatten().tolist()
+check("fmax NaN-ignore[0]", vals[0], 1.0)
+check("fmax NaN-ignore[1]", vals[1], 1.0)
+
+# logaddexp
+import math as _m
+expected = _m.log(_m.exp(1.0) + _m.exp(2.0))
+check("logaddexp(1,2)", float(np.logaddexp(np.array([1.0]), np.array([2.0])).flatten().tolist()[0]), expected)
+
 print(f"test_math_special: {passed} passed, {failed} failed")
 if failed:
     raise SystemExit(1)
