@@ -722,6 +722,7 @@ def sinc(x):
 
 def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
     """Replace NaN with zero and infinity with large finite numbers."""
+    # copy=False (in-place modification) is not supported; always returns a copy.
     x = asarray(x)
     posinf_val = posinf if posinf is not None else 1.7976931348623157e+308
     neginf_val = neginf if neginf is not None else -1.7976931348623157e+308

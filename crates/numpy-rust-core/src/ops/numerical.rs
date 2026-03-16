@@ -149,6 +149,13 @@ pub fn trapz(y: &NdArray, x: Option<&NdArray>, dx: f64, axis: Option<i64>) -> Re
             }
         }
     };
+    if axis_idx >= y.ndim() {
+        return Err(NumpyError::ValueError(format!(
+            "axis {} is out of bounds for array of dimension {}",
+            axis_idx,
+            y.ndim()
+        )));
+    }
 
     let y_f = y.astype(DType::Float64);
     let ArrayData::Float64(y_arr) = &y_f.data else {
@@ -243,6 +250,13 @@ pub fn cumulative_trapezoid(
             }
         }
     };
+    if axis_idx >= y.ndim() {
+        return Err(NumpyError::ValueError(format!(
+            "axis {} is out of bounds for array of dimension {}",
+            axis_idx,
+            y.ndim()
+        )));
+    }
 
     let y_f = y.astype(DType::Float64);
     let ArrayData::Float64(y_arr) = &y_f.data else {

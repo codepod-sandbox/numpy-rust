@@ -257,10 +257,16 @@ math_binary!(nextafter, libm::nextafterf, libm::nextafter);
 math_binary!(
     logaddexp,
     |a: f32, b: f32| {
+        if a.is_nan() || b.is_nan() {
+            return f32::NAN;
+        }
         let mx = a.max(b);
         mx + (1.0_f32 + (-(a - b).abs()).exp()).ln()
     },
     |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            return f64::NAN;
+        }
         let mx = a.max(b);
         mx + (1.0_f64 + (-(a - b).abs()).exp()).ln()
     }
@@ -268,10 +274,16 @@ math_binary!(
 math_binary!(
     logaddexp2,
     |a: f32, b: f32| {
+        if a.is_nan() || b.is_nan() {
+            return f32::NAN;
+        }
         let mx = a.max(b);
         mx + (1.0_f32 + (-(a - b).abs()).exp2()).log2()
     },
     |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            return f64::NAN;
+        }
         let mx = a.max(b);
         mx + (1.0_f64 + (-(a - b).abs()).exp2()).log2()
     }
