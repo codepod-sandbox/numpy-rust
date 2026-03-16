@@ -185,6 +185,11 @@ impl PyStructuredArray {
                 for &n in &names {
                     if let Some((_, dt)) = all_fields.iter().find(|(k, _)| k == n) {
                         subset_parts.push(format!("[\"{}\",\"{}\"]", n, dt));
+                    } else {
+                        return Err(vm.new_value_error(format!(
+                            "field '{}' missing from dtype_json — internal error",
+                            n
+                        )));
                     }
                 }
                 let subset_dtype_json = format!("[{}]", subset_parts.join(","));
