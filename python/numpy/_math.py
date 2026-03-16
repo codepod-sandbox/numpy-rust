@@ -378,10 +378,10 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
         result = a.copy()
         if a_min is not None:
             a_min_arr = a_min if min_is_array else full(a.shape, float(a_min))
-            result = where(result < a_min_arr, a_min_arr, result)
+            result = maximum(result, a_min_arr)
         if a_max is not None:
             a_max_arr = a_max if max_is_array else full(a.shape, float(a_max))
-            result = where(result > a_max_arr, a_max_arr, result)
+            result = minimum(result, a_max_arr)
         if out is not None:
             _copy_into(out, result)
             return out

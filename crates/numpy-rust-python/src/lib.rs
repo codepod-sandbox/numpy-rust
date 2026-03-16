@@ -144,6 +144,11 @@ pub mod _numpy_native {
     ) -> PyResult<String> {
         let dt1 = py_array::parse_dtype(type1.as_str(), vm)?;
         let dt2 = py_array::parse_dtype(type2.as_str(), vm)?;
+        if dt1 == numpy_rust_core::DType::Str || dt2 == numpy_rust_core::DType::Str {
+            return Err(
+                vm.new_type_error("Cannot promote string dtype with numeric dtype".to_owned())
+            );
+        }
         Ok(dt1.promote(dt2).to_string())
     }
 
