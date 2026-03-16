@@ -3,7 +3,7 @@ import sys as _sys
 import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray, AxisError, _builtin_max, _copy_into
+from ._helpers import _ObjectArray, AxisError, _builtin_max, _copy_into, _ComplexResultArray
 from ._core_types import (
     dtype, _normalize_dtype, StructuredDtype,
     Float64DType, Float32DType, Float16DType,
@@ -491,48 +491,60 @@ def _has_complex(result):
             return True
     return False
 
+
+def _scimath_wrap(result):
+    """Wrap complex128 ndarray results in _ComplexResultArray for compat.
+    RustPython returns complex scalars as (re, im) tuples; _ComplexResultArray
+    converts them to proper Python complex objects on element access."""
+    if hasattr(result, 'dtype') and result.dtype == dtype('complex128'):
+        flat = result.flatten().tolist()
+        flat_complex = [complex(v[0], v[1]) if isinstance(v, tuple) else complex(v) for v in flat]
+        return _ComplexResultArray(flat_complex, result.shape)
+    return result
+
+
 class _ScimathModule:
     """Complex-safe math functions (numpy.lib.scimath)."""
 
     @staticmethod
     def sqrt(x):
         from ._creation import asarray
-        return _native.scimath_sqrt(asarray(x))
+        return _scimath_wrap(_native.scimath_sqrt(asarray(x)))
 
     @staticmethod
     def log(x):
         from ._creation import asarray
-        return _native.scimath_log(asarray(x))
+        return _scimath_wrap(_native.scimath_log(asarray(x)))
 
     @staticmethod
     def log2(x):
         from ._creation import asarray
-        return _native.scimath_log2(asarray(x))
+        return _scimath_wrap(_native.scimath_log2(asarray(x)))
 
     @staticmethod
     def log10(x):
         from ._creation import asarray
-        return _native.scimath_log10(asarray(x))
+        return _scimath_wrap(_native.scimath_log10(asarray(x)))
 
     @staticmethod
     def arcsin(x):
         from ._creation import asarray
-        return _native.scimath_arcsin(asarray(x))
+        return _scimath_wrap(_native.scimath_arcsin(asarray(x)))
 
     @staticmethod
     def arccos(x):
         from ._creation import asarray
-        return _native.scimath_arccos(asarray(x))
+        return _scimath_wrap(_native.scimath_arccos(asarray(x)))
 
     @staticmethod
     def arctanh(x):
         from ._creation import asarray
-        return _native.scimath_arctanh(asarray(x))
+        return _scimath_wrap(_native.scimath_arctanh(asarray(x)))
 
     @staticmethod
     def power(x, p):
         from ._creation import asarray
-        return _native.scimath_power(asarray(x), asarray(p))
+        return _scimath_wrap(_native.scimath_power(asarray(x), asarray(p)))
 
 lib.scimath = _ScimathModule()
 
