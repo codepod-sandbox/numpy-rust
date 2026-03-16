@@ -833,55 +833,9 @@ def gradient(f, *varargs, axis=None, edge_order=1):
 def trapz(y, x=None, dx=1.0, axis=-1):
     """Integrate along the given axis using the composite trapezoidal rule."""
     y = asarray(y)
-    if y.ndim == 1:
-        n = y.size
-        if x is not None:
-            x = asarray(x).flatten()
-            total = 0.0
-            for i in range(1, n):
-                total += (x[i] - x[i-1]) * (y[i] + y[i-1]) / 2.0
-            return total
-        else:
-            total = 0.0
-            for i in range(1, n):
-                total += dx * (y[i] + y[i-1]) / 2.0
-            return total
-    # For multi-dim, apply along specified axis
-    if axis == -1:
-        axis = y.ndim - 1
-    if y.ndim == 2:
-        results = []
-        if axis == 0:
-            for j in range(y.shape[1]):
-                col = array([y[i][j] for i in range(y.shape[0])])
-                results.append(trapz(col, dx=dx))
-        else:
-            for i in range(y.shape[0]):
-                results.append(trapz(y[i], dx=dx))
-        return array(results)
-    # General nD case
-    if axis < 0:
-        axis = y.ndim + axis
-    # Move target axis to last, flatten leading dims, apply trapz per lane
-    import numpy as _np
-    y_moved = _np.moveaxis(y, axis, -1)
-    result_shape = list(y_moved.shape[:-1])
-    n_lane = y_moved.shape[-1]
-    lead = 1
-    for s in result_shape:
-        lead *= s
-    y_flat = y_moved.reshape((lead, n_lane))
-    flat_results = []
-    y_list = y_flat.tolist()
-    for i in range(lead):
-        row = array(y_list[i])
-        if x is not None:
-            flat_results.append(float(trapz(row, x=asarray(x), dx=dx)))
-        else:
-            flat_results.append(float(trapz(row, dx=dx)))
-    if not result_shape:
-        return float(flat_results[0])
-    return array(flat_results).reshape(result_shape)
+    if x is not None:
+        return _native.trapz_x(y, asarray(x), float(dx), int(axis))
+    return _native.trapz(y, float(dx), int(axis))
 
 
 trapezoid = trapz
@@ -890,44 +844,21 @@ trapezoid = trapz
 def cumulative_trapezoid(y, x=None, dx=1.0, axis=-1, initial=None):
     """Cumulatively integrate y(x) using the trapezoidal rule."""
     y = asarray(y)
-    if y.ndim == 1:
-        n = y.size
-        result = []
-        if initial is not None:
-            result.append(float(initial))
-        if x is not None:
-            x = asarray(x).flatten()
-            for i in range(1, n):
-                result.append((result[-1] if result else 0.0) + (x[i] - x[i-1]) * (y[i] + y[i-1]) / 2.0)
-        else:
-            for i in range(1, n):
-                result.append((result[-1] if result else 0.0) + dx * (y[i] + y[i-1]) / 2.0)
-        return array(result)
-    # For multi-dim, apply along specified axis
-    import numpy as _np
-    if axis == -1:
-        axis = y.ndim - 1
-    if axis < 0:
-        axis = y.ndim + axis
-    y_moved = _np.moveaxis(y, axis, -1)
-    result_shape = list(y_moved.shape[:-1])
-    n_lane = y_moved.shape[-1]
-    lead = 1
-    for s in result_shape:
-        lead *= s
-    y_flat = y_moved.reshape((lead, n_lane))
-    y_list = y_flat.tolist()
-    flat_results = []
-    for i in range(lead):
-        row = array(y_list[i])
-        cum = cumulative_trapezoid(row, x=x, dx=dx, axis=-1, initial=initial)
-        flat_results.append(cum.tolist())
-    out_lane = len(flat_results[0])
-    result_flat = []
-    for row in flat_results:
-        result_flat.extend(row)
-    out = array(result_flat).reshape(result_shape + [out_lane])
-    return _np.moveaxis(out, -1, axis)
+    if x is not None:
+        result = _native.cumulative_trapezoid_x(y, asarray(x), float(dx), int(axis))
+    else:
+        result = _native.cumulative_trapezoid(y, float(dx), int(axis))
+    if initial is not None:
+        # Prepend the initial value along the integration axis
+        import numpy as _np
+        ax = int(axis)
+        if ax < 0:
+            ax = y.ndim + ax
+        init_shape = list(result.shape)
+        init_shape[ax] = 1
+        init_arr = _np.full(init_shape, float(initial))
+        result = concatenate([init_arr, result], axis=ax)
+    return result
 
 
 def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):

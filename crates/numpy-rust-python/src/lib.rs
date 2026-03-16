@@ -1870,6 +1870,73 @@ pub mod _numpy_native {
         }
     }
 
+    // --- Reductions ---
+
+    #[pyfunction]
+    fn trapz(
+        y: vm::PyRef<PyNdArray>,
+        dx: vm::function::OptionalArg<f64>,
+        axis: vm::function::OptionalArg<i64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let dx_val = dx.unwrap_or(1.0);
+        let axis_val = axis.into_option();
+        numpy_rust_core::ops::numerical::trapz(&y.inner(), None, dx_val, axis_val)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn trapz_x(
+        y: vm::PyRef<PyNdArray>,
+        x: vm::PyRef<PyNdArray>,
+        dx: vm::function::OptionalArg<f64>,
+        axis: vm::function::OptionalArg<i64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let dx_val = dx.unwrap_or(1.0);
+        let axis_val = axis.into_option();
+        let x_inner = x.inner();
+        numpy_rust_core::ops::numerical::trapz(&y.inner(), Some(&x_inner), dx_val, axis_val)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn cumulative_trapezoid(
+        y: vm::PyRef<PyNdArray>,
+        dx: vm::function::OptionalArg<f64>,
+        axis: vm::function::OptionalArg<i64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let dx_val = dx.unwrap_or(1.0);
+        let axis_val = axis.into_option();
+        numpy_rust_core::ops::numerical::cumulative_trapezoid(&y.inner(), None, dx_val, axis_val)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn cumulative_trapezoid_x(
+        y: vm::PyRef<PyNdArray>,
+        x: vm::PyRef<PyNdArray>,
+        dx: vm::function::OptionalArg<f64>,
+        axis: vm::function::OptionalArg<i64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let dx_val = dx.unwrap_or(1.0);
+        let axis_val = axis.into_option();
+        let x_inner = x.inner();
+        numpy_rust_core::ops::numerical::cumulative_trapezoid(
+            &y.inner(),
+            Some(&x_inner),
+            dx_val,
+            axis_val,
+        )
+        .map(PyNdArray::from_core)
+        .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Polynomial ---
 
     #[cfg(feature = "linalg")]

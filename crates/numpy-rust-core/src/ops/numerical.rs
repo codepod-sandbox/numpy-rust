@@ -131,6 +131,185 @@ pub fn gradient_nd(f: &NdArray, spacing: f64) -> Result<Vec<NdArray>> {
     Ok(results)
 }
 
+/// Trapezoidal numerical integration along axis.
+/// y: values array
+/// x: optional x-coordinates (if None, uses uniform spacing dx)
+/// dx: spacing when x is None (default 1.0)
+/// axis: integration axis (None = last axis)
+pub fn trapz(y: &NdArray, x: Option<&NdArray>, dx: f64, axis: Option<i64>) -> Result<NdArray> {
+    let ndim = y.ndim() as i64;
+    let axis_idx = match axis {
+        Some(a) if a < 0 => (ndim + a) as usize,
+        Some(a) => a as usize,
+        None => {
+            if ndim > 0 {
+                (ndim - 1) as usize
+            } else {
+                0
+            }
+        }
+    };
+
+    let y_f = y.astype(DType::Float64);
+    let ArrayData::Float64(y_arr) = &y_f.data else {
+        unreachable!()
+    };
+
+    let n = y.shape()[axis_idx];
+    if n < 2 {
+        return Err(NumpyError::ValueError(
+            "trapz requires at least 2 elements along integration axis".into(),
+        ));
+    }
+
+    // Build dx array along axis_idx
+    let dx_vals: Vec<f64> = if let Some(x_arr) = x {
+        let x_f = x_arr.astype(DType::Float64);
+        let ArrayData::Float64(xa) = &x_f.data else {
+            unreachable!()
+        };
+        let x_flat: Vec<f64> = xa.iter().copied().collect();
+        x_flat.windows(2).map(|w| w[1] - w[0]).collect()
+    } else {
+        vec![dx; n - 1]
+    };
+
+    // For 1-D case:
+    if y.ndim() == 1 {
+        let y_flat: Vec<f64> = y_arr.iter().copied().collect();
+        let result: f64 = y_flat
+            .windows(2)
+            .zip(dx_vals.iter())
+            .map(|(w, &d)| 0.5 * (w[0] + w[1]) * d)
+            .sum();
+        return Ok(NdArray::from_data(ArrayData::Float64(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), result).into_shared(),
+        )));
+    }
+
+    // Multi-dimensional: reduce along axis_idx
+    let shape = y.shape().to_vec();
+    let mut out_shape = shape.clone();
+    out_shape.remove(axis_idx);
+    let out_n: usize = out_shape.iter().product();
+    let mut result_flat = vec![0.0_f64; out_n];
+
+    for (out_idx, out_val) in result_flat.iter_mut().enumerate() {
+        let mut rem = out_idx;
+        let mut in_idx_base = vec![0usize; y.ndim()];
+        let mut ax_out = out_shape.len();
+        for d in (0..y.ndim()).rev() {
+            if d == axis_idx {
+                continue;
+            }
+            ax_out -= 1;
+            let dim = out_shape[ax_out];
+            in_idx_base[d] = rem % dim;
+            rem /= dim;
+        }
+        let mut sum = 0.0;
+        for (i, &d) in dx_vals.iter().enumerate() {
+            in_idx_base[axis_idx] = i;
+            let v0 = y_arr[ndarray::IxDyn(&in_idx_base)];
+            in_idx_base[axis_idx] = i + 1;
+            let v1 = y_arr[ndarray::IxDyn(&in_idx_base)];
+            sum += 0.5 * (v0 + v1) * d;
+        }
+        *out_val = sum;
+    }
+
+    let result = ndarray::ArrayD::from_shape_vec(out_shape, result_flat)
+        .map_err(|e| NumpyError::ValueError(e.to_string()))?
+        .into_shared();
+    Ok(NdArray::from_data(ArrayData::Float64(result)))
+}
+
+/// Cumulative trapezoidal integration. Returns array with length n-1 along axis.
+pub fn cumulative_trapezoid(
+    y: &NdArray,
+    x: Option<&NdArray>,
+    dx: f64,
+    axis: Option<i64>,
+) -> Result<NdArray> {
+    let ndim = y.ndim() as i64;
+    let axis_idx = match axis {
+        Some(a) if a < 0 => (ndim + a) as usize,
+        Some(a) => a as usize,
+        None => {
+            if ndim > 0 {
+                (ndim - 1) as usize
+            } else {
+                0
+            }
+        }
+    };
+
+    let y_f = y.astype(DType::Float64);
+    let ArrayData::Float64(y_arr) = &y_f.data else {
+        unreachable!()
+    };
+    let n = y.shape()[axis_idx];
+    if n < 2 {
+        return Err(NumpyError::ValueError(
+            "cumulative_trapezoid requires at least 2 elements".into(),
+        ));
+    }
+
+    let dx_vals: Vec<f64> = if let Some(x_arr) = x {
+        let x_f = x_arr.astype(DType::Float64);
+        let ArrayData::Float64(xa) = &x_f.data else {
+            unreachable!()
+        };
+        let x_flat: Vec<f64> = xa.iter().copied().collect();
+        x_flat.windows(2).map(|w| w[1] - w[0]).collect()
+    } else {
+        vec![dx; n - 1]
+    };
+
+    let mut out_shape = y.shape().to_vec();
+    out_shape[axis_idx] = n - 1;
+    let out_n: usize = out_shape.iter().product();
+    let mut result_flat = vec![0.0_f64; out_n];
+
+    if y.ndim() == 1 {
+        let y_flat: Vec<f64> = y_arr.iter().copied().collect();
+        let mut cumsum = 0.0;
+        for (i, (&d, w)) in dx_vals.iter().zip(y_flat.windows(2)).enumerate() {
+            cumsum += 0.5 * (w[0] + w[1]) * d;
+            result_flat[i] = cumsum;
+        }
+        let result = ndarray::ArrayD::from_shape_vec(out_shape, result_flat)
+            .map_err(|e| NumpyError::ValueError(e.to_string()))?
+            .into_shared();
+        return Ok(NdArray::from_data(ArrayData::Float64(result)));
+    }
+
+    for (out_flat, out_cell) in result_flat.iter_mut().enumerate() {
+        let mut rem = out_flat;
+        let mut out_multi = vec![0usize; y.ndim()];
+        for d in (0..y.ndim()).rev() {
+            out_multi[d] = rem % out_shape[d];
+            rem /= out_shape[d];
+        }
+        let seg = out_multi[axis_idx];
+        let mut cumsum = 0.0;
+        let mut in_idx = out_multi.clone();
+        for (k, &d) in dx_vals.iter().enumerate().take(seg + 1) {
+            in_idx[axis_idx] = k;
+            let v0 = y_arr[ndarray::IxDyn(&in_idx)];
+            in_idx[axis_idx] = k + 1;
+            let v1 = y_arr[ndarray::IxDyn(&in_idx)];
+            cumsum += 0.5 * (v0 + v1) * d;
+        }
+        *out_cell = cumsum;
+    }
+
+    let result = ndarray::ArrayD::from_shape_vec(out_shape, result_flat)
+        .map_err(|e| NumpyError::ValueError(e.to_string()))?
+        .into_shared();
+    Ok(NdArray::from_data(ArrayData::Float64(result)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +368,43 @@ mod tests {
         assert!((arr[[0]] - 4.0).abs() < 1e-10);
         assert!((arr[[1]] - 4.0).abs() < 1e-10);
         assert!((arr[[2]] - 4.0).abs() < 1e-10);
+    }
+
+    fn f64_vals(r: &crate::NdArray) -> Vec<f64> {
+        let ArrayData::Float64(a) = r.data() else {
+            panic!("expected Float64")
+        };
+        a.iter().copied().collect()
+    }
+
+    #[test]
+    fn test_trapz_basic() {
+        // trapz([1, 2, 3], dx=1) = 4.0
+        let y = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let r = trapz(&y, None, 1.0, None).unwrap();
+        let vals = f64_vals(&r);
+        assert!((vals[0] - 4.0).abs() < 1e-10, "trapz = {}", vals[0]);
+    }
+
+    #[test]
+    fn test_trapz_with_x() {
+        // trapz([1,2,3], x=[0,1,3]) = 0.5*(1+2)*1 + 0.5*(2+3)*2 = 1.5 + 5 = 6.5
+        let y = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let x = NdArray::from_vec(vec![0.0_f64, 1.0, 3.0]);
+        let r = trapz(&y, Some(&x), 1.0, None).unwrap();
+        let vals = f64_vals(&r);
+        assert!((vals[0] - 6.5).abs() < 1e-10, "trapz = {}", vals[0]);
+    }
+
+    #[test]
+    fn test_cumulative_trapezoid() {
+        // cumtrapz([1,2,3], dx=1) = [1.5, 4.0]
+        let y = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
+        let r = cumulative_trapezoid(&y, None, 1.0, None).unwrap();
+        let vals = f64_vals(&r);
+        assert_eq!(vals.len(), 2);
+        assert!((vals[0] - 1.5).abs() < 1e-10);
+        assert!((vals[1] - 4.0).abs() < 1e-10);
     }
 
     #[test]
