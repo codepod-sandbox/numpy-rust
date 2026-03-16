@@ -836,7 +836,7 @@ class StructuredArray:
         dt = object.__getattribute__(self, 'dtype')
         native = object.__getattribute__(self, '_native_arr')
         for i in range(len(self)):
-            row_dict = native[i]   # dict from Rust __getitem__(int)
+            row_dict = native[i]   # list of scalars from Rust __getitem__(int)
             yield void(row_dict, dt)
 
     @property
