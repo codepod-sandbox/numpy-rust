@@ -623,6 +623,52 @@ pub mod _numpy_native {
         PyNdArray::from_core(a.inner().i0())
     }
 
+    // --- Scimath complex-safe functions ---
+
+    #[pyfunction]
+    fn scimath_sqrt(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().scimath_sqrt())
+    }
+
+    #[pyfunction]
+    fn scimath_log(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().scimath_log())
+    }
+
+    #[pyfunction]
+    fn scimath_log2(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().scimath_log2())
+    }
+
+    #[pyfunction]
+    fn scimath_log10(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().scimath_log10())
+    }
+
+    #[pyfunction]
+    fn scimath_arcsin(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().scimath_arcsin())
+    }
+
+    #[pyfunction]
+    fn scimath_arccos(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().scimath_arccos())
+    }
+
+    #[pyfunction]
+    fn scimath_arctanh(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().scimath_arctanh())
+    }
+
+    #[pyfunction]
+    fn scimath_power(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let a = obj_to_ndarray(&x1, vm)?;
+        let b = obj_to_ndarray(&x2, vm)?;
+        a.scimath_power(&b)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     #[pyfunction]
     fn logaddexp(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let a = obj_to_ndarray(&x1, vm)?;

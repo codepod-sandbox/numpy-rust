@@ -872,14 +872,165 @@ impl NdArray {
     }
 }
 
+/// Helper: scan Float32/Float64 array for out-of-domain values per predicate.
+/// If any found, casts to Complex128; otherwise returns the float data unchanged.
+fn maybe_complex(data: &ArrayData, is_out_of_domain: impl Fn(f64) -> bool) -> ArrayData {
+    let should_complex = match data {
+        ArrayData::Float32(a) => a.iter().any(|&x| is_out_of_domain(x as f64)),
+        ArrayData::Float64(a) => a.iter().any(|&x| is_out_of_domain(x)),
+        _ => false,
+    };
+    if should_complex {
+        cast_array_data(data, DType::Complex128)
+    } else {
+        data.clone()
+    }
+}
+
+impl NdArray {
+    pub fn scimath_sqrt(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let data = maybe_complex(&data, |x| x < 0.0);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.sqrt()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.sqrt()).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.sqrt()).into_shared()),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    pub fn scimath_log(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let data = maybe_complex(&data, |x| x < 0.0);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.ln()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.ln()).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.ln()).into_shared()),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    pub fn scimath_log2(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let data = maybe_complex(&data, |x| x < 0.0);
+        let ln2 = std::f64::consts::LN_2;
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.log2()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.log2()).into_shared()),
+            ArrayData::Complex128(a) => {
+                ArrayData::Complex128(a.mapv(|z| z.ln() / Complex::new(ln2, 0.0)).into_shared())
+            }
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    pub fn scimath_log10(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let data = maybe_complex(&data, |x| x < 0.0);
+        let ln10 = std::f64::consts::LN_10;
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.log10()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.log10()).into_shared()),
+            ArrayData::Complex128(a) => {
+                ArrayData::Complex128(a.mapv(|z| z.ln() / Complex::new(ln10, 0.0)).into_shared())
+            }
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    pub fn scimath_arcsin(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let data = maybe_complex(&data, |x| x.abs() > 1.0);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.asin()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.asin()).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.asin()).into_shared()),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    pub fn scimath_arccos(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let data = maybe_complex(&data, |x| x.abs() > 1.0);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.acos()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.acos()).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.acos()).into_shared()),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    pub fn scimath_arctanh(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let data = maybe_complex(&data, |x| x.abs() > 1.0);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.atanh()).into_shared()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.atanh()).into_shared()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.atanh()).into_shared()),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    /// Complex-safe power: negative base → complex via powc.
+    pub fn scimath_power(&self, exp_arr: &NdArray) -> Result<NdArray> {
+        let data_a = ensure_float(&self.data);
+        let data_e = ensure_float(&exp_arr.data);
+        let out_shape = broadcast_shape(self.shape(), exp_arr.shape())?;
+        let data_a = broadcast_array_data(&data_a, &out_shape);
+        let data_e = broadcast_array_data(&data_e, &out_shape);
+        // Check if any base is negative (needs complex)
+        let needs_complex = match &data_a {
+            ArrayData::Float32(a) => a.iter().any(|&x| x < 0.0),
+            ArrayData::Float64(a) => a.iter().any(|&x| x < 0.0),
+            _ => false,
+        };
+        if needs_complex {
+            let c_a = cast_array_data(&data_a, DType::Complex128);
+            let c_e = cast_array_data(&data_e, DType::Complex128);
+            if let (ArrayData::Complex128(a), ArrayData::Complex128(e)) = (c_a, c_e) {
+                return Ok(NdArray::from_data(ArrayData::Complex128(
+                    ndarray::Zip::from(&a)
+                        .and(&e)
+                        .map_collect(|&b, &p| b.powc(p))
+                        .into_shared(),
+                )));
+            }
+        }
+        // Normal float power
+        let result = match (data_a, data_e) {
+            (ArrayData::Float32(a), ArrayData::Float32(e)) => ArrayData::Float32(
+                ndarray::Zip::from(&a)
+                    .and(&e)
+                    .map_collect(|&x, &p| x.powf(p))
+                    .into_shared(),
+            ),
+            (ArrayData::Float64(a), ArrayData::Float64(e)) => ArrayData::Float64(
+                ndarray::Zip::from(&a)
+                    .and(&e)
+                    .map_collect(|&x, &p| x.powf(p))
+                    .into_shared(),
+            ),
+            _ => unreachable!(),
+        };
+        Ok(NdArray::from_data(result))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::array_data::ArrayData;
     use crate::{DType, NdArray};
     use num_complex::Complex;
 
     /// Extract f64 values from a Float64 NdArray for assertions.
     fn f64_vals(r: &NdArray) -> Vec<f64> {
-        use crate::array_data::ArrayData;
         let ArrayData::Float64(a) = r.data() else {
             panic!("expected Float64, got {:?}", r.dtype())
         };
@@ -1320,5 +1471,41 @@ mod tests {
         let vals = f64_vals(&r);
         assert!((vals[0] - 1.0).abs() < 1e-10); // I0(0) = 1
         assert!((vals[1] - 1.2660658778).abs() < 1e-8); // I0(1) ≈ 1.2660658778
+    }
+
+    #[test]
+    fn test_scimath_sqrt_positive() {
+        let a = arr(vec![4.0, 9.0]);
+        let r = a.scimath_sqrt();
+        // All positive: result should be real Float64
+        assert!(matches!(r.data(), ArrayData::Float64(_)));
+        let vals = f64_vals(&r);
+        assert!((vals[0] - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_scimath_sqrt_negative() {
+        let a = arr(vec![-4.0, 9.0]);
+        let r = a.scimath_sqrt();
+        // Has negative: result must be Complex128
+        assert!(matches!(r.data(), ArrayData::Complex128(_)));
+        // sqrt(-4) = 2i
+        if let ArrayData::Complex128(arr) = r.data() {
+            let v: Vec<_> = arr.iter().collect();
+            assert!((v[0].im - 2.0).abs() < 1e-10, "sqrt(-4).im = {}", v[0].im);
+        }
+    }
+
+    #[test]
+    fn test_scimath_log_negative() {
+        let a = arr(vec![-1.0]);
+        let r = a.scimath_log();
+        // log(-1) = iπ
+        assert!(matches!(r.data(), ArrayData::Complex128(_)));
+        if let ArrayData::Complex128(arr) = r.data() {
+            let v = arr.iter().next().unwrap();
+            assert!((v.re - 0.0).abs() < 1e-10);
+            assert!((v.im - std::f64::consts::PI).abs() < 1e-10);
+        }
     }
 }

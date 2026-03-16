@@ -495,114 +495,44 @@ class _ScimathModule:
     """Complex-safe math functions (numpy.lib.scimath)."""
 
     @staticmethod
-    def _to_array(result, shape):
-        """Convert list of float/complex results to an ndarray."""
-        has_cplx = False
-        for r in result:
-            if isinstance(r, complex):
-                has_cplx = True
-                break
-        if has_cplx:
-            return _make_complex_array(result, shape)
-        return _native.array([float(r) for r in result]).reshape(shape)
-
-    @staticmethod
     def sqrt(x):
-        x = asarray(x)
-        flat = x.flatten()
-        result = []
-        for i in range(flat.size):
-            v = flat[i]
-            if v < 0:
-                result.append(complex(0, (-v)**0.5))
-            else:
-                result.append(v**0.5)
-        return _ScimathModule._to_array(result, x.shape)
+        from ._creation import asarray
+        return _native.scimath_sqrt(asarray(x))
 
     @staticmethod
     def log(x):
-        x = asarray(x)
-        flat = x.flatten()
-        result = []
-        for i in range(flat.size):
-            v = flat[i]
-            if v <= 0:
-                import cmath
-                result.append(cmath.log(v))
-            else:
-                result.append(_math.log(v))
-        return _ScimathModule._to_array(result, x.shape)
-
-    @staticmethod
-    def log10(x):
-        x = asarray(x)
-        flat = x.flatten()
-        result = []
-        for i in range(flat.size):
-            v = flat[i]
-            if v <= 0:
-                import cmath
-                result.append(cmath.log10(v))
-            else:
-                result.append(_math.log10(v))
-        return _ScimathModule._to_array(result, x.shape)
+        from ._creation import asarray
+        return _native.scimath_log(asarray(x))
 
     @staticmethod
     def log2(x):
-        x = asarray(x)
-        flat = x.flatten()
-        result = []
-        for i in range(flat.size):
-            v = flat[i]
-            if v <= 0:
-                import cmath
-                result.append(cmath.log(v) / cmath.log(2))
-            else:
-                result.append(_math.log2(v))
-        return _ScimathModule._to_array(result, x.shape)
+        from ._creation import asarray
+        return _native.scimath_log2(asarray(x))
 
     @staticmethod
-    def power(x, p):
-        x = asarray(x)
-        flat = x.flatten()
-        result = []
-        for i in range(flat.size):
-            v = flat[i]
-            try:
-                r = v ** p
-                result.append(r)
-            except (ValueError, ZeroDivisionError):
-                import cmath
-                result.append(cmath.exp(p * cmath.log(v)))
-        return _ScimathModule._to_array(result, x.shape)
-
-    @staticmethod
-    def arccos(x):
-        x = asarray(x)
-        flat = x.flatten()
-        result = []
-        for i in range(flat.size):
-            v = flat[i]
-            if abs(v) > 1:
-                import cmath
-                result.append(cmath.acos(v))
-            else:
-                result.append(_math.acos(v))
-        return _ScimathModule._to_array(result, x.shape)
+    def log10(x):
+        from ._creation import asarray
+        return _native.scimath_log10(asarray(x))
 
     @staticmethod
     def arcsin(x):
-        x = asarray(x)
-        flat = x.flatten()
-        result = []
-        for i in range(flat.size):
-            v = flat[i]
-            if abs(v) > 1:
-                import cmath
-                result.append(cmath.asin(v))
-            else:
-                result.append(_math.asin(v))
-        return _ScimathModule._to_array(result, x.shape)
+        from ._creation import asarray
+        return _native.scimath_arcsin(asarray(x))
+
+    @staticmethod
+    def arccos(x):
+        from ._creation import asarray
+        return _native.scimath_arccos(asarray(x))
+
+    @staticmethod
+    def arctanh(x):
+        from ._creation import asarray
+        return _native.scimath_arctanh(asarray(x))
+
+    @staticmethod
+    def power(x, p):
+        from ._creation import asarray
+        return _native.scimath_power(asarray(x), asarray(p))
 
 lib.scimath = _ScimathModule()
 
