@@ -723,27 +723,9 @@ def sinc(x):
 def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
     """Replace NaN with zero and infinity with large finite numbers."""
     x = asarray(x)
-    if posinf is None:
-        posinf = 1.7976931348623157e+308  # float max
-    if neginf is None:
-        neginf = -1.7976931348623157e+308
-    flat = x.flatten()
-    n = flat.size
-    vals = []
-    for i in range(n):
-        v = float(flat[i])
-        if v != v:  # NaN check
-            vals.append(nan)
-        elif v == float('inf'):
-            vals.append(posinf)
-        elif v == float('-inf'):
-            vals.append(neginf)
-        else:
-            vals.append(v)
-    result = array(vals)
-    if x.ndim > 1:
-        result = result.reshape(x.shape)
-    return result
+    posinf_val = posinf if posinf is not None else 1.7976931348623157e+308
+    neginf_val = neginf if neginf is not None else -1.7976931348623157e+308
+    return _native.nan_to_num(x, float(nan), float(posinf_val), float(neginf_val))
 
 # --- Special functions -------------------------------------------------------
 
@@ -781,23 +763,7 @@ def y1(x):
 
 def i0(x):
     """Modified Bessel function of the first kind, order 0."""
-    x = asarray(x)
-    flat = x.flatten()
-    n = flat.size
-    result = []
-    for i in range(n):
-        v = float(flat[i])
-        # Series expansion: I0(x) = sum_{k=0}^{inf} ((x/2)^k / k!)^2
-        val = 1.0
-        term = 1.0
-        for k in range(1, 25):
-            term *= (v / 2.0) ** 2 / (k * k)
-            val += term
-        result.append(val)
-    r = array(result)
-    if x.ndim > 1:
-        r = r.reshape(x.shape)
-    return r
+    return _native.i0(asarray(x))
 
 # --- Comparison / allclose / isclose -----------------------------------------
 
@@ -1065,15 +1031,10 @@ def nextafter(x1, x2):
 def spacing(x):
     """Return the distance between x and the nearest adjacent number."""
     if isinstance(x, (int, float)):
-        ax = __builtins__["abs"](float(x)) if isinstance(__builtins__, dict) else _math.fabs(float(x))
-        return _math.nextafter(ax, _math.inf) - ax
-    x = asarray(x)
-    vals = x.flatten().tolist()
-    result = []
-    for v in vals:
-        ax = _math.fabs(float(v))
-        result.append(_math.nextafter(ax, _math.inf) - ax)
-    return array(result)
+        import math as _m
+        ax = _m.fabs(float(x))
+        return _m.nextafter(ax, _m.inf) - ax
+    return _native.spacing(asarray(x))
 
 # --- GCD / LCM ---------------------------------------------------------------
 

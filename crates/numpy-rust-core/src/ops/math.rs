@@ -646,6 +646,125 @@ impl NdArray {
 }
 
 impl NdArray {
+    /// Replace NaN, +Inf, -Inf with finite values. Integer arrays pass through unchanged.
+    /// nan: replacement for NaN (default 0.0)
+    /// posinf: replacement for +Inf (default f64::MAX)
+    /// neginf: replacement for -Inf (default -f64::MAX)
+    pub fn nan_to_num(&self, nan: f64, posinf: f64, neginf: f64) -> NdArray {
+        // Integer/bool arrays cannot have NaN or Inf — pass through unchanged
+        match self.dtype() {
+            crate::dtype::DType::Bool | crate::dtype::DType::Int32 | crate::dtype::DType::Int64 => {
+                return NdArray::from_data(self.data.deep_copy())
+            }
+            _ => {}
+        }
+        let data = ensure_float(&self.data);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(
+                a.mapv(|x| {
+                    if x.is_nan() {
+                        nan as f32
+                    } else if x == f32::INFINITY {
+                        posinf as f32
+                    } else if x == f32::NEG_INFINITY {
+                        neginf as f32
+                    } else {
+                        x
+                    }
+                })
+                .into_shared(),
+            ),
+            ArrayData::Float64(a) => ArrayData::Float64(
+                a.mapv(|x| {
+                    if x.is_nan() {
+                        nan
+                    } else if x.is_infinite() && x > 0.0 {
+                        posinf
+                    } else if x.is_infinite() && x < 0.0 {
+                        neginf
+                    } else {
+                        x
+                    }
+                })
+                .into_shared(),
+            ),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+
+    /// Distance between x and the nearest adjacent floating-point number.
+    pub fn spacing(&self) -> Result<NdArray> {
+        if self.dtype().is_complex() {
+            return Err(NumpyError::TypeError(
+                "spacing not supported for complex arrays".into(),
+            ));
+        }
+        let data = ensure_float(&self.data);
+        let result = match data {
+            ArrayData::Float32(a) => ArrayData::Float32(
+                a.mapv(|x| {
+                    let ax = x.abs();
+                    libm::nextafterf(ax, f32::INFINITY) - ax
+                })
+                .into_shared(),
+            ),
+            ArrayData::Float64(a) => ArrayData::Float64(
+                a.mapv(|x| {
+                    let ax = x.abs();
+                    libm::nextafter(ax, f64::INFINITY) - ax
+                })
+                .into_shared(),
+            ),
+            _ => unreachable!(),
+        };
+        Ok(NdArray::from_data(result))
+    }
+
+    /// Modified Bessel function of the first kind, order 0.
+    /// Uses series expansion: I0(x) = Σ ((x/2)^k / k!)^2
+    pub fn i0(&self) -> NdArray {
+        let data = ensure_float(&self.data);
+        let result = match data {
+            ArrayData::Float64(a) => ArrayData::Float64(
+                a.mapv(|x| {
+                    let mut val = 1.0_f64;
+                    let mut term = 1.0_f64;
+                    let h = x * 0.5;
+                    for k in 1_u32..30 {
+                        term *= (h * h) / (k * k) as f64;
+                        val += term;
+                        if term.abs() < 1e-15 * val.abs() {
+                            break;
+                        }
+                    }
+                    val
+                })
+                .into_shared(),
+            ),
+            ArrayData::Float32(a) => ArrayData::Float32(
+                a.mapv(|x| {
+                    let mut val = 1.0_f32;
+                    let mut term = 1.0_f32;
+                    let h = x * 0.5;
+                    for k in 1_u32..25 {
+                        term *= (h * h) / (k * k) as f32;
+                        val += term;
+                        if term.abs() < 1e-7_f32 * val.abs() {
+                            break;
+                        }
+                    }
+                    val
+                })
+                .into_shared(),
+            ),
+            _ => unreachable!(),
+        };
+        NdArray::from_data(result)
+    }
+}
+
+impl NdArray {
     /// Decomposes each element into mantissa and base-2 exponent.
     /// Returns (mantissa: Float64, exponent: Int32), both same shape as input.
     pub fn frexp(&self) -> Result<(NdArray, NdArray)> {
@@ -1165,5 +1284,41 @@ mod tests {
         assert_eq!(iv[0], 3.0);
         assert!((fv[1] - (-0.5)).abs() < 1e-10);
         assert_eq!(iv[1], -2.0);
+    }
+
+    #[test]
+    fn test_nan_to_num() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_data(ArrayData::Float64(
+            ndarray::array![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0]
+                .into_dyn()
+                .into_shared(),
+        ));
+        let r = a.nan_to_num(0.0, 1e308, -1e308);
+        let vals = f64_vals(&r);
+        assert_eq!(vals[0], 0.0);
+        assert_eq!(vals[1], 1e308);
+        assert_eq!(vals[2], -1e308);
+        assert_eq!(vals[3], 1.0);
+    }
+
+    #[test]
+    fn test_nan_to_num_integer_passthrough() {
+        use crate::array_data::ArrayData;
+        let a = NdArray::from_data(ArrayData::Int64(
+            ndarray::array![1_i64, 2, 3].into_dyn().into_shared(),
+        ));
+        let r = a.nan_to_num(0.0, 1e308, -1e308);
+        // Integer arrays must pass through unchanged
+        assert!(matches!(r.data(), ArrayData::Int64(_)));
+    }
+
+    #[test]
+    fn test_i0() {
+        let a = arr(vec![0.0, 1.0]);
+        let r = a.i0();
+        let vals = f64_vals(&r);
+        assert!((vals[0] - 1.0).abs() < 1e-10); // I0(0) = 1
+        assert!((vals[1] - 1.2660658778).abs() < 1e-8); // I0(1) ≈ 1.2660658778
     }
 }

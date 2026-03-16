@@ -88,6 +88,18 @@ frac, intg = np.modf(np.array([3.7, -2.5]))
 check("modf frac[0]", float(frac.flatten().tolist()[0]), 0.7)
 check("modf int[0]", float(intg.flatten().tolist()[0]), 3.0)
 
+# nan_to_num
+r = np.nan_to_num(np.array([float('nan'), float('inf'), float('-inf'), 1.0]))
+vals = r.flatten().tolist()
+check("nan_to_num nan", vals[0], 0.0)
+check("nan_to_num posinf", 1 if vals[1] > 1e307 else 0, 1)
+check("nan_to_num neginf", 1 if vals[2] < -1e307 else 0, 1)
+check("nan_to_num normal", vals[3], 1.0)
+
+# i0
+check("i0(0)", float(np.i0(np.array([0.0])).flatten().tolist()[0]), 1.0)
+check("i0(1)", float(np.i0(np.array([1.0])).flatten().tolist()[0]), 1.2660658778, tol=1e-7)
+
 print(f"test_math_special: {passed} passed, {failed} failed")
 if failed:
     raise SystemExit(1)

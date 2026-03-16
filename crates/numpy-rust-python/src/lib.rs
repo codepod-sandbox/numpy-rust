@@ -600,6 +600,30 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn nan_to_num(
+        a: vm::PyRef<PyNdArray>,
+        nan: f64,
+        posinf: f64,
+        neginf: f64,
+        _vm: &VirtualMachine,
+    ) -> PyNdArray {
+        PyNdArray::from_core(a.inner().nan_to_num(nan, posinf, neginf))
+    }
+
+    #[pyfunction]
+    fn spacing(a: vm::PyRef<PyNdArray>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        a.inner()
+            .spacing()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn i0(a: vm::PyRef<PyNdArray>, _vm: &VirtualMachine) -> PyNdArray {
+        PyNdArray::from_core(a.inner().i0())
+    }
+
+    #[pyfunction]
     fn logaddexp(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let a = obj_to_ndarray(&x1, vm)?;
         let b = obj_to_ndarray(&x2, vm)?;
