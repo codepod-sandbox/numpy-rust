@@ -2,7 +2,7 @@
 
 A NumPy implementation in Rust, compiled to WebAssembly. Provides ~95% of the NumPy API surface commonly used in data science and ML code — array creation, manipulation, linear algebra, FFT, random distributions, masked arrays, and more — for Python code running inside sandboxed environments.
 
-**v0.1.1 — 2,739 tests, 0 failures (`2026-03-07`)**
+**v0.2.0 — 2,912 tests, 0 failures (`2026-03-16`)**
 
 ## How it works
 
@@ -28,16 +28,16 @@ The Rust core (`numpy-rust-core`) implements n-dimensional arrays on top of the 
 
 ---
 
-## Compatibility snapshot (`2026-03-10`)
+## Compatibility snapshot (`2026-03-16`)
 
 | Suite | Result |
 |---|---|
-| `cargo test -q` | `426 passed, 0 failed` |
-| `./tests/python/run_tests.sh` | `1,106 passed, 0 failed` |
-| `./target/release/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,207 passed, 4 expected failures (xfail), 0 unexpected failures` |
+| `cargo test -q` | `450 passed, 0 failed` |
+| `./tests/python/run_tests.sh` | `1,261 passed, 0 failed` |
+| `./target/release/numpy-python tests/numpy_compat/run_compat.py --ci` | `1,201 passed, 13 expected failures (xfail), 0 unexpected failures` |
 | `./target/release/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci` | `43 passed, 405 expected failures (xfail), 54 skipped, 0 unexpected failures` |
 
-The 4 expected failures are architectural edge cases: overlapping `clip(out=)` with shared memory views (1), NEP50 float32/Python-float promotion (1), C-extension custom dtypes (1), and an upstream pytest-level xfail for NaT propagation in `clip` (1).
+The 13 compat expected failures are: overlapping `clip(out=)` with shared memory views (1), NEP50 float32/Python-float promotion (1), C-extension custom dtypes (1), multi-D rfft (3), nonzero on str dtype (1), string dtype promotion (6).
 The ufunc upstream suite currently has 405 expected failures, primarily due to missing low-level ufunc APIs (`resolve_dtypes`, `.at`, gufunc core signature handling), C-extension test helpers, and full dtype casting rules.
 
 The project goal is library compatibility first (pandas/sklearn/scipy-style usage), then performance. Work is prioritized toward API correctness, dtype semantics, and edge-case behavior over raw speed.
@@ -113,9 +113,9 @@ All reductions support `axis` (including tuple of axes), `keepdims`, and `ddof` 
 | NaN-safe | `nansum`, `nanprod`, `nanmean`, `nanstd`, `nanvar`, `nanmin`, `nanmax`, `nanargmin`, `nanargmax`, `nancumsum`, `nancumprod` |
 | Quantiles | `quantile`, `percentile`, `nanquantile`, `nanpercentile`, `nanmedian` |
 
-### Element-wise math (70+ functions)
+### Element-wise math (90+ functions)
 
-Available as both `np.func(a)` and `a.func()` methods.
+Available as both `np.func(a)` and `a.func()` methods. All backed by Rust/libm — no Python loops.
 
 | Category | Functions |
 |----------|-----------|
@@ -129,8 +129,11 @@ Available as both `np.func(a)` and `a.func()` methods.
 | Angular | `deg2rad`, `rad2deg`, `unwrap`, `sinc` |
 | Bitwise | `bitwise_and`, `bitwise_or`, `bitwise_xor`, `bitwise_not`, `left_shift`, `right_shift` |
 | Logical | `logical_and`, `logical_or`, `logical_xor`, `logical_not` |
-| Special | `copysign`, `heaviside`, `nextafter`, `spacing`, `modf`, `divmod_`, `gcd`, `lcm` |
+| Special | `copysign`, `heaviside`, `nextafter`, `spacing`, `frexp`, `ldexp`, `modf`, `divmod_`, `gcd`, `lcm` |
 | Floating | `isnan`, `isinf`, `isfinite`, `signbit`, `nan_to_num` |
+| Error/Gamma | `erf`, `erfc`, `gamma`, `lgamma` |
+| Bessel | `j0`, `j1`, `y0`, `y1`, `i0` |
+| Fused | `fmod` |
 
 ### Shape manipulation (40+ functions)
 
@@ -170,7 +173,7 @@ Available as both `np.func(a)` and `a.func()` methods.
 |----------|-------|
 | `interp` | 1D linear interpolation with `left`/`right` boundary params |
 | `gradient` | Numerical gradient, multi-axis, variable spacing |
-| `trapz`/`trapezoid` | Trapezoidal integration, nD support |
+| `trapz`/`trapezoid`, `cumulative_trapezoid` | Trapezoidal integration (cumulative and total), nD support |
 | `convolve`, `correlate` | 1D convolution/correlation |
 | `diff`, `ediff1d` | Discrete differences |
 | `histogram`, `histogram2d`, `histogramdd` | Binning with weights/range |
@@ -288,6 +291,18 @@ All distribution functions return scalars when `size=None` and arrays when `size
 | Utilities | `is_masked`, `getdata`, `getmaskarray`, `fix_invalid` |
 | Constant | `masked` — the masked singleton |
 
+### Scientific math (`np.lib.scimath`)
+
+Complex-safe variants that return complex results for out-of-domain inputs rather than NaN, matching `numpy.lib.scimath` semantics.
+
+| Function | Domain extension |
+|----------|-----------------|
+| `sqrt` | Negative inputs → complex |
+| `log`, `log2`, `log10` | Negative inputs → complex |
+| `arcsin`, `arccos` | `\|x\| > 1` → complex |
+| `arctanh` | `\|x\| > 1` → complex |
+| `power(x, p)` | Negative base → complex via `exp(p·ln(x))` |
+
 ### Polynomial (`np.polynomial`)
 
 `polyval`, `polyfit`, `polyadd`, `polysub`, `polymul`, `polyder`, `polyint`
@@ -355,17 +370,17 @@ Also: `np.polyval`, `np.polyfit`, `np.polyadd`, `np.polysub`, `np.polymul`, `np.
 
 These items are not yet implemented but may be needed for full compatibility:
 
-### Would break some code
-- **Structured/record arrays** — no compound dtypes or field access.
+### Pandas/sklearn critical
+- **Structured/record arrays** — no compound dtypes or field access (`df.to_records()`, `np.dtype([('x', float), ('y', int)])` patterns).
+- **Multi-axis fancy indexing** (`a[[0,1], [2,3]]`) — required by pandas internals for certain indexing operations.
+- **`.npy`/`.npz` binary format** — `save`/`load` currently use text. Binary format needed for interop with code that serializes arrays (e.g. model weights).
 
 ### Missing submodules
 - **`np.polynomial.chebyshev`**, **`hermite`**, **`laguerre`**, **`legendre`** — only basic polynomial operations.
 
 ### Edge cases
-- Multi-axis fancy indexing (`a[[0,1], [2,3]]`) — not supported.
 - **Fortran-order arrays** — everything is C-order.
-- **Memory-mapped files** (`np.memmap`) — not supported.
-- **`.npy` binary format** — `save`/`load` use text format.
+- **Memory-mapped files** (`np.memmap`) — not supported (WASM limitation).
 - Some `pad` modes not implemented (raises `NotImplementedError` with clear message).
 
 ---
@@ -374,10 +389,10 @@ These items are not yet implemented but may be needed for full compatibility:
 
 | Suite | Tests | Description |
 |-------|-------|-------------|
-| Rust unit tests | 426 | Core: dtypes, math, broadcasting, sorting, einsum, linalg, FFT, random, strings |
-| Python vendored tests | 1,106 | Comprehensive integration: all functions, edge cases, regressions |
-| NumPy compat tests | 1,218 | Upstream NumPy `test_numeric.py` run via RustPython (4 xfails) |
-| **Total** | **2,750** | |
+| Rust unit tests | 450 | Core: dtypes, math (incl. libm/special), broadcasting, sorting, einsum, linalg, FFT, random |
+| Python vendored tests | 1,261 | Comprehensive integration: all functions, edge cases, regressions |
+| NumPy compat tests | 1,218 | Upstream NumPy `test_numeric.py` run via RustPython (13 xfails) |
+| **Total** | **2,929** | |
 
 ---
 
