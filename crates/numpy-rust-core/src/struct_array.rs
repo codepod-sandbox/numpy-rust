@@ -4,6 +4,7 @@ use crate::error::{NumpyError, Result};
 use crate::indexing::Scalar;
 
 /// A single named column in a structured array.
+#[derive(Debug)]
 pub struct FieldSpec {
     pub name: String,
     pub data: ArrayData,
@@ -11,6 +12,7 @@ pub struct FieldSpec {
 
 /// Columnar structured array: each field is a separate homogeneous column.
 /// `shape` is the logical shape of the record array (not including fields).
+#[derive(Debug)]
 pub struct StructArrayData {
     pub fields: Vec<FieldSpec>,
     pub shape: Vec<usize>,
