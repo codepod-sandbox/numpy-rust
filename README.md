@@ -44,7 +44,6 @@ All numerical operations run in native Rust. The Python layer handles API surfac
 - **Slice views are copies.** `arr[1:4]` returns a copy — the `ndarray` crate can't represent sub-array `ArcArray` views. `view()` and `reshape()` on the whole array work in O(1). `shares_memory()` / `may_share_memory()` work correctly via Arc pointer equality.
 - **`out=` with slices.** Writes to `clip(out=arr[1:4])` don't propagate back because slices are copies.
 - **Complex scalars.** Scalars extracted from complex arrays come back as `(re, im)` tuples — a RustPython limitation.
-- **Binary `.npy`/`.npz`.** `np.save`/`np.load` use text. Binary format not implemented.
 - **Fortran-order layout.** All arrays are C-contiguous. `order='F'` is accepted but data is always row-major.
 
 ### Performance
