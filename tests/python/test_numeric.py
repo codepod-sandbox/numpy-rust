@@ -7630,12 +7630,10 @@ def test_t37_memmap_stub():
 
 def test_t37_ufunc_class():
     import numpy as np
-    # Direct instantiation raises TypeError (matching NumPy)
-    try:
-        np.ufunc('add', 2, 1)
-        assert False, "should have raised TypeError"
-    except TypeError:
-        pass
+    # np.ufunc() now accepts a string name to create stub ufuncs (for test shim compat)
+    u = np.ufunc('stub_test', 1, 1, types=['O->O'])
+    assert isinstance(u, np.ufunc)
+    assert_eq(u.__name__, 'stub_test')
     # np.add is a proper ufunc instance
     assert isinstance(np.add, np.ufunc)
     assert_eq(np.add.__name__, 'add')
