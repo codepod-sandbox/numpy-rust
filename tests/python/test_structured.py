@@ -78,6 +78,17 @@ empty_sa = np.zeros(0, dtype=sdt3)
 check("empty shape", empty_sa.shape, (0,))
 check("empty len", len(empty_sa), 0)
 
+# Task 8: recarray
+sdt4 = np.dtype([('px', 'float64'), ('py', 'float64')])
+data4 = [(1.0, 2.0), (3.0, 4.0)]
+ra = np.recarray((2,), dtype=sdt4)
+check("recarray type", type(ra).__name__, 'recarray')
+# wrap StructuredArray as recarray via np.rec.array
+rec_arr = np.rec.array(data4, dtype=sdt4)
+check("rec.array type", type(rec_arr).__name__, 'recarray')
+check("rec.array .px[0]", float(rec_arr.px[0]), 1.0)
+check("rec.array .py[1]", float(rec_arr.py[1]), 4.0)
+
 print(f"passed: {passed}, failed: {failed}")
 if failed:
     raise SystemExit(1)

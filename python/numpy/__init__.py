@@ -161,6 +161,100 @@ class StructuredArray:
         return f"StructuredArray({rows}, dtype={dt})"
 
 
+class recarray:
+    """Structured array with attribute-style field access (np.recarray)."""
+
+    def __init__(self, shape, dtype):
+        """Create an empty (zero-filled) structured array."""
+        if isinstance(shape, int):
+            shape = (shape,)
+        if len(shape) != 1:
+            raise ValueError(
+                "recarray only supports 1D arrays; got shape {}".format(shape)
+            )
+        arr = zeros(shape[0], dtype=dtype)   # returns StructuredArray
+        object.__setattr__(self, '_arr', arr)
+        object.__setattr__(self, 'dtype', arr.dtype)
+
+    @classmethod
+    def _from_structured(cls, structured_arr):
+        """Wrap an existing StructuredArray as a recarray (no data copy)."""
+        obj = object.__new__(cls)
+        object.__setattr__(obj, '_arr', structured_arr)
+        object.__setattr__(obj, 'dtype', structured_arr.dtype)
+        return obj
+
+    def __getattr__(self, name):
+        try:
+            arr = object.__getattribute__(self, '_arr')
+            dt = object.__getattribute__(self, 'dtype')
+        except AttributeError:
+            raise AttributeError(name)
+        if name in dt.names:
+            return arr[name]
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        try:
+            arr = object.__getattribute__(self, '_arr')
+            dt = object.__getattribute__(self, 'dtype')
+        except AttributeError:
+            object.__setattr__(self, name, value)
+            return
+        if name in dt.names:
+            arr[name] = value
+        else:
+            object.__setattr__(self, name, value)
+
+    def __getitem__(self, key):
+        return object.__getattribute__(self, '_arr')[key]
+
+    def __setitem__(self, key, val):
+        object.__getattribute__(self, '_arr')[key] = val
+
+    def __len__(self):
+        return len(object.__getattribute__(self, '_arr'))
+
+    def __iter__(self):
+        return iter(object.__getattribute__(self, '_arr'))
+
+    @property
+    def shape(self):
+        return object.__getattribute__(self, '_arr').shape
+
+    @property
+    def ndim(self):
+        return object.__getattribute__(self, '_arr').ndim
+
+
+class _RecModule:
+    """Stub for numpy.rec submodule."""
+
+    def array(self, data, dtype=None, **kwargs):
+        """Create a recarray from data (list of tuples)."""
+        arr = array(data, dtype=dtype)   # → StructuredArray or ndarray
+        if isinstance(arr, StructuredArray):
+            return recarray._from_structured(arr)
+        return arr
+
+    def fromarrays(self, arrayList, dtype=None, names=None, **kwargs):
+        """Create a recarray from a list of arrays, one per field."""
+        if names is not None and dtype is None:
+            # Build a structured dtype from the names and inferred column types
+            fields = []
+            for name, col in zip(names, arrayList):
+                col_arr = array(col)
+                fields.append((name, str(col_arr.dtype)))
+            dtype = globals()['dtype'](fields)
+        arr = zeros(len(arrayList[0]), dtype=dtype)
+        for name, col in zip(dtype.names, arrayList):
+            arr[name] = array(col)
+        return recarray._from_structured(arr)
+
+
+rec = _RecModule()
+
+
 # --- Aliases ----------------------------------------------------------------
 
 absolute = abs
