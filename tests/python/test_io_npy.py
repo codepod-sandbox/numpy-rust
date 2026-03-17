@@ -198,6 +198,68 @@ def test_save_object_raises():
     _cleanup(path)
 
 
+def test_savez_positional():
+    """savez positional args become arr_0, arr_1, ..."""
+    path = _TMP + 'multi.npz'
+    a = np.array([1, 2, 3], dtype='int32')
+    b = np.array([4.0, 5.0], dtype='float64')
+    np.savez(path, a, b)
+    npz = np.load(path)
+    _cleanup(path)
+    assert isinstance(npz.files, list), f"files should be list, got {type(npz.files)}"
+    assert 'arr_0' in npz.files, f"files: {npz.files}"
+    assert 'arr_1' in npz.files
+    assert npz['arr_0'].tolist() == [1, 2, 3]
+    assert npz['arr_1'].tolist() == [4.0, 5.0]
+    npz.close()
+
+
+def test_savez_named():
+    """savez keyword args preserve names."""
+    path = _TMP + 'named.npz'
+    x = np.array([10, 20], dtype='int64')
+    y = np.array([1.5, 2.5], dtype='float32')
+    np.savez(path, x=x, y=y)
+    with np.load(path) as npz:
+        assert 'x' in npz.files and 'y' in npz.files
+        assert npz['x'].tolist() == [10, 20]
+        assert abs(npz['y'].tolist()[0] - 1.5) < 1e-5
+    _cleanup(path)
+
+
+def test_savez_compressed():
+    """savez_compressed produces valid .npz with correct data."""
+    path = _TMP + 'compressed.npz'
+    a = np.array(list(range(100)), dtype='float64')
+    np.savez_compressed(path, data=a)
+    with np.load(path) as npz:
+        assert 'data' in npz.files
+        vals = npz['data'].tolist()
+        assert len(vals) == 100
+        assert abs(vals[0] - 0.0) < 1e-10
+        assert abs(vals[99] - 99.0) < 1e-10
+    _cleanup(path)
+
+
+def test_npzfile_interface():
+    """NpzFile: files is list, __contains__, __iter__, context manager, KeyError."""
+    path = _TMP + 'iface.npz'
+    np.savez(path, a=np.array([1]), b=np.array([2]))
+    npz = np.load(path)
+    assert isinstance(npz.files, list)
+    assert 'a' in npz
+    assert 'b' in npz
+    names = list(npz)
+    assert set(names) == {'a', 'b'}
+    try:
+        _ = npz['missing']
+        assert False, "should have raised KeyError"
+    except KeyError:
+        pass
+    npz.close()
+    _cleanup(path)
+
+
 # Runner
 tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
 passed = 0

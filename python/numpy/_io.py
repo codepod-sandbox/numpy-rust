@@ -347,20 +347,60 @@ def load(file, mmap_mode=None, **kwargs):
         return _npy_bytes_to_array(raw)
 
 
-def savez(file, *args, **kwds):
-    """Save several arrays into a single file in text format.
-    Since we can't use actual npz (zip) format, save as multi-section text."""
+class NpzFile:
+    """Dict-like wrapper for .npz archives."""
+
+    def __init__(self, file):
+        self._zip = _zipfile.ZipFile(file, 'r')
+        self.files = [
+            name[:-4] for name in self._zip.namelist()
+            if name.endswith('.npy')
+        ]
+
+    def __getitem__(self, key):
+        if key not in self.files:
+            raise KeyError(key)
+        raw = self._zip.read(key + '.npy')
+        return _npy_bytes_to_array(raw)
+
+    def __iter__(self):
+        return iter(self.files)
+
+    def __contains__(self, key):
+        return key in self.files
+
+    def close(self):
+        self._zip.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def _savez_impl(file, args, kwds, compress):
     arrays = {}
     for i, arr in enumerate(args):
         arrays[f'arr_{i}'] = asarray(arr)
     for name, arr in kwds.items():
         arrays[name] = asarray(arr)
-    with open(file, 'w') as f:
+    if isinstance(file, str) and not file.lower().endswith('.npz'):
+        file = file + '.npz'
+    try:
+        compression = _zipfile.ZIP_DEFLATED if compress else _zipfile.ZIP_STORED
+    except AttributeError:
+        compression = _zipfile.ZIP_STORED
+    with _zipfile.ZipFile(file, 'w', compression=compression) as zf:
         for name, arr in arrays.items():
-            f.write(f"# {name} shape: {list(arr.shape)}\n")
-            flat = arr.flatten()
-            vals = [str(flat[i]) for i in range(flat.size)]
-            f.write(','.join(vals) + '\n')
+            zf.writestr(name + '.npy', _array_to_npy_bytes(arr))
 
 
-savez_compressed = savez  # alias, same behavior in our sandbox
+def savez(file, *args, **kwds):
+    """Save arrays into an uncompressed .npz archive."""
+    _savez_impl(file, args, kwds, compress=False)
+
+
+def savez_compressed(file, *args, **kwds):
+    """Save arrays into a compressed .npz archive."""
+    _savez_impl(file, args, kwds, compress=True)
