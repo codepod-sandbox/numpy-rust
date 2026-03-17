@@ -6,6 +6,7 @@ pub mod py_fft;
 pub mod py_linalg;
 #[cfg(feature = "random")]
 pub mod py_random;
+pub mod py_struct_array;
 
 use rustpython_vm as vm;
 
@@ -42,6 +43,14 @@ pub mod _numpy_native {
     #[pyattr]
     fn flagsobj(vm: &VirtualMachine) -> vm::builtins::PyTypeRef {
         PyFlagsObj::make_class(&vm.ctx)
+    }
+
+    use crate::py_struct_array::PyStructuredArray;
+
+    #[allow(non_snake_case)]
+    #[pyattr]
+    fn StructuredArray(vm: &VirtualMachine) -> vm::builtins::PyTypeRef {
+        PyStructuredArray::make_class(&vm.ctx)
     }
 
     // --- Creation functions ---

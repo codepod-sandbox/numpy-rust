@@ -11,7 +11,9 @@ pub mod linalg;
 pub mod manipulation;
 pub mod ops;
 pub mod random;
+pub mod struct_array;
 pub mod utility;
+pub use struct_array::{FieldSpec, StructArrayData};
 
 pub use array::NdArray;
 pub use array_data::ArrayData;

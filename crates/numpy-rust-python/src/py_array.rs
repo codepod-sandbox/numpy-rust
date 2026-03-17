@@ -236,7 +236,7 @@ fn linear_to_coord(mut idx: usize, shape: &[usize]) -> Vec<usize> {
 }
 
 /// Convert a NumpyError to a Python exception.
-fn numpy_err(
+pub(crate) fn numpy_err(
     e: numpy_rust_core::NumpyError,
     vm: &VirtualMachine,
 ) -> vm::builtins::PyBaseExceptionRef {
@@ -244,7 +244,7 @@ fn numpy_err(
 }
 
 /// Convert a Scalar to a Python object.
-fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
+pub(crate) fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
     match s {
         Scalar::Bool(v) => vm.ctx.new_bool(v).into(),
         Scalar::Int32(v) => vm.ctx.new_int(v).into(),
@@ -271,7 +271,11 @@ fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
 
 /// Convert a Python object to a Scalar matching the target array dtype.
 /// For narrow dtypes, maps to the storage type's Scalar variant.
-fn py_obj_to_scalar(obj: &PyObjectRef, dtype: DType, vm: &VirtualMachine) -> PyResult<Scalar> {
+pub(crate) fn py_obj_to_scalar(
+    obj: &PyObjectRef,
+    dtype: DType,
+    vm: &VirtualMachine,
+) -> PyResult<Scalar> {
     // Use storage dtype for scalar conversion (narrow types map to wider storage)
     let storage = dtype.storage_dtype();
     if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
