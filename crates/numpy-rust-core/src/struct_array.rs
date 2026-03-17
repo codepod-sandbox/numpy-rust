@@ -87,6 +87,41 @@ impl StructArrayData {
         Ok(row)
     }
 
+    /// Extract a contiguous range of rows [start, end) as a new StructArrayData.
+    pub fn slice_rows(&self, start: usize, end: usize) -> Result<Self> {
+        use crate::indexing::SliceArg;
+        let n = self.len();
+        if end > n {
+            return Err(NumpyError::ValueError(format!(
+                "slice_rows: end {} out of bounds for array with {} rows",
+                end, n
+            )));
+        }
+        if start > end {
+            return Err(NumpyError::ValueError(format!(
+                "slice_rows: start {} > end {}",
+                start, end
+            )));
+        }
+        let sliced_fields: Vec<FieldSpec> = self
+            .fields
+            .iter()
+            .map(|f| {
+                let nd = NdArray::from_data(f.data.clone());
+                let sliced = nd.slice(&[SliceArg::Range {
+                    start: Some(start as isize),
+                    stop: Some(end as isize),
+                    step: 1,
+                }])?;
+                Ok(FieldSpec {
+                    name: f.name.clone(),
+                    data: sliced.data().clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(StructArrayData::new(sliced_fields, vec![end - start]))
+    }
+
     /// Replace a column. New data must have the same shape as `self.shape`.
     pub fn set_field(&mut self, name: &str, data: ArrayData) -> Result<()> {
         if data.shape() != self.shape.as_slice() {
@@ -172,6 +207,35 @@ mod tests {
         assert!(matches!(row[0], Scalar::Int64(30)));
         assert!(sa.get_row(3).is_err());
         assert!(sa.get_row(-4).is_err());
+    }
+
+    #[test]
+    fn test_slice_rows() {
+        let sa = StructArrayData::new(
+            vec![
+                FieldSpec {
+                    name: "x".into(),
+                    data: make_int_col(vec![10, 20, 30, 40]),
+                },
+                FieldSpec {
+                    name: "y".into(),
+                    data: make_float_col(vec![1.1, 2.2, 3.3, 4.4]),
+                },
+            ],
+            vec![4],
+        );
+        let sliced = sa.slice_rows(1, 3).unwrap();
+        assert_eq!(sliced.len(), 2);
+        assert_eq!(sliced.shape, vec![2]);
+        let row0 = sliced.get_row(0).unwrap();
+        assert!(matches!(row0[0], Scalar::Int64(20)));
+        let row1 = sliced.get_row(1).unwrap();
+        assert!(matches!(row1[0], Scalar::Int64(30)));
+        // empty slice
+        let empty = sa.slice_rows(2, 2).unwrap();
+        assert_eq!(empty.len(), 0);
+        // out of bounds
+        assert!(sa.slice_rows(0, 5).is_err());
     }
 
     #[test]
