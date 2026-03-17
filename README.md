@@ -2,7 +2,7 @@
 
 A NumPy 1.26 implementation in Rust for Python code running in sandboxed environments (RustPython/WASM).
 
-**3,091 tests, 0 failures (`2026-03-17`)**
+**3,775 tests, 0 failures (`2026-03-17`)**
 
 ## How it works
 
@@ -23,9 +23,10 @@ All numerical operations run in native Rust. The Python layer handles API surfac
 | Suite | Result |
 |---|---|
 | `cargo test` | 454 passed, 0 failed |
-| Python vendored tests | 1,320 passed, 0 failed |
+| Python vendored tests | 1,382 passed, 0 failed |
 | NumPy compat (`test_numeric.py` via RustPython) | 1,211 passed, 3 expected failures |
 | NumPy ufunc compat (`test_ufunc.py` via RustPython) | 106 passed, 344 expected failures |
+| NumPy I/O compat (`test_io.py` via RustPython) | 23 passed, 2 skipped (memory/fd limits) |
 
 ---
 
@@ -108,6 +109,7 @@ bash tests/python/run_tests.sh
 # NumPy compat tests (tracks known gaps via xfail list)
 ./target/release/numpy-python tests/numpy_compat/run_compat.py --ci
 ./target/release/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci
+./target/release/numpy-python tests/numpy_compat/run_io_compat.py --ci
 ```
 
 ### CI
