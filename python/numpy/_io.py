@@ -366,6 +366,22 @@ def load(file, mmap_mode=None, **kwargs):
             return _npy_bytes_to_array(header + rest)
 
 
+class BagObj:
+    """Attribute-style accessor for NpzFile (npz.f.arr_0 == npz['arr_0'])."""
+
+    def __init__(self, npz):
+        self._npz = npz
+
+    def __getattr__(self, key):
+        try:
+            return self._npz[key]
+        except KeyError:
+            raise AttributeError(key)
+
+    def __dir__(self):
+        return self._npz.files
+
+
 class NpzFile:
     """Dict-like wrapper for .npz archives."""
 
@@ -381,14 +397,22 @@ class NpzFile:
             name[:-4] for name in self._zip.namelist()
             if name.endswith('.npy')
         ]
+        self.f = BagObj(self)
 
     def __getitem__(self, key):
         if not isinstance(key, str):
             raise KeyError(key)
-        if key not in self.files:
-            raise KeyError(key)
-        raw = self._zip.read(key + '.npy')
-        return _npy_bytes_to_array(raw)
+        names = self._zip.namelist()
+        # Exact match (e.g. "metadata", "test1.npy", or "test2" holding .npy bytes)
+        if key in names:
+            raw = self._zip.read(key)
+            if raw[:6] == _MAGIC:
+                return _npy_bytes_to_array(raw)
+            return raw
+        # Strip-suffix lookup: "test1" → finds "test1.npy"
+        if key + '.npy' in names:
+            return _npy_bytes_to_array(self._zip.read(key + '.npy'))
+        raise KeyError(key)
 
     def __iter__(self):
         return iter(self.files)

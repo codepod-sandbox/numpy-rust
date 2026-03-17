@@ -14,14 +14,8 @@ TestSavezLoad.test_record
 TestSaveLoad.test_format_2_0
 TestSavezLoad.test_format_2_0
 
-# NpzFile doesn't handle non-.npy entries or key aliasing
-TestSavezLoad.test_load_non_npy
-
 # Requires 2GB+ memory -- hard-skipped in runner (would hang)
 # TestSavezLoad.test_big_arrays (hard-skipped via _SKIP_TESTS)
-
-# NpzFile.f BagObj not implemented
-TestSavezLoad.test_BagObj
 
 # str arrays not supported in our numpy
 TestSavezLoad.test_not_closing_opened_fid
