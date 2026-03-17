@@ -35,6 +35,14 @@ def test_ufunc_suite_remove_works():
     UNARY_OBJECT_UFUNCS.remove(np.bitwise_count)  # must NOT raise ValueError
     assert np.bitwise_count not in UNARY_OBJECT_UFUNCS
 
+def test_types_populated():
+    assert 'ff->f' in np.add.types, f"np.add.types = {np.add.types}"
+    assert 'dd->d' in np.add.types
+    assert np.add.ntypes == len(np.add.types)
+    assert len(np.sin.types) >= 2
+    # comparison ufuncs
+    assert 'ff->?' in np.greater.types or 'dd->?' in np.greater.types, f"np.greater.types = {np.greater.types}"
+
 if __name__ == '__main__':
     test_bitwise_count_scalar()
     test_bitwise_count_is_ufunc()
@@ -42,4 +50,5 @@ if __name__ == '__main__':
     test_ufunc_public_constructor_func()
     test_ufunc_public_constructor_str()
     test_ufunc_suite_remove_works()
+    test_types_populated()
     print("All bootstrap tests passed")

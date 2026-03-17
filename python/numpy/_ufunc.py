@@ -44,6 +44,19 @@ __all__ = [
     'bitwise_count',
 ]
 
+# Type signature constants for ufunc.types attribute
+_FLOAT_BINARY_TYPES   = ['ff->f', 'dd->d']
+_FLOAT_UNARY_TYPES    = ['f->f', 'd->d']
+_INT_BINARY_TYPES     = ['bb->b', 'BB->B', 'hh->h', 'HH->H',
+                          'ii->i', 'II->I', 'll->l', 'LL->L']
+_INT_UNARY_TYPES      = ['b->b', 'B->B', 'h->h', 'H->H',
+                          'i->i', 'I->I', 'l->l', 'L->L']
+_NUMERIC_BINARY_TYPES = _INT_BINARY_TYPES + _FLOAT_BINARY_TYPES
+_NUMERIC_UNARY_TYPES  = _INT_UNARY_TYPES + _FLOAT_UNARY_TYPES
+_CMP_BINARY_TYPES     = ['bb->?', 'BB->?', 'hh->?', 'HH->?',
+                          'ii->?', 'II->?', 'll->?', 'LL->?',
+                          'ff->?', 'dd->?']
+
 _UFUNC_SENTINEL = object()  # private token — only _make_ufunc passes it
 
 class ufunc:
@@ -84,20 +97,20 @@ class ufunc:
 
     @classmethod
     def _create(cls, func, nin, nout=1, *, name=None, identity=None,
-                reduce_fast=None, accumulate_fast=None):
+                reduce_fast=None, accumulate_fast=None, types=None):
         """Internal factory — use _make_ufunc() instead of ufunc(...)."""
         obj = cls.__new__(cls)
-        obj._func = func
-        obj.nin = nin
-        obj.nout = nout
-        obj.nargs = nin + nout
-        obj.identity = identity
-        obj.__name__ = name or getattr(func, '__name__', 'ufunc')
-        obj._reduce_fast = reduce_fast
-        obj._accumulate_fast = accumulate_fast
-        obj.ntypes = 0
-        obj.types = []
-        obj.signature = None
+        obj._func             = func
+        obj.nin               = nin
+        obj.nout              = nout
+        obj.nargs             = nin + nout
+        obj.identity          = identity
+        obj.__name__          = name or getattr(func, '__name__', 'ufunc')
+        obj._reduce_fast      = reduce_fast
+        obj._accumulate_fast  = accumulate_fast
+        obj.types             = list(types) if types is not None else []
+        obj.ntypes            = len(obj.types)
+        obj.signature         = None
         return obj
 
     def __call__(self, *args, **kwargs):
@@ -301,48 +314,81 @@ _nextafter_func = nextafter
 # Binary ufuncs with fast-path reduce/accumulate
 add = ufunc._create(_add_func, 2, name='add', identity=0,
             reduce_fast=lambda a, axis=0, keepdims=False: sum(a, axis=axis, keepdims=keepdims),
-            accumulate_fast=lambda a, axis=0: cumsum(a, axis=axis))
+            accumulate_fast=lambda a, axis=0: cumsum(a, axis=axis),
+            types=_NUMERIC_BINARY_TYPES + ['OO->O'])
 multiply = ufunc._create(_multiply_func, 2, name='multiply', identity=1,
                  reduce_fast=lambda a, axis=0, keepdims=False: prod(a, axis=axis, keepdims=keepdims),
-                 accumulate_fast=lambda a, axis=0: cumprod(a, axis=axis))
+                 accumulate_fast=lambda a, axis=0: cumprod(a, axis=axis),
+                 types=_NUMERIC_BINARY_TYPES + ['OO->O'])
 maximum = ufunc._create(_maximum_func, 2, name='maximum',
-                reduce_fast=lambda a, axis=0, keepdims=False: max(a, axis=axis, keepdims=keepdims))
+                reduce_fast=lambda a, axis=0, keepdims=False: max(a, axis=axis, keepdims=keepdims),
+                types=_NUMERIC_BINARY_TYPES)
 minimum = ufunc._create(_minimum_func, 2, name='minimum',
-                reduce_fast=lambda a, axis=0, keepdims=False: min(a, axis=axis, keepdims=keepdims))
+                reduce_fast=lambda a, axis=0, keepdims=False: min(a, axis=axis, keepdims=keepdims),
+                types=_NUMERIC_BINARY_TYPES)
 logical_and = ufunc._create(_logical_and_func, 2, name='logical_and', identity=True,
-                    reduce_fast=lambda a, axis=0, keepdims=False: all(a, axis=axis, keepdims=keepdims))
+                    reduce_fast=lambda a, axis=0, keepdims=False: all(a, axis=axis, keepdims=keepdims),
+                    types=['??->?', 'OO->?'])
 logical_or = ufunc._create(_logical_or_func, 2, name='logical_or', identity=False,
-                   reduce_fast=lambda a, axis=0, keepdims=False: any(a, axis=axis, keepdims=keepdims))
+                   reduce_fast=lambda a, axis=0, keepdims=False: any(a, axis=axis, keepdims=keepdims),
+                   types=['??->?', 'OO->?'])
 
 # Binary ufuncs with generic reduce only
-subtract = ufunc._create(_subtract_func, 2, name='subtract')
-divide = ufunc._create(_divide_func, 2, name='divide')
-true_divide = ufunc._create(_true_divide_func, 2, name='true_divide')
-floor_divide = ufunc._create(_floor_divide_func, 2, name='floor_divide')
-power = ufunc._create(_power_func, 2, name='power')
-remainder = ufunc._create(_remainder_func, 2, name='remainder')
+subtract = ufunc._create(_subtract_func, 2, name='subtract',
+                         types=_NUMERIC_BINARY_TYPES + ['OO->O'])
+divide = ufunc._create(_divide_func, 2, name='divide',
+                       types=_FLOAT_BINARY_TYPES)
+true_divide = ufunc._create(_true_divide_func, 2, name='true_divide',
+                            types=_FLOAT_BINARY_TYPES)
+floor_divide = ufunc._create(_floor_divide_func, 2, name='floor_divide',
+                             types=_NUMERIC_BINARY_TYPES)
+power = ufunc._create(_power_func, 2, name='power',
+                      types=_NUMERIC_BINARY_TYPES)
+remainder = ufunc._create(_remainder_func, 2, name='remainder',
+                          types=_NUMERIC_BINARY_TYPES)
 mod = remainder
-fmod = ufunc._create(_fmod_func, 2, name='fmod')
-fmax = ufunc._create(_fmax_func, 2, name='fmax')
-fmin = ufunc._create(_fmin_func, 2, name='fmin')
-logical_xor = ufunc._create(_logical_xor_func, 2, name='logical_xor', identity=False)
-bitwise_and = ufunc._create(_bitwise_and_func, 2, name='bitwise_and')
-bitwise_or = ufunc._create(_bitwise_or_func, 2, name='bitwise_or')
-bitwise_xor = ufunc._create(_bitwise_xor_func, 2, name='bitwise_xor')
-left_shift = ufunc._create(_left_shift_func, 2, name='left_shift')
-right_shift = ufunc._create(_right_shift_func, 2, name='right_shift')
-greater = ufunc._create(_greater_func, 2, name='greater')
-less = ufunc._create(_less_func, 2, name='less')
-equal = ufunc._create(_equal_func, 2, name='equal')
-not_equal = ufunc._create(_not_equal_func, 2, name='not_equal')
-greater_equal = ufunc._create(_greater_equal_func, 2, name='greater_equal')
-less_equal = ufunc._create(_less_equal_func, 2, name='less_equal')
-arctan2 = ufunc._create(_arctan2_func, 2, name='arctan2')
-hypot = ufunc._create(_hypot_func, 2, name='hypot')
-copysign = ufunc._create(_copysign_func, 2, name='copysign')
-ldexp = ufunc._create(_ldexp_func, 2, name='ldexp')
-heaviside = ufunc._create(_heaviside_func, 2, name='heaviside')
-nextafter = ufunc._create(_nextafter_func, 2, name='nextafter')
+fmod = ufunc._create(_fmod_func, 2, name='fmod',
+                     types=_FLOAT_BINARY_TYPES)
+fmax = ufunc._create(_fmax_func, 2, name='fmax',
+                     types=_FLOAT_BINARY_TYPES)
+fmin = ufunc._create(_fmin_func, 2, name='fmin',
+                     types=_FLOAT_BINARY_TYPES)
+logical_xor = ufunc._create(_logical_xor_func, 2, name='logical_xor', identity=False,
+                            types=['??->?', 'OO->?'])
+bitwise_and = ufunc._create(_bitwise_and_func, 2, name='bitwise_and',
+                            types=_INT_BINARY_TYPES)
+bitwise_or = ufunc._create(_bitwise_or_func, 2, name='bitwise_or',
+                           types=_INT_BINARY_TYPES)
+bitwise_xor = ufunc._create(_bitwise_xor_func, 2, name='bitwise_xor',
+                            types=_INT_BINARY_TYPES)
+left_shift = ufunc._create(_left_shift_func, 2, name='left_shift',
+                           types=_INT_BINARY_TYPES)
+right_shift = ufunc._create(_right_shift_func, 2, name='right_shift',
+                            types=_INT_BINARY_TYPES)
+greater = ufunc._create(_greater_func, 2, name='greater',
+                        types=_CMP_BINARY_TYPES)
+less = ufunc._create(_less_func, 2, name='less',
+                     types=_CMP_BINARY_TYPES)
+equal = ufunc._create(_equal_func, 2, name='equal',
+                      types=_CMP_BINARY_TYPES)
+not_equal = ufunc._create(_not_equal_func, 2, name='not_equal',
+                          types=_CMP_BINARY_TYPES)
+greater_equal = ufunc._create(_greater_equal_func, 2, name='greater_equal',
+                              types=_CMP_BINARY_TYPES)
+less_equal = ufunc._create(_less_equal_func, 2, name='less_equal',
+                           types=_CMP_BINARY_TYPES)
+arctan2 = ufunc._create(_arctan2_func, 2, name='arctan2',
+                        types=_FLOAT_BINARY_TYPES)
+hypot = ufunc._create(_hypot_func, 2, name='hypot',
+                      types=_FLOAT_BINARY_TYPES)
+copysign = ufunc._create(_copysign_func, 2, name='copysign',
+                         types=_FLOAT_BINARY_TYPES)
+ldexp = ufunc._create(_ldexp_func, 2, name='ldexp',
+                      types=['fi->f', 'di->d'])
+heaviside = ufunc._create(_heaviside_func, 2, name='heaviside',
+                          types=_FLOAT_BINARY_TYPES)
+nextafter = ufunc._create(_nextafter_func, 2, name='nextafter',
+                          types=_FLOAT_BINARY_TYPES)
 
 # Unary ufuncs (nin=1) — callable, but reduce/accumulate/outer raise ValueError
 _sin_func = sin
@@ -379,43 +425,47 @@ _isnan_func = isnan
 _isinf_func = isinf
 _isfinite_func = isfinite
 
-sin = ufunc._create(_sin_func, 1, name='sin')
-cos = ufunc._create(_cos_func, 1, name='cos')
-tan = ufunc._create(_tan_func, 1, name='tan')
-arcsin = ufunc._create(_arcsin_func, 1, name='arcsin')
-arccos = ufunc._create(_arccos_func, 1, name='arccos')
-arctan = ufunc._create(_arctan_func, 1, name='arctan')
-sinh = ufunc._create(_sinh_func, 1, name='sinh')
-cosh = ufunc._create(_cosh_func, 1, name='cosh')
-tanh = ufunc._create(_tanh_func, 1, name='tanh')
-exp = ufunc._create(_exp_func, 1, name='exp')
-exp2 = ufunc._create(_exp2_func, 1, name='exp2')
-log = ufunc._create(_log_func, 1, name='log')
-log2 = ufunc._create(_log2_func, 1, name='log2')
-log10 = ufunc._create(_log10_func, 1, name='log10')
-sqrt = ufunc._create(_sqrt_func, 1, name='sqrt')
-cbrt = ufunc._create(_cbrt_func, 1, name='cbrt')
-square = ufunc._create(_square_func, 1, name='square')
-reciprocal = ufunc._create(_reciprocal_func, 1, name='reciprocal')
-negative = ufunc._create(_negative_func, 1, name='negative')
-positive = ufunc._create(_positive_func, 1, name='positive')
-absolute = ufunc._create(_absolute_func, 1, name='absolute')
+sin = ufunc._create(_sin_func, 1, name='sin', types=_FLOAT_UNARY_TYPES)
+cos = ufunc._create(_cos_func, 1, name='cos', types=_FLOAT_UNARY_TYPES)
+tan = ufunc._create(_tan_func, 1, name='tan', types=_FLOAT_UNARY_TYPES)
+arcsin = ufunc._create(_arcsin_func, 1, name='arcsin', types=_FLOAT_UNARY_TYPES)
+arccos = ufunc._create(_arccos_func, 1, name='arccos', types=_FLOAT_UNARY_TYPES)
+arctan = ufunc._create(_arctan_func, 1, name='arctan', types=_FLOAT_UNARY_TYPES)
+sinh = ufunc._create(_sinh_func, 1, name='sinh', types=_FLOAT_UNARY_TYPES)
+cosh = ufunc._create(_cosh_func, 1, name='cosh', types=_FLOAT_UNARY_TYPES)
+tanh = ufunc._create(_tanh_func, 1, name='tanh', types=_FLOAT_UNARY_TYPES)
+exp = ufunc._create(_exp_func, 1, name='exp', types=_FLOAT_UNARY_TYPES)
+exp2 = ufunc._create(_exp2_func, 1, name='exp2', types=_FLOAT_UNARY_TYPES)
+log = ufunc._create(_log_func, 1, name='log', types=_FLOAT_UNARY_TYPES)
+log2 = ufunc._create(_log2_func, 1, name='log2', types=_FLOAT_UNARY_TYPES)
+log10 = ufunc._create(_log10_func, 1, name='log10', types=_FLOAT_UNARY_TYPES)
+sqrt = ufunc._create(_sqrt_func, 1, name='sqrt', types=_FLOAT_UNARY_TYPES)
+cbrt = ufunc._create(_cbrt_func, 1, name='cbrt', types=_FLOAT_UNARY_TYPES)
+square = ufunc._create(_square_func, 1, name='square', types=_NUMERIC_UNARY_TYPES)
+reciprocal = ufunc._create(_reciprocal_func, 1, name='reciprocal', types=_FLOAT_UNARY_TYPES)
+negative = ufunc._create(_negative_func, 1, name='negative',
+                         types=_NUMERIC_UNARY_TYPES + ['O->O'])
+positive = ufunc._create(_positive_func, 1, name='positive',
+                         types=_NUMERIC_UNARY_TYPES + ['O->O'])
+absolute = ufunc._create(_absolute_func, 1, name='absolute',
+                         types=_NUMERIC_UNARY_TYPES + ['O->O'])
 abs = absolute
-sign = ufunc._create(_sign_func, 1, name='sign')
-floor = ufunc._create(_floor_func, 1, name='floor')
-ceil = ufunc._create(_ceil_func, 1, name='ceil')
-rint = ufunc._create(_rint_func, 1, name='rint')
-trunc = ufunc._create(_trunc_func, 1, name='trunc')
-deg2rad = ufunc._create(_deg2rad_func, 1, name='deg2rad')
-rad2deg = ufunc._create(_rad2deg_func, 1, name='rad2deg')
-signbit = ufunc._create(_signbit_func, 1, name='signbit')
-logical_not = ufunc._create(_logical_not_func, 1, name='logical_not')
-isnan = ufunc._create(_isnan_func, 1, name='isnan')
-isinf = ufunc._create(_isinf_func, 1, name='isinf')
-isfinite = ufunc._create(_isfinite_func, 1, name='isfinite')
+sign = ufunc._create(_sign_func, 1, name='sign', types=_NUMERIC_UNARY_TYPES)
+floor = ufunc._create(_floor_func, 1, name='floor', types=_FLOAT_UNARY_TYPES)
+ceil = ufunc._create(_ceil_func, 1, name='ceil', types=_FLOAT_UNARY_TYPES)
+rint = ufunc._create(_rint_func, 1, name='rint', types=_FLOAT_UNARY_TYPES)
+trunc = ufunc._create(_trunc_func, 1, name='trunc', types=_FLOAT_UNARY_TYPES)
+deg2rad = ufunc._create(_deg2rad_func, 1, name='deg2rad', types=_FLOAT_UNARY_TYPES)
+rad2deg = ufunc._create(_rad2deg_func, 1, name='rad2deg', types=_FLOAT_UNARY_TYPES)
+signbit = ufunc._create(_signbit_func, 1, name='signbit', types=['f->?', 'd->?'])
+logical_not = ufunc._create(_logical_not_func, 1, name='logical_not', types=['?->?', 'O->?'])
+isnan = ufunc._create(_isnan_func, 1, name='isnan', types=['f->?', 'd->?'])
+isinf = ufunc._create(_isinf_func, 1, name='isinf', types=['f->?', 'd->?'])
+isfinite = ufunc._create(_isfinite_func, 1, name='isfinite', types=['f->?', 'd->?'])
 
 _bitwise_not_func = bitwise_not
-bitwise_not = ufunc._create(_bitwise_not_func, 1, name='bitwise_not')
+bitwise_not = ufunc._create(_bitwise_not_func, 1, name='bitwise_not',
+                            types=_INT_UNARY_TYPES)
 invert = bitwise_not
 
 # bitwise_count (popcount)
