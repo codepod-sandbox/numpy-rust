@@ -75,6 +75,70 @@ def _make_complex_array(values, shape):
 
 
 
+def _is_structured_dtype(dt):
+    """Return True if dt is a StructuredDtype or a dtype wrapping one."""
+    from ._core_types import StructuredDtype, dtype as _dtype_cls
+    if isinstance(dt, StructuredDtype):
+        return True
+    if isinstance(dt, _dtype_cls) and (hasattr(dt, '_structured') and dt._structured is not None):
+        return True
+    return False
+
+
+def _create_structured_array(data, sdt):
+    """Create a StructuredArray from a sequence of tuples and a StructuredDtype.
+
+    Args:
+        data: sequence of tuples, e.g. [(1.0, 2), (3.0, 4)]
+        sdt: StructuredDtype or dtype wrapping a StructuredDtype
+    """
+    import json
+    from numpy import StructuredArray
+    from ._core_types import StructuredDtype
+    # Unwrap if dtype wraps a StructuredDtype
+    if hasattr(sdt, '_structured') and sdt._structured is not None:
+        sdt = sdt._structured
+    names = sdt.names
+    nrows = len(data)
+    fields = []
+    for i, name in enumerate(names):
+        field_dtype_obj, _ = sdt.fields[name]
+        col_values = [row[i] for row in data]
+        col_arr = array(col_values, dtype=field_dtype_obj)
+        fields.append((name, col_arr))
+    dtype_json = json.dumps([[nm, str(sdt.fields[nm][0])] for nm in names])
+    native_fields = [(name, col._native if hasattr(col, '_native') else col)
+                     for name, col in fields]
+    native = _native.StructuredArray(native_fields, [nrows], dtype_json)
+    return StructuredArray(native)
+
+
+def _create_empty_structured(nrows, sdt, fill_value=0):
+    """Create a zero/fill-filled StructuredArray of shape (nrows,).
+
+    Args:
+        nrows: int — number of records
+        sdt: StructuredDtype or dtype wrapping one
+        fill_value: scalar to fill each column (default 0)
+    """
+    import json
+    from numpy import StructuredArray
+    from ._core_types import StructuredDtype
+    if hasattr(sdt, '_structured') and sdt._structured is not None:
+        sdt = sdt._structured
+    names = sdt.names
+    fields = []
+    for name in names:
+        field_dtype_obj, _ = sdt.fields[name]
+        col_arr = full(nrows, fill_value, dtype=field_dtype_obj)
+        fields.append((name, col_arr))
+    dtype_json = json.dumps([[nm, str(sdt.fields[nm][0])] for nm in names])
+    native_fields = [(name, col._native if hasattr(col, '_native') else col)
+                     for name, col in fields]
+    native = _native.StructuredArray(native_fields, [nrows], dtype_json)
+    return StructuredArray(native)
+
+
 def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=None):
     result = _array_core(data, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
     if ndmin > 0 and isinstance(result, ndarray):
@@ -84,6 +148,12 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     return result
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
+    # Check for structured dtype BEFORE normalization (normalization loses field info)
+    if dtype is not None and _is_structured_dtype(dtype):
+        from ._core_types import dtype as _dtype_cls
+        parsed = dtype if isinstance(dtype, _dtype_cls) else _dtype_cls(dtype)
+        data_seq = data if isinstance(data, (list, tuple)) else [data]
+        return _create_structured_array(data_seq, parsed)
     if dtype is not None:
         dtype = _normalize_dtype(dtype)
     elif hasattr(data, "_numpy_dtype_name"):
@@ -126,7 +196,17 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             if isinstance(data, (list, tuple)):
                 return _native.array([str(x) for x in data])
             return _native.array(data)
-        if dt == "object" or "," in dt:
+        if dt == "object":
+            return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], dt)
+        # Structured dtype: route to columnar Rust-backed StructuredArray
+        # Note: str(structured_dtype) returns "void", not a comma-separated string,
+        # so we must check _is_structured_dtype on the original dtype object.
+        if "," in dt or _is_structured_dtype(dtype):
+            from ._core_types import dtype as _dtype_cls, StructuredDtype
+            parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
+            if _is_structured_dtype(parsed):
+                data_seq = data if isinstance(data, (list, tuple)) else [data]
+                return _create_structured_array(data_seq, parsed)
             return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], dt)
     if isinstance(data, _ObjectArray):
         return data.copy() if copy else data
@@ -243,6 +323,13 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
 def zeros(shape, dtype=None, order="C", like=None):
     if isinstance(shape, int):
         shape = (shape,)
+    # Handle structured dtype
+    if dtype is not None:
+        from ._core_types import dtype as _dtype_cls
+        parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
+        if _is_structured_dtype(parsed):
+            nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
+            return _create_empty_structured(nrows, parsed, fill_value=0)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
@@ -414,6 +501,13 @@ def _make_void_result(shape, dtype_str, fill_value=0, itemsize=None):
 def full(shape, fill_value, dtype=None, order="C"):
     if isinstance(shape, int):
         shape = (shape,)
+    # Handle structured dtype
+    if dtype is not None:
+        from ._core_types import dtype as _dtype_cls
+        parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
+        if _is_structured_dtype(parsed):
+            nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
+            return _create_empty_structured(nrows, parsed, fill_value=fill_value)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
