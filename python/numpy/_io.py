@@ -3,6 +3,66 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from ._creation import array, asarray
 from ._manipulation import reshape
+import struct as _struct
+import zipfile as _zipfile
+import ast as _ast
+import io as _io_module
+
+_MAGIC = b'\x93NUMPY'
+
+# Maps dtype name -> (npy_descr, struct_char, itemsize)
+_DTYPE_INFO = {
+    'float16':    ('<f2', 'e', 2),
+    'float32':    ('<f4', 'f', 4),
+    'float64':    ('<f8', 'd', 8),
+    'int8':       ('|i1', 'b', 1),
+    'int16':      ('<i2', 'h', 2),
+    'int32':      ('<i4', 'i', 4),
+    'int64':      ('<i8', 'q', 8),
+    'uint8':      ('|u1', 'B', 1),
+    'uint16':     ('<u2', 'H', 2),
+    'uint32':     ('<u4', 'I', 4),
+    'uint64':     ('<u8', 'Q', 8),
+    'bool':       ('|b1', '?', 1),
+    'complex128': ('<c16', 'd', 16),  # 2 doubles per element
+}
+
+# Reverse: .npy descriptor -> dtype name (handles both endians)
+_DESCR_TO_DTYPE = {
+    '<f2': 'float16',   '>f2': 'float16',
+    '<f4': 'float32',   '>f4': 'float32',
+    '<f8': 'float64',   '>f8': 'float64',   '|f8': 'float64',
+    '<i1': 'int8',      '>i1': 'int8',      '|i1': 'int8',
+    '<i2': 'int16',     '>i2': 'int16',
+    '<i4': 'int32',     '>i4': 'int32',
+    '<i8': 'int64',     '>i8': 'int64',
+    '<u1': 'uint8',     '>u1': 'uint8',     '|u1': 'uint8',
+    '<u2': 'uint16',    '>u2': 'uint16',
+    '<u4': 'uint32',    '>u4': 'uint32',
+    '<u8': 'uint64',    '>u8': 'uint64',
+    '|b1': 'bool',      '<b1': 'bool',
+    '<c8':  'complex128',  '>c8':  'complex128',
+    '<c16': 'complex128',  '>c16': 'complex128',   '|c16': 'complex128',
+}
+
+
+def _dtype_to_descr(dtype_str):
+    """Return (npy_descr, struct_char, itemsize) for dtype name."""
+    info = _DTYPE_INFO.get(dtype_str)
+    if info is None:
+        raise ValueError(
+            f"cannot save {dtype_str!r} arrays to .npy (unsupported dtype)"
+        )
+    return info
+
+
+def _descr_to_dtype(descr):
+    """Map .npy descriptor string to our dtype name."""
+    dt = _DESCR_TO_DTYPE.get(descr)
+    if dt is None:
+        raise ValueError(f"unsupported .npy dtype descriptor: {descr!r}")
+    return dt
+
 
 __all__ = ['loadtxt', 'savetxt', 'genfromtxt', 'save', 'load', 'savez', 'savez_compressed']
 
