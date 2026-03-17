@@ -164,10 +164,13 @@ class StructuredArray:
         # All other cases: delegate to existing behavior
         result = native[key]
 
-        # String key: field access — reshape if multi-D
+        # String key: field access — reshape if multi-D, mark as unaligned
         if isinstance(key, str):
             if len(shape) > 1:
-                return result.reshape(shape)
+                result = result.reshape(shape)
+            # Structured field views are unaligned (interleaved memory semantics)
+            if hasattr(result, '_set_unaligned'):
+                result._set_unaligned()
             return result
 
         # Integer key (1D) → void scalar
@@ -236,6 +239,11 @@ class StructuredArray:
     @property
     def field_names(self):
         return object.__getattribute__(self, '_native_arr').field_names()
+
+    @property
+    def flags(self):
+        from ._helpers import _ArrayFlags
+        return _ArrayFlags(c_contiguous=True, f_contiguous=False)
 
     def tolist(self):
         """Return the array as a nested Python list of tuples."""

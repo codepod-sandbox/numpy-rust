@@ -496,13 +496,32 @@ class StructuredDtype:
     def __str__(self):
         return repr(self)
 
+    def _normalized_fields(self):
+        """Return fields with type strings normalized to canonical names."""
+        result = []
+        for name, dt in self._fields:
+            # Normalize: strip endian prefix and map to canonical name
+            dt_s = str(dt)
+            if isinstance(dt_s, str) and dt_s and dt_s[0] in '<>|=':
+                dt_s = dt_s[1:]
+            # Map short codes to canonical names for comparison
+            _short_to_canonical = {
+                'i1': 'int8', 'i2': 'int16', 'i4': 'int32', 'i8': 'int64',
+                'u1': 'uint8', 'u2': 'uint16', 'u4': 'uint32', 'u8': 'uint64',
+                'f2': 'float16', 'f4': 'float32', 'f8': 'float64',
+                'c8': 'complex64', 'c16': 'complex128', 'b1': 'bool',
+            }
+            canonical = _short_to_canonical.get(dt_s, dt_s)
+            result.append((name, canonical))
+        return result
+
     def __eq__(self, other):
         if isinstance(other, StructuredDtype):
-            return self._fields == other._fields
+            return self._normalized_fields() == other._normalized_fields()
         return False
 
     def __hash__(self):
-        return hash(tuple((n, str(d)) for n, d in self._fields))
+        return hash(tuple(self._normalized_fields()))
 
 
 # ---------------------------------------------------------------------------
@@ -742,10 +761,35 @@ class dtype:
     def __str__(self):
         return self.name
 
+    @staticmethod
+    def _parse_structured_name(name):
+        """Try to parse a structured dtype name string into a StructuredDtype."""
+        if not (isinstance(name, str) and name.startswith('[')):
+            return None
+        import ast as _ast_local
+        try:
+            fields = _ast_local.literal_eval(name)
+            return StructuredDtype(fields)
+        except Exception:
+            return None
+
     def __eq__(self, other):
         if isinstance(other, dtype):
-            if hasattr(self, '_structured') and hasattr(other, '_structured'):
-                return self._structured == other._structured
+            s_struct = getattr(self, '_structured', None)
+            o_struct = getattr(other, '_structured', None)
+            if s_struct is not None and o_struct is not None:
+                return s_struct == o_struct
+            # Try to parse structured dtype from name strings when _structured is None
+            if s_struct is None and o_struct is None:
+                s_from_name = dtype._parse_structured_name(getattr(self, 'name', ''))
+                o_from_name = dtype._parse_structured_name(getattr(other, 'name', ''))
+                if s_from_name is not None and o_from_name is not None:
+                    return s_from_name == o_from_name
+            # Mixed: one has _structured, other might be parseable
+            ss = s_struct or dtype._parse_structured_name(getattr(self, 'name', ''))
+            os = o_struct or dtype._parse_structured_name(getattr(other, 'name', ''))
+            if ss is not None and os is not None:
+                return ss == os
             return self.name == other.name
         if isinstance(other, str):
             return self.name == other or self.name == _normalize_dtype(other)

@@ -157,6 +157,24 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
     # Check for structured dtype BEFORE normalization (normalization loses field info)
+    # Also handle list-of-tuples dtype specs like [('x', 'i4'), ('y', 'i4')]
+    if dtype is not None and isinstance(dtype, list):
+        from ._core_types import dtype as _dtype_cls
+        parsed = _dtype_cls(dtype)
+        if isinstance(data, (list, tuple)) and len(data) > 0:
+            # Detect 2D: data[0] is a list/tuple of record tuples (not a record tuple itself)
+            # A record tuple has scalar elements; a 2D row has tuple elements
+            first = data[0]
+            if (isinstance(first, (list, tuple)) and len(first) > 0 and
+                    isinstance(first[0], (list, tuple))):
+                # 2D data: data[0][0] is a record tuple
+                flat_rows = [row for outer in data for row in outer]
+                outer_len = len(data)
+                inner_len = len(data[0])
+                result = _create_structured_array(flat_rows, parsed)
+                return result.reshape((outer_len, inner_len))
+        data_seq = data if isinstance(data, (list, tuple)) else [data]
+        return _create_structured_array(data_seq, parsed)
     if dtype is not None and _is_structured_dtype(dtype):
         from ._core_types import dtype as _dtype_cls
         parsed = dtype if isinstance(dtype, _dtype_cls) else _dtype_cls(dtype)
@@ -204,8 +222,14 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             if isinstance(data, (list, tuple)):
                 return _native.array([str(x) for x in data])
             return _native.array(data)
-        if dt == "object":
-            return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], dt)
+        if dt in ("object", "<class 'object'>"):
+            # Flatten nested list/tuple for object arrays (e.g. [[1,2],[3,4]])
+            if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (list, tuple)):
+                flat = [x for row in data for x in row]
+                inner_len = len(data[0])
+                shape = (len(data), inner_len)
+                return _ObjectArray(flat, "object", shape=shape)
+            return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], "object")
         # Structured dtype: route to columnar Rust-backed StructuredArray
         # Note: str(structured_dtype) returns "void", not a comma-separated string,
         # so we must check _is_structured_dtype on the original dtype object.
@@ -738,6 +762,9 @@ def asarray(a, dtype=None, order=None):
 asanyarray = asarray  # In our implementation, same as asarray
 
 def ascontiguousarray(a, dtype=None):
+    from numpy import StructuredArray
+    if isinstance(a, StructuredArray):
+        return a
     return asarray(a)
 
 def copy(a, order="K"):
@@ -908,6 +935,13 @@ def fromfunction(function, shape, dtype=float, **kwargs):
 
 def asfortranarray(a):
     """Return an array laid out in Fortran order (simplified: just copy)."""
+    from numpy import StructuredArray
+    if isinstance(a, StructuredArray):
+        # Structured arrays don't have meaningful Fortran order — return as-is
+        return a
+    from ._helpers import _ObjectArray
+    if isinstance(a, _ObjectArray):
+        return a.copy()
     return array(a, copy=True)
 
 

@@ -185,17 +185,15 @@ def test_load_legacy_text():
     assert abs(b.tolist()[0] - 1.0) < 1e-6
 
 
-def test_save_object_raises():
-    """Saving an object array raises ValueError."""
-    path = _TMP + 'obj.npy'
+def test_save_str_array():
+    """Saving and loading a string array round-trips correctly."""
+    import io as _io
     a = np.array(['hello', 'world'])
-    try:
-        np.save(path, a)
-        _cleanup(path)
-        assert False, "should have raised ValueError"
-    except (ValueError, TypeError):
-        pass
-    _cleanup(path)
+    buf = _io.BytesIO()
+    np.save(buf, a)
+    buf.seek(0)
+    b = np.load(buf)
+    assert b.tolist() == ['hello', 'world'], f"expected ['hello', 'world'], got {b.tolist()}"
 
 
 def test_savez_positional():

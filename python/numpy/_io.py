@@ -7,6 +7,7 @@ import struct as _struct
 import zipfile as _zipfile
 import ast as _ast
 import io as _io_module
+import re as _re
 
 _MAGIC = b'\x93NUMPY'
 
@@ -46,6 +47,49 @@ _DESCR_TO_DTYPE = {
     '<c16': 'complex128',  '>c16': 'complex128',   '|c16': 'complex128',
 }
 
+# Type mapping for structured dtype fields: bare type string -> (struct_char, itemsize, npy_prefix)
+_STRUCTURED_FIELD_MAP = {
+    'bool':  ('?', 1),  'b1': ('?', 1),
+    'i1':    ('b', 1),  'int8': ('b', 1),
+    'i2':    ('h', 2),  'int16': ('h', 2),
+    'i4':    ('i', 4),  'int32': ('i', 4),
+    'i8':    ('q', 8),  'int64': ('q', 8),
+    'u1':    ('B', 1),  'uint8': ('B', 1),
+    'u2':    ('H', 2),  'uint16': ('H', 2),
+    'u4':    ('I', 4),  'uint32': ('I', 4),
+    'u8':    ('Q', 8),  'uint64': ('Q', 8),
+    'f2':    ('e', 2),  'float16': ('e', 2),
+    'f4':    ('f', 4),  'float32': ('f', 4),
+    'f8':    ('d', 8),  'float64': ('d', 8),
+    'c8':    ('ff', 8), 'complex64': ('ff', 8),
+    'c16':   ('dd', 16), 'complex128': ('dd', 16),
+}
+
+# Map from bare type key (stripped of endian prefix) to npy descr with endian
+_STRUCTURED_FIELD_NPY_DESCR = {
+    'bool': '|b1',  'b1': '|b1',
+    'i1': '|i1',  'int8': '|i1',
+    'i2': '<i2',  'int16': '<i2',
+    'i4': '<i4',  'int32': '<i4',
+    'i8': '<i8',  'int64': '<i8',
+    'u1': '|u1',  'uint8': '|u1',
+    'u2': '<u2',  'uint16': '<u2',
+    'u4': '<u4',  'uint32': '<u4',
+    'u8': '<u8',  'uint64': '<u8',
+    'f2': '<f2',  'float16': '<f2',
+    'f4': '<f4',  'float32': '<f4',
+    'f8': '<f8',  'float64': '<f8',
+    'c8': '<c8',  'complex64': '<c8',
+    'c16': '<c16', 'complex128': '<c16',
+}
+
+
+def _strip_endian(type_str):
+    """Strip leading endian prefix from a type string like '<i4' -> 'i4'."""
+    if type_str and type_str[0] in '<>|=':
+        return type_str[1:]
+    return type_str
+
 
 def _dtype_to_descr(dtype_str):
     """Return (npy_descr, struct_char, itemsize) for dtype name."""
@@ -65,20 +109,146 @@ def _descr_to_dtype(descr):
     return dt
 
 
+def _make_npy_bytes(magic_ver, header_bytes, data_bytes):
+    """Assemble a .npy blob with the given version byte (1 or 2), header, and data."""
+    header_len = len(header_bytes)
+    if magic_ver == 1:
+        return _MAGIC + b'\x01\x00' + _struct.pack('<H', header_len) + header_bytes + data_bytes
+    else:
+        return _MAGIC + b'\x02\x00' + _struct.pack('<I', header_len) + header_bytes + data_bytes
+
+
+def _build_header(descr_str, shape, fortran_order=False):
+    """Build a padded .npy header, returning (header_bytes, version).
+
+    Chooses version 1.0 unless the header would exceed 65535 bytes.
+    """
+    shape_repr = repr(tuple(shape))
+    if isinstance(descr_str, str) and descr_str.startswith('['):
+        # Structured dtype: descr already looks like a Python list literal
+        header_dict = f"{{'descr': {descr_str}, 'fortran_order': {fortran_order}, 'shape': {shape_repr}, }}"
+    else:
+        header_dict = f"{{'descr': '{descr_str}', 'fortran_order': {fortran_order}, 'shape': {shape_repr}, }}"
+
+    raw = header_dict.encode('latin-1')
+    # Try version 1.0 first (prefix = 10 bytes)
+    base_len = len(raw) + 1  # +1 for trailing '\n'
+    pad1 = (64 - ((10 + base_len) % 64)) % 64
+    if 10 + base_len + pad1 <= 10 + 65535:
+        header = header_dict + ' ' * pad1 + '\n'
+        return header.encode('latin-1'), 1
+    # Fall back to version 2.0 (prefix = 12 bytes)
+    pad2 = (64 - ((12 + base_len) % 64)) % 64
+    header = header_dict + ' ' * pad2 + '\n'
+    return header.encode('latin-1'), 2
+
+
 def _array_to_npy_bytes(arr):
-    """Encode an ndarray as a .npy binary blob (version 1.0)."""
+    """Encode an ndarray (or _ObjectArray / StructuredArray) as a .npy binary blob."""
+    from ._helpers import _ObjectArray
+    from numpy import StructuredArray
+
     dtype_str = str(arr.dtype)
-    descr, struct_char, _ = _dtype_to_descr(dtype_str)
     shape = arr.shape
 
-    # Build header dict string and pad to 64-byte alignment.
-    # Total prefix = magic(6) + version(2) + header_len_field(2) = 10 bytes.
-    # Requirement: (10 + header_len) % 64 == 0
-    header_dict = f"{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape!r}, }}"
-    base_len = len(header_dict.encode('latin-1')) + 1  # +1 for '\n'
-    pad = (64 - ((10 + base_len) % 64)) % 64
-    header = header_dict + ' ' * pad + '\n'
-    header_bytes = header.encode('latin-1')
+    # ------------------------------------------------------------------ object
+    if dtype_str in ('object', "<class 'object'>"):
+        import pickle
+        flat = list(arr.flatten().tolist()) if hasattr(arr, 'flatten') else list(arr._data)
+        data_bytes = pickle.dumps(flat)
+        header_bytes, ver = _build_header('|O', shape)
+        return _make_npy_bytes(ver, header_bytes, data_bytes)
+
+    # ------------------------------------------------------------------- str
+    if dtype_str == 'str':
+        flat = arr.flatten().tolist() if hasattr(arr, 'flatten') else list(arr._data)
+        if flat:
+            max_len = max(len(s) for s in flat)
+        else:
+            max_len = 1
+        if max_len == 0:
+            max_len = 1
+        descr = f'<U{max_len}'
+        chunks = []
+        for s in flat:
+            encoded = s.encode('utf-32-le')
+            # Pad or truncate to max_len chars * 4 bytes
+            target = max_len * 4
+            if len(encoded) < target:
+                encoded = encoded + b'\x00' * (target - len(encoded))
+            else:
+                encoded = encoded[:target]
+            chunks.append(encoded)
+        data_bytes = b''.join(chunks)
+        header_bytes, ver = _build_header(descr, shape)
+        return _make_npy_bytes(ver, header_bytes, data_bytes)
+
+    # -------------------------------------------------------------- structured
+    if dtype_str.startswith('[') or dtype_str.startswith('dtype(') or isinstance(arr, StructuredArray):
+        # Get the field list: list of (name, bare_type_str)
+        # For StructuredArray: use arr.dtype.descr which gives [(name, dtype_name), ...]
+        # For _ObjectArray with structured dtype: parse str(arr.dtype)
+        dt_obj = arr.dtype
+        if hasattr(dt_obj, 'descr') and hasattr(dt_obj, 'names') and dt_obj.names is not None:
+            # StructuredDtype / dtype wrapping StructuredDtype
+            fields_raw = [(name, str(dt_obj.fields[name][0])) for name in dt_obj.names]
+        elif dtype_str.startswith('['):
+            fields_raw = _ast.literal_eval(dtype_str)
+        else:
+            # Fallback: try descr from dtype object
+            descr_val = getattr(dt_obj, 'descr', None)
+            if descr_val:
+                fields_raw = [(item[0], item[1]) for item in descr_val if item[0]]
+            else:
+                raise ValueError(f"cannot determine structured dtype fields from {dtype_str!r}")
+
+        # Build npy-compatible field list and struct format
+        npy_fields = []
+        row_fmt = ''
+        for name, type_str in fields_raw:
+            bare = _strip_endian(type_str)
+            info = _STRUCTURED_FIELD_MAP.get(bare)
+            if info is None:
+                raise ValueError(f"unsupported structured field type: {type_str!r}")
+            struct_char, sz = info
+            npy_desc = _STRUCTURED_FIELD_NPY_DESCR.get(bare, f'<{bare}')
+            npy_fields.append((name, npy_desc))
+            row_fmt += struct_char
+
+        # Build descr string for npy header (Python list-of-tuples literal)
+        descr_parts = ", ".join(f"('{n}', '{d}')" for n, d in npy_fields)
+        descr_str_npy = f'[{descr_parts}]'
+
+        # Get row data — tolist() returns list of record tuples
+        rows = arr.tolist()
+        nrows = len(rows)
+        # Structured arrays are always 1D (nrows records) in .npy format
+        npy_shape = (nrows,)
+
+        chunks = []
+        for row in rows:
+            # row is a tuple of field values
+            values = []
+            for val, (name, type_str) in zip(row, fields_raw):
+                bare = _strip_endian(type_str)
+                struct_char, _ = _STRUCTURED_FIELD_MAP[bare]
+                if struct_char in ('ff', 'dd'):
+                    if isinstance(val, complex):
+                        values.extend([float(val.real), float(val.imag)])
+                    else:
+                        values.extend([float(val), 0.0])
+                elif struct_char == '?':
+                    values.append(bool(val))
+                else:
+                    values.append(val)
+            chunks.append(_struct.pack('<' + row_fmt, *values))
+
+        data_bytes = b''.join(chunks)
+        header_bytes, ver = _build_header(descr_str_npy, npy_shape)
+        return _make_npy_bytes(ver, header_bytes, data_bytes)
+
+    # --------------------------------------------------------- standard numeric
+    descr, struct_char, _ = _dtype_to_descr(dtype_str)
 
     flat = arr.flatten().tolist()
     n = len(flat)
@@ -93,15 +263,32 @@ def _array_to_npy_bytes(arr):
                 pairs.extend([float(v[0]), float(v[1])])
             else:
                 pairs.extend([float(v), 0.0])
-        data = _struct.pack('<' + float_char * len(pairs), *pairs)
+        data_bytes = _struct.pack('<' + float_char * len(pairs), *pairs)
     elif dtype_str == 'bool':
-        data = _struct.pack('?' * n, *flat)
+        data_bytes = _struct.pack('?' * n, *flat)
     else:
-        data = _struct.pack('<' + struct_char * n, *flat)
+        data_bytes = _struct.pack('<' + struct_char * n, *flat)
 
-    header_len = len(header_bytes)
-    return _MAGIC + b'\x01\x00' + _struct.pack('<H', header_len) + header_bytes + data
+    header_bytes, ver = _build_header(descr, shape)
+    return _make_npy_bytes(ver, header_bytes, data_bytes)
 
+
+def _parse_structured_descr(descr):
+    """Parse a structured dtype descriptor (list or string starting with '[').
+
+    Returns list of (name, bare_type) tuples.
+    """
+    if isinstance(descr, list):
+        fields = descr
+    else:
+        fields = _ast.literal_eval(descr)
+    # Normalize: strip endian from type strings
+    result = []
+    for item in fields:
+        name, type_str = item[0], item[1]
+        bare = _strip_endian(type_str)
+        result.append((name, bare, type_str))
+    return result
 
 
 def _npy_bytes_to_array(data):
@@ -128,7 +315,6 @@ def _npy_bytes_to_array(data):
     fortran_order = hdr['fortran_order']
     shape = tuple(hdr['shape'])
 
-    dtype_str = _descr_to_dtype(descr)
     data_start = header_start + header_len
     raw = data[data_start:]
 
@@ -136,6 +322,84 @@ def _npy_bytes_to_array(data):
     for s in shape:
         n *= s
 
+    # ------------------------------------------------------------------ object
+    if descr == '|O':
+        import pickle
+        flat = pickle.loads(raw)
+        if not flat and n == 0:
+            result = array([], dtype=object)
+            if shape != (0,):
+                result = result.reshape(list(shape))
+            return result
+        result = array(flat, dtype=object)
+        if shape not in ((), (n,)):
+            result = result.reshape(list(shape))
+        return result
+
+    # ------------------------------------------------------------------- str
+    if isinstance(descr, str) and _re.match(r'^[<>|]?U\d+$', descr):
+        # Extract char count
+        m = _re.search(r'U(\d+)$', descr)
+        char_count = int(m.group(1))
+        bytes_per_elem = char_count * 4
+        flat = []
+        for i in range(n):
+            chunk = raw[i * bytes_per_elem:(i + 1) * bytes_per_elem]
+            s = chunk.decode('utf-32-le').rstrip('\x00')
+            flat.append(s)
+        if shape == ():
+            return array(flat[0] if flat else '', dtype='str')
+        result = array(flat, dtype='str')
+        if shape != (n,):
+            result = result.reshape(list(shape))
+        return result
+
+    # -------------------------------------------------------------- structured
+    if isinstance(descr, (list, str)) and (
+        isinstance(descr, list) or
+        (isinstance(descr, str) and descr.strip().startswith('['))
+    ):
+        fields = _parse_structured_descr(descr)
+        # Build struct format
+        fmt = '<'
+        field_sizes = []
+        for name, bare, orig in fields:
+            info = _STRUCTURED_FIELD_MAP.get(bare)
+            if info is None:
+                raise ValueError(f"unsupported structured field type: {orig!r}")
+            struct_char, sz = info
+            fmt += struct_char
+            field_sizes.append((name, bare, struct_char, sz))
+
+        # Calculate itemsize
+        itemsize = sum(sz for _, _, _, sz in field_sizes)
+
+        # Unpack all rows
+        rows = []
+        for i in range(n):
+            row_bytes = raw[i * itemsize:(i + 1) * itemsize]
+            unpacked = _struct.unpack(fmt, row_bytes)
+            # Rebuild row: complex types need re-pairing
+            row_vals = []
+            idx = 0
+            for name, bare, struct_char, sz in field_sizes:
+                if struct_char in ('ff', 'dd'):
+                    row_vals.append(complex(unpacked[idx], unpacked[idx + 1]))
+                    idx += 2
+                else:
+                    row_vals.append(unpacked[idx])
+                    idx += 1
+            rows.append(tuple(row_vals))
+
+        # Reconstruct dtype spec
+        dtype_spec = [(name, orig) for name, bare, orig in fields]
+        result = array(rows, dtype=dtype_spec)
+        if shape not in ((), (n,)):
+            result = result.reshape(list(shape))
+        return result
+
+    # --------------------------------------------------------- standard numeric
+    dtype_str = _descr_to_dtype(descr)
     endian = '>'  if descr[0] == '>' else '<'
 
     if dtype_str in ('complex128', 'complex64'):
@@ -398,6 +662,11 @@ class NpzFile:
             if name.endswith('.npy')
         ]
         self.f = BagObj(self)
+
+    @property
+    def zip(self):
+        """Alias for _zip (used by some tests as data.zip.fp)."""
+        return self._zip
 
     def __getitem__(self, key):
         if not isinstance(key, str):

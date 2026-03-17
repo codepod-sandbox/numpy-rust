@@ -10,7 +10,7 @@ __all__ = [
     "assert_array_compare", "assert_string_equal",
     "HAS_REFCOUNT", "IS_WASM", "IS_PYPY", "IS_PYSTON",
     "suppress_warnings", "break_cycles", "check_support_sve",
-    "runstring", "temppath",
+    "runstring", "temppath", "tempdir",
 ]
 
 # Platform flags
@@ -25,11 +25,22 @@ def assert_(val, msg=""):
         raise AssertionError(msg or "assertion failed")
 
 
+def _as_scalar(v):
+    """Convert a value to a comparable scalar (handles complex tuples)."""
+    if isinstance(v, (tuple, list)) and len(v) == 2:
+        # Complex stored as (re, im) tuple in our Rust backend
+        return complex(v[0], v[1])
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return v
+
+
 def _as_list(arr):
     """Convert ndarray to flat Python list for element-wise comparison."""
     if isinstance(arr, numpy.ndarray):
         flat = arr.flatten()
-        return [float(flat[i]) for i in range(flat.size)]
+        return [_as_scalar(flat[i]) for i in range(flat.size)]
     return [arr]
 
 
@@ -57,6 +68,32 @@ def _structured_array_equal(actual, desired):
     return True, ""
 
 
+def _is_array_like(obj):
+    """Return True if obj is ndarray or an array-like object with shape/flatten."""
+    if isinstance(obj, numpy.ndarray):
+        return True
+    # _ObjectArray and similar objects have shape, flatten, and tolist
+    t = type(obj).__name__
+    return t in ('_ObjectArray', '_ComplexResultArray') or (
+        hasattr(obj, 'shape') and hasattr(obj, 'flatten') and hasattr(obj, 'tolist')
+        and not _is_structured_array(obj)
+    )
+
+
+def _as_list_compat(obj):
+    """Convert any array-like (ndarray or _ObjectArray) to flat scalar list."""
+    if isinstance(obj, numpy.ndarray):
+        return _as_list(obj)
+    if hasattr(obj, 'flatten') and hasattr(obj, 'tolist'):
+        try:
+            flat = obj.flatten()
+            lst = flat.tolist() if hasattr(flat, 'tolist') else list(flat)
+            return [_as_scalar(x) for x in lst]
+        except Exception:
+            pass
+    return [_as_scalar(obj)]
+
+
 def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
     # Handle StructuredArray comparison (not ndarray subclasses)
     if _is_structured_array(actual) or _is_structured_array(desired):
@@ -66,31 +103,57 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
                 raise AssertionError(f"Structured arrays not equal: {msg}. {err_msg}")
             return
         # one is StructuredArray, one is not — fall through to generic
-    if isinstance(actual, numpy.ndarray) and isinstance(desired, numpy.ndarray):
-        if actual.shape != desired.shape:
+    if _is_array_like(actual) and _is_array_like(desired):
+        # Both are array-like (handles ndarray vs _ObjectArray cross-comparison)
+        a_shape = actual.shape if hasattr(actual, 'shape') else (1,)
+        d_shape = desired.shape if hasattr(desired, 'shape') else (1,)
+        if a_shape != d_shape:
             raise AssertionError(
-                f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"
+                f"Shape mismatch: {a_shape} vs {d_shape}. {err_msg}"
             )
-        a_vals = _as_list(actual)
-        d_vals = _as_list(desired)
+        a_vals = _as_list_compat(actual)
+        d_vals = _as_list_compat(desired)
         for i, (a, d) in enumerate(zip(a_vals, d_vals)):
-            if a != d:
-                raise AssertionError(
-                    f"Arrays not equal at index {i}: {a} != {d}. {err_msg}"
-                )
+            try:
+                equal = (a == d)
+                # Handle complex comparison: abs of difference
+                if isinstance(a, complex) and isinstance(d, complex):
+                    equal = (abs(a - d) < 1e-10)
+                if not equal:
+                    raise AssertionError(
+                        f"Arrays not equal at index {i}: {a} != {d}. {err_msg}"
+                    )
+            except (TypeError, ValueError):
+                if a != d:
+                    raise AssertionError(
+                        f"Arrays not equal at index {i}: {a} != {d}. {err_msg}"
+                    )
         return
-    if isinstance(actual, numpy.ndarray) or isinstance(desired, numpy.ndarray):
-        # one is array, one is scalar-like
-        arr = actual if isinstance(actual, numpy.ndarray) else desired
-        scalar = desired if isinstance(actual, numpy.ndarray) else actual
-        vals = _as_list(arr)
-        if arr.size == 1:
-            if vals[0] != scalar:
-                raise AssertionError(f"{vals[0]} != {scalar}. {err_msg}")
+    if _is_array_like(actual) or _is_array_like(desired):
+        # one is array-like, one is scalar-like
+        arr = actual if _is_array_like(actual) else desired
+        scalar = desired if _is_array_like(actual) else actual
+        arr_size = 1
+        if hasattr(arr, 'size'):
+            arr_size = arr.size
+        elif hasattr(arr, 'shape'):
+            arr_size = 1
+            for s in arr.shape:
+                arr_size *= s
+        if arr_size == 1:
+            vals = _as_list_compat(arr)
+            v = vals[0] if vals else None
+            if v != scalar:
+                raise AssertionError(f"{v} != {scalar}. {err_msg}")
             return
-    if actual != desired:
+    try:
+        if actual != desired:
+            raise AssertionError(
+                f"Items not equal:\n actual: {actual}\n desired: {desired}\n{err_msg}"
+            )
+    except (TypeError, ValueError):
         raise AssertionError(
-            f"Items not equal:\n actual: {actual}\n desired: {desired}\n{err_msg}"
+            f"Items not equal (comparison failed):\n actual: {actual}\n desired: {desired}\n{err_msg}"
         )
 
 
@@ -260,5 +323,21 @@ class temppath:
         import os
         try:
             os.unlink(self.path)
+        except OSError:
+            pass
+
+
+class tempdir:
+    def __init__(self, suffix="", prefix="tmp", dir=None):
+        import tempfile
+        self._dir = tempfile.mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
+
+    def __enter__(self):
+        return self._dir
+
+    def __exit__(self, *args):
+        import shutil
+        try:
+            shutil.rmtree(self._dir)
         except OSError:
             pass
