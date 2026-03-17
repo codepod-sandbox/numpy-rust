@@ -86,14 +86,14 @@ def _is_structured_dtype(dt):
 
 
 def _create_structured_array(data, sdt):
-    """Create a StructuredArray from a sequence of tuples and a StructuredDtype.
+    """Create a StructuredArray from a sequence of tuples/void scalars and a StructuredDtype.
 
     Args:
-        data: sequence of tuples, e.g. [(1.0, 2), (3.0, 4)]
+        data: sequence of tuples or void scalars, e.g. [(1.0, 2), (3.0, 4)]
         sdt: StructuredDtype or dtype wrapping a StructuredDtype
     """
     import json
-    from numpy import StructuredArray
+    from numpy import StructuredArray, void
     from ._core_types import StructuredDtype
     # Unwrap if dtype wraps a StructuredDtype
     if hasattr(sdt, '_structured') and sdt._structured is not None:
@@ -103,7 +103,15 @@ def _create_structured_array(data, sdt):
     fields = []
     for i, name in enumerate(names):
         field_dtype_obj, _ = sdt.fields[name]
-        col_values = [row[i] for row in data]
+        col_values = []
+        for row in data:
+            # Handle void scalars (numpy.void objects) or regular tuples
+            if isinstance(row, void):
+                # void objects are dict-like: access by field name
+                col_values.append(row[name])
+            else:
+                # Regular tuple: access by index
+                col_values.append(row[i])
         col_arr = array(col_values, dtype=field_dtype_obj)
         fields.append((name, col_arr))
     dtype_json = json.dumps([[nm, str(sdt.fields[nm][0])] for nm in names])
@@ -328,6 +336,11 @@ def zeros(shape, dtype=None, order="C", like=None):
         from ._core_types import dtype as _dtype_cls
         parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
         if _is_structured_dtype(parsed):
+            if isinstance(shape, (list, tuple)) and len(shape) > 1:
+                raise ValueError(
+                    "structured arrays only support 1D shape in this implementation; "
+                    "got shape {}".format(tuple(shape))
+                )
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=0)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
@@ -506,6 +519,11 @@ def full(shape, fill_value, dtype=None, order="C"):
         from ._core_types import dtype as _dtype_cls
         parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
         if _is_structured_dtype(parsed):
+            if isinstance(shape, (list, tuple)) and len(shape) > 1:
+                raise ValueError(
+                    "structured arrays only support 1D shape in this implementation; "
+                    "got shape {}".format(tuple(shape))
+                )
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=fill_value)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
@@ -641,9 +659,13 @@ def empty_like(a, dtype=None, order="K", subok=True, shape=None):
     return arr
 
 def asarray(a, dtype=None, order=None):
+    from numpy import StructuredArray
     if isinstance(a, ndarray):
         if dtype is not None:
             return a.astype(str(dtype))
+        return a
+    if isinstance(a, StructuredArray):
+        # StructuredArray is already an array-like, return as-is
         return a
     return array(a, dtype=dtype)
 
