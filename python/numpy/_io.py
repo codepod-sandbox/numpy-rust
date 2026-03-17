@@ -302,34 +302,49 @@ def genfromtxt(fname, dtype=None, comments='#', delimiter=None, skip_header=0,
 
 
 def save(file, arr, **kwargs):
-    """Save an array to a .npy file (text-based format for compatibility)."""
+    """Save an array to a .npy file in binary format."""
     arr = asarray(arr)
-    with open(file, 'w') as f:
-        f.write(f"# shape: {list(arr.shape)}\n")
-        flat = arr.flatten()
-        vals = [str(flat[i]) for i in range(flat.size)]
-        f.write(','.join(vals) + '\n')
-
-
-def load(file, mmap_mode=None, fix_imports=True, encoding='ASCII', **kwargs):
-    """Load array from a .npy file (text-based format)."""
-    with open(file, 'r') as f:
-        lines = f.readlines()
-    # Parse shape from first line
-    shape_line = lines[0].strip()
-    if shape_line.startswith('# shape:'):
-        import json
-        shape = tuple(json.loads(shape_line.split(':')[1].strip()))
-        data_line = lines[1].strip()
+    data = _array_to_npy_bytes(arr)
+    if isinstance(file, str):
+        with open(file, 'wb') as f:
+            f.write(data)
     else:
-        # Fallback: treat as flat data
-        data_line = lines[0].strip()
-        shape = None
-    vals = [float(v) for v in data_line.split(',')]
-    result = array(vals)
-    if shape is not None and len(shape) > 1:
-        result = result.reshape(shape)
-    return result
+        file.write(data)
+
+
+def load(file, mmap_mode=None, **kwargs):
+    """Load array(s) from a .npy or .npz file."""
+    if isinstance(file, str):
+        if file.lower().endswith('.npz'):
+            return NpzFile(file)
+        with open(file, 'rb') as f:
+            first = f.read(1)
+            f.seek(0)
+            if first == b'\x93':
+                return _npy_bytes_to_array(f.read())
+            elif first == b'#':
+                # Legacy text format from old stub
+                with open(file, 'r') as tf:
+                    lines = tf.readlines()
+                shape_line = lines[0].strip()
+                if shape_line.startswith('# shape:'):
+                    import json
+                    shape = tuple(json.loads(shape_line.split(':')[1].strip()))
+                    data_line = lines[1].strip()
+                else:
+                    data_line = lines[0].strip()
+                    shape = None
+                vals = [float(v) for v in data_line.split(',')]
+                result = array(vals)
+                if shape is not None and len(shape) > 1:
+                    result = result.reshape(list(shape))
+                return result
+            else:
+                raise ValueError(f"unknown file format: {file!r}")
+    else:
+        # File-like object — assume binary .npy
+        raw = file.read()
+        return _npy_bytes_to_array(raw)
 
 
 def savez(file, *args, **kwds):

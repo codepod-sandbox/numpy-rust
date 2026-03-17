@@ -150,6 +150,54 @@ def test_interop_read():
     assert abs(vals[2] - 3.0) < 1e-10
 
 
+def test_save_load_file_path():
+    """save/load round-trip via file path."""
+    path = _TMP + 'basic.npy'
+    a = np.array([[1.0, 2.0], [3.0, 4.0]])
+    np.save(path, a)
+    b = np.load(path)
+    _cleanup(path)
+    assert b.shape == (2, 2)
+    assert b.tolist() == [[1.0, 2.0], [3.0, 4.0]]
+
+
+def test_save_load_fileobj():
+    """save/load round-trip via BytesIO file-like object."""
+    import io
+    a = np.array([10, 20, 30], dtype='int32')
+    buf = io.BytesIO()
+    np.save(buf, a)
+    buf.seek(0)
+    b = np.load(buf)
+    assert b.shape == (3,)
+    assert b.tolist() == [10, 20, 30]
+
+
+def test_load_legacy_text():
+    """Files written by the old text-based save() still load."""
+    path = _TMP + 'legacy.npy'
+    with open(path, 'w') as f:
+        f.write('# shape: [3]\n')
+        f.write('1.0,2.0,3.0\n')
+    b = np.load(path)
+    _cleanup(path)
+    assert b.shape == (3,), f"expected (3,) got {b.shape}"
+    assert abs(b.tolist()[0] - 1.0) < 1e-6
+
+
+def test_save_object_raises():
+    """Saving an object array raises ValueError."""
+    path = _TMP + 'obj.npy'
+    a = np.array(['hello', 'world'])
+    try:
+        np.save(path, a)
+        _cleanup(path)
+        assert False, "should have raised ValueError"
+    except (ValueError, TypeError):
+        pass
+    _cleanup(path)
+
+
 # Runner
 tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
 passed = 0
