@@ -137,6 +137,12 @@ def _npy_bytes_to_array(data):
     endian = '>'  if descr[0] == '>' else '<'
 
     if dtype_str == 'complex128':
+        if descr in ('<c8', '>c8'):
+            import warnings
+            warnings.warn(
+                "complex64 (.npy descr '<c8') is not supported; loaded as complex128",
+                UserWarning, stacklevel=2,
+            )
         float_char = 'f' if descr in ('<c8', '>c8') else 'd'
         vals = _struct.unpack_from(endian + float_char * (n * 2), raw)
         flat = [complex(vals[i * 2], vals[i * 2 + 1]) for i in range(n)]
