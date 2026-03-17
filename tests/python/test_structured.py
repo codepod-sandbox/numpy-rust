@@ -18,6 +18,13 @@ check("dtype.names", dt.names, ('x', 'y'))
 check("dtype.fields keys", set(dt.fields.keys()), {'x', 'y'})
 check("dtype.descr", dt.descr, [('x', 'float64'), ('y', 'int32')])
 
+# Task 5: void scalar
+dt2 = np.dtype([('a', 'int64'), ('b', 'float64')])
+row = np.void({'a': 1, 'b': 2.5}, dt2)
+check("void getitem", row['a'], 1)
+check("void getattr", row.b, 2.5)
+check("void repr", row.__repr__(), repr((1, 2.5)))
+
 print(f"passed: {passed}, failed: {failed}")
 if failed:
     raise SystemExit(1)
