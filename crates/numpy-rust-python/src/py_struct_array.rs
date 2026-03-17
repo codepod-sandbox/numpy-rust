@@ -1,14 +1,15 @@
 use std::sync::RwLock;
 
 use rustpython_vm as vm;
-use vm::builtins::PyStr;
+use vm::builtins::{PySlice, PyStr};
 use vm::protocol::PyMappingMethods;
 use vm::types::AsMapping;
 use vm::{atomic_func, AsObject, PyObjectRef, PyPayload, PyResult, VirtualMachine};
 
+use numpy_rust_core::indexing::SliceArg;
 use numpy_rust_core::{FieldSpec, NdArray, StructArrayData};
 
-use crate::py_array::{numpy_err, scalar_to_py, PyNdArray};
+use crate::py_array::{numpy_err, py_slice_to_slice_arg, scalar_to_py, PyNdArray};
 
 /// Python-visible structured array class backed by columnar Rust storage.
 /// Each field is stored as a separate ArrayData column.
@@ -198,6 +199,41 @@ impl PyStructuredArray {
                 let sub_sa = StructArrayData::new(subset_fields, shape);
                 return Ok(Self::new_from_data(sub_sa, subset_dtype_json).into_pyobject(vm));
             }
+        }
+
+        // Slice key -> extract contiguous row range
+        if let Some(slice) = key.downcast_ref::<PySlice>() {
+            let n = self.inner.read().unwrap().len();
+            let slice_arg = py_slice_to_slice_arg(slice, vm)?;
+            let (start, end) = match slice_arg {
+                SliceArg::Range { start, stop, step } => {
+                    if step != 1 {
+                        return Err(
+                            vm.new_value_error("StructuredArray slice step must be 1".to_owned())
+                        );
+                    }
+                    let s = start.unwrap_or(0);
+                    let e = stop.unwrap_or(n as isize);
+                    let s = if s < 0 {
+                        (n as isize + s).max(0) as usize
+                    } else {
+                        (s as usize).min(n)
+                    };
+                    let e = if e < 0 {
+                        (n as isize + e).max(0) as usize
+                    } else {
+                        (e as usize).min(n)
+                    };
+                    (s, e.max(s))
+                }
+                SliceArg::Full => (0, n),
+                SliceArg::Index(_) => unreachable!("py_slice_to_slice_arg never returns Index"),
+            };
+            let sliced = {
+                let inner = self.inner.read().unwrap();
+                inner.slice_rows(start, end).map_err(|e| numpy_err(e, vm))?
+            };
+            return Ok(Self::new_from_data(sliced, self.dtype_json.clone()).into_pyobject(vm));
         }
 
         // Integer key → return list of scalars in field order.

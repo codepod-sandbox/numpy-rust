@@ -3163,7 +3163,7 @@ fn multi_dim_fancy_setitem(
 }
 
 /// Convert a RustPython `PySlice` to a core `SliceArg`.
-fn py_slice_to_slice_arg(slice: &PySlice, vm: &VirtualMachine) -> PyResult<SliceArg> {
+pub(crate) fn py_slice_to_slice_arg(slice: &PySlice, vm: &VirtualMachine) -> PyResult<SliceArg> {
     let start = match &slice.start {
         Some(obj) if !vm.is_none(obj) => {
             let v: i64 = obj.clone().try_into_value(vm)?;

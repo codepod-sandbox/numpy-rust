@@ -89,6 +89,18 @@ check("rec.array type", type(rec_arr).__name__, 'recarray')
 check("rec.array .px[0]", float(rec_arr.px[0]), 1.0)
 check("rec.array .py[1]", float(rec_arr.py[1]), 4.0)
 
+# Task 2: slice indexing on 1D structured array
+sdt = np.dtype([('x', 'float64'), ('y', 'int32')])
+arr = np.array([(1.0, 2), (3.0, 4), (5.0, 6), (7.0, 8)], dtype=sdt)
+sliced = arr[1:3]
+check("slice type", type(sliced).__name__, 'StructuredArray')
+check("slice shape", sliced.shape, (2,))
+check("slice x[0]", float(sliced['x'][0]), 3.0)
+check("slice x[1]", float(sliced['x'][1]), 5.0)
+# empty slice
+empty_sl = arr[2:2]
+check("empty slice shape", empty_sl.shape, (0,))
+
 print(f"passed: {passed}, failed: {failed}")
 if failed:
     raise SystemExit(1)
