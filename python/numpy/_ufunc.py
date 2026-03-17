@@ -13,6 +13,7 @@ from ._math import (
     sign, floor, ceil, rint, trunc,
     deg2rad, rad2deg, signbit,
     isnan, isinf, isfinite,
+    modf,
 )
 from ._bitwise import (
     logical_and, logical_or, logical_xor, logical_not,
@@ -30,7 +31,7 @@ __all__ = [
     'logical_and', 'logical_or', 'logical_xor',
     'bitwise_and', 'bitwise_or', 'bitwise_xor', 'left_shift', 'right_shift',
     'greater', 'less', 'equal', 'not_equal', 'greater_equal', 'less_equal',
-    'arctan2', 'hypot', 'copysign', 'ldexp', 'heaviside', 'nextafter',
+    'arctan2', 'hypot', 'copysign', 'ldexp', 'heaviside', 'nextafter', 'modf',
     # Wrapped unary ufuncs
     'sin', 'cos', 'tan', 'arcsin', 'arccos', 'arctan',
     'sinh', 'cosh', 'tanh',
@@ -58,6 +59,24 @@ _CMP_BINARY_TYPES     = ['bb->?', 'BB->?', 'hh->?', 'HH->?',
                           'ff->?', 'dd->?']
 
 _UFUNC_SENTINEL = object()  # private token — only _make_ufunc passes it
+
+
+def _set_at(a, idx, result):
+    """Write result into a[idx], preserving a's dtype."""
+    if hasattr(a, 'dtype'):
+        try:
+            if result.ndim == 0 or result.size == 1:
+                a[idx] = a.dtype.type(result.flat[0])
+            else:
+                a[idx] = result.astype(a.dtype)
+        except (TypeError, ValueError):
+            if result.ndim == 0 or result.size == 1:
+                a[idx] = result.flat[0]
+            else:
+                a[idx] = result
+    else:
+        a[idx] = result.flat[0] if result.size == 1 else result
+
 
 class ufunc:
     """Universal function wrapper with reduce/accumulate/outer/reduceat/at."""
@@ -212,19 +231,63 @@ class ufunc:
         return result
 
     def at(self, a, indices, b=None):
-        if self.nin != 2:
-            raise ValueError("at only supported for binary functions")
-        if b is None:
-            raise ValueError("second operand required for binary ufunc")
-        indices = list(indices) if not isinstance(indices, list) else indices
-        b = asarray(b)
-        b_flat = b.flatten().tolist() if b.ndim > 0 else [float(b)]
-        for k, idx in enumerate(indices):
-            bv = b_flat[k] if k < len(b_flat) else b_flat[-1]
-            result = self._func(a[idx], bv)
-            # Extract scalar from result (func may return array)
-            result = asarray(result)
-            a[idx] = float(result) if result.ndim == 0 or result.size == 1 else result
+        # Reject nout > 1
+        if self.nout > 1:
+            raise ValueError(
+                "ufunc '{}' does not support at() — "
+                "nout must be 1".format(self.__name__))
+        # Reject gufuncs
+        if self.signature is not None:
+            raise TypeError(
+                "ufunc '{}' with a non-trivial signature cannot be used "
+                "with at()".format(self.__name__))
+        # Validate b presence
+        if self.nin == 1:
+            if b is not None:
+                raise ValueError(
+                    "ufunc '{}' does not take a second operand in "
+                    ".at()".format(self.__name__))
+        else:
+            if b is None:
+                raise ValueError(
+                    "ufunc '{}' requires a second operand in "
+                    ".at()".format(self.__name__))
+
+        n = len(a)
+        # Normalize indices to a flat Python list of ints
+        if isinstance(indices, slice):
+            idx_list = list(range(*indices.indices(n)))
+        elif hasattr(indices, 'tolist'):
+            idx_list = [int(i) for i in indices.flatten().tolist()]
+        else:
+            idx_list = [int(i) for i in indices]
+        # Resolve negative indices
+        idx_list = [i if i >= 0 else n + i for i in idx_list]
+
+        if self.nin == 1:
+            for idx in idx_list:
+                result = self._func(asarray(a[idx]))
+                result = asarray(result)
+                _set_at(a, idx, result)
+        else:
+            b_arr = asarray(b)
+            if b_arr.ndim == 0:
+                b_list = [b_arr.flat[0]] * len(idx_list)
+            else:
+                b_flat = b_arr.ravel().tolist()
+                if len(b_flat) == 1:
+                    b_list = b_flat * len(idx_list)
+                elif len(b_flat) != len(idx_list):
+                    raise ValueError(
+                        "operands could not be broadcast together: "
+                        "indices has {} elements but b has {}".format(
+                            len(idx_list), len(b_flat)))
+                else:
+                    b_list = b_flat
+            for idx, bv in zip(idx_list, b_list):
+                result = self._func(asarray(a[idx]), asarray(bv))
+                result = asarray(result)
+                _set_at(a, idx, result)
 
     def _generic_reduce(self, a, axis, keepdims, initial):
         if axis is None:
@@ -389,6 +452,11 @@ heaviside = ufunc._create(_heaviside_func, 2, name='heaviside',
                           types=_FLOAT_BINARY_TYPES)
 nextafter = ufunc._create(_nextafter_func, 2, name='nextafter',
                           types=_FLOAT_BINARY_TYPES)
+
+# nout=2 ufuncs (can call, but .at() raises ValueError)
+_modf_func = modf
+modf = ufunc._create(_modf_func, 1, nout=2, name='modf',
+                     types=['f->ff', 'd->dd'])
 
 # Unary ufuncs (nin=1) — callable, but reduce/accumulate/outer raise ValueError
 _sin_func = sin
