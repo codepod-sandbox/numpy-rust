@@ -148,15 +148,17 @@ impl PyStructuredArray {
 
     #[pymethod]
     fn __getitem__(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-        let inner = self.inner.read().unwrap();
-
         // String key → return PyNdArray column
         if let Some(key_str) = key.downcast_ref::<PyStr>() {
             let name = key_str.as_str();
-            let col_data = inner
-                .field(name)
-                .ok_or_else(|| vm.new_key_error(vm.ctx.new_str(name).into()))?;
-            let nd = NdArray::from_data(col_data.clone());
+            let col_data = {
+                let inner = self.inner.read().unwrap();
+                inner
+                    .field(name)
+                    .ok_or_else(|| vm.new_key_error(vm.ctx.new_str(name).into()))?
+                    .clone()
+            }; // lock dropped here
+            let nd = NdArray::from_data(col_data);
             return Ok(PyNdArray::from_core(nd).to_py(vm));
         }
 
@@ -164,44 +166,46 @@ impl PyStructuredArray {
         if let Ok(key_list) = key.clone().try_into_value::<Vec<PyObjectRef>>(vm) {
             if !key_list.is_empty() && key_list.iter().all(|k| k.downcast_ref::<PyStr>().is_some())
             {
-                let names: Vec<&str> = key_list
+                let names: Vec<String> = key_list
                     .iter()
-                    .map(|k| k.downcast_ref::<PyStr>().unwrap().as_str())
+                    .map(|k| k.downcast_ref::<PyStr>().unwrap().as_str().to_owned())
                     .collect();
-                for &n in &names {
-                    if inner.field(n).is_none() {
-                        return Err(vm.new_key_error(vm.ctx.new_str(n).into()));
+                // Extract subset data under lock, then drop lock
+                let (subset_fields, shape, dtype_json) = {
+                    let inner = self.inner.read().unwrap();
+                    for n in &names {
+                        if inner.field(n.as_str()).is_none() {
+                            return Err(vm.new_key_error(vm.ctx.new_str(n.as_str()).into()));
+                        }
                     }
-                }
-                let subset_fields: Vec<FieldSpec> = names
-                    .iter()
-                    .map(|&n| FieldSpec {
-                        name: n.to_owned(),
-                        data: inner.field(n).unwrap().clone(),
-                    })
-                    .collect();
-                let all_fields = parse_dtype_json_to_vec(&self.dtype_json, vm)?;
+                    let subset_fields: Vec<FieldSpec> = names
+                        .iter()
+                        .map(|n| FieldSpec {
+                            name: n.clone(),
+                            data: inner.field(n.as_str()).unwrap().clone(),
+                        })
+                        .collect();
+                    (subset_fields, inner.shape.clone(), self.dtype_json.clone())
+                }; // lock dropped here
+                let all_fields = parse_dtype_json_to_vec(&dtype_json, vm)?;
                 let mut subset_parts: Vec<String> = Vec::new();
-                for &n in &names {
+                for n in &names {
                     if let Some((_, dt)) = all_fields.iter().find(|(k, _)| k == n) {
                         subset_parts.push(format!("[\"{}\",\"{}\"]", n, dt));
-                    } else {
-                        return Err(vm.new_value_error(format!(
-                            "field '{}' missing from dtype_json — internal error",
-                            n
-                        )));
                     }
                 }
                 let subset_dtype_json = format!("[{}]", subset_parts.join(","));
-                let sub_sa = StructArrayData::new(subset_fields, inner.shape.clone());
+                let sub_sa = StructArrayData::new(subset_fields, shape);
                 return Ok(Self::new_from_data(sub_sa, subset_dtype_json).into_pyobject(vm));
             }
         }
 
         // Integer key → return list of scalars in field order.
-        // Python StructuredArray.__getitem__ zips with dtype.names to build void.
         if let Ok(idx) = key.clone().try_into_value::<i64>(vm) {
-            let row_scalars = inner.get_row(idx as isize).map_err(|e| numpy_err(e, vm))?;
+            let row_scalars = {
+                let inner = self.inner.read().unwrap();
+                inner.get_row(idx as isize).map_err(|e| numpy_err(e, vm))?
+            }; // lock dropped here
             let values: Vec<PyObjectRef> = row_scalars
                 .into_iter()
                 .map(|s| scalar_to_py(s, vm))
@@ -264,6 +268,9 @@ impl AsMapping for PyStructuredArray {
 }
 
 /// Parse dtype_json into Vec<(name, dtype_str)>. Format: [["x","float64"],["y","int32"]]
+/// Hand-rolled parser avoids adding a JSON crate dependency.
+/// NOTE: dtype_str values must not contain commas (bare dtype strings like "float64",
+/// "int32", etc. are fine; complex nested/sub-array dtypes are out of scope for v1).
 fn parse_dtype_json_to_vec(
     dtype_json: &str,
     vm: &VirtualMachine,
