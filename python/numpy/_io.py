@@ -64,6 +64,43 @@ def _descr_to_dtype(descr):
     return dt
 
 
+def _array_to_npy_bytes(arr):
+    """Encode an ndarray as a .npy binary blob (version 1.0)."""
+    dtype_str = str(arr.dtype)
+    descr, struct_char, _ = _dtype_to_descr(dtype_str)
+    shape = arr.shape
+
+    # Build header dict string and pad to 64-byte alignment.
+    # Total prefix = magic(6) + version(2) + header_len_field(2) = 10 bytes.
+    # Requirement: (10 + header_len) % 64 == 0
+    header_dict = f"{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape!r}, }}"
+    base_len = len(header_dict.encode('latin-1')) + 1  # +1 for '\n'
+    pad = (64 - ((10 + base_len) % 64)) % 64
+    header = header_dict + ' ' * pad + '\n'
+    header_bytes = header.encode('latin-1')
+
+    flat = arr.flatten().tolist()
+    n = len(flat)
+
+    if dtype_str == 'complex128':
+        pairs = []
+        for v in flat:
+            if isinstance(v, complex):
+                pairs.extend([v.real, v.imag])
+            elif isinstance(v, (tuple, list)) and len(v) == 2:
+                pairs.extend([float(v[0]), float(v[1])])
+            else:
+                pairs.extend([float(v), 0.0])
+        data = _struct.pack('<' + 'd' * len(pairs), *pairs)
+    elif dtype_str == 'bool':
+        data = _struct.pack('?' * n, *flat)
+    else:
+        data = _struct.pack('<' + struct_char * n, *flat)
+
+    header_len = len(header_bytes)
+    return _MAGIC + b'\x01\x00' + _struct.pack('<H', header_len) + header_bytes + data
+
+
 __all__ = ['loadtxt', 'savetxt', 'genfromtxt', 'save', 'load', 'savez', 'savez_compressed']
 
 

@@ -45,6 +45,27 @@ def test_dtype_roundtrip_each_dtype():
                 assert av == bv, f"{dt}[{i}]: {av} != {bv}"
 
 
+def test_npy_bytes_magic_and_header():
+    """_array_to_npy_bytes produces valid magic, version, and header."""
+    from numpy._io import _array_to_npy_bytes, _MAGIC
+    import ast, struct
+    a = np.array([1.0, 2.0, 3.0])  # float64
+    data = _array_to_npy_bytes(a)
+    assert data[:6] == _MAGIC, "bad magic"
+    assert data[6] == 1 and data[7] == 0, "expected version 1.0"
+    header_len = struct.unpack_from("<H", data, 8)[0]
+    assert (10 + header_len) % 64 == 0, "header not 64-byte aligned"
+    header_str = data[10:10 + header_len].decode("latin-1").strip()
+    hdr = ast.literal_eval(header_str)
+    assert hdr["descr"] == "<f8"
+    assert hdr["fortran_order"] == False
+    assert hdr["shape"] == (3,)
+    vals = struct.unpack_from("<3d", data, 10 + header_len)
+    assert abs(vals[0] - 1.0) < 1e-10
+    assert abs(vals[1] - 2.0) < 1e-10
+    assert abs(vals[2] - 3.0) < 1e-10
+
+
 # Runner
 tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
 passed = 0
