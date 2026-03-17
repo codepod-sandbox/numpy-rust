@@ -734,21 +734,34 @@ def count_nonzero(a, axis=None, *, keepdims=False):
         n = axis if axis >= 0 else axis + a.ndim
         if n < 0 or n >= a.ndim:
             raise AxisError(axis, a.ndim)
+    # Helper: determine if a scalar value is nonzero
+    def _is_nonzero(v):
+        if isinstance(v, tuple):  # complex (re, im) representation
+            return v[0] != 0.0 or v[1] != 0.0
+        if isinstance(v, (str, bytes)):  # empty string/bytes is falsy
+            return bool(v)
+        if isinstance(v, (int, float, bool)):
+            return v != 0
+        # Arbitrary Python objects (void, datetime64, etc.) — use __bool__
+        return bool(v)
     # Rust count_nonzero only handles float64; cast integer/bool arrays
     dt = str(a.dtype)
     if dt in ("int32", "int64", "int8", "int16", "uint8", "uint16", "uint32", "uint64", "bool"):
         a = a.astype("float64")
     if axis is None:
+        if not isinstance(a, ndarray):
+            # _ObjectArray (strings, bytes, etc.) — iterate Python-side
+            flat = a.flatten().tolist() if hasattr(a, 'flatten') else list(a)
+            result = sum(1 for v in flat if _is_nonzero(v))
+            if keepdims:
+                return array([float(result)]).reshape((1,) * len(a.shape)).astype("int64")
+            return result
         result = _native.count_nonzero(a)
         if keepdims:
             return array([float(result)]).reshape((1,) * a.ndim).astype("int64")
         return result
     # Build a boolean mask (nonzero -> 1.0, zero -> 0.0), then sum along axis
     flat = a.flatten().tolist()
-    def _is_nonzero(v):
-        if isinstance(v, tuple):  # complex (re, im) representation
-            return v[0] != 0.0 or v[1] != 0.0
-        return v != 0.0
     mask_data = [1.0 if _is_nonzero(v) else 0.0 for v in flat]
     mask = array(mask_data).reshape(a.shape)
     result = mask.sum(axis, keepdims)

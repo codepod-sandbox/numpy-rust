@@ -191,79 +191,131 @@ def _fft_ifftn(a, s=None, axes=None):
         return result
 
 
-def _fft_rfft(a, n=None, axis=-1, norm=None):
-    """Real FFT - only positive frequencies."""
-    a = asarray(a).astype("float64")
-    if a.ndim == 0:
-        a = a.reshape([1])
-    data = a.tolist()
-    if isinstance(data[0], list):
-        raise NotImplementedError("rfft only supports 1D")
+def _rfft_1d_list(data, n=None, norm=None):
+    """Apply 1D rfft to a list of floats. Returns list of [real, imag] pairs."""
+    import cmath as _cmath
     N = n if n is not None else len(data)
-    # Pad or truncate
     if len(data) < N:
-        data = data + [0.0] * (N - len(data))
+        data = list(data) + [0.0] * (N - len(data))
     elif len(data) > N:
-        data = data[:N]
-    # Compute full DFT - only first N//2 + 1 frequencies
-    import cmath
-    result = []
+        data = list(data)[:N]
     out_len = N // 2 + 1
+    result = []
     for k in _builtin_range(out_len):
         s = 0.0 + 0.0j
         for n_idx in _builtin_range(N):
             angle = -2.0 * 3.141592653589793 * k * n_idx / N
-            s += data[n_idx] * cmath.exp(1j * angle)
+            s += data[n_idx] * _cmath.exp(1j * angle)
         if norm == "ortho":
             s /= N ** 0.5
         result.append([s.real, s.imag])
-    # Return as (out_len, 2) shaped array matching native fft format
-    return array(result)
+    return result
+
+
+def _irfft_1d_list(re_parts, im_parts, n=None, norm=None):
+    """Apply 1D irfft given separate real/imag lists of rfft output. Returns real list."""
+    import math as _math_mod
+    m = len(re_parts)
+    N = n if n is not None else 2 * (m - 1)
+    # Reconstruct full Hermitian-symmetric spectrum
+    full_r = [0.0] * N
+    full_i = [0.0] * N
+    for k in _builtin_range(min(m, N)):
+        full_r[k] = re_parts[k]
+        full_i[k] = im_parts[k]
+    # Fill Hermitian conjugate: X[N-k] = conj(X[k]) for k=1..m-1
+    for k in _builtin_range(1, m):
+        conj_k = N - k
+        if 0 < conj_k < N and conj_k >= m:
+            full_r[conj_k] = re_parts[k]
+            full_i[conj_k] = -im_parts[k]
+    # IDFT
+    result = []
+    for nn in _builtin_range(N):
+        s = 0.0
+        for k in _builtin_range(N):
+            angle = 2.0 * 3.141592653589793 * k * nn / N
+            s += full_r[k] * _math_mod.cos(angle) - full_i[k] * _math_mod.sin(angle)
+        s /= N ** 0.5 if norm == "ortho" else N
+        result.append(s)
+    return result
+
+
+def _fft_rfft(a, n=None, axis=-1, norm=None):
+    """Real FFT - only positive frequencies. Supports 1D and 2D input."""
+    a = asarray(a).astype("float64")
+    if a.ndim == 0:
+        a = a.reshape([1])
+    if a.ndim == 1:
+        return array(_rfft_1d_list(a.tolist(), n, norm))
+    elif a.ndim == 2:
+        ax = axis % 2 if axis >= 0 else 2 + axis  # normalize to 0 or 1
+        a_list = a.tolist()
+        rows, cols = a.shape
+        if ax == 1:
+            # rfft along each row
+            results = [_rfft_1d_list(a_list[i], n, norm) for i in _builtin_range(rows)]
+            return array(results)  # (rows, out_len, 2)
+        else:
+            # rfft along each column (axis=0)
+            N_ax = n if n is not None else rows
+            out_len = N_ax // 2 + 1
+            col_results = [_rfft_1d_list([a_list[i][j] for i in _builtin_range(rows)], n, norm)
+                           for j in _builtin_range(cols)]
+            # Reshape to (out_len, cols, 2)
+            out = [[col_results[j][k] for j in _builtin_range(cols)] for k in _builtin_range(out_len)]
+            return array(out)  # (out_len, cols, 2)
+    else:
+        raise NotImplementedError("rfft only supports 1D and 2D arrays")
 
 
 def _fft_irfft(a, n=None, axis=-1, norm=None):
-    """Inverse real FFT."""
+    """Inverse real FFT. Supports 1D, (M,2) complex, and (A,B,2) multi-D complex."""
     a = asarray(a)
-    # Handle (M, 2) complex format from rfft
-    data_list = a.tolist()
-    if a.ndim == 2 and a.shape[1] == 2:
-        # Complex format: [[real, imag], ...]
-        data_r = [row[0] for row in data_list]
-        data_i = [row[1] for row in data_list]
-    elif a.ndim == 1:
-        # Real-only input
-        data_r = data_list
-        data_i = [0.0] * len(data_r)
-    else:
-        data_r = a.real.tolist() if hasattr(a, 'real') else data_list
-        data_i = a.imag.tolist() if hasattr(a, 'imag') else [0.0] * len(data_r)
-    if not isinstance(data_r, list):
-        data_r = [data_r]
-        data_i = [data_i]
-    m = len(data_r)
-    N = n if n is not None else 2 * (m - 1)
-    # Reconstruct full spectrum using Hermitian symmetry
-    import math as _math_mod
-    full_spectrum = []
-    for i in _builtin_range(m):
-        full_spectrum.append(complex(data_r[i], data_i[i]))
-    # Mirror for negative frequencies
-    for i in _builtin_range(m, N):
-        mirror = N - i
-        full_spectrum.append(complex(data_r[mirror], -data_i[mirror]))
-    # IDFT
-    result = []
-    for n_idx in _builtin_range(N):
-        s = 0.0
-        for k in _builtin_range(N):
-            angle = 2.0 * 3.141592653589793 * k * n_idx / N
-            s += full_spectrum[k].real * _math_mod.cos(angle) - full_spectrum[k].imag * _math_mod.sin(angle)
-        if norm == "ortho":
-            s /= N ** 0.5
+    if a.ndim == 1:
+        re_parts = a.tolist()
+        return array(_irfft_1d_list(re_parts, [0.0] * len(re_parts), n, norm))
+    elif a.ndim == 2 and a.shape[-1] == 2:
+        # 1D complex: (M, 2) from rfft
+        data_list = a.tolist()
+        re_parts = [row[0] for row in data_list]
+        im_parts = [row[1] for row in data_list]
+        return array(_irfft_1d_list(re_parts, im_parts, n, norm))
+    elif a.ndim == 3 and a.shape[-1] == 2:
+        # Multi-D complex (A, B, 2): axis refers to the logical 2D complex axis
+        logical_ndim = 2
+        ax = axis if axis >= 0 else axis + logical_ndim
+        a_list = a.tolist()
+        dim0, dim1, _ = a.shape
+        if ax == 1:
+            # irfft along axis 1: apply to each a[i] of shape (dim1, 2)
+            results = []
+            for i in _builtin_range(dim0):
+                re_parts = [a_list[i][k][0] for k in _builtin_range(dim1)]
+                im_parts = [a_list[i][k][1] for k in _builtin_range(dim1)]
+                results.append(_irfft_1d_list(re_parts, im_parts, n, norm))
+            return array(results)  # (dim0, N)
         else:
-            s /= N
-        result.append(s)
-    return array(result)
+            # irfft along axis 0: apply to each column a[:, j, :] of shape (dim0, 2)
+            N_out = n if n is not None else 2 * (dim0 - 1)
+            col_results = []
+            for j in _builtin_range(dim1):
+                re_parts = [a_list[k][j][0] for k in _builtin_range(dim0)]
+                im_parts = [a_list[k][j][1] for k in _builtin_range(dim0)]
+                col_results.append(_irfft_1d_list(re_parts, im_parts, n, norm))
+            # Reassemble as (N_out, dim1)
+            out = [[col_results[j][i] for j in _builtin_range(dim1)] for i in _builtin_range(N_out)]
+            return array(out)  # (N_out, dim1)
+    else:
+        # Fallback for other shapes
+        data_list = a.tolist()
+        if isinstance(data_list, list) and len(data_list) > 0 and isinstance(data_list[0], list):
+            re_parts = [row[0] if isinstance(row, list) else row for row in data_list]
+            im_parts = [row[1] if isinstance(row, list) else 0.0 for row in data_list]
+        else:
+            re_parts = data_list if isinstance(data_list, list) else [data_list]
+            im_parts = [0.0] * len(re_parts)
+        return array(_irfft_1d_list(re_parts, im_parts, n, norm))
 
 
 def _fft_rfft2(a, s=None, axes=(-2, -1), norm=None):

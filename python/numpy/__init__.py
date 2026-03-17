@@ -76,12 +76,20 @@ def _parse_dtype_json(json_str):
 
 
 class void:
-    """Scalar returned by arr[i] on a structured array."""
+    """Scalar returned by arr[i] on a structured array, or a placeholder void of N bytes."""
 
-    def __init__(self, data, dtype):
+    def __init__(self, data, dtype=None):
+        if isinstance(data, int) and dtype is None:
+            # np.void(n) creates a placeholder void of n bytes
+            object.__setattr__(self, '_data', {})
+            object.__setattr__(self, 'dtype', None)
+            return
         # Use object.__setattr__ throughout to avoid any __setattr__ override issues
         object.__setattr__(self, '_data', data)   # dict {fieldname: scalar_value}
         object.__setattr__(self, 'dtype', dtype)
+
+    def __bool__(self):
+        return False  # void scalars are always considered zero
 
     def __getitem__(self, key):
         return object.__getattribute__(self, '_data')[key]
@@ -96,12 +104,16 @@ class void:
     def __repr__(self):
         data = object.__getattribute__(self, '_data')
         dt = object.__getattribute__(self, 'dtype')
+        if dt is None or not data:
+            return 'void()'
         vals = tuple(data[n] for n in dt.names)
         return repr(vals)
 
     def __iter__(self):
         data = object.__getattribute__(self, '_data')
         dt = object.__getattribute__(self, 'dtype')
+        if dt is None or not data:
+            return iter([])
         return iter(data[n] for n in dt.names)
 
 

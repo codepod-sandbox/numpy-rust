@@ -117,6 +117,17 @@ class _ObjectArray:
         self._is_fortran = True
 
     def copy(self): return _ObjectArray(list(self._data), self._dtype, shape=self._shape, is_fortran=self._is_fortran, itemsize=self._itemsize)
+    def reshape(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
+            shape = tuple(shape[0])
+        else:
+            shape = tuple(shape)
+        n = 1
+        for s in shape:
+            n *= s
+        if n != len(self._data):
+            raise ValueError("cannot reshape array of size {} into shape {}".format(len(self._data), shape))
+        return _ObjectArray(list(self._data), self._dtype, shape=shape, itemsize=self._itemsize)
     def astype(self, dtype):
         dtype_str = str(dtype)
         # Convert temporal types to numeric
