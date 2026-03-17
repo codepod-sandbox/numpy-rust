@@ -101,6 +101,66 @@ def _array_to_npy_bytes(arr):
     return _MAGIC + b'\x01\x00' + _struct.pack('<H', header_len) + header_bytes + data
 
 
+
+def _npy_bytes_to_array(data):
+    """Parse a .npy binary blob and return an ndarray."""
+    if len(data) < 10 or data[:6] != _MAGIC:
+        raise ValueError("not a .npy file: bad magic bytes")
+
+    major = data[6]
+
+    if major == 1:
+        header_len = _struct.unpack_from('<H', data, 8)[0]
+        header_start = 10
+    elif major == 2:
+        header_len = _struct.unpack_from('<I', data, 8)[0]
+        header_start = 12
+    else:
+        raise ValueError(f"unsupported .npy version: {major}")
+
+    header_bytes = data[header_start:header_start + header_len]
+    header_str = header_bytes.decode('latin-1').strip()
+    hdr = _ast.literal_eval(header_str)
+
+    descr = hdr['descr']
+    fortran_order = hdr['fortran_order']
+    shape = tuple(hdr['shape'])
+
+    dtype_str = _descr_to_dtype(descr)
+    data_start = header_start + header_len
+    raw = data[data_start:]
+
+    n = 1
+    for s in shape:
+        n *= s
+
+    endian = '>'  if descr[0] == '>' else '<'
+
+    if dtype_str == 'complex128':
+        float_char = 'f' if descr in ('<c8', '>c8') else 'd'
+        vals = _struct.unpack_from(endian + float_char * (n * 2), raw)
+        flat = [complex(vals[i * 2], vals[i * 2 + 1]) for i in range(n)]
+    elif dtype_str == 'bool':
+        flat = list(_struct.unpack_from('?' * n, raw))
+    else:
+        _, struct_char, _ = _DTYPE_INFO[dtype_str]
+        flat = list(_struct.unpack_from(endian + struct_char * n, raw))
+
+    if fortran_order and len(shape) > 1:
+        result = array(flat, dtype=dtype_str).reshape(list(shape[::-1]))
+        axes = list(range(len(shape) - 1, -1, -1))
+        result = result.transpose(axes)
+    elif shape == ():
+        result = array(flat[0] if flat else 0, dtype=dtype_str)
+    elif n == 0:
+        result = array([], dtype=dtype_str).reshape(list(shape))
+    else:
+        result = array(flat, dtype=dtype_str)
+        if shape != (n,):
+            result = result.reshape(list(shape))
+
+    return result
+
 __all__ = ['loadtxt', 'savetxt', 'genfromtxt', 'save', 'load', 'savez', 'savez_compressed']
 
 
