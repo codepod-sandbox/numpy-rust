@@ -487,6 +487,7 @@ class StructuredDtype:
         self.char = 'V'
         self.name = 'void'
         self.str = '|V{}'.format(self.itemsize)
+        self.descr = [(name, str(dt_obj)) for name, dt_obj in self._fields]
 
     def __repr__(self):
         parts = ', '.join("('{}', '{}')".format(n, d) for n, d in self._fields)
@@ -577,6 +578,7 @@ class dtype:
             self.names = sd.names
             self.fields = sd.fields
             self._structured = sd
+            self.descr = sd.descr
         elif isinstance(tp, StructuredDtype):
             self.name = tp.name
             self.kind = tp.kind
@@ -585,11 +587,17 @@ class dtype:
             self.names = tp.names
             self.fields = tp.fields
             self._structured = tp
+            self.descr = tp.descr
         elif isinstance(tp, dtype):
             self.name = tp.name
             self.kind = tp.kind
             self.itemsize = tp.itemsize
             self.char = tp.char
+            if hasattr(tp, '_structured') and tp._structured is not None:
+                self.names = tp.names
+                self.fields = tp.fields
+                self._structured = tp._structured
+                self.descr = tp.descr
         elif isinstance(tp, str):
             tp = _DTYPE_CHAR_MAP.get(tp, tp)
             # Handle arbitrary |Sn byte strings -> 'bytes'
