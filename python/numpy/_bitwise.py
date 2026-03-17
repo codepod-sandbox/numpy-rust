@@ -1,11 +1,12 @@
 """Bitwise and logical operations, delegating to Rust native implementations."""
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._creation import asarray
+from ._creation import asarray, array
 from ._helpers import _copy_into
 
 __all__ = [
     'bitwise_and', 'bitwise_or', 'bitwise_xor', 'bitwise_not', 'invert',
+    'bitwise_count',
     'left_shift', 'right_shift',
     'logical_and', 'logical_or', 'logical_xor', 'logical_not',
 ]
@@ -50,6 +51,18 @@ def bitwise_not(x, out=None, **kwargs):
     return r
 
 invert = bitwise_not
+
+def bitwise_count(x, out=None, **kwargs):
+    """Element-wise count of 1-bits (population count / popcount)."""
+    a = asarray(x) if not isinstance(x, ndarray) else x
+    # int(v) & mask handles negative integers (count bits in unsigned repr)
+    flat = [bin(int(v) & 0xFFFFFFFFFFFFFFFF).count('1')
+            for v in a.flatten().tolist()]
+    r = array(flat, dtype='uint8').reshape(a.shape)
+    if out is not None:
+        _copy_into(out, r)
+        return out
+    return r
 
 def left_shift(x1, x2, out=None, **kwargs):
     """Element-wise left bit shift."""

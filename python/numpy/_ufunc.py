@@ -41,6 +41,7 @@ __all__ = [
     'deg2rad', 'rad2deg', 'signbit',
     'logical_not', 'isnan', 'isinf', 'isfinite',
     'bitwise_not', 'invert',
+    'bitwise_count',
 ]
 
 _UFUNC_SENTINEL = object()  # private token — only _make_ufunc passes it
@@ -49,8 +50,37 @@ class ufunc:
     """Universal function wrapper with reduce/accumulate/outer/reduceat/at."""
 
     def __init__(self, *args, **kwargs):
-        # Match NumPy: direct instantiation is not allowed
-        raise TypeError("cannot create 'numpy.ufunc' instances")
+        # If _create already initialized us (has _func set), nothing to do.
+        if hasattr(self, '_func'):
+            return
+        # Public constructor path.
+        if args and callable(args[0]):
+            func = args[0]
+            nin  = int(kwargs.get('nin', 1))
+            nout = int(kwargs.get('nout', 1))
+            name = kwargs.get('name', getattr(func, '__name__', 'ufunc'))
+        elif args and isinstance(args[0], str):
+            _n   = args[0]
+            nin  = int(args[1]) if len(args) > 1 else int(kwargs.get('nin', 1))
+            nout = int(args[2]) if len(args) > 2 else int(kwargs.get('nout', 1))
+            name = _n
+            def func(*a, **kw):
+                raise TypeError(
+                    "ufunc '{}' is not available in this environment".format(_n))
+        else:
+            raise TypeError("cannot create 'numpy.ufunc' instances")
+        self._func            = func
+        self.nin              = nin
+        self.nout             = nout
+        self.nargs            = nin + nout
+        self.identity         = kwargs.get('identity', None)
+        self.__name__         = name
+        self._reduce_fast     = None
+        self._accumulate_fast = None
+        _types                = kwargs.get('types', None)
+        self.types            = list(_types) if _types is not None else []
+        self.ntypes           = len(self.types)
+        self.signature        = kwargs.get('signature', None)
 
     @classmethod
     def _create(cls, func, nin, nout=1, *, name=None, identity=None,
@@ -387,3 +417,11 @@ isfinite = ufunc._create(_isfinite_func, 1, name='isfinite')
 _bitwise_not_func = bitwise_not
 bitwise_not = ufunc._create(_bitwise_not_func, 1, name='bitwise_not')
 invert = bitwise_not
+
+# bitwise_count (popcount)
+from ._bitwise import bitwise_count as _bitwise_count_func
+bitwise_count = ufunc._create(_bitwise_count_func, 1, name='bitwise_count')
+bitwise_count.types = ['b->B', 'B->B', 'h->B', 'H->B',
+                       'i->B', 'I->B', 'l->B', 'L->B',
+                       'q->B', 'Q->B', 'O->O']
+bitwise_count.ntypes = len(bitwise_count.types)
