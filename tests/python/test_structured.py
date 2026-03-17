@@ -101,6 +101,40 @@ check("slice x[1]", float(sliced['x'][1]), 5.0)
 empty_sl = arr[2:2]
 check("empty slice shape", empty_sl.shape, (0,))
 
+# Task 3: 2D StructuredArray shape tracking
+sdt2 = np.dtype([('a', 'float32')])
+flat = np.array([(1.0,), (2.0,), (3.0,), (4.0,), (5.0,), (6.0,)], dtype=sdt2)
+
+# reshape
+arr2d = flat.reshape((2, 3))
+check("2d shape", arr2d.shape, (2, 3))
+check("2d ndim", arr2d.ndim, 2)
+check("2d len", len(arr2d), 2)  # first dimension
+
+# field access returns 2D ndarray
+col = arr2d['a']
+check("2d field shape", col.shape, (2, 3))
+
+# integer row access on 2D returns 1D StructuredArray
+row0 = arr2d[0]
+check("2d row type", type(row0).__name__, 'StructuredArray')
+check("2d row shape", row0.shape, (3,))
+check("2d row field[0]", float(row0['a'][0]), 1.0)
+check("2d row field[2]", float(row0['a'][2]), 3.0)
+
+row1 = arr2d[1]
+check("2d row1 field[0]", float(row1['a'][0]), 4.0)
+
+# tuple indexing returns void scalar
+elem = arr2d[0, 2]
+check("2d elem type", type(elem).__name__, 'void')
+check("2d elem value", float(elem['a']), 3.0)
+
+# reshape back to 1D
+flat2 = arr2d.reshape((6,))
+check("reshape back shape", flat2.shape, (6,))
+check("reshape back ndim", flat2.ndim, 1)
+
 print(f"passed: {passed}, failed: {failed}")
 if failed:
     raise SystemExit(1)

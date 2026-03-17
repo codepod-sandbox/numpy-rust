@@ -120,22 +120,61 @@ class void:
 class StructuredArray:
     """Python wrapper for _native.StructuredArray (columnar Rust-backed structured array)."""
 
-    def __init__(self, native_arr):
+    def __init__(self, native_arr, py_shape=None):
         object.__setattr__(self, '_native_arr', native_arr)
         dt = _parse_dtype_json(native_arr.dtype)
         object.__setattr__(self, 'dtype', dt)
+        # _py_shape: None = use Rust 1D shape; tuple = Python-tracked multi-D shape
+        object.__setattr__(self, '_py_shape', tuple(py_shape) if py_shape is not None else None)
 
     def __getitem__(self, key):
         native = object.__getattribute__(self, '_native_arr')
-        result = native[key]
         dt = object.__getattribute__(self, 'dtype')
-        # Integer key → Rust returns a list of scalars in field order
+        shape = self.shape
+
+        # Tuple key: (i, j) for 2D element access
+        if isinstance(key, tuple) and len(shape) > 1:
+            if len(key) != len(shape):
+                raise IndexError(
+                    "too many indices for array: array is {}-dimensional, "
+                    "but {} were indexed".format(len(shape), len(key))
+                )
+            flat = 0
+            stride = 1
+            for k in _builtin_range(len(shape) - 1, -1, -1):
+                flat += key[k] * stride
+                stride *= shape[k]
+            result = native[flat]
+            if isinstance(result, list):
+                return void({n: v for n, v in zip(dt.names, result)}, dt)
+            return result
+
+        # Integer key on multi-D: return a row (1D StructuredArray)
+        if isinstance(key, int) and len(shape) > 1:
+            cols = shape[1]  # number of elements per row
+            row_native = native[key * cols : (key + 1) * cols]
+            if hasattr(row_native, 'field_names'):
+                return StructuredArray(row_native)
+            # fallback: shouldn't happen
+            return row_native
+
+        # All other cases: delegate to existing behavior
+        result = native[key]
+
+        # String key: field access — reshape if multi-D
+        if isinstance(key, str):
+            if len(shape) > 1:
+                return result.reshape(shape)
+            return result
+
+        # Integer key (1D) → void scalar
         if isinstance(result, list):
             return void({n: v for n, v in zip(dt.names, result)}, dt)
-        # List of strings → Rust returns _native.StructuredArray → wrap
+
+        # Slice or list-of-strings → StructuredArray
         if hasattr(result, 'field_names'):
             return StructuredArray(result)
-        # String key → Rust returns PyNdArray column directly
+
         return result
 
     def __setitem__(self, key, val):
@@ -146,17 +185,45 @@ class StructuredArray:
         native[key] = val
 
     def __len__(self):
-        return len(object.__getattribute__(self, '_native_arr'))
+        return self.shape[0]
+
+    def reshape(self, *new_shape):
+        if len(new_shape) == 1 and isinstance(new_shape[0], (list, tuple)):
+            new_shape = tuple(new_shape[0])
+        else:
+            new_shape = tuple(new_shape)
+        total = 1
+        for s in new_shape:
+            total *= s
+        native = object.__getattribute__(self, '_native_arr')
+        if total != len(native):
+            raise ValueError(
+                "cannot reshape structured array of size {} into shape {}".format(
+                    len(native), new_shape
+                )
+            )
+        # If result is 1D, clear _py_shape so Rust shape is used
+        if len(new_shape) == 1:
+            return StructuredArray(native)
+        return StructuredArray(native, py_shape=new_shape)
 
     def __iter__(self):
+        shape = self.shape
+        if len(shape) > 1:
+            for i in _builtin_range(shape[0]):
+                yield self[i]
+            return
         dt = object.__getattribute__(self, 'dtype')
         native = object.__getattribute__(self, '_native_arr')
-        for i in range(len(self)):
-            row_list = native[i]   # list of scalars from Rust __getitem__(int)
+        for i in _builtin_range(len(native)):
+            row_list = native[i]
             yield void({n: v for n, v in zip(dt.names, row_list)}, dt)
 
     @property
     def shape(self):
+        py_shape = object.__getattribute__(self, '_py_shape')
+        if py_shape is not None:
+            return py_shape
         return tuple(object.__getattribute__(self, '_native_arr').shape)
 
     @property
