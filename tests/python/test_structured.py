@@ -135,6 +135,24 @@ flat2 = arr2d.reshape((6,))
 check("reshape back shape", flat2.shape, (6,))
 check("reshape back ndim", flat2.ndim, 1)
 
+# Task 4: zeros multi-D structured
+sdt3 = np.dtype([('v', 'float64')])
+z2d = np.zeros((2, 3), dtype=sdt3)
+check("zeros 2d shape", z2d.shape, (2, 3))
+check("zeros 2d ndim", z2d.ndim, 2)
+check("zeros 2d len", len(z2d), 2)
+check("zeros 2d v[0][0]", float(z2d[0]['v'][0]), 0.0)
+check("zeros 2d v[1][2]", float(z2d[1, 2]['v']), 0.0)
+
+# empty multi-D
+e2d = np.empty((3, 2), dtype=sdt3)
+check("empty 2d shape", e2d.shape, (3, 2))
+
+# Task 4b: ones and full multi-D structured
+o2d = np.ones((2, 2), dtype=np.dtype([('v', 'int32')]))
+check("ones 2d shape", o2d.shape, (2, 2))
+check("ones 2d val", int(o2d[0, 0]['v']), 1)
+
 print(f"passed: {passed}, failed: {failed}")
 if failed:
     raise SystemExit(1)

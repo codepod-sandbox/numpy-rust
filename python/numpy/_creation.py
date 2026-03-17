@@ -337,10 +337,11 @@ def zeros(shape, dtype=None, order="C", like=None):
         parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
         if _is_structured_dtype(parsed):
             if isinstance(shape, (list, tuple)) and len(shape) > 1:
-                raise ValueError(
-                    "structured arrays only support 1D shape in this implementation; "
-                    "got shape {}".format(tuple(shape))
-                )
+                nrows = 1
+                for s in shape:
+                    nrows *= s
+                arr = _create_empty_structured(nrows, parsed, fill_value=0)
+                return arr.reshape(tuple(shape))
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=0)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
@@ -365,6 +366,19 @@ def zeros(shape, dtype=None, order="C", like=None):
 def ones(shape, dtype=None, order="C", like=None):
     if isinstance(shape, int):
         shape = (shape,)
+    # Handle structured dtype
+    if dtype is not None:
+        from ._core_types import dtype as _dtype_cls
+        parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
+        if _is_structured_dtype(parsed):
+            if isinstance(shape, (list, tuple)) and len(shape) > 1:
+                nrows = 1
+                for s in shape:
+                    nrows *= s
+                arr = _create_empty_structured(nrows, parsed, fill_value=1)
+                return arr.reshape(tuple(shape))
+            nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
+            return _create_empty_structured(nrows, parsed, fill_value=1)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
     if dt in ("object", "<class 'object'>"):
         n = 1
@@ -520,10 +534,11 @@ def full(shape, fill_value, dtype=None, order="C"):
         parsed = _dtype_cls(dtype) if not isinstance(dtype, _dtype_cls) else dtype
         if _is_structured_dtype(parsed):
             if isinstance(shape, (list, tuple)) and len(shape) > 1:
-                raise ValueError(
-                    "structured arrays only support 1D shape in this implementation; "
-                    "got shape {}".format(tuple(shape))
-                )
+                nrows = 1
+                for s in shape:
+                    nrows *= s
+                arr = _create_empty_structured(nrows, parsed, fill_value=fill_value)
+                return arr.reshape(tuple(shape))
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=fill_value)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
