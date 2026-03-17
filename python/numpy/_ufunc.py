@@ -131,6 +131,108 @@ def _set_at(a, idx, result):
         a[idx] = result.flat[0] if result.size == 1 else result
 
 
+# Mapping from dtype strings / type chars / Python types to numpy type codes
+_DTYPE_TO_TYPECODE = {
+    # Integer types (signed)
+    'int8': 'b', 'int16': 'h', 'int32': 'i', 'int64': 'l', 'intp': 'l',
+    # Integer types (unsigned)
+    'uint8': 'B', 'uint16': 'H', 'uint32': 'I', 'uint64': 'L',
+    # Float types
+    'float16': 'e', 'float32': 'f', 'float64': 'd', 'float128': 'g',
+    'longdouble': 'g',
+    # Complex types
+    'complex64': 'F', 'complex128': 'D', 'complex256': 'G',
+    # Bool, object, bytes
+    'bool': '?', 'bool_': '?', 'object': 'O', 'object_': 'O',
+    'bytes_': 'S', 'str_': 'U', 'bytes': 'S', 'str': 'U',
+    # Short codes
+    'e': 'e', 'f': 'f', 'd': 'd', 'g': 'g',
+    'b': 'b', 'h': 'h', 'i': 'i', 'l': 'l',
+    'B': 'B', 'H': 'H', 'I': 'I', 'L': 'L', 'Q': 'L',
+    '?': '?', 'O': 'O', 'F': 'F', 'D': 'D', 'G': 'G',
+}
+
+# Python builtin types to numpy type codes
+_PYTYPE_TO_TYPECODE = {
+    bool: '?',
+    int: 'l',
+    float: 'd',
+    complex: 'D',
+    object: 'O',
+    bytes: 'S',
+    str: 'U',
+}
+
+
+def _type_to_code(t):
+    """Convert a type specifier to a numpy type code char, or None if any."""
+    if t is None:
+        return None
+    # Python builtin types
+    if t in _PYTYPE_TO_TYPECODE:
+        return _PYTYPE_TO_TYPECODE[t]
+    # numpy dtype-like objects
+    if hasattr(t, 'name'):
+        return _DTYPE_TO_TYPECODE.get(t.name)
+    # Single character string
+    if isinstance(t, str):
+        # Could be 'float64', 'e', etc.
+        return _DTYPE_TO_TYPECODE.get(t)
+    return None
+
+
+def _check_signature_types(ufunc_obj, sig_spec):
+    """Validate signature type tuple against available loops.
+
+    sig_spec is a tuple of (nin+nout) type specifiers, where None means "any".
+    Raises TypeError if no compatible loop exists.
+    """
+    if not isinstance(sig_spec, (list, tuple)):
+        return  # string signatures are not validated here
+    if not ufunc_obj.types:
+        return  # no type info, can't validate
+
+    # Convert specifiers to codes (None = wildcard)
+    codes = [_type_to_code(t) for t in sig_spec]
+    nin = ufunc_obj.nin
+    nout = ufunc_obj.nout
+
+    # Check if len matches nin+nout
+    if len(codes) != nin + nout:
+        return  # wrong length, let numpy handle it
+
+    # Try to find a matching loop
+    for loop in ufunc_obj.types:
+        # Parse loop: e.g. 'edd->d' or 'bb->b'
+        if '->' in loop:
+            parts = loop.split('->')
+            in_codes = parts[0]
+            out_codes = parts[1]
+        else:
+            continue
+
+        if len(in_codes) != nin or len(out_codes) != nout:
+            continue
+
+        all_codes = list(in_codes) + list(out_codes)
+        match = True
+        for wanted, available in zip(codes, all_codes):
+            if wanted is None:
+                continue  # wildcard - matches anything
+            if wanted != available:
+                match = False
+                break
+        if match:
+            return  # found a matching loop
+
+    # No matching loop found
+    raise TypeError(
+        "ufunc '{}' does not support the signature {}".format(
+            ufunc_obj.__name__, sig_spec
+        )
+    )
+
+
 class ufunc:
     """Universal function wrapper with reduce/accumulate/outer/reduceat/at."""
 
@@ -189,11 +291,29 @@ class ufunc:
         out = kwargs.pop('out', None)
         _dtype = kwargs.pop('dtype', None)
         _where = kwargs.pop('where', True)
-        kwargs.pop('casting', None)
+        _casting = kwargs.pop('casting', None)
         kwargs.pop('subok', None)
         kwargs.pop('order', None)
-        kwargs.pop('sig', None)
-        kwargs.pop('signature', None)
+        _sig = kwargs.pop('sig', None)
+        _signature = kwargs.pop('signature', None)
+        # Detect conflicting keyword arguments (mirrors NumPy behavior)
+        if _sig is not None and _signature is not None:
+            raise TypeError(
+                "cannot specify both 'sig' and 'signature'"
+            )
+        if _sig is not None and _dtype is not None:
+            raise TypeError(
+                "cannot specify both 'sig' and 'dtype'"
+            )
+        if _signature is not None and _dtype is not None:
+            raise TypeError(
+                "cannot specify both 'signature' and 'dtype'"
+            )
+
+        # Validate signature type tuple against available loops
+        _effective_sig = _sig if _sig is not None else _signature
+        if isinstance(_effective_sig, (list, tuple)):
+            _check_signature_types(self, _effective_sig)
 
         try:
             result = self._func(*args, **kwargs)
@@ -227,6 +347,18 @@ class ufunc:
 
         if out is not None:
             out = out[0] if isinstance(out, tuple) else out
+            # Casting validation: "equiv" requires identical dtype
+            if _casting == "equiv":
+                res_dt = getattr(result, 'dtype', None)
+                out_dt = getattr(out, 'dtype', None)
+                if res_dt is not None and out_dt is not None:
+                    if str(res_dt) != str(out_dt):
+                        raise TypeError(
+                            "Cannot cast ufunc '{}' output from dtype('{}') "
+                            "to dtype('{}') with casting rule 'equiv'".format(
+                                self.__name__, res_dt, out_dt
+                            )
+                        )
             _copy_into(out, result)
             return out
         return result
@@ -362,7 +494,7 @@ class ufunc:
         a = asarray(a)
         if dtype is not None:
             a = a.astype(str(dtype))
-        indices = list(indices)
+        indices = [int(x) for x in indices]
         n = a.shape[axis]
         results = []
         for k in range(len(indices)):
@@ -581,10 +713,10 @@ minimum = ufunc._create(_minimum_func, 2, name='minimum',
                 types=_NUMERIC_BINARY_TYPES)
 logical_and = ufunc._create(_logical_and_func, 2, name='logical_and', identity=True,
                     reduce_fast=lambda a, axis=0, keepdims=False: all(a, axis=axis, keepdims=keepdims),
-                    types=['??->?', 'OO->?'])
+                    types=['??->?', 'OO->O'])
 logical_or = ufunc._create(_logical_or_func, 2, name='logical_or', identity=False,
                    reduce_fast=lambda a, axis=0, keepdims=False: any(a, axis=axis, keepdims=keepdims),
-                   types=['??->?', 'OO->?'])
+                   types=['??->?', 'OO->O'])
 
 # Binary ufuncs with generic reduce only
 subtract = ufunc._create(_subtract_func, 2, name='subtract',
@@ -607,7 +739,7 @@ fmax = ufunc._create(_fmax_func, 2, name='fmax',
 fmin = ufunc._create(_fmin_func, 2, name='fmin',
                      types=_FLOAT_BINARY_TYPES)
 logical_xor = ufunc._create(_logical_xor_func, 2, name='logical_xor', identity=False,
-                            types=['??->?', 'OO->?'])
+                            types=['??->?', 'OO->O'])
 bitwise_and = ufunc._create(_bitwise_and_func, 2, name='bitwise_and',
                             types=_INT_BINARY_TYPES)
 bitwise_or = ufunc._create(_bitwise_or_func, 2, name='bitwise_or',

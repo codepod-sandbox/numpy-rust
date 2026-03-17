@@ -123,18 +123,26 @@ impl NdArray {
             (ArrayData::Int64(a), ArrayData::Int64(b)) => {
                 let mut out = a.clone();
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    let d = *o / r;
-                    let rem = *o % r;
-                    *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
+                    if r == 0 {
+                        *o = 0;
+                    } else {
+                        let d = *o / r;
+                        let rem = *o % r;
+                        *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
+                    }
                 });
                 ArrayData::Int64(out)
             }
             (ArrayData::Int32(a), ArrayData::Int32(b)) => {
                 let mut out = a.clone();
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    let d = *o / r;
-                    let rem = *o % r;
-                    *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
+                    if r == 0 {
+                        *o = 0;
+                    } else {
+                        let d = *o / r;
+                        let rem = *o % r;
+                        *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
+                    }
                 });
                 ArrayData::Int32(out)
             }
@@ -169,24 +177,32 @@ impl NdArray {
             (ArrayData::Int64(a), ArrayData::Int64(b)) => {
                 let mut out = a.clone();
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    let rem = *o % r;
-                    *o = if rem != 0 && (rem ^ r) < 0 {
-                        rem + r
+                    if r == 0 {
+                        *o = 0;
                     } else {
-                        rem
-                    };
+                        let rem = *o % r;
+                        *o = if rem != 0 && (rem ^ r) < 0 {
+                            rem + r
+                        } else {
+                            rem
+                        };
+                    }
                 });
                 ArrayData::Int64(out)
             }
             (ArrayData::Int32(a), ArrayData::Int32(b)) => {
                 let mut out = a.clone();
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    let rem = *o % r;
-                    *o = if rem != 0 && (rem ^ r) < 0 {
-                        rem + r
+                    if r == 0 {
+                        *o = 0;
                     } else {
-                        rem
-                    };
+                        let rem = *o % r;
+                        *o = if rem != 0 && (rem ^ r) < 0 {
+                            rem + r
+                        } else {
+                            rem
+                        };
+                    }
                 });
                 ArrayData::Int32(out)
             }

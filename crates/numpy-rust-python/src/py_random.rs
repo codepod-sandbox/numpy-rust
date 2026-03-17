@@ -48,35 +48,48 @@ mod _random {
 
     #[pyfunction]
     fn randint(args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        // Accept: randint(low, high, size) or randint(low, high, size=N)
-        let low: i64 = args
+        // Accept: randint(high) or randint(low, high) or randint(low, high, size)
+        // Also accepts size= and dtype= as keyword args (dtype is ignored, always int64)
+        let first = args
             .args
             .first()
             .ok_or_else(|| vm.new_type_error("randint() missing argument: 'low'".to_owned()))?
-            .clone()
-            .try_into_value(vm)?;
-        let high: i64 = args
-            .args
-            .get(1)
-            .ok_or_else(|| vm.new_type_error("randint() missing argument: 'high'".to_owned()))?
-            .clone()
-            .try_into_value(vm)?;
+            .clone();
+        let first_val: i64 = first.try_into_value(vm)?;
+
+        let (low, high) = if let Some(second) = args.args.get(1) {
+            let second_val: i64 = second.clone().try_into_value(vm)?;
+            (first_val, second_val)
+        } else if let Some(kw_high) = args.kwargs.get("high") {
+            let high_val: i64 = kw_high.clone().try_into_value(vm)?;
+            (first_val, high_val)
+        } else {
+            // Single arg: randint(high) means [0, high)
+            (0i64, first_val)
+        };
+
         // size can be positional (3rd arg) or keyword 'size'
         let size_obj = if let Some(pos) = args.args.get(2) {
-            pos.clone()
-        } else if let Some(kw) = args.kwargs.get("size") {
-            kw.clone()
+            Some(pos.clone())
         } else {
-            // Scalar: return single value
-            let sh = vec![1usize];
-            return numpy_rust_core::random::randint(low, high, &sh)
-                .map(PyNdArray::from_core)
-                .map_err(|e| err(e, vm));
+            args.kwargs.get("size").cloned()
         };
-        let sh = extract_shape(&size_obj, vm)?;
-        numpy_rust_core::random::randint(low, high, &sh)
-            .map(PyNdArray::from_core)
-            .map_err(|e| err(e, vm))
+
+        match size_obj {
+            None => {
+                // Scalar: return single value
+                let sh = vec![1usize];
+                numpy_rust_core::random::randint(low, high, &sh)
+                    .map(PyNdArray::from_core)
+                    .map_err(|e| err(e, vm))
+            }
+            Some(size_obj) => {
+                let sh = extract_shape(&size_obj, vm)?;
+                numpy_rust_core::random::randint(low, high, &sh)
+                    .map(PyNdArray::from_core)
+                    .map_err(|e| err(e, vm))
+            }
+        }
     }
 
     #[pyfunction]

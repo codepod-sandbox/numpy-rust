@@ -2,7 +2,7 @@
 
 A NumPy 1.26 implementation in Rust for Python code running in sandboxed environments (RustPython/WASM). Covers the full NumPy API — array math, linalg, FFT, random distributions, structured arrays, masked arrays, string operations, and more.
 
-**2,985 tests, 0 failures (`2026-03-17`)**
+**3,091 tests, 0 failures (`2026-03-17`)**
 
 ## How it works
 
@@ -25,8 +25,11 @@ All numerical operations run in native Rust — element-wise math (90+ functions
 | `cargo test` | 454 passed, 0 failed |
 | Python vendored tests | 1,320 passed, 0 failed |
 | NumPy compat (`test_numeric.py` via RustPython) | 1,211 passed, 3 expected failures |
+| NumPy ufunc compat (`test_ufunc.py` via RustPython) | 106 passed, 346 expected failures |
 
-The 3 compat expected failures: out-parameter with overlapping slice memory (1), C-extension custom dtype (1), NaT propagation in clip — a known upstream NumPy bug (1).
+The 3 numeric compat expected failures: out-parameter with overlapping slice memory (1), C-extension custom dtype (1), NaT propagation in clip — a known upstream NumPy bug (1).
+
+The 346 ufunc expected failures are C-extension-only features: low-level strided-loop API, PyUFunc generic loop machinery, gufunc signature introspection, and string ufuncs — none implementable without CPython's C extension infrastructure.
 
 ---
 

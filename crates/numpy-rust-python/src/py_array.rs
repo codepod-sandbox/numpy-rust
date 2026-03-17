@@ -388,15 +388,30 @@ pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
 /// Parse a Python dtype string to DType.
 pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
     match s {
-        "bool" | "<class 'bool'>" => Ok(DType::Bool),
+        "bool" | "?" | "<class 'bool'>" => Ok(DType::Bool),
+        // Single-char numpy type codes (also handle byte-order prefixes)
+        "b" | "|b" | "<b" | ">b" => Ok(DType::Int8),
+        "h" | "|h" | "<h" | ">h" => Ok(DType::Int16),
+        "i" | "|i" | "<i" | ">i" => Ok(DType::Int32),
+        "l" | "q" | "|l" | "<l" | ">l" | "|q" | "<q" | ">q" => Ok(DType::Int64),
+        "B" | "|B" | "<B" | ">B" => Ok(DType::UInt8),
+        "H" | "|H" | "<H" | ">H" => Ok(DType::UInt16),
+        "I" | "|I" | "<I" | ">I" => Ok(DType::UInt32),
+        "L" | "Q" | "|L" | "<L" | ">L" | "|Q" | "<Q" | ">Q" => Ok(DType::UInt64),
+        "e" | "<e" | ">e" => Ok(DType::Float16),
+        "f" | "<f" | ">f" => Ok(DType::Float32),
+        "d" | "<d" | ">d" => Ok(DType::Float64),
+        "F" | "<F" | ">F" => Ok(DType::Complex64),
+        "D" | "<D" | ">D" => Ok(DType::Complex128),
+        // Full name aliases
         "int8" | "i1" => Ok(DType::Int8),
         "int16" | "i2" => Ok(DType::Int16),
         "int32" | "i32" | "i4" => Ok(DType::Int32),
-        "int64" | "i64" | "i8" | "int" | "<class 'int'>" => Ok(DType::Int64),
+        "int64" | "i64" | "i8" | "int" | "<class 'int'>" | "intp" | "int_" => Ok(DType::Int64),
         "uint8" | "u1" => Ok(DType::UInt8),
         "uint16" | "u2" => Ok(DType::UInt16),
         "uint32" | "u4" => Ok(DType::UInt32),
-        "uint64" | "u8" => Ok(DType::UInt64),
+        "uint64" | "u8" | "uintp" => Ok(DType::UInt64),
         "float16" | "f2" => Ok(DType::Float16),
         "float32" | "f32" | "f4" => Ok(DType::Float32),
         "float64" | "f64" | "float" | "<class 'float'>" => Ok(DType::Float64),
