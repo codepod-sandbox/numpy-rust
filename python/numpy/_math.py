@@ -326,6 +326,11 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
             raise TypeError("clip() missing 1 required positional argument: 'a_min'")
     if not isinstance(a, (ndarray, _ObjectArray)):
         a = array(a)
+    # If out overlaps with input, copy input first to avoid corruption
+    if out is not None and isinstance(a, ndarray) and isinstance(out, ndarray):
+        from numpy import shares_memory
+        if shares_memory(a, out):
+            a = a.copy()
     if a_min is None and a_max is None:
         return a.copy() if isinstance(a, ndarray) else a
     # Check casting constraint when out is provided
@@ -825,10 +830,35 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
             arr = arr.reshape(list(out_shape))
         return arr
     scalar_input = not isinstance(a, ndarray) and not isinstance(b, ndarray) and not isinstance(a, (list, tuple)) and not isinstance(b, (list, tuple))
+    # NEP50: plain Python scalars (int, float, bool) adopt the dtype of the array operand.
+    # numpy scalars (np.float32, np.float64, etc.) keep their explicit dtype.
+    _is_weak = lambda x: type(x) in (int, float, complex, bool)
+    # Step 1: convert a and b, applying NEP50 for weak scalars
+    _a_target = str(a.dtype) if isinstance(a, ndarray) else None
+    _b_target = str(b.dtype) if isinstance(b, ndarray) else None
     if not isinstance(a, ndarray):
-        a = array(a) if isinstance(a, (list, tuple)) else array([a])
+        if _b_target and _is_weak(a):
+            a = array([a], dtype=_b_target)
+        elif isinstance(a, (list, tuple)):
+            a = array(a)
+        else:
+            a = array([a])
     if not isinstance(b, ndarray):
-        b = array(b) if isinstance(b, (list, tuple)) else array([b])
+        if _is_weak(b):
+            b = array([b], dtype=str(a.dtype))  # adopt a's dtype (NEP50)
+        elif isinstance(b, (list, tuple)):
+            b = array(b)
+        else:
+            b = array([b])
+    # Step 2: compute result dtype for NEP50 atol/rtol casting
+    # When a and b have the same sub-float64 dtype, weak atol/rtol adopt that dtype
+    _a_dt = str(a.dtype)
+    _b_dt = str(b.dtype)
+    _atol_rtol_dtype = _a_dt if (_a_dt == _b_dt and _a_dt != "float64") else None
+    if _atol_rtol_dtype and _is_weak(atol):
+        atol = float(array([atol], dtype=_atol_rtol_dtype)[0])
+    if _atol_rtol_dtype and _is_weak(rtol):
+        rtol = float(array([rtol], dtype=_atol_rtol_dtype)[0])
     # Handle infinities: inf == inf (same sign) should be True
     a_inf = isinf(a)
     b_inf = isinf(b)

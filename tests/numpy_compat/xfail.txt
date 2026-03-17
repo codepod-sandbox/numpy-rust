@@ -1,4 +1,3 @@
 TestClip.test_clip_with_out_memory_overlap
 TestResize.test_reshape_from_zero
-TestIsclose.test_nep50_isclose
 TestTypes.test_can_cast_and_promote_usertypes

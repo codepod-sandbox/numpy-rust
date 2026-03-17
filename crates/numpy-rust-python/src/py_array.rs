@@ -1599,7 +1599,9 @@ impl PyNdArray {
         let zelf = zelf
             .downcast_ref::<PyNdArray>()
             .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-        let other = match obj_to_ndarray(other, vm) {
+        // NEP50: plain Python scalars (int, float) adopt the array's dtype (weak typing).
+        let zelf_dtype = zelf.data.read().unwrap().dtype();
+        let other = match obj_to_ndarray_nep50(other, zelf_dtype, vm) {
             Ok(arr) => arr,
             Err(_) => {
                 return Ok(vm::function::Either::B(
@@ -2404,6 +2406,42 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
         return Ok(NdArray::from_vec(vals));
     }
     Err(vm.new_type_error("expected ndarray or scalar".to_owned()))
+}
+
+/// NEP50-aware scalar conversion: plain Python scalars (int, float) adopt the target dtype
+/// (weak typing), while numpy scalars and arrays keep their explicit dtype (strong typing).
+fn obj_to_ndarray_nep50(
+    obj: &vm::PyObject,
+    target_dtype: DType,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    // numpy array: strong typing, unchanged
+    if obj.downcast_ref::<PyNdArray>().is_some() {
+        return obj_to_ndarray(obj, vm);
+    }
+    // numpy scalar (has _numpy_dtype_name): strong typing, unchanged
+    if obj.get_attr("_numpy_dtype_name", vm).is_ok() {
+        return obj_to_ndarray(obj, vm);
+    }
+    // Python bool: stays bool (don't demote to integer/float)
+    if obj.class().is(vm.ctx.types.bool_type) {
+        return obj_to_ndarray(obj, vm);
+    }
+    // Plain Python float or int: weak typing → cast to target_dtype
+    if obj.class().is(vm.ctx.types.float_type) {
+        if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
+            return Ok(NdArray::from_scalar(f).astype(target_dtype));
+        }
+    }
+    if obj.class().is(vm.ctx.types.int_type) {
+        if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+            if let Ok(val) = i.try_to_primitive::<i64>(vm) {
+                return Ok(NdArray::from_scalar(val as f64).astype(target_dtype));
+            }
+        }
+    }
+    // Fallback: use normal conversion
+    obj_to_ndarray(obj, vm)
 }
 
 /// Check numpy errstate for division warnings/errors.
