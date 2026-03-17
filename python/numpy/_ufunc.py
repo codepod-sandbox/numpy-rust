@@ -59,6 +59,28 @@ _CMP_BINARY_TYPES     = ['bb->?', 'BB->?', 'hh->?', 'HH->?',
                           'ff->?', 'dd->?']
 
 _UFUNC_SENTINEL = object()  # private token — only _make_ufunc passes it
+_REDUCE_NOVALUE = object()  # sentinel distinguishes "no initial" from initial=None
+
+
+def _check_out_shape(out, result):
+    """Raise ValueError if out.shape is incompatible with result.shape.
+
+    We allow: exact match, or result is scalar/0-d and out has size 1
+    (matches NumPy's behaviour of allowing e.g. out=array([0.]) for a scalar
+    reduction result).
+    """
+    if not hasattr(out, 'shape') or not hasattr(result, 'shape'):
+        return
+    if out.shape == result.shape:
+        return
+    # Allow scalar result into size-1 out (NumPy broadcasts in this case)
+    r_size = getattr(result, 'size', 1) if result.shape != () else 1
+    o_size = getattr(out, 'size', 1)
+    if r_size == 1 and o_size == 1:
+        return
+    raise ValueError(
+        "out array has wrong shape: expected {}, got {}".format(
+            result.shape, out.shape))
 
 
 def _set_at(a, idx, result):
@@ -153,22 +175,93 @@ class ufunc:
         return f"<ufunc '{self.__name__}'>"
 
     def reduce(self, a, axis=0, dtype=None, out=None, keepdims=False,
-               initial=None, where=True):
+               initial=_REDUCE_NOVALUE, where=True):
         if self.nin != 2:
             raise ValueError("reduce only supported for binary functions")
         a = asarray(a)
+        # Validate dtype
         if dtype is not None:
-            a = a.astype(str(dtype))
-        if self._reduce_fast is not None and initial is None:
+            if isinstance(dtype, str):
+                try:
+                    a = a.astype(dtype)
+                except Exception:
+                    raise TypeError("Cannot cast to dtype {!r}".format(dtype))
+            else:
+                try:
+                    a = a.astype(str(dtype))
+                except Exception:
+                    raise TypeError("Invalid dtype {!r}".format(dtype))
+        # Validate out
+        if out is not None:
+            if isinstance(out, tuple):
+                if len(out) == 1:
+                    out = out[0]
+                else:
+                    raise TypeError("out must be a single array, not a tuple")
+            if not hasattr(out, 'shape'):
+                raise TypeError("out must be an array, not {!r}".format(type(out).__name__))
+        # Validate axis
+        if axis is not None and not isinstance(axis, (int, tuple)):
+            raise TypeError(
+                "axis must be None, int, or tuple of ints, not {!r}".format(
+                    type(axis).__name__))
+        # axis=() — reduce over zero axes → return copy
+        if isinstance(axis, tuple) and len(axis) == 0:
+            result = a.copy()
+            if out is not None:
+                _check_out_shape(out, result)
+                _copy_into(out, result)
+                return out
+            return result
+        # Handle where= (anything other than bare True)
+        if where is not True and not (isinstance(where, bool) and where):
+            result = self._reduce_with_where(a, axis, keepdims, initial, where)
+            result = asarray(result)
+            if out is not None:
+                _check_out_shape(out, result)
+                _copy_into(out, result)
+                return out
+            return result
+        # Normal reduction
+        _no_init = initial is _REDUCE_NOVALUE
+        _use_fast = (self._reduce_fast is not None
+                     and _no_init
+                     and str(getattr(a, 'dtype', '')) != 'object')
+        if _use_fast:
             result = self._reduce_fast(a, axis=axis, keepdims=keepdims)
         else:
-            result = self._generic_reduce(a, axis=axis, keepdims=keepdims,
-                                          initial=initial)
+            _init = None if _no_init else initial
+            result = self._generic_reduce(a, axis=axis, keepdims=keepdims, initial=_init)
+        result = asarray(result)
         if out is not None:
-            out = out[0] if isinstance(out, tuple) else out
-            _copy_into(out, asarray(result))
+            _check_out_shape(out, result)
+            _copy_into(out, result)
             return out
         return result
+
+    def _reduce_with_where(self, a, axis, keepdims, initial, where):
+        """Reduction applying a boolean where mask."""
+        _no_init = initial is _REDUCE_NOVALUE
+        identity = None if _no_init else initial
+        if identity is None and self.identity is not None:
+            identity = self.identity
+        if identity is not None:
+            where_arr = asarray(where, dtype='bool') if not isinstance(where, bool) else where
+            if hasattr(where_arr, 'shape') and where_arr.ndim > 0:
+                flat_a = a.ravel().tolist()
+                flat_w = where_arr.ravel().tolist()
+                if len(flat_w) < len(flat_a):
+                    repeats = (len(flat_a) + len(flat_w) - 1) // len(flat_w)
+                    flat_w = (flat_w * repeats)[:len(flat_a)]
+                flat_m = [v if w else identity for v, w in zip(flat_a, flat_w)]
+                masked = array(flat_m, dtype=a.dtype).reshape(a.shape)
+            else:
+                masked = a
+            _init = None if _no_init else initial
+            return self._generic_reduce(masked, axis=axis, keepdims=keepdims, initial=_init)
+        else:
+            _init = None if _no_init else initial
+            return self._generic_reduce(a, axis=axis, keepdims=keepdims, initial=_init)
 
     def accumulate(self, a, axis=0, dtype=None, out=None):
         if self.nin != 2:
@@ -182,6 +275,7 @@ class ufunc:
             result = self._generic_accumulate(a, axis=axis)
         if out is not None:
             out = out[0] if isinstance(out, tuple) else out
+            _check_out_shape(out, asarray(result))
             _copy_into(out, asarray(result))
             return out
         return result
@@ -226,6 +320,7 @@ class ufunc:
         result = stack(results, axis=axis)
         if out is not None:
             out = out[0] if isinstance(out, tuple) else out
+            _check_out_shape(out, asarray(result))
             _copy_into(out, asarray(result))
             return out
         return result
@@ -290,38 +385,70 @@ class ufunc:
                 _set_at(a, idx, result)
 
     def _generic_reduce(self, a, axis, keepdims, initial):
+        # Handle tuple axis
+        if isinstance(axis, tuple):
+            result = a
+            _init = initial
+            for ax in sorted(axis, reverse=True):
+                result = asarray(self._generic_reduce(result, ax, keepdims=False,
+                                                      initial=_init))
+                _init = None  # apply initial only once
+            if keepdims:
+                result = asarray(result)
+                for ax in sorted(axis):
+                    result = expand_dims(result, axis=ax)
+            return result
         if axis is None:
             flat = a.ravel()
+            n = flat.size
             if initial is not None:
-                result = asarray(initial)
-                start = 0
+                acc = asarray(initial)
+                for i in range(n):
+                    acc = self._func(acc, flat[i])
             elif self.identity is not None:
-                result = asarray(self.identity)
-                start = 0
+                acc = asarray(self.identity)
+                for i in range(n):
+                    acc = self._func(acc, flat[i])
             else:
-                if len(flat) == 0:
-                    raise ValueError("zero-size array with no identity")
-                result = flat[0]
-                start = 1
-            for i in range(start, len(flat)):
-                result = self._func(result, flat[i])
-            return result
-        # Axis-specific: fold slices along axis
+                if n == 0:
+                    raise ValueError(
+                        "zero-size array to reduction operation '{}' "
+                        "which has no identity".format(self.__name__))
+                acc = asarray(flat[0])
+                for i in range(1, n):
+                    acc = self._func(acc, flat[i])
+            return acc
+        # Axis-specific
         n = a.shape[axis]
         if n == 0:
-            raise ValueError("zero-size array with no identity")
+            if self.identity is not None or initial is not None:
+                seed = initial if initial is not None else self.identity
+                shape = list(a.shape)
+                shape.pop(axis)
+                if keepdims:
+                    shape.insert(axis, 1)
+                result_shape = shape if shape else ()
+                if result_shape:
+                    return array([seed] * (1 if not result_shape else
+                                  __import__('math').prod(result_shape)),
+                                 dtype=a.dtype).reshape(result_shape)
+                else:
+                    return asarray(seed)
+            raise ValueError(
+                "zero-size array to reduction operation '{}' "
+                "which has no identity".format(self.__name__))
         slices = [squeeze(take(a, [i], axis=axis), axis=axis) for i in range(n)]
         if initial is not None:
-            result = asarray(initial)
+            acc = asarray(initial)
             for s in slices:
-                result = self._func(result, s)
+                acc = self._func(acc, s)
         else:
-            result = slices[0]
+            acc = slices[0]
             for s in slices[1:]:
-                result = self._func(result, s)
+                acc = self._func(acc, s)
         if keepdims:
-            result = expand_dims(asarray(result), axis=axis)
-        return result
+            acc = expand_dims(asarray(acc), axis=axis)
+        return acc
 
     def _generic_accumulate(self, a, axis):
         if a.ndim == 0:
