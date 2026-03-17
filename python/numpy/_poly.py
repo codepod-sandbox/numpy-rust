@@ -469,13 +469,22 @@ def correlate(a, v, mode='valid'):
         nv_l = len(v_list)
         # Full correlation length
         full_len = na_l + nv_l - 1
+
+        def _to_cplx(v):
+            """Convert value to Python complex (handles (re,im) tuples from Rust)."""
+            if isinstance(v, complex):
+                return v
+            if isinstance(v, (tuple, list)) and len(v) == 2:
+                return complex(v[0], v[1])
+            return complex(v)
+
         result = []
         for k in range(full_len):
             s = complex(0, 0)
             for j in range(nv_l):
                 ai = k - nv_l + 1 + j
                 if 0 <= ai < na_l:
-                    s += complex(a_list[ai]) * complex(v_list[j]).conjugate()
+                    s += _to_cplx(a_list[ai]) * _to_cplx(v_list[j]).conjugate()
             result.append(s)
         if mode == 'valid':
             _bmin = __import__("builtins").min

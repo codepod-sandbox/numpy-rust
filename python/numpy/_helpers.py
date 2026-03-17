@@ -43,6 +43,9 @@ class _ArrayFlags:
         self.owndata = True
         self.aligned = True
         self.writebackifcopy = False
+        # fnc = Fortran non-contiguous (Fortran-order but not contiguous)
+        # For plain Python arrays this is always False
+        self.fnc = False
     def __getitem__(self, key):
         k = key.upper()
         if k in ('C_CONTIGUOUS', 'C', 'CONTIGUOUS'):
@@ -51,6 +54,8 @@ class _ArrayFlags:
             return self.f_contiguous
         if k == 'WRITEABLE':
             return self.writeable
+        if k == 'FNC':
+            return self.fnc
         return False
 
 # Wrap creation functions to accept (and currently ignore) dtype keyword

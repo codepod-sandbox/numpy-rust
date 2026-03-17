@@ -1,0 +1,31 @@
+# Known failures for npy/npz I/O compat tests
+# Format: ClassName.test_method_name (one per line)
+# Blank lines and lines starting with # are ignored.
+
+# Object arrays not supported in our numpy
+TestSaveLoad.test_array_object
+TestSavezLoad.test_array_object
+
+# Structured/record dtype arrays not supported
+TestSaveLoad.test_record
+TestSavezLoad.test_record
+
+# Large structured dtypes (format 2.0) -- structured dtype not supported
+TestSaveLoad.test_format_2_0
+TestSavezLoad.test_format_2_0
+
+# NpzFile doesn't handle non-.npy entries or key aliasing
+TestSavezLoad.test_load_non_npy
+
+# Requires 2GB+ memory -- hard-skipped in runner (would hang)
+# TestSavezLoad.test_big_arrays (hard-skipped via _SKIP_TESTS)
+
+# NpzFile.f BagObj not implemented
+TestSavezLoad.test_BagObj
+
+# str arrays not supported in our numpy
+TestSavezLoad.test_not_closing_opened_fid
+TestSavezLoad.test_closing_zipfile_after_load
+
+# Resource management / 1024-iteration fid test -- hard-skipped in runner
+# TestSavezLoad.test_closing_fid (hard-skipped via _SKIP_TESTS)

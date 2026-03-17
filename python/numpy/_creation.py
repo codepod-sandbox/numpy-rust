@@ -287,7 +287,8 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 result = result.astype("bool")
         return result
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], complex):
-        return _ObjectArray(data if isinstance(data, list) else list(data), "complex128")
+        dt_name = str(dtype) if dtype is not None else "complex128"
+        return _ObjectArray(data if isinstance(data, list) else list(data), dt_name)
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (int, float)):
         # Check if any element is complex (mixed int/float/complex list)
         _any_complex = __import__("builtins").any(isinstance(x, complex) for x in data)
@@ -303,6 +304,56 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (list, tuple, ndarray)):
         shape = _infer_shape(data)
         if shape is not None:
+            # First try: check for complex elements before flattening
+            _any = __import__("builtins").any
+            _builtins = __import__("builtins")
+
+            def _flatten_complex(d):
+                """Flatten nested lists including complex values."""
+                if isinstance(d, (list, tuple)):
+                    result = []
+                    for item in d:
+                        sub = _flatten_complex(item)
+                        if sub is None:
+                            return None
+                        result.extend(sub)
+                    return result
+                if isinstance(d, complex):
+                    return [d]
+                if isinstance(d, (int, float, bool)):
+                    return [complex(d, 0.0)]
+                try:
+                    return [complex(float(d), 0.0)]
+                except (TypeError, ValueError):
+                    return None
+
+            # Check if any nested element is complex
+            def _has_any_complex(d):
+                if isinstance(d, complex):
+                    return True
+                if isinstance(d, (list, tuple)):
+                    return _any(_has_any_complex(x) for x in d)
+                return False
+
+            _is_complex_data = _has_any_complex(data)
+            _want_complex = (dtype is not None and str(dtype).startswith("complex"))
+
+            if _is_complex_data or _want_complex:
+                flat_c = _flatten_complex(data)
+                if flat_c is not None:
+                    reals = [x.real for x in flat_c]
+                    imags = [x.imag for x in flat_c]
+                    re_arr = _native.array(reals).reshape(list(shape)).astype("complex128")
+                    im_arr = _native.array(imags).reshape(list(shape)).astype("complex128")
+                    _j_arr = _native.zeros([1], "complex128")
+                    _j_arr[0] = (0.0, 1.0)
+                    result = re_arr + im_arr * _j_arr.reshape([])
+                    if dtype is not None:
+                        dt = str(dtype)
+                        if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                            result = result.astype(dt)
+                    return result
+
             flat = _flatten_nested(data)
             if flat is not None:
                 result = _native.array(flat)

@@ -25,6 +25,7 @@ _DTYPE_INFO = {
     'uint64':     ('<u8', 'Q', 8),
     'bool':       ('|b1', '?', 1),
     'complex128': ('<c16', 'd', 16),  # 2 doubles per element
+    'complex64':  ('<c8',  'f', 8),   # 2 floats per element
 }
 
 # Reverse: .npy descriptor -> dtype name (handles both endians)
@@ -41,7 +42,7 @@ _DESCR_TO_DTYPE = {
     '<u4': 'uint32',    '>u4': 'uint32',
     '<u8': 'uint64',    '>u8': 'uint64',
     '|b1': 'bool',      '<b1': 'bool',
-    '<c8':  'complex128',  '>c8':  'complex128',
+    '<c8':  'complex64',   '>c8':  'complex64',
     '<c16': 'complex128',  '>c16': 'complex128',   '|c16': 'complex128',
 }
 
@@ -82,7 +83,8 @@ def _array_to_npy_bytes(arr):
     flat = arr.flatten().tolist()
     n = len(flat)
 
-    if dtype_str == 'complex128':
+    if dtype_str in ('complex128', 'complex64'):
+        float_char = 'd' if dtype_str == 'complex128' else 'f'
         pairs = []
         for v in flat:
             if isinstance(v, complex):
@@ -91,7 +93,7 @@ def _array_to_npy_bytes(arr):
                 pairs.extend([float(v[0]), float(v[1])])
             else:
                 pairs.extend([float(v), 0.0])
-        data = _struct.pack('<' + 'd' * len(pairs), *pairs)
+        data = _struct.pack('<' + float_char * len(pairs), *pairs)
     elif dtype_str == 'bool':
         data = _struct.pack('?' * n, *flat)
     else:
@@ -136,14 +138,9 @@ def _npy_bytes_to_array(data):
 
     endian = '>'  if descr[0] == '>' else '<'
 
-    if dtype_str == 'complex128':
-        if descr in ('<c8', '>c8'):
-            import warnings
-            warnings.warn(
-                "complex64 (.npy descr '<c8') is not supported; loaded as complex128",
-                UserWarning, stacklevel=2,
-            )
-        float_char = 'f' if descr in ('<c8', '>c8') else 'd'
+    if dtype_str in ('complex128', 'complex64'):
+        # complex64 uses 2 floats, complex128 uses 2 doubles
+        float_char = 'f' if dtype_str == 'complex64' else 'd'
         vals = _struct.unpack_from(endian + float_char * (n * 2), raw)
         flat = [complex(vals[i * 2], vals[i * 2 + 1]) for i in range(n)]
     elif dtype_str == 'bool':
@@ -321,49 +318,73 @@ def save(file, arr, **kwargs):
 def load(file, mmap_mode=None, **kwargs):
     """Load array(s) from a .npy or .npz file."""
     if isinstance(file, str):
-        if file.lower().endswith('.npz'):
-            return NpzFile(file)
+        # Detect format by magic bytes first, then fall back to extension
         with open(file, 'rb') as f:
-            first = f.read(1)
-            f.seek(0)
-            if first == b'\x93':
+            magic = f.read(4)
+        if magic[:2] == b'PK':
+            # ZIP magic: .npz file
+            return NpzFile(file)
+        elif magic[:1] == b'\x93':
+            # NumPy .npy magic
+            with open(file, 'rb') as f:
                 return _npy_bytes_to_array(f.read())
-            elif first == b'#':
-                # Legacy text format from old stub
-                with open(file, 'r') as tf:
-                    lines = tf.readlines()
-                shape_line = lines[0].strip()
-                if shape_line.startswith('# shape:'):
-                    import json
-                    shape = tuple(json.loads(shape_line.split(':')[1].strip()))
-                    data_line = lines[1].strip()
-                else:
-                    data_line = lines[0].strip()
-                    shape = None
-                vals = [float(v) for v in data_line.split(',')]
-                result = array(vals)
-                if shape is not None and len(shape) > 1:
-                    result = result.reshape(list(shape))
-                return result
+        elif file.lower().endswith('.npz'):
+            return NpzFile(file)
+        elif magic[:1] == b'#':
+            # Legacy text format from old stub
+            with open(file, 'r') as tf:
+                lines = tf.readlines()
+            shape_line = lines[0].strip()
+            if shape_line.startswith('# shape:'):
+                import json
+                shape = tuple(json.loads(shape_line.split(':')[1].strip()))
+                data_line = lines[1].strip()
             else:
-                raise ValueError(f"unknown file format: {file!r}")
+                data_line = lines[0].strip()
+                shape = None
+            vals = [float(v) for v in data_line.split(',')]
+            result = array(vals)
+            if shape is not None and len(shape) > 1:
+                result = result.reshape(list(shape))
+            return result
+        else:
+            raise ValueError(f"unknown file format: {file!r}")
     else:
-        # File-like object — assume binary .npy
-        raw = file.read()
-        return _npy_bytes_to_array(raw)
+        # File-like object — detect format from magic bytes
+        header = file.read(4)
+        if len(header) >= 2 and header[:2] == b'PK':
+            # ZIP magic: this is a .npz file
+            file.seek(0)
+            return NpzFile(file)
+        elif len(header) >= 1 and header[:1] == b'\x93':
+            # NumPy magic: read the rest as .npy
+            rest = file.read()
+            return _npy_bytes_to_array(header + rest)
+        else:
+            # Fallback: try as .npy
+            rest = file.read()
+            return _npy_bytes_to_array(header + rest)
 
 
 class NpzFile:
     """Dict-like wrapper for .npz archives."""
 
     def __init__(self, file):
-        self._zip = _zipfile.ZipFile(file, 'r')
+        # Track whether we own a file descriptor (for cleanup by callers)
+        if isinstance(file, str):
+            self.fid = open(file, 'rb')
+            self._zip = _zipfile.ZipFile(self.fid, 'r')
+        else:
+            self.fid = None
+            self._zip = _zipfile.ZipFile(file, 'r')
         self.files = [
             name[:-4] for name in self._zip.namelist()
             if name.endswith('.npy')
         ]
 
     def __getitem__(self, key):
+        if not isinstance(key, str):
+            raise KeyError(key)
         if key not in self.files:
             raise KeyError(key)
         raw = self._zip.read(key + '.npy')
@@ -372,11 +393,34 @@ class NpzFile:
     def __iter__(self):
         return iter(self.files)
 
+    def keys(self):
+        return iter(self.files)
+
     def __contains__(self, key):
         return key in self.files
 
+    def __len__(self):
+        return len(self.files)
+
+    _MAX_REPR_ARRAY_COUNT = 5
+
+    def __repr__(self):
+        # Match NumPy's format: "NpzFile 'fname' with keys: k1, k2..."
+        if self.fid is not None:
+            fname = repr(self.fid.name)
+        else:
+            fname = repr('<memory>')
+        keys = sorted(self.files)
+        if len(keys) > self._MAX_REPR_ARRAY_COUNT:
+            shown = ', '.join(keys[:self._MAX_REPR_ARRAY_COUNT]) + '...'
+        else:
+            shown = ', '.join(keys)
+        return f"NpzFile {fname} with keys: {shown}"
+
     def close(self):
         self._zip.close()
+        if self.fid is not None:
+            self.fid.close()
 
     def __enter__(self):
         return self
