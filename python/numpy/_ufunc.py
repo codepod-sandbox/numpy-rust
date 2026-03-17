@@ -25,6 +25,7 @@ from ._manipulation import expand_dims, take, squeeze, stack
 
 __all__ = [
     'ufunc',
+    '_ufunc_reconstruct',
     # Wrapped binary ufuncs (overwrite plain function names with ufunc objects)
     'add', 'subtract', 'multiply', 'divide', 'true_divide', 'floor_divide',
     'power', 'remainder', 'mod', 'fmod', 'maximum', 'minimum', 'fmax', 'fmin',
@@ -43,6 +44,7 @@ __all__ = [
     'logical_not', 'isnan', 'isinf', 'isfinite',
     'bitwise_not', 'invert',
     'bitwise_count',
+    'gcd', 'lcm', 'divmod',
 ]
 
 # Type signature constants for ufunc.types attribute
@@ -60,6 +62,35 @@ _CMP_BINARY_TYPES     = ['bb->?', 'BB->?', 'hh->?', 'HH->?',
 
 _UFUNC_SENTINEL = object()  # private token — only _make_ufunc passes it
 _REDUCE_NOVALUE = object()  # sentinel distinguishes "no initial" from initial=None
+
+
+def _apply_where_mask(result, where_arr, fill, existing=None):
+    """Apply boolean mask: keep result at True, fill/existing at False."""
+    flat_r = result.ravel().tolist()
+    if where_arr.ndim == 0:
+        flat_w = [bool(where_arr.flat[0])] * len(flat_r)
+    else:
+        flat_w = where_arr.ravel().tolist()
+    if len(flat_w) < len(flat_r):
+        repeats = (len(flat_r) + len(flat_w) - 1) // len(flat_w)
+        flat_w = (flat_w * repeats)[:len(flat_r)]
+    if existing is not None:
+        flat_e = asarray(existing).ravel().tolist()
+        flat_out = [r if w else e for r, w, e in zip(flat_r, flat_w, flat_e)]
+    else:
+        flat_out = [r if w else fill for r, w in zip(flat_r, flat_w)]
+    return array(flat_out, dtype=result.dtype).reshape(result.shape)
+
+
+def _ufunc_reconstruct(module_name, ufunc_name):
+    """Deserialize a ufunc by module + name lookup."""
+    import importlib
+    for legacy in ('numpy.core', 'numpy._core.umath', 'numpy._core'):
+        if module_name.startswith(legacy):
+            module_name = 'numpy'
+            break
+    mod = importlib.import_module(module_name)
+    return getattr(mod, ufunc_name)
 
 
 def _check_out_shape(out, result):
@@ -157,19 +188,51 @@ class ufunc:
     def __call__(self, *args, **kwargs):
         out = kwargs.pop('out', None)
         _dtype = kwargs.pop('dtype', None)
-        # Pop silently-ignored params so they don't reach the wrapped func
+        _where = kwargs.pop('where', True)
         kwargs.pop('casting', None)
-        kwargs.pop('where', None)
         kwargs.pop('subok', None)
         kwargs.pop('order', None)
-        result = self._func(*args, **kwargs)
+        kwargs.pop('sig', None)
+        kwargs.pop('signature', None)
+
+        try:
+            result = self._func(*args, **kwargs)
+        except TypeError as e:
+            if any(a is None for a in args):
+                raise TypeError(
+                    "loop of ufunc does not support argument 0 of type NoneType "
+                    "which has no callable {} method".format(self.__name__)) from None
+            raise
+
         if _dtype is not None:
             result = asarray(result).astype(str(_dtype))
+        result = asarray(result)
+
+        # Handle where=
+        if _where is not True and not (isinstance(_where, bool) and _where):
+            import warnings
+            if out is None:
+                warnings.warn(
+                    "'where' used without 'out': elements at False positions "
+                    "are undefined",
+                    UserWarning, stacklevel=2)
+                where_arr = asarray(_where, dtype='bool')
+                result = _apply_where_mask(result, where_arr, fill=0)
+            else:
+                _out = out[0] if isinstance(out, tuple) else out
+                where_arr = asarray(_where, dtype='bool')
+                result = _apply_where_mask(result, where_arr, fill=None, existing=_out)
+                _copy_into(_out, result)
+                return _out
+
         if out is not None:
             out = out[0] if isinstance(out, tuple) else out
-            _copy_into(out, asarray(result))
+            _copy_into(out, result)
             return out
         return result
+
+    def __reduce__(self):
+        return (_ufunc_reconstruct, ('numpy', self.__name__))
 
     def __repr__(self):
         return f"<ufunc '{self.__name__}'>"
@@ -670,3 +733,23 @@ bitwise_count.types = ['b->B', 'B->B', 'h->B', 'H->B',
                        'i->B', 'I->B', 'l->B', 'L->B',
                        'q->B', 'Q->B', 'O->O']
 bitwise_count.ntypes = len(bitwise_count.types)
+
+# gcd / lcm / divmod
+try:
+    from ._math import gcd as _gcd_func
+    gcd = ufunc._create(_gcd_func, 2, name='gcd', types=_INT_BINARY_TYPES)
+except (ImportError, AttributeError):
+    pass
+
+try:
+    from ._math import lcm as _lcm_func
+    lcm = ufunc._create(_lcm_func, 2, name='lcm', types=_INT_BINARY_TYPES)
+except (ImportError, AttributeError):
+    pass
+
+try:
+    from ._math import divmod_ as _divmod_func
+    divmod = ufunc._create(_divmod_func, 2, nout=2, name='divmod',
+                           types=['ll->ll', 'qq->qq', 'ff->ff', 'dd->dd'])
+except (ImportError, AttributeError):
+    pass

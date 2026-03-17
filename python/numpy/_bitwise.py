@@ -82,39 +82,38 @@ def right_shift(x1, x2, out=None, **kwargs):
 
 # --- Logical operations ------------------------------------------------------
 
+def _to_bool(x):
+    """Convert to bool array via element-wise Python truthiness."""
+    a = asarray(x) if not isinstance(x, ndarray) else x
+    try:
+        return a.astype('bool')
+    except Exception:
+        flat = [bool(v) for v in a.flatten().tolist()]
+        return array(flat, dtype='bool').reshape(a.shape)
+
 def logical_and(x1, x2, out=None, **kwargs):
-    a = asarray(x1) if not isinstance(x1, ndarray) else x1
-    b = asarray(x2) if not isinstance(x2, ndarray) else x2
-    r = _native.logical_and(a, b)
+    r = _native.logical_and(_to_bool(x1), _to_bool(x2))
     if out is not None:
         _copy_into(out, r)
         return out
     return r
 
 def logical_or(x1, x2, out=None, **kwargs):
-    a = asarray(x1) if not isinstance(x1, ndarray) else x1
-    b = asarray(x2) if not isinstance(x2, ndarray) else x2
-    r = _native.logical_or(a, b)
+    r = _native.logical_or(_to_bool(x1), _to_bool(x2))
     if out is not None:
         _copy_into(out, r)
         return out
     return r
 
 def logical_xor(x1, x2, out=None, **kwargs):
-    a = asarray(x1) if not isinstance(x1, ndarray) else x1
-    b = asarray(x2) if not isinstance(x2, ndarray) else x2
-    r = _native.logical_xor(a, b)
+    r = _native.logical_xor(_to_bool(x1), _to_bool(x2))
     if out is not None:
         _copy_into(out, r)
         return out
     return r
 
 def logical_not(x, out=None, **kwargs):
-    if isinstance(x, ndarray):
-        r = _native.logical_not(x)
-    else:
-        r = asarray(x)
-        r = _native.logical_not(r)
+    r = _native.logical_not(_to_bool(x))
     if out is not None:
         _copy_into(out, r)
         return out

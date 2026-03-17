@@ -20,6 +20,9 @@ from ._reductions import *
 from ._manipulation import *
 from ._bitwise import *
 from ._ufunc import *
+from ._ufunc import _ufunc_reconstruct, gcd, lcm
+# RustPython treats builtin names like 'divmod' specially in module scope;
+# setattr on the module object is the only reliable way to override it.
 from ._poly import *
 from ._indexing import *
 from ._window import *
@@ -351,7 +354,8 @@ round_ = around
 round = around
 
 mod = remainder
-divmod = divmod_
+# divmod is exposed as a ufunc (see _ufunc.py); divmod_ is the plain function alias
+# divmod = divmod_  # (replaced by ufunc version imported from _ufunc)
 
 special = type('special', (), {
     'gamma': staticmethod(gamma),
