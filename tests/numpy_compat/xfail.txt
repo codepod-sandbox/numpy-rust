@@ -1,3 +1,2 @@
 TestClip.test_clip_with_out_memory_overlap
-TestResize.test_reshape_from_zero
 TestTypes.test_can_cast_and_promote_usertypes

@@ -478,7 +478,64 @@ def tile(a, reps):
     return _native.tile(a, reps)
 
 
+def _native_resize(col, total):
+    """Tile a 1D ndarray to length total."""
+    n = len(col)
+    flat = col.flatten().tolist()
+    result_vals = [flat[i % n] for i in _builtin_range(total)]
+    return asarray(result_vals).astype(str(col.dtype))
+
+
+def _resize_structured(a, new_shape):
+    """Resize a StructuredArray by tiling its fields to fill new_shape."""
+    import json as _json
+    import _numpy_native as _native_mod
+    from numpy import StructuredArray
+    from _numpy_native import ndarray
+
+    if isinstance(new_shape, int):
+        new_shape = (new_shape,)
+    else:
+        new_shape = tuple(new_shape)
+
+    total = 1
+    for s in new_shape:
+        total *= s
+
+    dt = a.dtype
+    native = object.__getattribute__(a, '_native_arr')
+
+    if total == 0:
+        return zeros(new_shape, dtype=dt)
+
+    # Build dtype_json for the new native array
+    dtype_json = _json.dumps([[nm, str(dt.fields[nm][0])] for nm in dt.names])
+
+    # Tile each field independently
+    new_fields = []
+    for name in dt.names:
+        col = native[name]  # PyNdArray, 1D
+        if len(col) == 0:
+            tiled = zeros(total, dtype=str(col.dtype))
+            if not isinstance(tiled, ndarray):
+                tiled = asarray([0] * total).astype(str(col.dtype))
+        else:
+            tiled = _native_resize(col, total)
+        new_fields.append((name, tiled))
+
+    native_fields = [(name, col) for name, col in new_fields]
+    new_native = _native_mod.StructuredArray(native_fields, [total], dtype_json)
+    flat = StructuredArray(new_native)
+
+    if len(new_shape) == 1:
+        return flat
+    return flat.reshape(new_shape)
+
+
 def resize(a, new_shape):
+    from numpy import StructuredArray
+    if isinstance(a, StructuredArray):
+        return _resize_structured(a, new_shape)
     a = asarray(a)
     if isinstance(new_shape, int):
         new_shape = (new_shape,)

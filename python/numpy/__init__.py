@@ -234,6 +234,11 @@ class StructuredArray:
     def field_names(self):
         return object.__getattribute__(self, '_native_arr').field_names()
 
+    def tolist(self):
+        """Return the array as a nested Python list of tuples."""
+        dt = object.__getattribute__(self, 'dtype')
+        return [tuple(row[n] for n in dt.names) for row in self]
+
     def __repr__(self):
         dt = object.__getattribute__(self, 'dtype')
         rows = list(self)

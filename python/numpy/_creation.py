@@ -748,6 +748,21 @@ def fromstring(string, dtype=None, count=-1, sep=''):
 def array_equal(a1, a2, equal_nan=False):
     """True if two arrays have the same shape and elements."""
     try:
+        # Handle StructuredArray comparison field-by-field
+        import numpy as _np_mod
+        if isinstance(a1, _np_mod.StructuredArray) or isinstance(a2, _np_mod.StructuredArray):
+            if not (isinstance(a1, _np_mod.StructuredArray) and isinstance(a2, _np_mod.StructuredArray)):
+                return False
+            if a1.shape != a2.shape:
+                return False
+            if a1.dtype != a2.dtype:
+                return False
+            for name in a1.dtype.names:
+                col1 = a1[name]
+                col2 = a2[name]
+                if not array_equal(col1, col2, equal_nan=equal_nan):
+                    return False
+            return True
         if not isinstance(a1, ndarray):
             a1 = array(a1)
         if not isinstance(a2, ndarray):

@@ -153,6 +153,28 @@ o2d = np.ones((2, 2), dtype=np.dtype([('v', 'int32')]))
 check("ones 2d shape", o2d.shape, (2, 2))
 check("ones 2d val", int(o2d[0, 0]['v']), 1)
 
+# Task 5: resize structured array
+sdt4 = np.dtype([('a', 'float32')])
+A_empty = np.zeros(0, dtype=sdt4)
+Ar = np.resize(A_empty, (2, 1))
+check("resize empty shape", Ar.shape, (2, 1))
+check("resize empty dtype", Ar.dtype, A_empty.dtype)
+check("resize empty val", float(Ar[0, 0]['a']), 0.0)
+
+# resize non-empty: tiling
+A1 = np.array([(1.0,), (2.0,)], dtype=sdt4)
+Ar2 = np.resize(A1, (2, 3))
+check("resize tile shape", Ar2.shape, (2, 3))
+check("resize tile [0,0]", float(Ar2[0, 0]['a']), 1.0)
+check("resize tile [0,1]", float(Ar2[0, 1]['a']), 2.0)
+check("resize tile [0,2]", float(Ar2[0, 2]['a']), 1.0)  # wraps around
+check("resize tile [1,0]", float(Ar2[1, 0]['a']), 2.0)
+
+# resize 1D
+Ar3 = np.resize(A1, (4,))
+check("resize 1d shape", Ar3.shape, (4,))
+check("resize 1d [2]", float(Ar3['a'][2]), 1.0)
+
 print(f"passed: {passed}, failed: {failed}")
 if failed:
     raise SystemExit(1)

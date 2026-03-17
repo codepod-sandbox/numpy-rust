@@ -33,7 +33,39 @@ def _as_list(arr):
     return [arr]
 
 
+def _is_structured_array(obj):
+    """Return True if obj is a numpy StructuredArray (not an ndarray subclass)."""
+    t = type(obj)
+    return t.__name__ in ('StructuredArray', 'recarray') and not isinstance(obj, numpy.ndarray)
+
+
+def _structured_array_equal(actual, desired):
+    """Element-wise equality check for two StructuredArray objects."""
+    if actual.shape != desired.shape:
+        return False, f"Shape mismatch: {actual.shape} vs {desired.shape}"
+    dt = actual.dtype
+    if dt != desired.dtype:
+        return False, f"Dtype mismatch: {dt} vs {desired.dtype}"
+    for name in dt.names:
+        a_col = actual[name]
+        d_col = desired[name]
+        a_flat = a_col.flatten().tolist()
+        d_flat = d_col.flatten().tolist()
+        for i, (a, d) in enumerate(zip(a_flat, d_flat)):
+            if a != d:
+                return False, f"Field '{name}' not equal at index {i}: {a} != {d}"
+    return True, ""
+
+
 def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
+    # Handle StructuredArray comparison (not ndarray subclasses)
+    if _is_structured_array(actual) or _is_structured_array(desired):
+        if _is_structured_array(actual) and _is_structured_array(desired):
+            ok, msg = _structured_array_equal(actual, desired)
+            if not ok:
+                raise AssertionError(f"Structured arrays not equal: {msg}. {err_msg}")
+            return
+        # one is StructuredArray, one is not — fall through to generic
     if isinstance(actual, numpy.ndarray) and isinstance(desired, numpy.ndarray):
         if actual.shape != desired.shape:
             raise AssertionError(
