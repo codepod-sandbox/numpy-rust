@@ -1239,7 +1239,47 @@ def result_type(*arrays_and_dtypes):
     return dtype(result)
 
 
+def _numeric_to_str_len(name):
+    """Return number of characters needed to represent this numeric dtype as string."""
+    _sizes = {
+        'bool': 5, 'bool_': 5,
+        'int8': 4, 'int16': 6, 'int32': 11, 'int64': 21,
+        'uint8': 3, 'uint16': 5, 'uint32': 10, 'uint64': 20,
+        'float16': 12, 'float32': 12, 'float64': 22,
+        'complex64': 24, 'complex128': 48,
+    }
+    return _sizes.get(name, None)
+
+
+def _parse_us_dtype(raw):
+    """Parse a raw U/S dtype spec (possibly endian-prefixed).
+    Returns (char, size) where char is 'U' or 'S', size is int (0 = unsized).
+    Returns None if not a U/S dtype.
+    """
+    if isinstance(raw, str):
+        s = raw.lstrip('<>=|')
+    elif isinstance(raw, dtype):
+        # For S types, name preserves size; U types lose size (become 'str')
+        s = raw.name
+    else:
+        s = str(raw).lstrip('<>=|')
+    if s.startswith('U') and (len(s) == 1 or s[1:].isdigit()):
+        return ('U', int(s[1:]) if len(s) > 1 else 0)
+    if s.startswith('S') and (len(s) == 1 or s[1:].isdigit()):
+        return ('S', int(s[1:]) if len(s) > 1 else 0)
+    if s == 'str':
+        # dtype('U5') loses size -> treat as unsized U
+        return ('U', 0)
+    return None
+
+
 def promote_types(type1, type2):
+    # Capture original representations for U/S type detection (before dtype conversion)
+    _raw1 = type1 if isinstance(type1, (str, dtype)) else str(type1)
+    _raw2 = type2 if isinstance(type2, (str, dtype)) else str(type2)
+    _us1 = _parse_us_dtype(_raw1)
+    _us2 = _parse_us_dtype(_raw2)
+
     # Ensure both are dtype objects for metadata access
     if not isinstance(type1, dtype):
         try:
@@ -1302,6 +1342,33 @@ def promote_types(type1, type2):
         if t1_meta is not None and t1_meta == t2_meta:
             result.metadata = t1_meta
         return result
+
+    # String/bytes type promotion
+    if _us1 is not None or _us2 is not None:
+        # Object promoted with string -> object
+        if s1 == 'object' or s2 == 'object':
+            return dtype('object')
+        if _us1 is not None and _us2 is not None:
+            # Both are string/bytes types: U+U, S+S, U+S
+            c1, n1 = _us1
+            c2, n2 = _us2
+            # U wins over S (unicode is wider)
+            out_char = 'U' if ('U' in (c1, c2)) else 'S'
+            out_size = max(n1, n2)
+            return dtype(out_char + str(out_size))
+        # One is string/bytes, other is numeric
+        if _us1 is not None:
+            us_char, us_size = _us1
+            numeric_name = s2
+        else:
+            us_char, us_size = _us2
+            numeric_name = s1
+        needed = _numeric_to_str_len(numeric_name)
+        if needed is None:
+            # Unknown numeric type - can't promote
+            raise TypeError("Cannot promote string dtype with numeric dtype")
+        out_size = max(us_size, needed)
+        return dtype(us_char + str(out_size))
 
     _int_bits = {
         "bool": 1,

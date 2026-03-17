@@ -6,8 +6,3 @@ TestRFFT.test_rfft_irfft_n_parameter
 TestRFFT.test_rfft_irfft_roundtrip_2d
 TestRFFT.test_rfft_irfft_roundtrip_axis0
 TestTypes.test_can_cast_and_promote_usertypes
-TestTypes.test_promote_types_endian
-TestTypes.test_promote_types_strings[0]
-TestTypes.test_promote_types_strings[1]
-TestTypes.test_promote_types_strings[2]
-TestTypes.test_promote_types_strings[3]
