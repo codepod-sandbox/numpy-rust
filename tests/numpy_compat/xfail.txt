@@ -1,4 +1,5 @@
 TestClip.test_clip_with_out_memory_overlap
+TestResize.test_reshape_from_zero
 TestIsclose.test_nep50_isclose
 TestNonzero.test_count_nonzero_axis_all_dtypes
 TestRFFT.test_rfft_irfft_n_parameter
