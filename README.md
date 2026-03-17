@@ -1,6 +1,6 @@
 # numpy-rust
 
-A NumPy 1.26 implementation in Rust for Python code running in sandboxed environments (RustPython/WASM). Covers the full NumPy API — array math, linalg, FFT, random distributions, structured arrays, masked arrays, string operations, and more.
+A NumPy 1.26 implementation in Rust for Python code running in sandboxed environments (RustPython/WASM).
 
 **3,091 tests, 0 failures (`2026-03-17`)**
 
@@ -16,7 +16,7 @@ Python code (import numpy as np)
    numpy-rust-core (ndarray, nalgebra, rustfft, rand)
 ```
 
-All numerical operations run in native Rust — element-wise math (90+ functions via libm), reductions, broadcasting, sorting, linear algebra (nalgebra), FFT (rustfft), and random distributions. The Python layer handles API surface, dtype routing, and a small number of pure-Python fallbacks for non-numeric types.
+All numerical operations run in native Rust. The Python layer handles API surface and dtype routing.
 
 ## Test coverage
 
@@ -25,35 +25,37 @@ All numerical operations run in native Rust — element-wise math (90+ functions
 | `cargo test` | 454 passed, 0 failed |
 | Python vendored tests | 1,320 passed, 0 failed |
 | NumPy compat (`test_numeric.py` via RustPython) | 1,211 passed, 3 expected failures |
-| NumPy ufunc compat (`test_ufunc.py` via RustPython) | 106 passed, 346 expected failures |
-
-The 3 numeric compat expected failures: out-parameter with overlapping slice memory (1), C-extension custom dtype (1), NaT propagation in clip — a known upstream NumPy bug (1).
-
-The 346 ufunc expected failures are C-extension-only features: low-level strided-loop API, PyUFunc generic loop machinery, gufunc signature introspection, and string ufuncs — none implementable without CPython's C extension infrastructure.
+| NumPy ufunc compat (`test_ufunc.py` via RustPython) | 106 passed, 344 expected failures |
 
 ---
 
-## Known limitations
+## Limitations
 
-### Not supported
+### CPython-only features (not implementable in RustPython/WASM)
 
-- **Array views for slices.** `arr[1:4]` returns a copy — a limitation of the `ndarray` crate (sub-array `ArcArray` views aren't representable). `view()` on the whole array works in O(1) and shares the underlying buffer; `reshape()` similarly. `shares_memory()` / `may_share_memory()` work correctly via Arc pointer equality.
-- **`out=` parameter.** Writes to an output slice (`clip(out=arr[1:4])`) don't propagate back to the original because slices are copies (same root cause as above).
-- **Complex scalars.** Scalars extracted from complex arrays come back as `(re, im)` tuples rather than Python `complex` — a RustPython limitation.
-- **Binary `.npy`/`.npz` format.** `np.save`/`np.load` use text. Binary format is not implemented.
+- **C-extension ufunc machinery.** The low-level strided-loop API, `PyUFunc_OO_O` generic loops, and gufunc signature introspection all require CPython internals. The 344 ufunc xfails are entirely in this category.
 - **C-extension custom dtypes** (e.g. `rational`). Requires CPython's type system.
 - **`np.memmap`.** Memory-mapped files aren't available in WASM.
-- **Fortran-order layout.** All arrays are C-contiguous. `order='F'` is accepted and tracked but data is always stored row-major.
+- **String ufuncs.** `np.char.find` and similar as ufuncs require CPython string buffer internals.
+- **`errstate` with `raise` mode.** FP exception signaling requires OS-level signal handling.
 
-### Not efficient
+### Architecture limits
+
+- **Slice views are copies.** `arr[1:4]` returns a copy — the `ndarray` crate can't represent sub-array `ArcArray` views. `view()` and `reshape()` on the whole array work in O(1). `shares_memory()` / `may_share_memory()` work correctly via Arc pointer equality.
+- **`out=` with slices.** Writes to `clip(out=arr[1:4])` don't propagate back because slices are copies.
+- **Complex scalars.** Scalars extracted from complex arrays come back as `(re, im)` tuples — a RustPython limitation.
+- **Binary `.npy`/`.npz`.** `np.save`/`np.load` use text. Binary format not implemented.
+- **Fortran-order layout.** All arrays are C-contiguous. `order='F'` is accepted but data is always row-major.
+
+### Performance
 
 - **`einsum`** uses brute-force index iteration — correct but slow for large contractions.
 - **`rfft`/`irfft`** are pure Python. `fft`/`ifft` are native Rust via `rustfft`.
 - No SIMD or multi-threading. All operations are single-threaded.
 
-### Parameters silently ignored
+### Silently ignored parameters
 
-`casting=`, `subok=`, `where=` on most ufuncs and array functions. `out=` is silently ignored except for in-place operators.
+`casting=`, `subok=` on most ufuncs. `out=` is silently ignored except for in-place operators.
 
 ---
 
@@ -61,14 +63,14 @@ The 346 ufunc expected failures are C-extension-only features: low-level strided
 
 | Submodule | Notes |
 |-----------|-------|
-| `np.linalg` | matmul, inv, solve, det, eig, svd, qr, norm, cholesky, lstsq, pinv, and more — core ops via nalgebra |
+| `np.linalg` | matmul, inv, solve, det, eig, svd, qr, norm, cholesky, lstsq, pinv — via nalgebra |
 | `np.fft` | fft/ifft (Rust/rustfft), rfft/irfft, fft2/fftn, fftfreq, fftshift |
-| `np.random` | Full distribution set (normal, uniform, poisson, …), both legacy and Generator API |
-| `np.ma` | MaskedArray with standard creation, indexing, and reduction operations |
+| `np.random` | Full distribution set, both legacy and Generator API |
+| `np.ma` | MaskedArray with creation, indexing, and reduction operations |
 | `np.testing` | assert_allclose, assert_array_equal, assert_equal, assert_raises, and friends |
 | `np.polynomial` | polyval, polyfit, polyadd, polysub, polymul, polyder, polyint |
 | `np.char` | String operation array functions |
-| `np.lib.scimath` | Complex-safe math — sqrt, log, arcsin, etc. return complex for out-of-domain inputs |
+| `np.lib.scimath` | Complex-safe math (sqrt, log, arcsin, etc.) |
 
 ---
 
@@ -106,6 +108,7 @@ bash tests/python/run_tests.sh
 
 # NumPy compat tests (tracks known gaps via xfail list)
 ./target/release/numpy-python tests/numpy_compat/run_compat.py --ci
+./target/release/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci
 ```
 
 ### CI
