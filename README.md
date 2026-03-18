@@ -1,8 +1,8 @@
 # numpy-rust
 
-A NumPy 1.26 implementation in Rust for Python code running in sandboxed environments (RustPython/WASM).
+A NumPy implementation in Rust for Python code running in sandboxed environments (RustPython/WASM).
 
-**3,775 tests, 0 failures (`2026-03-17`)**
+**4,767 tests passing (`2026-03-18`)**
 
 ## How it works
 
@@ -22,11 +22,44 @@ All numerical operations run in native Rust. The Python layer handles API surfac
 
 | Suite | Result |
 |---|---|
-| `cargo test` | 454 passed, 0 failed |
-| Python vendored tests | 1,382 passed, 0 failed |
-| NumPy compat (`test_numeric.py` via RustPython) | 1,211 passed, 3 expected failures |
-| NumPy ufunc compat (`test_ufunc.py` via RustPython) | 106 passed, 344 expected failures |
-| NumPy I/O compat (`test_io.py` via RustPython) | 23 passed, 2 skipped (memory/fd limits) |
+| `cargo test` | 454 passed |
+| Python vendored tests | 1,188 passed |
+| NumPy compat (`test_numeric.py`) | 1,207 passed, 7 expected failures |
+| NumPy ufunc compat (`test_ufunc.py`) | 106 passed, 344 expected failures |
+| NumPy I/O compat (`test_io.py`) | 23 passed, 2 skipped |
+| Upstream NumPy tests (74 files, 86K lines) | 2,372 passed, 6 panics, 6 timeouts |
+
+### Upstream test breakdown
+
+74 vendored upstream NumPy test files cover: core array ops, math, indexing, dtypes, scalars, shape manipulation, einsum, array padding, set ops, nan functions, histograms, index tricks, stride tricks, type checking, masked arrays, polynomials, FFT, linalg, random, and more.
+
+```bash
+# Run all upstream tests (scan mode)
+./target/release/numpy-python tests/numpy_compat/run_upstream.py --scan
+
+# Run a single upstream test file
+./target/release/numpy-python tests/numpy_compat/run_upstream.py upstream/core_test_numeric.py
+```
+
+---
+
+## Submodules
+
+| Submodule | Notes |
+|-----------|-------|
+| `np.linalg` | matmul, inv, solve, det, eig, svd, qr, norm, cholesky, lstsq, pinv — via nalgebra |
+| `np.fft` | fft/ifft (Rust/rustfft), rfft/irfft, fft2/fftn, fftfreq, fftshift |
+| `np.random` | Full distribution set, both legacy and Generator API, SeedSequence |
+| `np.ma` | Complete MaskedArray (224 symbols): creation, masking, ufunc wrappers, reductions, manipulation, set ops, statistics |
+| `np.testing` | assert_allclose, assert_array_equal, assert_equal, assert_raises, suppress_warnings, temppath |
+| `np.polynomial` | Polynomial, Chebyshev, Legendre, Hermite, HermiteE, Laguerre classes with val/fit/add/sub/mul/der/int |
+| `np.char` / `np.strings` | 35+ element-wise string operations |
+| `np.lib.scimath` | Complex-safe math (sqrt, log, log2, log10, arcsin, arccos) |
+| `np.lib.stride_tricks` | as_strided, broadcast_shapes, sliding_window_view |
+| `np.dtypes` | DType class stubs for all numeric types |
+| `np._core` | Full internal compatibility package (15 submodules) |
+| `np.exceptions` | AxisError, ComplexWarning, DTypePromotionError, RankWarning, TooHardError |
+| `np._utils` | asbytes, asunicode, Version |
 
 ---
 
@@ -37,7 +70,7 @@ All numerical operations run in native Rust. The Python layer handles API surfac
 - **C-extension ufunc machinery.** The low-level strided-loop API, `PyUFunc_OO_O` generic loops, and gufunc signature introspection all require CPython internals. The 344 ufunc xfails are entirely in this category.
 - **C-extension custom dtypes** (e.g. `rational`). Requires CPython's type system.
 - **`np.memmap`.** Memory-mapped files aren't available in WASM.
-- **String ufuncs.** `np.char.find` and similar as ufuncs require CPython string buffer internals.
+- **`nditer`.** The N-dimensional iterator requires CPython C-level iteration protocol.
 - **`errstate` with `raise` mode.** FP exception signaling requires OS-level signal handling.
 
 ### Architecture limits
@@ -46,6 +79,7 @@ All numerical operations run in native Rust. The Python layer handles API surfac
 - **`out=` with slices.** Writes to `clip(out=arr[1:4])` don't propagate back because slices are copies.
 - **Complex scalars.** Scalars extracted from complex arrays come back as `(re, im)` tuples — a RustPython limitation.
 - **Fortran-order layout.** All arrays are C-contiguous. `order='F'` is accepted but data is always row-major.
+- **Long double.** `np.longdouble` maps to `float64` (Rust has no 80-bit float). Same for `np.clongdouble` → `complex128`.
 
 ### Performance
 
@@ -56,21 +90,6 @@ All numerical operations run in native Rust. The Python layer handles API surfac
 ### Silently ignored parameters
 
 `casting=`, `subok=` on most ufuncs. `out=` is silently ignored except for in-place operators.
-
----
-
-## Submodules
-
-| Submodule | Notes |
-|-----------|-------|
-| `np.linalg` | matmul, inv, solve, det, eig, svd, qr, norm, cholesky, lstsq, pinv — via nalgebra |
-| `np.fft` | fft/ifft (Rust/rustfft), rfft/irfft, fft2/fftn, fftfreq, fftshift |
-| `np.random` | Full distribution set, both legacy and Generator API |
-| `np.ma` | MaskedArray with creation, indexing, and reduction operations |
-| `np.testing` | assert_allclose, assert_array_equal, assert_equal, assert_raises, and friends |
-| `np.polynomial` | polyval, polyfit, polyadd, polysub, polymul, polyder, polyint |
-| `np.char` | String operation array functions |
-| `np.lib.scimath` | Complex-safe math (sqrt, log, arcsin, etc.) |
 
 ---
 
@@ -110,6 +129,9 @@ bash tests/python/run_tests.sh
 ./target/release/numpy-python tests/numpy_compat/run_compat.py --ci
 ./target/release/numpy-python tests/numpy_compat/run_ufunc_compat.py --ci
 ./target/release/numpy-python tests/numpy_compat/run_io_compat.py --ci
+
+# Upstream NumPy tests (74 vendored test files)
+./target/release/numpy-python tests/numpy_compat/run_upstream.py --scan
 ```
 
 ### CI
