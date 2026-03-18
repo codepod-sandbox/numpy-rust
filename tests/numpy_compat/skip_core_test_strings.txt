@@ -1,0 +1,4 @@
+# Tests that crash the process (sys.maxsize allocation, expects OverflowError but Rust backend OOMs)
+TestMethods.test_multiply_raises
+TestMethods.test_inplace_multiply
+TestMethods.test_expandtabs_raises_overflow

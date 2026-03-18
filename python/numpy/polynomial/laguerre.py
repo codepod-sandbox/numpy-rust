@@ -1,14 +1,30 @@
-"""numpy.polynomial.laguerre - Laguerre polynomial functions.
-
-Provides module-level access to Laguerre polynomial functions for imports like:
-    from numpy.polynomial.laguerre import lagval
-"""
+"""numpy.polynomial.laguerre - Laguerre polynomial functions."""
 from numpy.polynomial import laguerre as _lag
 
-lagval = _lag.lagval
-lagfit = _lag.lagfit
+Laguerre = _lag.Laguerre
+lagdomain = _lag.lagdomain
+lagzero = _lag.lagzero
+lagone = _lag.lagone
+lagx = _lag.lagx
+lagtrim = _lag.lagtrim
+lagline = _lag.lagline
 lagadd = _lag.lagadd
 lagsub = _lag.lagsub
+lagmulx = _lag.lagmulx
 lagmul = _lag.lagmul
+lagdiv = _lag.lagdiv
+lagpow = _lag.lagpow
+lagval = _lag.lagval
 lagder = _lag.lagder
 lagint = _lag.lagint
+lagroots = _lag.lagroots
+lagvander = _lag.lagvander
+lagvander2d = _lag.lagvander2d
+lagvander3d = _lag.lagvander3d
+lagcompanion = _lag.lagcompanion
+lagfromroots = _lag.lagfromroots
+lagfit = _lag.lagfit
+lag2poly = _lag.lag2poly
+poly2lag = _lag.poly2lag
+lagweight = _lag.lagweight
+laggauss = _lag.laggauss

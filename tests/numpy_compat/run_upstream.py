@@ -294,7 +294,7 @@ _SKIP_TESTS = set()
 
 
 def _load_xfail(test_file):
-    global _XFAIL_TESTS
+    global _XFAIL_TESTS, _SKIP_TESTS
     base = os.path.splitext(os.path.basename(test_file))[0]
     xfail_path = os.path.join(_this_dir, "xfail_{}.txt".format(base))
     _XFAIL_TESTS = set()
@@ -304,6 +304,14 @@ def _load_xfail(test_file):
                 line = line.strip()
                 if line and not line.startswith("#"):
                     _XFAIL_TESTS.add(line)
+    skip_path = os.path.join(_this_dir, "skip_{}.txt".format(base))
+    _SKIP_TESTS = set()
+    if os.path.exists(skip_path):
+        with open(skip_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    _SKIP_TESTS.add(line)
 
 
 def _is_expected_fail(name):
@@ -367,8 +375,10 @@ def _cross_product(param_lists, method=None):
         layers.append((names, vals_list, is_multi))
 
     if method is not None:
+        _sorted = False
         try:
-            varnames = method.__code__.co_varnames
+            _code = getattr(method, '_code_obj', None) or method.__code__
+            varnames = _code.co_varnames
             params = [v for v in varnames if v != 'self']
             def _sig_index(layer_names):
                 for p in layer_names:
@@ -376,8 +386,23 @@ def _cross_product(param_lists, method=None):
                         return params.index(p)
                 return 9999
             layers.sort(key=lambda layer: _sig_index(layer[0]))
-        except Exception:
+            _sorted = True
+        except (AttributeError, Exception) as _e:
             pass
+        if not _sorted:
+            # Fallback: try inspect.signature
+            try:
+                import inspect
+                sig = inspect.signature(method)
+                params = [p for p in sig.parameters if p != 'self']
+                def _sig_index2(layer_names):
+                    for p in layer_names:
+                        if p in params:
+                            return params.index(p)
+                    return 9999
+                layers.sort(key=lambda layer: _sig_index2(layer[0]))
+            except Exception:
+                pass
 
     all_value_lists = [l[1] for l in layers]
     multi_arg = [l[2] for l in layers]
@@ -402,6 +427,7 @@ def _run_parametrized(full_name, method):
     else:
         names_str, values = method._parametrize
     is_xfail = getattr(method, "_xfail", False)
+    pass  # debug removed
 
     try:
         if not isinstance(values, (list, tuple)):
@@ -435,7 +461,71 @@ def _run_parametrized(full_name, method):
         _passed += 1
 
 
-def _run_test_method(cls_name, inst, mname):
+class _ParametrizedWrapper:
+    """Wrapper that merges class-level and method-level parametrize lists."""
+    def __init__(self, method, class_params):
+        self._method = method
+        # Start with method-level params
+        method_params = getattr(method, '_parametrize_list', None)
+        if method_params:
+            combined = list(method_params)
+        elif hasattr(method, '_parametrize'):
+            combined = [method._parametrize]
+        else:
+            combined = []
+        # Append class-level params
+        if class_params:
+            combined.extend(class_params)
+        self._parametrize_list = combined
+        self._parametrize = combined[0] if combined else None
+        # Forward xfail and __code__ (for _cross_product sorting)
+        self._xfail = getattr(method, '_xfail', False)
+        self._xfail_reason = getattr(method, '_xfail_reason', '')
+        # Try multiple ways to get __code__ for parameter ordering
+        # We need the ORIGINAL function's code (not a *args/**kwargs wrapper)
+        _code = None
+        # Walk through __wrapped__ chain to find original function
+        _candidates = []
+        obj = method
+        for _depth in range(10):
+            _candidates.append(obj)
+            _func = getattr(obj, '__func__', None)
+            if _func is not None and _func not in _candidates:
+                _candidates.append(_func)
+            _wrapped = getattr(obj, '__wrapped__', None)
+            if _wrapped is not None and _wrapped not in _candidates:
+                obj = _wrapped
+            else:
+                break
+        for cand in _candidates:
+            c = getattr(cand, '__code__', None)
+            if c is not None:
+                vn = c.co_varnames
+                # Skip *args/**kwargs wrappers — we want the real signature
+                if len(vn) >= 2 and 'args' not in vn[:3] and 'kwargs' not in vn[:3]:
+                    _code = c
+                    break
+                elif _code is None:
+                    _code = c  # keep as fallback
+        # If best code is still *args, try inspect
+        if _code is not None and 'args' in _code.co_varnames[:3]:
+            try:
+                import inspect
+                sig = inspect.signature(method)
+                _varnames = tuple(sig.parameters.keys())
+                if len(_varnames) > 0 and 'args' not in _varnames[:3]:
+                    class _FakeCode:
+                        co_varnames = _varnames
+                    _code = _FakeCode()
+            except Exception:
+                pass
+        self._code_obj = _code
+
+    def __call__(self, *args):
+        return self._method(*args)
+
+
+def _run_test_method(cls_name, inst, mname, class_params=None):
     global _skipped, _errored
 
     try:
@@ -454,8 +544,11 @@ def _run_test_method(cls_name, inst, mname):
         _skipped += 1
         return
 
-    if hasattr(method, "_parametrize"):
-        _run_parametrized(full_name, method)
+    # Merge class-level parametrize with method-level parametrize
+    has_method_params = hasattr(method, "_parametrize")
+    if class_params or has_method_params:
+        wrapper = _ParametrizedWrapper(method, class_params)
+        _run_parametrized(full_name, wrapper)
         return
 
     _run_single_test(full_name, method)
@@ -504,6 +597,10 @@ def _run_test_file(test_path, label=None):
             if not _summary_only:
                 print("--- {} ---".format(name))
                 sys.stdout.flush()
+
+            # Collect class-level parametrize
+            class_params = getattr(obj, '_parametrize_list', None)
+
             try:
                 inst = obj()
             except Exception:
@@ -537,7 +634,7 @@ def _run_test_file(test_path, label=None):
                         setup_ok = False
 
                 if setup_ok:
-                    _run_test_method(name, inst, mname)
+                    _run_test_method(name, inst, mname, class_params)
                     if hasattr(inst, "teardown_method"):
                         try:
                             inst.teardown_method()
@@ -631,12 +728,12 @@ if __name__ == "__main__":
             print()
 
         if _failures and not _summary_only:
-            shown = _failures[:30]
+            shown = _failures[:500]
             print("--- FAILURES ({}) ---".format(len(_failures)))
             for fname, fmsg in shown:
                 print("  FAIL {}: {}".format(fname, fmsg[:150]))
-            if len(_failures) > 30:
-                print("  ... and {} more".format(len(_failures) - 30))
+            if len(_failures) > 500:
+                print("  ... and {} more".format(len(_failures) - 500))
             print()
 
         total = passed + failed + skipped + errored + xfailed
