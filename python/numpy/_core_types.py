@@ -1739,13 +1739,14 @@ def mintypecode(typechars, typeset='GDFgdf', default='d'):
     """
     # Map from type char to (is_complex, float_precision_bits)
     # Precision bits = float precision per component
+    # Only include standard type chars; legacy/unknown chars are treated as needing
+    # at least the default type.
     _type_info = {
-        '?': (False, 8), 'b': (False, 8), 'B': (False, 8),
-        '1': (False, 8), 's': (False, 8), 'w': (False, 8),
-        'h': (False, 16), 'H': (False, 16),
-        'i': (False, 32), 'I': (False, 32), 'l': (False, 64), 'L': (False, 64),
-        'u': (False, 32),  # unsigned
-        'c': (True, 8),  # character -> treat as small
+        '?': (False, 0), 'b': (False, 0), 'B': (False, 0),
+        '1': (False, 0), 's': (False, 0), 'w': (False, 0),
+        'h': (False, 0), 'H': (False, 0),
+        'i': (False, 0), 'I': (False, 0), 'l': (False, 0), 'L': (False, 0),
+        'u': (False, 0), 'c': (False, 0),
         'e': (False, 16),
         'f': (False, 32), 'd': (False, 64), 'g': (False, 128),
         'F': (True, 32), 'D': (True, 64), 'G': (True, 128),
@@ -1765,6 +1766,10 @@ def mintypecode(typechars, typeset='GDFgdf', default='d'):
         max_prec = _builtin_max(max_prec, prec)
 
     if not any_recognized:
+        return default
+
+    # If only integer/non-float types seen, return default
+    if max_prec == 0 and not has_complex:
         return default
 
     # Build candidate list from typeset

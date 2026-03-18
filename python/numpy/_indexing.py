@@ -570,20 +570,23 @@ def tri(N, M=None, k=0, dtype=None):
 def tril(m, k=0):
     """Lower triangle of an array. Return a copy with elements above the k-th diagonal zeroed."""
     m = asarray(m)
-    out_dtype = m.dtype
+    out_dtype = str(m.dtype)
     if m.ndim < 2:
         raise ValueError("Input must be >= 2-d.")
     rows, cols = m.shape[-2], m.shape[-1]
     mask = tri(rows, cols, k=k, dtype='bool')
     z = zeros(m.shape, dtype=out_dtype)
     import numpy as _np
-    return _np.where(mask, m, z)
+    result = _np.where(mask, m, z)
+    if str(result.dtype) != out_dtype:
+        result = result.astype(out_dtype)
+    return result
 
 
 def triu(m, k=0):
     """Upper triangle of an array. Return a copy with elements below the k-th diagonal zeroed."""
     m = asarray(m)
-    out_dtype = m.dtype
+    out_dtype = str(m.dtype)
     if m.ndim < 2:
         raise ValueError("Input must be >= 2-d.")
     rows, cols = m.shape[-2], m.shape[-1]
@@ -592,7 +595,10 @@ def triu(m, k=0):
     z = zeros(m.shape, dtype=out_dtype)
     import numpy as _np
     # triu: keep where mask is False (above k-1 diagonal = at or above k diagonal)
-    return _np.where(mask, z, m)
+    result = _np.where(mask, z, m)
+    if str(result.dtype) != out_dtype:
+        result = result.astype(out_dtype)
+    return result
 
 
 def fill_diagonal(a, val, wrap=False):

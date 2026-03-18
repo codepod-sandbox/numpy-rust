@@ -2459,8 +2459,18 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
                         .map_err(|e| vm.new_type_error(e.to_string()))?;
                 return Ok(base.astype(dt));
             }
-            let f = obj.to_owned().try_into_value::<f64>(vm)?;
-            return Ok(NdArray::from_scalar(f).astype(dt));
+            // Try f64 first, then fall back to i64 for int subtypes (e.g. _NumpyIntScalar)
+            if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
+                return Ok(NdArray::from_scalar(f).astype(dt));
+            }
+            if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+                if let Ok(val) = i.try_to_primitive::<i64>(vm) {
+                    return Ok(NdArray::from_scalar(val as f64).astype(dt));
+                }
+            }
+            return Err(
+                vm.new_type_error(format!("cannot convert {} to array", obj.class().name()))
+            );
         }
     }
     // Preserve Python bool scalars as bool dtype (not float64).

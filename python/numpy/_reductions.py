@@ -831,25 +831,26 @@ def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear
 def ediff1d(ary, to_end=None, to_begin=None):
     """The differences between consecutive elements of an array."""
     ary = asarray(ary).flatten()
+    dtype_str = str(ary.dtype)
     n = ary.size
-    diffs = []
+    parts = []
     if to_begin is not None:
-        if isinstance(to_begin, (int, float)):
-            diffs.append(float(to_begin))
-        else:
-            tb = asarray(to_begin).flatten()
-            for i in range(tb.size):
-                diffs.append(tb[i])
-    for i in range(1, n):
-        diffs.append(ary[i] - ary[i - 1])
+        tb = asarray(to_begin).flatten()
+        parts.append(tb)
+    if n > 1:
+        diff_vals = [ary[i] - ary[i - 1] for i in range(1, n)]
+        parts.append(array(diff_vals))
+    elif n == 1:
+        # 0-length diff
+        parts.append(array([], dtype=dtype_str))
+    else:
+        parts.append(array([], dtype=dtype_str))
     if to_end is not None:
-        if isinstance(to_end, (int, float)):
-            diffs.append(float(to_end))
-        else:
-            te = asarray(to_end).flatten()
-            for i in range(te.size):
-                diffs.append(te[i])
-    return array(diffs)
+        te = asarray(to_end).flatten()
+        parts.append(te)
+    import numpy as _np
+    result = _np.concatenate(parts) if parts else array([], dtype=dtype_str)
+    return result.astype(dtype_str)
 
 
 def max(a, axis=None, out=None, keepdims=False, where=True):
@@ -1148,6 +1149,10 @@ def setdiff1d(ar1, ar2, assume_unique=False):
         ar1 = array(ar1)
     if not isinstance(ar2, ndarray):
         ar2 = array(ar2)
+    if isinstance(ar1, _ObjectArray) or isinstance(ar2, _ObjectArray):
+        s1 = set(ar1.flatten().tolist())
+        s2 = set(ar2.flatten().tolist())
+        return array(sorted(s1 - s2))
     return _native.setdiff1d(ar1, ar2)
 
 

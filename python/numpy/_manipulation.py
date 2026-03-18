@@ -2024,6 +2024,35 @@ def _take_along_axis(arr, indices, axis):
     return concatenate(parts, axis=axis)
 
 
+class _PadVector:
+    """Mutable list-like that supports numpy-style slice assignment (broadcast scalar)."""
+    def __init__(self, flat_data, indices):
+        self._flat = flat_data
+        self._indices = indices
+
+    def __len__(self):
+        return len(self._indices)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            idxs = range(*key.indices(len(self._indices)))
+            return [self._flat[self._indices[i]] for i in idxs]
+        return self._flat[self._indices[key]]
+
+    def __setitem__(self, key, value):
+        if isinstance(key, slice):
+            idxs = list(range(*key.indices(len(self._indices))))
+            if not hasattr(value, '__len__'):
+                # Broadcast scalar to slice
+                for i in idxs:
+                    self._flat[self._indices[i]] = value
+            else:
+                for j, i in enumerate(idxs):
+                    self._flat[self._indices[i]] = value[j]
+        else:
+            self._flat[self._indices[key]] = value
+
+
 def _pad_callable(a, pad_width, func, kwargs):
     """Pad using a user-supplied callable."""
     pw = _normalize_pad_width(pad_width, a.ndim)
@@ -2034,46 +2063,7 @@ def _pad_callable(a, pad_width, func, kwargs):
     # Create output filled with edge-padded values initially
     padded = _pad_edge(a, pw)
 
-    # For each axis, extract 1D vectors and call the function
-    # The function signature is func(vector, pad_width, iaxis, kwargs)
-    # where vector is a 1D slice of the padded array that we modify in-place
-    # We simulate this by extracting each 1D slice, letting the function modify it,
-    # then putting it back
-    import itertools
-    for ax in range(a.ndim):
-        # Iterate over all indices except the current axis
-        other_axes = [i for i in range(a.ndim) if i != ax]
-        ranges = [range(new_shape[i]) for i in other_axes]
-        for idx_combo in itertools.product(*ranges):
-            # Build full index
-            full_idx = [0] * a.ndim
-            oi = 0
-            for i in range(a.ndim):
-                if i == ax:
-                    full_idx[i] = slice(None)
-                else:
-                    full_idx[i] = idx_combo[oi]
-                    oi += 1
-
-            # Extract 1D vector as Python list (mutable)
-            vector_arr = padded[tuple(full_idx)]
-            vector = vector_arr.tolist()
-
-            # Call user function
-            func(vector, (pw[ax][0], pw[ax][1]), ax, kwargs)
-
-            # Write back
-            new_vec = array(vector, dtype=a.dtype)
-            # We need to rebuild padded with this slice replaced
-            # Since we can't do in-place assignment easily, collect and rebuild
-            for vi in range(len(vector)):
-                idx2 = list(full_idx)
-                idx2[ax] = vi
-                # Can't do item assignment on our arrays easily...
-                pass
-
-    # Simpler approach: build result for callable by processing 1D slices
-    # Actually, let's use a flattened approach
+    # Use a flattened approach for in-place mutation
     import itertools
     result_flat = padded.flatten().tolist()
     strides = []
@@ -2094,10 +2084,11 @@ def _pad_callable(a, pad_width, func, kwargs):
                     base += idx_combo[oi] * strides[i]
                     oi += 1
 
-            vector = [result_flat[base + j * strides[ax]] for j in range(new_shape[ax])]
+            # Build a 1D ndarray-like mutable wrapper
+            vec_len = new_shape[ax]
+            flat_indices = [base + j * strides[ax] for j in range(vec_len)]
+            vector = _PadVector(result_flat, flat_indices)
             func(vector, (pw[ax][0], pw[ax][1]), ax, kwargs)
-            for j in range(new_shape[ax]):
-                result_flat[base + j * strides[ax]] = vector[j]
 
     return array(result_flat, dtype=a.dtype).reshape(new_shape)
 
