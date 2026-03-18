@@ -6366,11 +6366,15 @@ def test_legint_p0():
     assert_close(r.tolist()[1], 1.0)
 
 def test_legint_p1():
-    """Integral of P_1: (P_2-P_0)/3 => [-1/3, 0, 1/3]"""
+    """Integral of P_1 with F(0)=0: [1/6, 0, 1/3]"""
     import numpy.polynomial as poly
     r = poly.legendre.legint([0.0, 1.0])
     rl = r.tolist()
-    assert_close(rl[0], -1.0/3.0, tol=1e-6)
+    # With default lbnd=0, k=0: F(0)=0
+    # Raw antiderivative of P_1 is [-1/3, 0, 1/3]
+    # Adjusted so F(0) = 0: ic[0] += 0 - legval(0, ic) = 0 - (-1/2) = 1/2
+    # Result: [-1/3 + 1/2, 0, 1/3] = [1/6, 0, 1/3]
+    assert_close(rl[0], 1.0/6.0, tol=1e-6)
     assert_close(rl[1], 0.0, tol=1e-6)
     assert_close(rl[2], 1.0/3.0, tol=1e-6)
 

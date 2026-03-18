@@ -1592,7 +1592,7 @@ def find_common_type(array_types, scalar_types):
 class finfo:
     """Machine limits for floating point types."""
     def __init__(self, dtype=None):
-        if dtype is None or str(dtype) in ('float64', 'f8', 'float', 'd'):
+        if dtype is None or dtype is float or str(dtype) in ('float64', 'f8', 'float', 'd', 'longdouble', 'longfloat', 'g'):
             self.bits = 64
             self.eps = 2.220446049250313e-16
             self.max = 1.7976931348623157e+308

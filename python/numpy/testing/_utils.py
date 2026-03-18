@@ -221,6 +221,8 @@ def assert_array_almost_equal(actual, desired, decimal=6, err_msg="", verbose=Tr
 
 def assert_allclose(actual, desired, rtol=1e-7, atol=0, equal_nan=True,
                     err_msg="", verbose=True):
+    actual = numpy.asarray(actual)
+    desired = numpy.asarray(desired)
     a_vals = _as_list(actual) if _is_array_like(actual) else [float(actual)]
     d_vals = _as_list(desired) if _is_array_like(desired) else [float(desired)]
     for i, (a, d) in enumerate(zip(a_vals, d_vals)):

@@ -375,7 +375,14 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
         if isinstance(result, ndarray) and result.ndim == 0:
             result = float(result)
     else:
-        result = a.var(None, ddof, keepdims)
+        if isinstance(ddof, float) and ddof != int(ddof):
+            # float ddof not supported by native var — compute in Python
+            m = a.sum(None, True) / a.size
+            result = _sq_dev(a - m).sum() / (a.size - ddof)
+            if isinstance(result, ndarray) and result.ndim == 0:
+                result = float(result)
+        else:
+            result = a.var(None, int(ddof) if isinstance(ddof, float) else ddof, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
     elif not isinstance(result, ndarray):
@@ -647,7 +654,7 @@ def _apply_keepdims(result, a, axis):
         return array([float(result)]).reshape(shape)
 
 
-def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
     if isinstance(q, (list, tuple, ndarray)):
@@ -661,7 +668,7 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
     return result
 
 
-def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
     if isinstance(q, (list, tuple, ndarray)):
@@ -788,7 +795,7 @@ def nanmedian(a, axis=None, out=None, overwrite_input=False, keepdims=False):
     return result
 
 
-def nanpercentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+def nanpercentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     """Compute the qth percentile, ignoring NaNs."""
     a = asarray(a)
     if isinstance(q, (list, tuple, ndarray)):
@@ -804,7 +811,7 @@ def nanpercentile(a, q, axis=None, out=None, overwrite_input=False, method="line
     return result
 
 
-def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
+def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     """Compute the qth quantile, ignoring NaNs."""
     a = asarray(a)
     if isinstance(q, (list, tuple, ndarray)):

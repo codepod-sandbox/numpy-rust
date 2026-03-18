@@ -777,7 +777,9 @@ class _TestingModule:
             raise AssertionError("Arrays are not less-ordered\nx: {}\ny: {}".format(x.tolist(), y.tolist()))
 
 
-testing = _TestingModule()
+# testing module is now properly defined in numpy/testing/_utils.py
+# Import the real module instead of using the stub class
+import numpy.testing as testing
 
 
 # ---------------------------------------------------------------------------

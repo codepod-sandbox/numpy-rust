@@ -2356,6 +2356,24 @@ class Hermite(ABCPolyBase):
     _vander_func = staticmethod(_hermvander)
 
 
+def _hermgauss(n):
+    """Hermite-Gauss quadrature (physicist's)."""
+    import math
+    n = int(n)
+    # Build symmetric tridiagonal matrix
+    comp = np.zeros((n, n))
+    for i in range(n - 1):
+        comp[i, i + 1] = math.sqrt((i + 1) / 2.0)
+        comp[i + 1, i] = math.sqrt((i + 1) / 2.0)
+    x = np.linalg.eigvalsh(comp)
+    x = np.sort(x)
+    w = np.zeros(n)
+    for i in range(n):
+        hn1 = _hermval_scalar(float(x[i]), [0.0]*(n-1) + [1.0])
+        if abs(hn1) > 1e-300:
+            w[i] = math.sqrt(math.pi) * 2.0**(n-1) * math.factorial(n) / (float(n) * hn1)**2
+    return x, w
+
 def _hermmulx(c):
     c = list(np.asarray(c).flatten().tolist())
     if len(c) == 1 and c[0] == 0:
@@ -2408,6 +2426,7 @@ class hermite:
     hermline = staticmethod(lambda off, scl: np.array([off, scl / 2.0]))
     hermmulx = staticmethod(lambda c: _hermmulx(c))
     hermweight = staticmethod(lambda x: np.exp(-np.asarray(x)**2))
+    hermgauss = staticmethod(lambda n: _hermgauss(n))
     herm2poly = staticmethod(_herm2poly)
     poly2herm = staticmethod(_poly2herm)
 
@@ -2980,6 +2999,28 @@ class Laguerre(ABCPolyBase):
     _vander_func = staticmethod(_lagvander)
 
 
+def _laggauss(n):
+    """Laguerre-Gauss quadrature."""
+    import math
+    n = int(n)
+    # Build tridiagonal matrix for Laguerre: alpha_i = 2*i+1, beta_i = -(i+1)
+    comp = np.zeros((n, n))
+    for i in range(n):
+        comp[i, i] = 2.0 * i + 1.0
+        if i + 1 < n:
+            comp[i, i + 1] = -(i + 1.0)
+            comp[i + 1, i] = -(i + 1.0)
+    x = np.linalg.eigvalsh(comp)
+    x = np.sort(x)
+    # Compute weights
+    w = np.zeros(n)
+    for i in range(n):
+        xi = float(x[i])
+        l_n1 = _lagval_scalar(xi, [0.0]*n + [1.0])
+        if abs(l_n1) > 1e-300:
+            w[i] = xi / ((n + 1.0)**2 * l_n1**2)
+    return x, w
+
 def _lagmulx(c):
     c = list(np.asarray(c).flatten().tolist())
     if len(c) == 1 and c[0] == 0:
@@ -3033,6 +3074,7 @@ class laguerre:
     lagline = staticmethod(lambda off, scl: np.array([off + scl, -scl]))
     lagmulx = staticmethod(lambda c: _lagmulx(c))
     lagweight = staticmethod(lambda x: np.exp(-np.asarray(x)))
+    laggauss = staticmethod(lambda n: _laggauss(n))
     lag2poly = staticmethod(_lag2poly)
     poly2lag = staticmethod(_poly2lag)
 

@@ -834,8 +834,13 @@ def asarray(a, dtype=None, order=None):
             return a.astype(str(dtype))
         return a
     if isinstance(a, StructuredArray):
-        # StructuredArray is already an array-like, return as-is
         return a
+    # MaskedArray → extract underlying data via filled()
+    if hasattr(a, 'filled') and hasattr(a, 'mask') and hasattr(a, 'data'):
+        result = a.filled()
+        if dtype is not None:
+            return result.astype(str(dtype))
+        return result
     return array(a, dtype=dtype)
 
 asanyarray = asarray  # In our implementation, same as asarray
