@@ -219,13 +219,10 @@ def mean(a, axis=None, dtype=None, out=None, keepdims=False, where=True):
     if not isinstance(result, ndarray) and dtype is None:
         result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
-        if isinstance(out, ndarray):
-            if out.size == 1:
-                out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
-            else:
-                flat_r = result.flatten() if isinstance(result, ndarray) else array([result])
-                for i in range(out.size):
-                    out.flatten()[i] = float(flat_r[i])
+        if isinstance(result, ndarray):
+            _copy_into(out, result)
+        elif isinstance(out, ndarray) and out.size == 1:
+            out[0] = float(result)
         return out
     return result
 
@@ -266,8 +263,10 @@ def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
     if dtype is not None:
         result = _dtype_cast(result, dtype)
     if out is not None:
-        if isinstance(out, ndarray) and out.size == 1:
-            out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
+        if isinstance(result, ndarray):
+            _copy_into(out, result)
+        elif isinstance(out, ndarray) and out.size == 1:
+            out[0] = float(result)
         return out
     if isinstance(a, ndarray) and axis is None and not keepdims and not isinstance(result, ndarray):
         from ._core_types import float64, complex128
@@ -388,8 +387,10 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
     elif not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
-        if isinstance(out, ndarray) and out.size == 1:
-            out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
+        if isinstance(result, ndarray):
+            _copy_into(out, result)
+        elif isinstance(out, ndarray) and out.size == 1:
+            out[0] = float(result)
         return out
     return result
 
@@ -1118,6 +1119,10 @@ def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
     if not isinstance(ar2, ndarray):
         ar2 = array(ar2)
     if not return_indices:
+        if isinstance(ar1, _ObjectArray) or isinstance(ar2, _ObjectArray):
+            s1 = set(ar1.flatten().tolist())
+            s2 = set(ar2.flatten().tolist())
+            return array(sorted(s1 & s2))
         return _native.intersect1d(ar1, ar2)
     # Find intersection with indices
     flat1 = ar1.flatten().tolist()
@@ -1161,12 +1166,39 @@ def setxor1d(ar1, ar2, assume_unique=False):
     return _np.sort(concatenate([diff1, diff2]))
 
 
-def isin(element, test_elements, assume_unique=False, invert=False):
+def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
     if not isinstance(element, ndarray):
         element = array(element)
     if not isinstance(test_elements, ndarray):
         test_elements = array(test_elements)
-    result = _native.isin(element, test_elements)
+    # Handle _ObjectArray (strings, objects, etc.) in Python
+    if isinstance(element, _ObjectArray) or isinstance(test_elements, _ObjectArray):
+        el_flat = element.flatten().tolist() if isinstance(element, (ndarray, _ObjectArray)) else [element]
+        te_flat = test_elements.flatten().tolist() if isinstance(test_elements, (ndarray, _ObjectArray)) else [test_elements]
+        te_set = set(te_flat)
+        if invert:
+            res = [x not in te_set for x in el_flat]
+        else:
+            res = [x in te_set for x in el_flat]
+        result = array(res, dtype='bool')
+        if hasattr(element, 'shape') and element.shape != result.shape:
+            result = result.reshape(element.shape)
+        return result
+    try:
+        result = _native.isin(element, test_elements)
+    except (ValueError, TypeError, IndexError):
+        # Fallback to Python implementation for cases Rust can't handle
+        el_flat = element.flatten().tolist()
+        te_flat = test_elements.flatten().tolist()
+        te_set = set(te_flat)
+        if invert:
+            res = [x not in te_set for x in el_flat]
+        else:
+            res = [x in te_set for x in el_flat]
+        result = array(res, dtype='bool')
+        if element.shape != result.shape:
+            result = result.reshape(element.shape)
+        return result
     if invert:
         import numpy as _np
         return _np.logical_not(result)

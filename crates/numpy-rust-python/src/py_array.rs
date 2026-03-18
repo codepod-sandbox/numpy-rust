@@ -900,8 +900,40 @@ impl PyNdArray {
         let data = self.data.read().unwrap();
         let is_f = self.is_fortran.load(Ordering::Relaxed);
         if let Some(dtype_obj) = dtype_arg.into_option() {
-            // If it's a Python type/class (e.g. MyNDArray subclass), return instance of that type
+            // If it's a Python type/class (e.g. MyNDArray subclass), check if it's
+            // actually an ndarray subclass vs a scalar type like np.int8
             if let Ok(py_type) = dtype_obj.clone().downcast::<vm::builtins::PyType>() {
+                // First try to extract _scalar_name (indicating a dtype-like type, not ndarray subclass)
+                let scalar_name_result = py_type
+                    .as_object()
+                    .get_attr("_scalar_name", vm)
+                    .and_then(|v| v.try_into_value::<String>(vm));
+                if let Ok(scalar_name) = scalar_name_result {
+                    // It's a scalar type like np.int8 – use _scalar_name as dtype
+                    match parse_dtype(scalar_name.as_str(), vm) {
+                        Ok(target_dt) => {
+                            let result = data
+                                .view_as_dtype(target_dt)
+                                .map_err(|e| vm.new_value_error(e.to_string()))?;
+                            return Ok(PyNdArray::from_core(result).into_pyobject(vm));
+                        }
+                        Err(_) => return Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm)),
+                    }
+                }
+                // Also try __name__ as a dtype string (e.g. "int8", "float32")
+                if let Ok(type_name) = py_type
+                    .as_object()
+                    .get_attr("__name__", vm)
+                    .and_then(|v| v.try_into_value::<String>(vm))
+                {
+                    if let Ok(target_dt) = parse_dtype(type_name.as_str(), vm) {
+                        let result = data
+                            .view_as_dtype(target_dt)
+                            .map_err(|e| vm.new_value_error(e.to_string()))?;
+                        return Ok(PyNdArray::from_core(result).into_pyobject(vm));
+                    }
+                }
+                // It's likely an ndarray subclass – create instance of that type
                 let result = PyNdArray {
                     data: RwLock::new(data.clone()),
                     is_fortran: AtomicBool::new(is_f),

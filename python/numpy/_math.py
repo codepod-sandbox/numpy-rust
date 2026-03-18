@@ -169,30 +169,62 @@ def isscalar(x):
 
 def isrealobj(x):
     """Return True if x is not a complex type."""
-    if isinstance(x, ndarray):
-        return x.dtype not in ("complex64", "complex128")
-    return not isinstance(x, complex)
+    return not iscomplexobj(x)
 
 def iscomplexobj(x):
     """Return True if x has a complex type."""
-    if isinstance(x, ndarray):
-        return x.dtype in ("complex64", "complex128")
-    return isinstance(x, complex)
+    # Check for dtype attribute (duck typing support)
+    dtype = getattr(x, 'dtype', None)
+    if dtype is not None:
+        # ndarray: check string
+        if isinstance(x, ndarray):
+            return str(dtype) in ("complex64", "complex128")
+        # Duck type: check dtype.kind == 'c', or dtype is complex type
+        kind = getattr(dtype, 'kind', None)
+        if kind is not None:
+            return kind == 'c'
+        # dtype might be a type itself (e.g. complex)
+        try:
+            return issubclass(dtype, complex)
+        except TypeError:
+            pass
+        # Check dtype.type
+        tp = getattr(dtype, 'type', None)
+        if tp is not None:
+            try:
+                return issubclass(tp, complex)
+            except TypeError:
+                pass
+        return False
+    # Plain scalar or list
+    if isinstance(x, complex):
+        return True
+    if isinstance(x, (list, tuple)):
+        # Check if any element is complex
+        for item in x:
+            if isinstance(item, complex):
+                return True
+        return False
+    return False
 
 def isreal(x):
-    """Returns boolean array -- True where elements are real."""
+    """Returns boolean array -- True where elements have zero imaginary part."""
     if not isinstance(x, ndarray):
         x = array(x)
     if x.dtype in ("complex64", "complex128"):
-        return zeros(x.shape, dtype="bool")
+        # Element-wise: real if imag part == 0
+        im = x.imag
+        return im == zeros(im.shape)
     return ones(x.shape, dtype="bool")
 
 def iscomplex(x):
-    """Returns boolean array -- True where elements are complex."""
+    """Returns boolean array -- True where elements have nonzero imaginary part."""
     if not isinstance(x, ndarray):
         x = array(x)
     if x.dtype in ("complex64", "complex128"):
-        return ones(x.shape, dtype="bool")
+        # Element-wise: complex if imag part != 0
+        im = x.imag
+        return im != zeros(im.shape)
     return zeros(x.shape, dtype="bool")
 
 def issubdtype(arg1, arg2):
@@ -226,6 +258,11 @@ def issubdtype(arg1, arg2):
             return issubclass(cls1, arg2)
         return False
 
+    # Python built-in types (int, float, complex, str) are NOT abstract type
+    # categories in NumPy 2.0+.  issubdtype(np.int8, int) -> False.
+    if arg2 is int or arg2 is float or arg2 is complex or arg2 is str:
+        return False
+
     # Fall back to string-based logic for backward compatibility
     # Normalize arg1
     if isinstance(arg1, dtype):
@@ -251,22 +288,33 @@ def issubdtype(arg1, arg2):
     else:
         dt2 = str(arg2)
 
-    # Map type categories
-    _float_types = {"float16", "float32", "float64", "float", "floating", "float_"}
-    _int_types = {"int8", "int16", "int32", "int64", "int", "integer", "signedinteger", "int_"}
+    # Map type categories (only use proper abstract type names, not Python builtins)
+    _float_types = {"float16", "float32", "float64", "floating", "float_"}
+    _int_types = {"int8", "int16", "int32", "int64", "integer", "signedinteger", "int_"}
     _uint_types = {"uint8", "uint16", "uint32", "uint64", "unsignedinteger"}
-    _complex_types = {"complex64", "complex128", "complex", "complexfloating", "complex_"}
+    _complex_types = {"complex64", "complex128", "complexfloating", "complex_"}
     _number_types = _float_types | _int_types | _uint_types | _complex_types | {"number"}
     _bool_types = {"bool", "bool_"}
 
+    # Normalize string args that refer to concrete dtypes, not abstract categories
+    # "float" -> "float64", "int" -> "int64", "complex" -> "complex128"
+    _concrete_aliases = {
+        "float": "float64", "int": "int64", "complex": "complex128",
+        "f": "float64", "d": "float64", "i": "int32", "l": "int64",
+    }
+    if dt2 in _concrete_aliases:
+        dt2 = _concrete_aliases[dt2]
+    if dt1 in _concrete_aliases:
+        dt1 = _concrete_aliases[dt1]
+
     # Check if dt1 is a subtype of dt2
-    if dt2 in ("floating", "float"):
+    if dt2 in ("floating",):
         return dt1 in _float_types
-    elif dt2 in ("integer", "signedinteger", "int"):
+    elif dt2 in ("integer", "signedinteger"):
         return dt1 in _int_types
     elif dt2 in ("unsignedinteger",):
         return dt1 in _uint_types
-    elif dt2 in ("complexfloating", "complex"):
+    elif dt2 in ("complexfloating",):
         return dt1 in _complex_types
     elif dt2 in ("number",):
         return dt1 in _number_types
@@ -846,11 +894,63 @@ def sinc(x):
 
 def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
     """Replace NaN with zero and infinity with large finite numbers."""
-    # copy=False (in-place modification) is not supported; always returns a copy.
-    x = asarray(x)
+    _scalar_input = not isinstance(x, (ndarray, list, tuple))
+    # Also check for _ObjectArray
+    from ._helpers import _ObjectArray
+    if isinstance(x, _ObjectArray):
+        _scalar_input = False
+
+    x_arr = asarray(x)
+    orig_dtype = str(x_arr.dtype)
     posinf_val = posinf if posinf is not None else 1.7976931348623157e+308
     neginf_val = neginf if neginf is not None else -1.7976931348623157e+308
-    return _native.nan_to_num(x, float(nan), float(posinf_val), float(neginf_val))
+
+    if "int" in orig_dtype or "bool" in orig_dtype:
+        # Integer/bool types can't have NaN/inf, return as-is
+        if _scalar_input:
+            from ._core_types import int_
+            return int_(int(x))
+        return x_arr
+
+    if "complex" in orig_dtype:
+        # Handle complex: process real and imaginary parts separately
+        re = x_arr.real
+        im = x_arr.imag
+        # re and im are ndarray (float64), safe to call _native.nan_to_num
+        if isinstance(re, ndarray):
+            re_fixed = _native.nan_to_num(re, float(nan), float(posinf_val), float(neginf_val))
+        else:
+            re_fixed = asarray(re)
+        if isinstance(im, ndarray):
+            im_fixed = _native.nan_to_num(im, float(nan), float(posinf_val), float(neginf_val))
+        else:
+            im_fixed = asarray(im)
+
+        # Reconstruct complex array
+        result_list = []
+        re_flat = re_fixed.flatten().tolist()
+        im_flat = im_fixed.flatten().tolist()
+        for i in range(len(re_flat)):
+            result_list.append(complex(re_flat[i], im_flat[i]))
+        result = array(result_list)
+        if len(x_arr.shape) > 1:
+            result = result.reshape(x_arr.shape)
+
+        if _scalar_input:
+            from ._core_types import complex128
+            return complex128(result_list[0])
+        return result
+
+    if isinstance(x_arr, ndarray):
+        result = _native.nan_to_num(x_arr, float(nan), float(posinf_val), float(neginf_val))
+    else:
+        # Fallback for non-ndarray
+        result = x_arr
+
+    if _scalar_input:
+        from ._core_types import float64
+        return float64(float(result.flatten()[0]) if hasattr(result, 'flatten') else float(result))
+    return result
 
 # --- Special functions -------------------------------------------------------
 
@@ -1246,13 +1346,17 @@ def astype(a, dtype, casting='unsafe', copy=True):
 
 def real(a):
     """Return the real part of the array elements."""
-    if isinstance(a, ndarray):
+    if hasattr(a, 'real'):
+        return a.real
+    if isinstance(a, complex):
         return a.real
     return a
 
 def imag(a):
     """Return the imaginary part of the array elements."""
-    if isinstance(a, ndarray):
+    if hasattr(a, 'imag'):
+        return a.imag
+    if isinstance(a, complex):
         return a.imag
     return 0
 
@@ -1335,17 +1439,22 @@ def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
 def real_if_close(a, tol=100):
     """If input is complex with all imaginary parts close to zero, return real parts."""
     a = asarray(a)
-    if a.dtype not in ("complex64", "complex128"):
+    if not iscomplexobj(a):
         return a
     # Check if imaginary part is negligible
     im = imag(a)
-    re = real(a)
-    eps = 2.220446049250313e-16  # float64 machine epsilon
+    if tol > 1:
+        # Relative tolerance: compare imag to tol * machine_eps
+        eps = 2.220446049250313e-16  # float64 machine epsilon
+        threshold = tol * eps
+    else:
+        # Absolute tolerance
+        threshold = tol
     flat_im = im.flatten()
     for i in range(flat_im.size):
-        if _math.fabs(float(flat_im[i])) > tol * eps:
+        if _math.fabs(float(flat_im[i])) > threshold:
             return a  # has significant imaginary part
-    return re
+    return real(a)
 
 # --- isneginf / isposinf -----------------------------------------------------
 

@@ -113,6 +113,22 @@ def _create_structured_array(data, sdt):
                 # Regular tuple: access by index
                 col_values.append(row[i])
         col_arr = array(col_values, dtype=field_dtype_obj)
+        # Convert _ObjectArray complex columns to native ndarray so Rust
+        # StructuredArray can accept them.
+        if isinstance(col_arr, _ObjectArray):
+            _dt = str(col_arr.dtype) if hasattr(col_arr.dtype, '__str__') else str(col_arr._dtype)
+            if _dt.startswith("complex"):
+                _dt_name = _dt if _dt in ("complex64", "complex128") else "complex128"
+                _n = len(col_values)
+                _narr = _native.zeros([_n], _dt_name)
+                for _ci, _cv in enumerate(col_values):
+                    if isinstance(_cv, complex):
+                        _narr[_ci] = (_cv.real, _cv.imag)
+                    elif isinstance(_cv, (int, float)):
+                        _narr[_ci] = (float(_cv), 0.0)
+                    elif isinstance(_cv, tuple) and len(_cv) == 2:
+                        _narr[_ci] = (float(_cv[0]), float(_cv[1]))
+                col_arr = _narr
         fields.append((name, col_arr))
     dtype_json = json.dumps([[nm, str(sdt.fields[nm][0])] for nm in names])
     native_fields = [(name, col._native if hasattr(col, '_native') else col)
@@ -156,6 +172,22 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     return result
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
+    # Support __array__ protocol: objects with __array__() method
+    if (not isinstance(data, (ndarray, _ObjectArray, list, tuple, int, float, complex, bool, str, bytes))
+            and hasattr(data, '__array__')):
+        try:
+            converted = data.__array__(dtype=dtype, copy=copy)
+        except TypeError:
+            try:
+                converted = data.__array__(dtype=dtype)
+            except TypeError:
+                converted = data.__array__()
+        if isinstance(converted, (ndarray, _ObjectArray)):
+            if copy:
+                return converted.copy()
+            return converted
+        # __array__ returned something else, use it as data
+        data = converted
     # Check for structured dtype BEFORE normalization (normalization loses field info)
     # Also handle list-of-tuples dtype specs like [('x', 'i4'), ('y', 'i4')]
     if dtype is not None and isinstance(dtype, list):

@@ -510,6 +510,10 @@ def from_dlpack(x):
 # --- np.isdtype (NumPy 2.x dtype kind check) --------------------------------
 def isdtype(dtype_arg, kind):
     """Check if dtype belongs to a specified kind category."""
+    # Validate dtype_arg - must be a NumPy dtype, not a string
+    if isinstance(dtype_arg, str):
+        raise TypeError("dtype_arg must be a NumPy dtype, not a string. "
+                        "Use np.dtype('...') to convert.")
     # Normalize dtype_arg to a dtype object
     dt = dtype(dtype_arg)
     dt_name = dt.name if hasattr(dt, 'name') else str(dt)
@@ -517,6 +521,10 @@ def isdtype(dtype_arg, kind):
     # If kind is a tuple, check any
     if isinstance(kind, tuple):
         return any(isdtype(dtype_arg, k) for k in kind)
+
+    # Validate kind argument type
+    if not isinstance(kind, (str, type)) and not hasattr(kind, '_scalar_name'):
+        raise TypeError("kind argument must be a dtype, a string, or a tuple of these")
 
     # If kind is an abstract type class, map to the corresponding string kind
     _abstract_map = {
@@ -559,7 +567,10 @@ def isdtype(dtype_arg, kind):
     elif kind == 'numeric':
         return dt_name in (_signed | _unsigned | _real_floating | _complex_floating)
     else:
-        raise ValueError(f"Unrecognized kind: {kind!r}")
+        raise ValueError(f"{kind!r} is not a known kind name. "
+                         "Use 'bool', 'signed integer', 'unsigned integer', "
+                         "'integral', 'real floating', 'complex floating', "
+                         "or 'numeric'.")
 
 # --- Ensure DTypePromotionError is importable from numpy ---------------------
 from numpy.exceptions import DTypePromotionError

@@ -24,6 +24,28 @@ empty = numpy.empty
 zeros = numpy.zeros
 
 
+def _arg(x):
+    """Return the angle (argument) of complex array elements.
+
+    Works element-wise on complex arrays, returning real array of angles.
+    """
+    import math
+    if hasattr(x, '_data'):
+        # _ObjectArray: process element-wise
+        result = []
+        for v in x._data:
+            if isinstance(v, complex):
+                result.append(math.atan2(v.imag, v.real))
+            elif isinstance(v, tuple) and len(v) == 2:
+                result.append(math.atan2(v[1], v[0]))
+            elif isinstance(v, (int, float)):
+                result.append(math.atan2(0.0, float(v)))
+            else:
+                result.append(float('nan'))
+        return numpy.array(result)
+    return numpy.angle(x)
+
+
 def __getattr__(name):
     if hasattr(numpy, name):
         return getattr(numpy, name)

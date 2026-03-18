@@ -110,6 +110,23 @@ class _ObjectArray:
     @property
     def T(self): return self
     @property
+    def real(self):
+        """Return real part of each element."""
+        dt = str(self._dtype) if hasattr(self._dtype, '__str__') else self._dtype
+        if 'complex' in str(dt):
+            vals = [v.real if isinstance(v, complex) else float(v) for v in self._data]
+            return _native.array(vals).reshape(list(self._shape)) if len(self._shape) > 1 else _native.array(vals)
+        return self
+    @property
+    def imag(self):
+        """Return imaginary part of each element."""
+        dt = str(self._dtype) if hasattr(self._dtype, '__str__') else self._dtype
+        if 'complex' in str(dt):
+            vals = [v.imag if isinstance(v, complex) else 0.0 for v in self._data]
+            return _native.array(vals).reshape(list(self._shape)) if len(self._shape) > 1 else _native.array(vals)
+        import numpy as _np
+        return _np.zeros(self._shape)
+    @property
     def flags(self): return _ArrayFlags(c_contiguous=not self._is_fortran, f_contiguous=self._is_fortran)
     @property
     def strides(self):

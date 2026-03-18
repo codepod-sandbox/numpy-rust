@@ -757,16 +757,18 @@ def flip(a, axis=None):
 
 def flipud(a):
     """Flip array upside down (reverse along axis 0)."""
-    if isinstance(a, ndarray):
-        return _native.flipud(a)
-    return flip(a, 0)
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    return _native.flipud(a)
 
 
 def fliplr(a):
     """Flip array left-right (reverse along axis 1)."""
-    if isinstance(a, ndarray):
-        return _native.fliplr(a)
-    return flip(a, 1)
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if a.ndim < 2:
+        raise ValueError("Input must be >= 2-d.")
+    return _native.fliplr(a)
 
 
 def rot90(a, k=1, axes=(0, 1)):
@@ -1445,132 +1447,659 @@ def trim_zeros(filt, trim='fb'):
 # pad
 # ---------------------------------------------------------------------------
 
-def pad(a, pad_width, mode='constant', constant_values=0, **kwargs):
+def pad(a, pad_width, mode='constant', **kwargs):
+    """Pad an array.
+
+    Parameters
+    ----------
+    a : array_like
+    pad_width : int, sequence, or array_like
+        Number of values padded to the edges of each axis.
+    mode : str or callable
+        Padding mode.
+    **kwargs : keyword arguments for the mode.
+    """
     if not isinstance(a, ndarray):
-        a = array(a)
-    # Normalise pad_width to list of (before, after) per axis
-    if isinstance(pad_width, int):
-        pw = [(pad_width, pad_width)] * a.ndim
-    elif isinstance(pad_width, (list, tuple)):
-        if isinstance(pad_width[0], int):
-            if len(pad_width) == 2:
-                pw = [(pad_width[0], pad_width[1])] * a.ndim
-            else:
-                pw = [(pad_width[0], pad_width[0])] * a.ndim
-        else:
-            pw = [(p[0], p[1]) for p in pad_width]
-    else:
-        pw = [(pad_width, pad_width)] * a.ndim
+        a = asarray(a)
+
+    # Handle callable mode (legacy vector functionality)
+    if callable(mode):
+        return _pad_callable(a, pad_width, mode, kwargs)
+
+    # Normalise pad_width to array of shape (ndim, 2)
+    pw = _normalize_pad_width(pad_width, a.ndim)
+
+    # Check for empty axes that need padding with non-constant/empty modes
+    if mode not in ('constant', 'empty'):
+        for ax in range(a.ndim):
+            if a.shape[ax] == 0 and (pw[ax][0] > 0 or pw[ax][1] > 0):
+                raise ValueError(
+                    "can't extend empty axis %d using modes other than "
+                    "'constant' or 'empty'" % ax
+                )
+
+    # Shortcut: no padding needed
+    total_pad = sum(pw[ax][0] + pw[ax][1] for ax in range(a.ndim))
+    if total_pad == 0:
+        return a.copy() if hasattr(a, 'copy') else array(a)
 
     if mode == 'constant':
-        if isinstance(constant_values, (list, tuple)):
-            constant_values = constant_values[0] if isinstance(constant_values[0], (int, float)) else constant_values[0][0]
-        import _numpy_native as _nat
-        return _nat.pad(a, pad_width, float(constant_values))
+        return _pad_constant(a, pw, kwargs.get('constant_values', 0))
+    elif mode == 'edge':
+        return _pad_edge(a, pw)
+    elif mode == 'linear_ramp':
+        return _pad_linear_ramp(a, pw, kwargs.get('end_values', 0))
+    elif mode == 'reflect':
+        return _pad_reflect(a, pw, kwargs.get('reflect_type', 'even'))
+    elif mode == 'symmetric':
+        return _pad_symmetric(a, pw, kwargs.get('reflect_type', 'even'))
+    elif mode == 'wrap':
+        return _pad_wrap(a, pw)
+    elif mode in ('maximum', 'minimum', 'mean', 'median'):
+        return _pad_stat(a, pw, mode, kwargs.get('stat_length', None))
+    elif mode == 'empty':
+        return _pad_empty(a, pw)
+    else:
+        raise ValueError("Unknown padding mode: %s" % mode)
 
-    # Pure-Python implementation for 'edge', 'reflect', 'wrap'
-    def _pad_1d(data_list, before, after, mode_str):
-        """Pad a 1D Python list with the given mode."""
-        n = len(data_list)
-        result = []
-        if mode_str == 'edge':
-            result = [data_list[0]] * before + list(data_list) + [data_list[-1]] * after
-        elif mode_str == 'reflect':
-            left = []
-            for i in range(before):
-                idx = (i + 1) % (2 * (n - 1)) if n > 1 else 0
-                if idx >= n:
-                    idx = 2 * (n - 1) - idx
-                left.insert(0, data_list[idx])
-            right = []
-            for i in range(after):
-                idx = (i + 1) % (2 * (n - 1)) if n > 1 else 0
-                if idx >= n:
-                    idx = 2 * (n - 1) - idx
-                right.append(data_list[n - 1 - idx])
-            result = left + list(data_list) + right
-        elif mode_str == 'wrap':
-            left = []
-            for i in range(before):
-                left.insert(0, data_list[-(i + 1) % n])
-            right = []
-            for i in range(after):
-                right.append(data_list[i % n])
-            result = left + list(data_list) + right
-        elif mode_str == 'symmetric':
-            left = []
-            for i in range(before):
-                idx = i % (2 * n) if n > 0 else 0
-                if idx >= n:
-                    idx = 2 * n - 1 - idx
-                left.insert(0, data_list[idx])
-            right = []
-            for i in range(after):
-                idx = i % (2 * n) if n > 0 else 0
-                if idx >= n:
-                    idx = 2 * n - 1 - idx
-                right.append(data_list[n - 1 - idx])
-            result = left + list(data_list) + right
-        elif mode_str == 'linear_ramp':
-            end_val = kwargs.get('end_values', 0)
-            if isinstance(end_val, (list, tuple)):
-                end_val = end_val[0] if isinstance(end_val[0], (int, float)) else end_val[0][0]
-            left = []
-            for i in range(before):
-                frac = float(i + 1) / float(before + 1) if before > 0 else 1.0
-                left.append(end_val + (data_list[0] - end_val) * frac)
-            right = []
-            for i in range(after):
-                frac = float(i + 1) / float(after + 1) if after > 0 else 1.0
-                right.append(data_list[-1] + (end_val - data_list[-1]) * frac)
-            result = left + list(data_list) + right
-        elif mode_str == 'mean':
-            mean_val = sum(data_list) / len(data_list) if len(data_list) > 0 else 0.0
-            result = [mean_val] * before + list(data_list) + [mean_val] * after
-        elif mode_str == 'median':
-            sorted_data = sorted(data_list)
-            mid = len(sorted_data) // 2
-            if len(sorted_data) % 2 == 0 and len(sorted_data) > 0:
-                median_val = (sorted_data[mid - 1] + sorted_data[mid]) / 2.0
-            elif len(sorted_data) > 0:
-                median_val = sorted_data[mid]
+
+def _normalize_pad_width(pad_width, ndim):
+    """Normalize pad_width to list of (before, after) tuples, one per axis."""
+    import math
+
+    def _to_int(x):
+        return int(math.floor(float(x) + 0.5)) if isinstance(x, float) else int(x)
+
+    if isinstance(pad_width, (int, float)):
+        v = _to_int(pad_width)
+        return [(v, v)] * ndim
+
+    # Convert to a flat structure
+    if hasattr(pad_width, 'tolist'):
+        pad_width = pad_width.tolist()
+
+    if isinstance(pad_width, (list, tuple)):
+        # Check for nested structure
+        if len(pad_width) == 0:
+            raise ValueError("pad_width must not be empty")
+
+        first = pad_width[0]
+        if isinstance(first, (int, float)):
+            # 1D: either (before, after) broadcast to all axes, or (val,) broadcast
+            if len(pad_width) == 1:
+                v = _to_int(first)
+                return [(v, v)] * ndim
+            elif len(pad_width) == 2:
+                return [(_to_int(pad_width[0]), _to_int(pad_width[1]))] * ndim
             else:
-                median_val = 0.0
-            result = [median_val] * before + list(data_list) + [median_val] * after
-        elif mode_str == 'minimum':
-            min_val = min(data_list) if len(data_list) > 0 else 0.0
-            result = [min_val] * before + list(data_list) + [min_val] * after
-        elif mode_str == 'maximum':
-            max_val = max(data_list) if len(data_list) > 0 else 0.0
-            result = [max_val] * before + list(data_list) + [max_val] * after
+                raise ValueError(
+                    "operands could not be broadcast together with shape "
+                    "(%d,) and (%d, 2)" % (len(pad_width), ndim)
+                )
+        elif isinstance(first, (list, tuple)):
+            # List of tuples: one per axis, or one broadcast to all axes
+            if len(pad_width) == 1:
+                # Single pair broadcast to all axes
+                p = pad_width[0]
+                if len(p) == 1:
+                    v = _to_int(p[0])
+                    return [(v, v)] * ndim
+                elif len(p) == 2:
+                    return [(_to_int(p[0]), _to_int(p[1]))] * ndim
+                else:
+                    raise ValueError(
+                        "operands could not be broadcast together"
+                    )
+            elif len(pad_width) == ndim:
+                result = []
+                for p in pad_width:
+                    if isinstance(p, (int, float)):
+                        v = _to_int(p)
+                        result.append((v, v))
+                    elif isinstance(p, (list, tuple)):
+                        if len(p) == 1:
+                            v = _to_int(p[0])
+                            result.append((v, v))
+                        elif len(p) == 2:
+                            result.append((_to_int(p[0]), _to_int(p[1])))
+                        else:
+                            raise ValueError(
+                                "operands could not be broadcast together"
+                            )
+                    else:
+                        v = _to_int(p)
+                        result.append((v, v))
+                return result
+            else:
+                raise ValueError(
+                    "operands could not be broadcast together with shape "
+                    "(%d,) and (%d, 2)" % (len(pad_width), ndim)
+                )
         else:
-            raise NotImplementedError("pad mode '{}' is not supported".format(mode_str))
+            v = _to_int(first)
+            return [(v, v)] * ndim
+    else:
+        v = _to_int(pad_width)
+        return [(v, v)] * ndim
+
+
+def _normalize_stat_length(stat_length, ndim):
+    """Normalize stat_length to list of (before, after) tuples."""
+    from numpy.lib._arraypad_impl import _as_pairs
+    if stat_length is None:
+        return [(None, None)] * ndim
+    return _as_pairs(stat_length, ndim, as_index=True)
+
+
+def _normalize_per_axis_val(val, ndim):
+    """Normalize a per-axis value (constant_values or end_values) to (ndim, 2) shape."""
+    if isinstance(val, (int, float)):
+        return [(val, val)] * ndim
+    if isinstance(val, (list, tuple)):
+        if len(val) == 0:
+            return [(0, 0)] * ndim
+        first = val[0]
+        if isinstance(first, (int, float)):
+            if len(val) == 1:
+                return [(first, first)] * ndim
+            elif len(val) == 2:
+                return [(val[0], val[1])] * ndim
+            else:
+                return [(val[0], val[1])] * ndim
+        elif isinstance(first, (list, tuple)):
+            if len(val) == ndim:
+                result = []
+                for p in val:
+                    if isinstance(p, (list, tuple)):
+                        result.append((p[0], p[1]))
+                    else:
+                        result.append((p, p))
+                return result
+            elif len(val) == 1:
+                p = val[0]
+                if isinstance(p, (list, tuple)):
+                    return [(p[0], p[1])] * ndim
+                return [(p, p)] * ndim
+            else:
+                result = []
+                for p in val:
+                    if isinstance(p, (list, tuple)):
+                        result.append((p[0], p[1]))
+                    else:
+                        result.append((p, p))
+                return result
+        else:
+            return [(first, first)] * ndim
+    return [(val, val)] * ndim
+
+
+def _pad_constant(a, pw, constant_values):
+    """Pad with constant values."""
+    cv = _normalize_per_axis_val(constant_values, a.ndim)
+
+    # Build the new shape
+    new_shape = []
+    for ax in range(a.ndim):
+        new_shape.append(a.shape[ax] + pw[ax][0] + pw[ax][1])
+
+    # Handle empty dimensions
+    has_empty = False
+    for ax in range(a.ndim):
+        if a.shape[ax] == 0 and (pw[ax][0] > 0 or pw[ax][1] > 0):
+            has_empty = True
+
+    if has_empty or a.size == 0:
+        result = zeros(tuple(new_shape), dtype=a.dtype)
         return result
 
-    if a.ndim == 1:
-        data = [float(a[i]) for i in range(a.shape[0])]
-        padded = _pad_1d(data, pw[0][0], pw[0][1], mode)
-        return array(padded)
-
-    def _to_nested(arr):
-        """Convert ndarray to nested Python lists."""
-        if arr.ndim == 1:
-            return [float(arr[i]) for i in range(arr.shape[0])]
-        return [_to_nested(arr[i]) for i in range(arr.shape[0])]
-
-    def _pad_axis(nested, axis, before, after, mode_str, current_depth=0):
-        """Recursively pad along a specific axis of nested lists."""
-        if current_depth == axis:
-            return _pad_1d(nested, before, after, mode_str)
-        else:
-            return [_pad_axis(sub, axis, before, after, mode_str, current_depth + 1) for sub in nested]
-
-    nested = _to_nested(a)
+    # Pad axis by axis using concatenate
+    result = a
     for ax in range(a.ndim):
         before, after = pw[ax]
-        if before > 0 or after > 0:
-            nested = _pad_axis(nested, ax, before, after, mode)
-    return array(nested)
+        before_val, after_val = cv[ax]
+
+        if before > 0:
+            before_shape = list(result.shape)
+            before_shape[ax] = before
+            before_arr = ones(tuple(before_shape), dtype=a.dtype) * asarray(before_val).astype(a.dtype)
+            result = concatenate([before_arr, result], axis=ax)
+
+        if after > 0:
+            after_shape = list(result.shape)
+            after_shape[ax] = after
+            after_arr = ones(tuple(after_shape), dtype=a.dtype) * asarray(after_val).astype(a.dtype)
+            result = concatenate([result, after_arr], axis=ax)
+
+    return result
+
+
+def _pad_edge(a, pw):
+    """Pad with edge values."""
+    result = a
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before == 0 and after == 0:
+            continue
+
+        n = result.shape[ax]
+        if n == 0:
+            continue
+
+        parts = []
+        if before > 0:
+            # Take first slice along axis and repeat
+            slices = [slice(None)] * result.ndim
+            slices[ax] = slice(0, 1)
+            edge = result[tuple(slices)]
+            # Tile to get `before` copies
+            reps = [1] * result.ndim
+            reps[ax] = before
+            parts.append(tile(edge, reps))
+
+        parts.append(result)
+
+        if after > 0:
+            slices = [slice(None)] * result.ndim
+            slices[ax] = slice(n - 1, n)
+            edge = result[tuple(slices)]
+            reps = [1] * result.ndim
+            reps[ax] = after
+            parts.append(tile(edge, reps))
+
+        result = concatenate(parts, axis=ax)
+
+    return result
+
+
+def _reflect_index(i, n, reflect_type='even'):
+    """Get reflected index for padding. i is the distance from edge (1-based)."""
+    if n <= 1:
+        return 0
+    period = 2 * (n - 1)
+    idx = i % period
+    if idx >= n:
+        idx = period - idx
+    return idx
+
+
+def _pad_reflect(a, pw, reflect_type='even'):
+    """Pad with reflected values."""
+    result = a
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before == 0 and after == 0:
+            continue
+        n = result.shape[ax]
+        if n == 0:
+            continue
+
+        parts = []
+        if before > 0:
+            # Build before-padding indices
+            indices = []
+            for i in range(before, 0, -1):
+                idx = _reflect_index(i, n)
+                indices.append(idx)
+            before_arr = _take_along_axis(result, indices, ax)
+            if reflect_type == 'odd':
+                # odd reflect: 2*edge - reflected value
+                slices = [slice(None)] * result.ndim
+                slices[ax] = slice(0, 1)
+                edge = result[tuple(slices)]
+                reps = [1] * result.ndim
+                reps[ax] = before
+                edge_broadcast = tile(edge, reps)
+                before_arr = edge_broadcast * 2 - before_arr
+            parts.append(before_arr)
+
+        parts.append(result)
+
+        if after > 0:
+            indices = []
+            for i in range(1, after + 1):
+                idx = n - 1 - _reflect_index(i, n)
+                indices.append(idx)
+            after_arr = _take_along_axis(result, indices, ax)
+            if reflect_type == 'odd':
+                slices = [slice(None)] * result.ndim
+                slices[ax] = slice(n - 1, n)
+                edge = result[tuple(slices)]
+                reps = [1] * result.ndim
+                reps[ax] = after
+                edge_broadcast = tile(edge, reps)
+                after_arr = edge_broadcast * 2 - after_arr
+            parts.append(after_arr)
+
+        result = concatenate(parts, axis=ax)
+
+    return result
+
+
+def _pad_symmetric(a, pw, reflect_type='even'):
+    """Pad with symmetric (mirror) values."""
+    result = a
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before == 0 and after == 0:
+            continue
+        n = result.shape[ax]
+        if n == 0:
+            continue
+
+        parts = []
+        if before > 0:
+            indices = []
+            for i in range(before, 0, -1):
+                # symmetric: index 1 -> element 0, index 2 -> element 1, etc.
+                # with wrapping via period 2*n
+                idx = (i - 1) % (2 * n)
+                if idx >= n:
+                    idx = 2 * n - 1 - idx
+                indices.append(idx)
+            before_arr = _take_along_axis(result, indices, ax)
+            if reflect_type == 'odd':
+                slices = [slice(None)] * result.ndim
+                slices[ax] = slice(0, 1)
+                edge = result[tuple(slices)]
+                reps = [1] * result.ndim
+                reps[ax] = before
+                edge_broadcast = tile(edge, reps)
+                before_arr = edge_broadcast * 2 - before_arr
+            parts.append(before_arr)
+
+        parts.append(result)
+
+        if after > 0:
+            indices = []
+            for i in range(1, after + 1):
+                idx = (i - 1) % (2 * n)
+                if idx >= n:
+                    idx = 2 * n - 1 - idx
+                indices.append(n - 1 - idx)
+            after_arr = _take_along_axis(result, indices, ax)
+            if reflect_type == 'odd':
+                slices = [slice(None)] * result.ndim
+                slices[ax] = slice(n - 1, n)
+                edge = result[tuple(slices)]
+                reps = [1] * result.ndim
+                reps[ax] = after
+                edge_broadcast = tile(edge, reps)
+                after_arr = edge_broadcast * 2 - after_arr
+            parts.append(after_arr)
+
+        result = concatenate(parts, axis=ax)
+
+    return result
+
+
+def _pad_wrap(a, pw):
+    """Pad with wrapped values."""
+    result = a
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before == 0 and after == 0:
+            continue
+        n = result.shape[ax]
+        if n == 0:
+            continue
+
+        parts = []
+        if before > 0:
+            indices = []
+            for i in range(before, 0, -1):
+                idx = (n - (i % n)) % n
+                indices.append(idx)
+            parts.append(_take_along_axis(result, indices, ax))
+
+        parts.append(result)
+
+        if after > 0:
+            indices = []
+            for i in range(after):
+                idx = i % n
+                indices.append(idx)
+            parts.append(_take_along_axis(result, indices, ax))
+
+        result = concatenate(parts, axis=ax)
+
+    return result
+
+
+def _pad_linear_ramp(a, pw, end_values):
+    """Pad with linear ramp to end values."""
+    ev = _normalize_per_axis_val(end_values, a.ndim)
+    result = a.astype('float64') if a.dtype in ('int8', 'int16', 'int32', 'int64',
+                                                  'uint8', 'uint16', 'uint32', 'uint64',
+                                                  'bool') else a.copy() if hasattr(a, 'copy') else asarray(a)
+    orig_dtype = a.dtype
+
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before == 0 and after == 0:
+            continue
+        n = result.shape[ax]
+
+        parts = []
+        if before > 0:
+            # Get edge value (first slice along this axis)
+            slices = [slice(None)] * result.ndim
+            slices[ax] = slice(0, 1)
+            edge_val = result[tuple(slices)]
+            end_val = ev[ax][0]
+
+            # Create ramp: from end_val (at position 0) to edge_val (at position before)
+            # positions: 0, 1, ..., before-1 map to end_val ... (approaching edge_val)
+            ramp_parts = []
+            for i in range(before):
+                # t goes from 0 to 1 as i goes from 0 to before
+                t = float(i) / float(before)
+                val = asarray(end_val) + (edge_val - asarray(end_val)) * t
+                ramp_parts.append(val)
+            before_arr = concatenate(ramp_parts, axis=ax)
+            parts.append(before_arr)
+
+        parts.append(result)
+
+        if after > 0:
+            slices = [slice(None)] * result.ndim
+            slices[ax] = slice(n - 1, n)
+            edge_val = result[tuple(slices)]
+            end_val = ev[ax][1]
+
+            ramp_parts = []
+            for i in range(1, after + 1):
+                t = float(i) / float(after)
+                val = edge_val + (asarray(end_val) - edge_val) * t
+                ramp_parts.append(val)
+            after_arr = concatenate(ramp_parts, axis=ax)
+            parts.append(after_arr)
+
+        result = concatenate(parts, axis=ax)
+
+    return result.astype(orig_dtype)
+
+
+def _pad_stat(a, pw, mode, stat_length):
+    """Pad with statistical values (mean, median, minimum, maximum)."""
+    sl = _normalize_stat_length(stat_length, a.ndim)
+
+    result = a
+    for ax in range(a.ndim):
+        before, after = pw[ax]
+        if before == 0 and after == 0:
+            continue
+        n = result.shape[ax]
+        if n == 0:
+            continue
+
+        sl_before, sl_after = sl[ax]
+
+        # Compute stat for before-padding: use first sl_before elements along axis
+        if before > 0:
+            if sl_before is None:
+                chunk_before = result  # use all
+            else:
+                sl_b = _builtin_min(int(sl_before), n)
+                if sl_b == 0 and mode in ('minimum', 'maximum'):
+                    raise ValueError("stat_length of 0 yields no value for padding")
+                slices = [slice(None)] * result.ndim
+                slices[ax] = slice(0, _builtin_max(sl_b, 0))
+                chunk_before = result[tuple(slices)]
+
+            stat_before = _compute_stat(chunk_before, ax, mode)
+            # Broadcast to before-pad shape
+            reps = [1] * result.ndim
+            reps[ax] = before
+            before_arr = tile(stat_before, reps)
+        else:
+            before_arr = None
+
+        if after > 0:
+            if sl_after is None:
+                chunk_after = result
+            else:
+                sl_a = _builtin_min(int(sl_after), n)
+                if sl_a == 0 and mode in ('minimum', 'maximum'):
+                    raise ValueError("stat_length of 0 yields no value for padding")
+                slices = [slice(None)] * result.ndim
+                slices[ax] = slice(n - _builtin_max(sl_a, 0) if sl_a > 0 else n, n)
+                chunk_after = result[tuple(slices)]
+
+            stat_after = _compute_stat(chunk_after, ax, mode)
+            reps = [1] * result.ndim
+            reps[ax] = after
+            after_arr = tile(stat_after, reps)
+        else:
+            after_arr = None
+
+        parts = []
+        if before_arr is not None:
+            parts.append(before_arr)
+        parts.append(result)
+        if after_arr is not None:
+            parts.append(after_arr)
+        result = concatenate(parts, axis=ax)
+
+    return result
+
+
+def _compute_stat(chunk, axis, mode):
+    """Compute a statistic along an axis, keeping dims."""
+    import numpy as np
+    # Guard against empty chunks
+    if chunk.shape[axis] == 0:
+        shape = list(chunk.shape)
+        shape[axis] = 1
+        return np.full(tuple(shape), float('nan'))
+    if mode == 'mean':
+        return np.mean(chunk, axis=axis, keepdims=True)
+    elif mode == 'median':
+        return np.median(chunk, axis=axis, keepdims=True)
+    elif mode == 'minimum':
+        return np.min(chunk, axis=axis, keepdims=True)
+    elif mode == 'maximum':
+        return np.max(chunk, axis=axis, keepdims=True)
+
+
+def _pad_empty(a, pw):
+    """Pad with uninitialized values (zeros in our case)."""
+    new_shape = tuple(a.shape[ax] + pw[ax][0] + pw[ax][1] for ax in range(a.ndim))
+    result = zeros(new_shape, dtype=a.dtype)
+    # Copy original data into the right position
+    if a.size > 0:
+        slices = tuple(slice(pw[ax][0], pw[ax][0] + a.shape[ax]) for ax in range(a.ndim))
+        # Build result by overlaying original data
+        # Since we can't do result[slices] = a, we build it with concatenate
+        result = _pad_constant(a, pw, 0)
+    return result
+
+
+def _take_along_axis(arr, indices, axis):
+    """Take slices along an axis by indices list, return concatenated result."""
+    parts = []
+    for idx in indices:
+        slices = [slice(None)] * arr.ndim
+        slices[axis] = slice(idx, idx + 1)
+        parts.append(arr[tuple(slices)])
+    return concatenate(parts, axis=axis)
+
+
+def _pad_callable(a, pad_width, func, kwargs):
+    """Pad using a user-supplied callable."""
+    pw = _normalize_pad_width(pad_width, a.ndim)
+
+    # Build padded array shape
+    new_shape = tuple(a.shape[ax] + pw[ax][0] + pw[ax][1] for ax in range(a.ndim))
+
+    # Create output filled with edge-padded values initially
+    padded = _pad_edge(a, pw)
+
+    # For each axis, extract 1D vectors and call the function
+    # The function signature is func(vector, pad_width, iaxis, kwargs)
+    # where vector is a 1D slice of the padded array that we modify in-place
+    # We simulate this by extracting each 1D slice, letting the function modify it,
+    # then putting it back
+    import itertools
+    for ax in range(a.ndim):
+        # Iterate over all indices except the current axis
+        other_axes = [i for i in range(a.ndim) if i != ax]
+        ranges = [range(new_shape[i]) for i in other_axes]
+        for idx_combo in itertools.product(*ranges):
+            # Build full index
+            full_idx = [0] * a.ndim
+            oi = 0
+            for i in range(a.ndim):
+                if i == ax:
+                    full_idx[i] = slice(None)
+                else:
+                    full_idx[i] = idx_combo[oi]
+                    oi += 1
+
+            # Extract 1D vector as Python list (mutable)
+            vector_arr = padded[tuple(full_idx)]
+            vector = vector_arr.tolist()
+
+            # Call user function
+            func(vector, (pw[ax][0], pw[ax][1]), ax, kwargs)
+
+            # Write back
+            new_vec = array(vector, dtype=a.dtype)
+            # We need to rebuild padded with this slice replaced
+            # Since we can't do in-place assignment easily, collect and rebuild
+            for vi in range(len(vector)):
+                idx2 = list(full_idx)
+                idx2[ax] = vi
+                # Can't do item assignment on our arrays easily...
+                pass
+
+    # Simpler approach: build result for callable by processing 1D slices
+    # Actually, let's use a flattened approach
+    import itertools
+    result_flat = padded.flatten().tolist()
+    strides = []
+    stride = 1
+    for d in range(a.ndim - 1, -1, -1):
+        strides.insert(0, stride)
+        stride *= new_shape[d]
+
+    for ax in range(a.ndim):
+        other_axes = [i for i in range(a.ndim) if i != ax]
+        ranges = [range(new_shape[i]) for i in other_axes]
+        for idx_combo in itertools.product(*ranges):
+            # Compute flat indices for this 1D slice
+            base = 0
+            oi = 0
+            for i in range(a.ndim):
+                if i != ax:
+                    base += idx_combo[oi] * strides[i]
+                    oi += 1
+
+            vector = [result_flat[base + j * strides[ax]] for j in range(new_shape[ax])]
+            func(vector, (pw[ax][0], pw[ax][1]), ax, kwargs)
+            for j in range(new_shape[ax]):
+                result_flat[base + j * strides[ax]] = vector[j]
+
+    return array(result_flat, dtype=a.dtype).reshape(new_shape)
 
 
 # ---------------------------------------------------------------------------
@@ -1583,6 +2112,8 @@ def vander(x, N=None, increasing=False):
     n = x.size
     if N is None:
         N = n
+    if N == 0:
+        return empty((n, 0), dtype=x.dtype)
     if increasing:
         cols = []
         for j in range(N):
@@ -1597,7 +2128,8 @@ def vander(x, N=None, increasing=False):
             for i in range(n):
                 col.append(x[i] ** (N - 1 - j))
             cols.append(array(col))
-    return stack(cols, axis=1)
+    result = stack(cols, axis=1)
+    return result
 
 
 # ---------------------------------------------------------------------------

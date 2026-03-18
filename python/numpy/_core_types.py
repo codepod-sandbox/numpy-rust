@@ -708,6 +708,11 @@ class dtype:
             self.kind = "i"
             self.itemsize = 8
             self.char = "q"
+        elif tp is complex or tp is complex128:
+            self.name = "complex128"
+            self.kind = "c"
+            self.itemsize = 16
+            self.char = "D"
         elif tp is bool or tp is bool_:
             self.name = "bool"
             self.kind = "b"
@@ -1728,23 +1733,73 @@ class iinfo:
 # ---------------------------------------------------------------------------
 
 def mintypecode(typechars, typeset='GDFgdf', default='d'):
-    """Return the character for the minimum-size type to which given types can be safely cast."""
-    _typechar_order = {'?': 0, 'b': 1, 'B': 1, 'h': 2, 'H': 2, 'i': 3, 'I': 3, 'l': 4, 'L': 4,
-                       'q': 4, 'Q': 4, 'f': 5, 'd': 6, 'g': 7, 'F': 8, 'D': 9, 'G': 10}
-    best = default
-    best_rank = _typechar_order.get(default, 6)
+    """Return the character for the minimum-size type to which given types can be safely cast.
+
+    Returns the typecode character from typeset that can represent all typechars.
+    """
+    # Map from type char to (is_complex, float_precision_bits)
+    # Precision bits = float precision per component
+    _type_info = {
+        '?': (False, 8), 'b': (False, 8), 'B': (False, 8),
+        '1': (False, 8), 's': (False, 8), 'w': (False, 8),
+        'h': (False, 16), 'H': (False, 16),
+        'i': (False, 32), 'I': (False, 32), 'l': (False, 64), 'L': (False, 64),
+        'u': (False, 32),  # unsigned
+        'c': (True, 8),  # character -> treat as small
+        'e': (False, 16),
+        'f': (False, 32), 'd': (False, 64), 'g': (False, 128),
+        'F': (True, 32), 'D': (True, 64), 'G': (True, 128),
+    }
+    # Determine: do we have any complex? what's the max float precision needed?
+    has_complex = False
+    max_prec = 0
+    any_recognized = False
     for tc in typechars:
-        r = _typechar_order.get(tc, 6)
-        if r > best_rank and tc in typeset:
-            best = tc
-            best_rank = r
-    return best
+        info = _type_info.get(tc)
+        if info is None:
+            continue
+        any_recognized = True
+        is_cmplx, prec = info
+        if is_cmplx:
+            has_complex = True
+        max_prec = _builtin_max(max_prec, prec)
+
+    if not any_recognized:
+        return default
+
+    # Build candidate list from typeset
+    # For each candidate, determine if it satisfies:
+    # 1. If has_complex, candidate must be complex
+    # 2. Candidate precision >= max_prec
+    candidates = []
+    _prec_order = {'f': 32, 'd': 64, 'g': 128, 'F': 32, 'D': 64, 'G': 128}
+    for tc in typeset:
+        info = _type_info.get(tc)
+        if info is None:
+            continue
+        is_cmplx, prec = info
+        # Must be complex if input has complex, must be real if input is real
+        if has_complex and not is_cmplx:
+            continue
+        if not has_complex and is_cmplx:
+            continue
+        # Must cover precision
+        if prec < max_prec:
+            continue
+        candidates.append((prec, tc))
+
+    if candidates:
+        candidates.sort()
+        return candidates[0][1]
+
+    # Fallback: return default
+    return default
 
 
 def common_type(*arrays):
     """Return a scalar type common to input arrays."""
     has_complex = False
-    max_float = 32
+    max_float = 0  # track bits: 16, 32, 64
     for a in arrays:
         import numpy as _np
         arr = _np.asarray(a)
@@ -1752,18 +1807,28 @@ def common_type(*arrays):
         if "complex" in dt:
             has_complex = True
             if "128" in dt:
-                max_float = 64
+                max_float = _builtin_max(max_float, 64)
             else:
                 max_float = _builtin_max(max_float, 32)
         elif "float64" in dt or "float" == dt:
             max_float = _builtin_max(max_float, 64)
         elif "float32" in dt:
             max_float = _builtin_max(max_float, 32)
-        elif "int" in dt:
+        elif "float16" in dt:
+            max_float = _builtin_max(max_float, 16)
+        elif "int" in dt or "uint" in dt:
             max_float = _builtin_max(max_float, 64)  # int promotes to float64
+        elif dt == "bool":
+            max_float = _builtin_max(max_float, 64)  # bool promotes to float64
     if has_complex:
-        return complex128 if max_float >= 64 else complex64
-    return float64 if max_float >= 64 else float32
+        if max_float >= 64:
+            return complex128
+        return complex64
+    if max_float >= 64 or max_float == 0:
+        return float64
+    if max_float >= 32:
+        return float32
+    return float16
 
 
 # ---------------------------------------------------------------------------

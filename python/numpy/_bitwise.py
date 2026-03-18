@@ -44,7 +44,12 @@ def bitwise_xor(x1, x2, out=None, **kwargs):
 
 def bitwise_not(x, out=None, **kwargs):
     """Element-wise bitwise NOT (invert) of integer array."""
-    r = _native.bitwise_not(_to_int(x))
+    a = asarray(x) if not isinstance(x, ndarray) else x
+    # For boolean arrays, invert means logical not
+    if str(a.dtype) == 'bool':
+        r = _native.logical_not(a)
+    else:
+        r = _native.bitwise_not(_to_int(a))
     if out is not None:
         _copy_into(out, r)
         return out

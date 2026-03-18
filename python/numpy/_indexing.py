@@ -329,79 +329,36 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
 
 
 def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
-    """Compute the 2D histogram of two data samples."""
-    if not isinstance(x, ndarray):
-        x = array(x)
-    if not isinstance(y, ndarray):
-        y = array(y)
-    x_flat = x.flatten()
-    y_flat = y.flatten()
-    n = x_flat.size
-    x_list = x_flat.tolist()
-    y_list = y_flat.tolist()
-    # Determine number of bins for x and y
+    """Compute the 2D histogram of two data samples.
+
+    Delegates to histogramdd for the actual computation.
+    """
+    import numpy as _np
+    x = _np.asarray(x)
+    y = _np.asarray(y)
+
+    if x.size != y.size:
+        raise ValueError('x and y must have the same length.')
+
+    # Build bins for histogramdd
     if isinstance(bins, (list, tuple)):
-        nbins_x = int(bins[0])
-        nbins_y = int(bins[1])
-    else:
-        nbins_x = int(bins)
-        nbins_y = int(bins)
-    # Determine ranges
-    if range is not None:
-        xmin, xmax = float(range[0][0]), float(range[0][1])
-        ymin, ymax = float(range[1][0]), float(range[1][1])
-    else:
-        xmin = _builtin_min(x_list)
-        xmax = _builtin_max(x_list)
-        ymin = _builtin_min(y_list)
-        ymax = _builtin_max(y_list)
-    # Build bin edges
-    xedges_list = []
-    yedges_list = []
-    for i in _builtin_range(nbins_x + 1):
-        xedges_list.append(xmin + i * (xmax - xmin) / nbins_x)
-    for i in _builtin_range(nbins_y + 1):
-        yedges_list.append(ymin + i * (ymax - ymin) / nbins_y)
-    # Count into 2D bins
-    hist_data = []
-    for i in _builtin_range(nbins_x):
-        row = []
-        for j in _builtin_range(nbins_y):
-            row.append(0.0)
-        hist_data.append(row)
-    xspan = xmax - xmin
-    yspan = ymax - ymin
-    for k in _builtin_range(n):
-        xv = x_list[k]
-        yv = y_list[k]
-        # Find x bin
-        if xspan == 0.0:
-            xi = 0
+        if len(bins) == 1:
+            raise ValueError("bins must be a sequence of 1 or 2 elements")
+        if len(bins) == 2:
+            xbins, ybins = bins[0], bins[1]
         else:
-            xi = int((xv - xmin) / (xspan / nbins_x))
-        if xi >= nbins_x:
-            xi = nbins_x - 1
-        if xi < 0:
-            xi = 0
-        # Find y bin
-        if yspan == 0.0:
-            yi = 0
-        else:
-            yi = int((yv - ymin) / (yspan / nbins_y))
-        if yi >= nbins_y:
-            yi = nbins_y - 1
-        if yi < 0:
-            yi = 0
-        hist_data[xi][yi] = hist_data[xi][yi] + 1.0
-    # Convert to arrays
-    flat_hist = []
-    for i in _builtin_range(nbins_x):
-        for j in _builtin_range(nbins_y):
-            flat_hist.append(hist_data[i][j])
-    hist = array(flat_hist).reshape((nbins_x, nbins_y))
-    xedges = array(xedges_list)
-    yedges = array(yedges_list)
-    return hist, xedges, yedges
+            raise ValueError("bins must be a sequence of 1 or 2 elements")
+        # Each bin spec can be int or array-like
+        dd_bins = [xbins, ybins]
+    else:
+        dd_bins = [bins, bins]
+
+    # Stack x, y into (N, 2) sample
+    sample = _np.column_stack([x.flatten(), y.flatten()])
+
+    hist, edges = _np.histogramdd(sample, bins=dd_bins, range=range,
+                                  density=density, weights=weights)
+    return hist, edges[0], edges[1]
 
 
 def histogramdd(sample, bins=10, range=None, density=False, weights=None):
@@ -412,26 +369,58 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
     n_samples, n_dims = sample.shape[0], sample.shape[1]
     sample_list = sample.tolist()
 
-    # Determine bins per dimension
-    if isinstance(bins, int):
-        bins_per_dim = [bins] * n_dims
-    elif isinstance(bins, (list, tuple)):
-        bins_per_dim = [int(b) for b in bins]
-    else:
-        bins_per_dim = [int(bins)] * n_dims
-
     _range = range
 
-    # Build edges
-    edges = []
-    for d in _builtin_range(n_dims):
-        vals = [row[d] for row in sample_list]
-        if _range is not None and _range[d] is not None:
-            lo, hi = float(_range[d][0]), float(_range[d][1])
+    # Determine bins per dimension - each can be int or array-like edge list
+    if isinstance(bins, int):
+        bins_spec = [bins] * n_dims
+    elif isinstance(bins, (list, tuple)):
+        if len(bins) == n_dims:
+            bins_spec = list(bins)
         else:
-            lo, hi = _builtin_min(vals), _builtin_max(vals)
-        edge = linspace(lo, hi, num=bins_per_dim[d] + 1, endpoint=True).tolist()
-        edges.append(edge)
+            # Try to interpret as a single int/array for all dims
+            bins_spec = [bins] * n_dims
+    else:
+        bins_spec = [int(bins)] * n_dims
+
+    # Build edges for each dimension
+    edges = []
+    bins_per_dim = []
+    for d in _builtin_range(n_dims):
+        b = bins_spec[d]
+        if isinstance(b, (int, float)):
+            nb = int(b)
+            vals = [row[d] for row in sample_list] if n_samples > 0 else []
+            if _range is not None and _range[d] is not None:
+                lo, hi = float(_range[d][0]), float(_range[d][1])
+            elif len(vals) > 0:
+                lo, hi = _builtin_min(vals), _builtin_max(vals)
+            else:
+                lo, hi = 0.0, 1.0
+            edge = linspace(lo, hi, num=nb + 1, endpoint=True).tolist()
+            edges.append(edge)
+            bins_per_dim.append(nb)
+        elif isinstance(b, (list, tuple)):
+            # b is edge array
+            edge = [float(v) for v in b]
+            edges.append(edge)
+            bins_per_dim.append(len(edge) - 1)
+        elif isinstance(b, ndarray):
+            edge = b.flatten().tolist()
+            edges.append(edge)
+            bins_per_dim.append(len(edge) - 1)
+        else:
+            nb = int(b)
+            vals = [row[d] for row in sample_list] if n_samples > 0 else []
+            if _range is not None and _range[d] is not None:
+                lo, hi = float(_range[d][0]), float(_range[d][1])
+            elif len(vals) > 0:
+                lo, hi = _builtin_min(vals), _builtin_max(vals)
+            else:
+                lo, hi = 0.0, 1.0
+            edge = linspace(lo, hi, num=nb + 1, endpoint=True).tolist()
+            edges.append(edge)
+            bins_per_dim.append(nb)
 
     # Build histogram
     shape = bins_per_dim
@@ -567,27 +556,43 @@ def tri(N, M=None, k=0, dtype=None):
     """An array with ones at and below the given diagonal and zeros elsewhere."""
     if M is None:
         M = N
+    if dtype is None:
+        dtype = 'float64'
     rows = []
     for i in range(N):
         row = []
         for j in range(M):
-            row.append(1.0 if j <= i + k else 0.0)
+            row.append(1 if j <= i + k else 0)
         rows.append(row)
-    return array(rows)
+    return array(rows, dtype=dtype)
 
 
 def tril(m, k=0):
     """Lower triangle of an array. Return a copy with elements above the k-th diagonal zeroed."""
     m = asarray(m)
-    mask = tri(m.shape[0], m.shape[1], k=k)
-    return m * mask
+    out_dtype = m.dtype
+    if m.ndim < 2:
+        raise ValueError("Input must be >= 2-d.")
+    rows, cols = m.shape[-2], m.shape[-1]
+    mask = tri(rows, cols, k=k, dtype='bool')
+    z = zeros(m.shape, dtype=out_dtype)
+    import numpy as _np
+    return _np.where(mask, m, z)
 
 
 def triu(m, k=0):
     """Upper triangle of an array. Return a copy with elements below the k-th diagonal zeroed."""
     m = asarray(m)
-    mask = tri(m.shape[0], m.shape[1], k=k - 1)
-    return m * (ones(m.shape) - mask)
+    out_dtype = m.dtype
+    if m.ndim < 2:
+        raise ValueError("Input must be >= 2-d.")
+    rows, cols = m.shape[-2], m.shape[-1]
+    # triu = NOT tril(k-1)
+    mask = tri(rows, cols, k=k - 1, dtype='bool')
+    z = zeros(m.shape, dtype=out_dtype)
+    import numpy as _np
+    # triu: keep where mask is False (above k-1 diagonal = at or above k diagonal)
+    return _np.where(mask, z, m)
 
 
 def fill_diagonal(a, val, wrap=False):

@@ -188,7 +188,12 @@ def _skip_func(msg=""):
 def _fixture(*args, **kwargs):
     if args and callable(args[0]):
         return args[0]
-    return lambda fn: fn
+    params = kwargs.get('params', None)
+    def _dec(fn):
+        if params is not None:
+            fn._fixture_params = params
+        return fn
+    return _dec
 
 
 def _importorskip(name, **kwargs):
@@ -542,7 +547,7 @@ class _ParametrizedWrapper:
         return self._method(*args)
 
 
-def _run_test_method(cls_name, inst, mname, class_params=None):
+def _run_test_method(cls_name, inst, mname, class_params=None, fixtures=None):
     global _skipped, _errored
 
     try:
@@ -560,6 +565,40 @@ def _run_test_method(cls_name, inst, mname, class_params=None):
     if getattr(method, "_skip", False):
         _skipped += 1
         return
+
+    # Check if this test method needs fixture arguments
+    if fixtures:
+        # Detect which fixture parameters this method accepts
+        _method_params = []
+        try:
+            _code = getattr(method, '__code__', None) or getattr(method, '__func__', method).__code__
+            _varnames = _code.co_varnames
+            # Skip 'self' if present
+            _args = [v for v in _varnames[:_code.co_argcount] if v != 'self']
+        except (AttributeError, Exception):
+            try:
+                import inspect
+                sig = inspect.signature(method)
+                _args = [p for p in sig.parameters if p != 'self']
+            except Exception:
+                _args = []
+
+        _needed_fixtures = [(fname, fvals) for fname, fvals in fixtures.items() if fname in _args]
+        if _needed_fixtures:
+            # Convert fixtures to parametrize-style execution
+            fixture_params = [(fname, fvals) for fname, fvals in _needed_fixtures]
+            # Merge with existing class_params and method parametrize
+            extra_params = [(fname, vals) for fname, vals in fixture_params]
+            merged = list(extra_params)
+            if class_params:
+                merged.extend(class_params)
+            has_method_params = hasattr(method, "_parametrize")
+            if has_method_params:
+                wrapper = _ParametrizedWrapper(method, merged)
+            else:
+                wrapper = _ParametrizedWrapper(method, merged)
+            _run_parametrized(full_name, wrapper)
+            return
 
     # Merge class-level parametrize with method-level parametrize
     has_method_params = hasattr(method, "_parametrize")
@@ -629,6 +668,28 @@ def _run_test_file(test_path, label=None):
                 _errored += 1
                 continue
 
+            # Collect fixture methods (methods with _fixture_params)
+            _fixtures = {}
+            try:
+                for _attr_name in dir(obj):
+                    if _attr_name.startswith("test_") or _attr_name.startswith("_"):
+                        continue
+                    _attr = getattr(obj, _attr_name, None)
+                    if callable(_attr) and hasattr(_attr, '_fixture_params'):
+                        # Resolve fixture values by calling the method with a mock request
+                        _fix_values = []
+                        for _p in _attr._fixture_params:
+                            class _MockRequest:
+                                param = _p
+                            try:
+                                _val = _attr(inst, _MockRequest())
+                                _fix_values.append(_val)
+                            except Exception:
+                                _fix_values.append(_p)
+                        _fixtures[_attr_name] = _fix_values
+            except Exception:
+                pass
+
             for mname in method_names:
                 setup_ok = True
                 if hasattr(inst, "setup_method"):
@@ -651,7 +712,7 @@ def _run_test_file(test_path, label=None):
                         setup_ok = False
 
                 if setup_ok:
-                    _run_test_method(name, inst, mname, class_params)
+                    _run_test_method(name, inst, mname, class_params, _fixtures if _fixtures else None)
                     if hasattr(inst, "teardown_method"):
                         try:
                             inst.teardown_method()
@@ -745,12 +806,12 @@ if __name__ == "__main__":
             print()
 
         if _failures and not _summary_only:
-            shown = _failures[:30]
+            shown = _failures[:300]
             print("--- FAILURES ({}) ---".format(len(_failures)))
             for fname, fmsg in shown:
                 print("  FAIL {}: {}".format(fname, fmsg[:150]))
-            if len(_failures) > 30:
-                print("  ... and {} more".format(len(_failures) - 30))
+            if len(_failures) > 300:
+                print("  ... and {} more".format(len(_failures) - 300))
             print()
 
         total = passed + failed + skipped + errored + xfailed

@@ -37,13 +37,15 @@ def _block_setup(arrays):
     flat, list_ndim = _flatten(arrays)
     result = []
     max_ndim = 0
+    total_size = 0
     for a in flat:
         arr = numpy.asarray(a)
         result.append(arr)
         if arr.ndim > max_ndim:
             max_ndim = arr.ndim
+        total_size += arr.size
     result_ndim = max(max_ndim, list_ndim)
-    return result, list_ndim, result_ndim
+    return result, list_ndim, result_ndim, total_size
 
 
 def _block_slicing(arrays, list_ndim, result_ndim):

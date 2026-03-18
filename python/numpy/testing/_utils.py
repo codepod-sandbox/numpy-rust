@@ -182,6 +182,8 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
 
 
 def assert_almost_equal(actual, desired, decimal=7, err_msg="", verbose=True):
+    actual = numpy.asarray(actual)
+    desired = numpy.asarray(desired)
     if _is_array_like(actual) or _is_array_like(desired):
         a_vals = _as_list(actual) if _is_array_like(actual) else [actual]
         d_vals = _as_list(desired) if _is_array_like(desired) else [desired]

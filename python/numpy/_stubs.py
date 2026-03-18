@@ -1132,7 +1132,9 @@ def tensordot(a, b, axes=2):
     result = dot(at2, bt2)
     out_shape = free_a_shape + free_b_shape
     if len(out_shape) == 0:
-        return result
+        # 0-d result — return scalar with shape ()
+        val = float(result.flatten()[0])
+        return array(val)
     return result.reshape(out_shape)
 
 
@@ -1249,6 +1251,15 @@ def einsum(*operands, **kwargs):
     for i in range(len(arrays)):
         if not isinstance(arrays[i], ndarray):
             arrays[i] = asarray(arrays[i])
+    # Upcast all arrays to a common dtype to avoid Rust type mismatch errors
+    if len(arrays) > 1 and dtype is None:
+        import numpy as _np
+        common_dt = str(arrays[0].dtype)
+        for a in arrays[1:]:
+            common_dt = str(_np.promote_types(common_dt, str(a.dtype)))
+        for i in range(len(arrays)):
+            if str(arrays[i].dtype) != common_dt:
+                arrays[i] = arrays[i].astype(common_dt)
     # Handle implicit output subscripts
     if '->' not in subscripts:
         input_subs = subscripts.replace(' ', '')
@@ -1264,19 +1275,68 @@ def einsum(*operands, **kwargs):
         if has_ellipsis:
             output = '...' + output
         subscripts = input_subs + '->' + output
+    # Expand ellipsis to explicit indices before calling native einsum
+    if '...' in subscripts:
+        parts = subscripts.split('->')
+        input_part = parts[0]
+        output_part = parts[1] if len(parts) > 1 else None
+        input_terms = input_part.split(',')
+        # Find used indices
+        used_indices = set()
+        for t in input_terms:
+            used_indices.update(c for c in t if c.isalpha())
+        if output_part:
+            used_indices.update(c for c in output_part if c.isalpha())
+        # Find available indices for ellipsis expansion
+        all_letters = [chr(c) for c in range(ord('A'), ord('Z')+1)] + [chr(c) for c in range(ord('a'), ord('z')+1)]
+        avail = [c for c in all_letters if c not in used_indices]
+        # Determine ellipsis dimensions for each operand
+        expanded_terms = []
+        ellipsis_ndim = 0
+        for idx_t, t in enumerate(input_terms):
+            if '...' in t:
+                explicit_count = len(t.replace('...', ''))
+                if idx_t < len(arrays):
+                    arr_ndim = arrays[idx_t].ndim
+                    this_ellipsis = arr_ndim - explicit_count
+                    if this_ellipsis < 0:
+                        this_ellipsis = 0
+                    ellipsis_ndim = _builtin_max(ellipsis_ndim, this_ellipsis)
+        # Now expand
+        ellipsis_labels = avail[:ellipsis_ndim]
+        new_input_terms = []
+        for idx_t, t in enumerate(input_terms):
+            if '...' in t:
+                explicit_count = len(t.replace('...', ''))
+                if idx_t < len(arrays):
+                    arr_ndim = arrays[idx_t].ndim
+                    this_ellipsis = arr_ndim - explicit_count
+                else:
+                    this_ellipsis = ellipsis_ndim
+                if this_ellipsis < 0:
+                    this_ellipsis = 0
+                # Use right-aligned ellipsis labels for broadcasting
+                labels = ellipsis_labels[ellipsis_ndim - this_ellipsis:]
+                new_input_terms.append(t.replace('...', ''.join(labels)))
+            else:
+                new_input_terms.append(t)
+        new_input = ','.join(new_input_terms)
+        if output_part is not None:
+            if '...' in output_part:
+                new_output = output_part.replace('...', ''.join(ellipsis_labels))
+            else:
+                new_output = output_part
+            subscripts = new_input + '->' + new_output
+        else:
+            subscripts = new_input
     try:
         result = _native.einsum(subscripts, *arrays)
     except TypeError as e:
-        # Handle scalar inputs that native einsum can't handle
+        # Handle scalar inputs / type mismatches that native einsum can't handle
         err_msg = str(e)
-        if "Expected type" in err_msg and ("'int'" in err_msg or "'float'" in err_msg):
-            # Convert scalar operands to 0-d arrays
-            new_arrays = []
-            for a in arrays:
-                if not isinstance(a, ndarray):
-                    new_arrays.append(asarray(a))
-                else:
-                    new_arrays.append(a)
+        if "Expected type" in err_msg:
+            # Upcast everything to float64 as a safe fallback
+            new_arrays = [asarray(a).astype('float64') if not isinstance(a, ndarray) else a.astype('float64') for a in arrays]
             result = _native.einsum(subscripts, *new_arrays)
         else:
             raise
