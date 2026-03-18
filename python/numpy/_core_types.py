@@ -698,7 +698,7 @@ class dtype:
 
     _dtype_class_map = {}  # filled after DType subclasses are defined below
 
-    def __new__(cls, tp=None, metadata=None):
+    def __new__(cls, tp=None, metadata=None, align=False):
         if cls is dtype:
             # Determine canonical dtype name to pick the right subclass
             name = None
@@ -743,7 +743,7 @@ class dtype:
                     return object.__new__(target_cls)
         return object.__new__(cls)
 
-    def __init__(self, tp=None, metadata=None):
+    def __init__(self, tp=None, metadata=None, align=False):
         if isinstance(tp, list):
             # List-of-tuples structured dtype: delegate to StructuredDtype
             sd = StructuredDtype(tp)
@@ -1156,6 +1156,15 @@ def _normalize_dtype_with_size(dt):
         if getattr(dt, 'kind', None) == 'V':
             return 'V{}'.format(dt.itemsize)
         return _normalize_dtype(str(dt))
+    # For string inputs, preserve U/S/V size info
+    if isinstance(dt, str):
+        s = dt.lstrip('<>=|')
+        if s.startswith('U') and len(s) > 1 and s[1:].isdigit():
+            return s
+        if s.startswith('S') and len(s) > 1 and s[1:].isdigit():
+            return s
+        if s.startswith('V') and len(s) > 1 and s[1:].isdigit():
+            return s
     return _normalize_dtype(str(dt))
 
 

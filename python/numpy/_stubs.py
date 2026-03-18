@@ -884,9 +884,56 @@ def show_config():
     print("  backend: Rust + RustPython")
 
 def einsum_path(*operands, optimize='greedy'):
-    """Evaluate optimal contraction order (stub returns naive path)."""
-    # Return a naive path: contract in order
-    n = int(len(operands) // 2)  # rough estimate
+    """Evaluate optimal contraction order (stub returns naive path).
+
+    Performs the same input validation as einsum so that bad calls
+    raise the same errors (ValueError / TypeError).
+    """
+    if len(operands) == 0:
+        raise ValueError("No input operands")
+    # Parse subscripts / arrays just like einsum does
+    if not isinstance(operands[0], str):
+        # Interleaved format – first operand must be array-like
+        raise TypeError("subscripts must be a string")
+    subscripts = operands[0]
+    if not isinstance(subscripts, str):
+        raise TypeError("subscripts must be a string")
+    arrays = list(operands[1:])
+    if len(arrays) == 0 and subscripts == '':
+        raise ValueError("No input operands")
+    # Convert to ndarrays
+    for i in range(len(arrays)):
+        arrays[i] = asarray(arrays[i])
+    # Check operand count vs subscripts
+    if '->' in subscripts:
+        input_part = subscripts.split('->')[0]
+    else:
+        input_part = subscripts
+    n_subs = len(input_part.split(','))
+    if n_subs != len(arrays):
+        raise ValueError(
+            "einsum: {} operands but subscripts specify {}".format(
+                len(arrays), n_subs))
+    # Check dims vs subscript indices
+    input_terms = input_part.split(',')
+    for idx, term in enumerate(input_terms):
+        if idx < len(arrays):
+            clean = term.replace('...', '')
+            n_explicit = len(clean)
+            arr_ndim = arrays[idx].ndim
+            has_ellipsis = '...' in term
+            if has_ellipsis:
+                if arr_ndim < n_explicit:
+                    raise ValueError(
+                        "einsum: operand has {} dims but subscript "
+                        "has {} indices".format(arr_ndim, n_explicit))
+            else:
+                if n_explicit != arr_ndim:
+                    raise ValueError(
+                        "einsum: operand has {} dims but subscript "
+                        "has {} indices".format(arr_ndim, n_explicit))
+    # Return naive path
+    n = len(arrays)
     path = [(0, 1)] * _builtin_max(1, n - 1)
     return path, ""
 

@@ -97,7 +97,18 @@ class _ObjectArray:
         if isinstance(self._dtype, str):
             try:
                 import numpy as _np
-                return _np.dtype(self._dtype)
+                d = _np.dtype(self._dtype)
+                # Ensure unicode string dtypes have correct .str with length
+                if d.name == 'str' and d.str == '<U':
+                    raw = self._dtype
+                    stripped = raw.lstrip('<>=|')
+                    if stripped.startswith('U') and len(stripped) > 1 and stripped[1:].isdigit():
+                        ulen = int(stripped[1:])
+                        d.str = '<U' + str(ulen)
+                        d.itemsize = 4 * ulen
+                        d.kind = 'U'
+                        d.char = 'U'
+                return d
             except Exception:
                 pass
         return self._dtype

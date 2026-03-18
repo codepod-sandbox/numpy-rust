@@ -1447,6 +1447,60 @@ def trim_zeros(filt, trim='fb'):
 # pad
 # ---------------------------------------------------------------------------
 
+def _validate_pad_width_type(pad_width):
+    """Raise TypeError if pad_width contains non-integral values."""
+    def _check_scalar(v):
+        if v is None or isinstance(v, str):
+            raise TypeError("`pad_width` must be of integral type.")
+        if isinstance(v, complex):
+            raise TypeError("`pad_width` must be of integral type.")
+        if isinstance(v, float):
+            if v != int(v) or _math.isnan(v) or _math.isinf(v):
+                raise TypeError("`pad_width` must be of integral type.")
+            # float that equals its int (e.g. 3.0) is technically also
+            # rejected by NumPy >= 1.25
+            raise TypeError("`pad_width` must be of integral type.")
+        if isinstance(v, bool):
+            return  # bool is a subclass of int, accepted
+        if isinstance(v, int):
+            return  # plain int is fine
+        # ndarray / _ObjectArray scalar
+        if isinstance(v, ndarray):
+            if v.ndim == 0:
+                _check_scalar_dtype(v)
+            else:
+                for i in range(v.size):
+                    _check_scalar(v.flatten()[i])
+            return
+        # Unknown type
+        raise TypeError("`pad_width` must be of integral type.")
+
+    def _check_scalar_dtype(arr):
+        """Check a 0-d ndarray for integral dtype."""
+        dt = str(arr.dtype) if hasattr(arr, 'dtype') else ''
+        if 'float' in dt or 'complex' in dt or 'str' in dt or 'object' in dt:
+            raise TypeError("`pad_width` must be of integral type.")
+
+    def _walk(pw):
+        if isinstance(pw, ndarray):
+            dt = str(pw.dtype) if hasattr(pw, 'dtype') else ''
+            if 'float' in dt or 'complex' in dt or 'str' in dt or 'object' in dt or 'bytes' in dt:
+                raise TypeError("`pad_width` must be of integral type.")
+            return
+        if hasattr(pw, '_data'):
+            # _ObjectArray
+            for v in pw._data:
+                _check_scalar(v)
+            return
+        if isinstance(pw, (list, tuple)):
+            for item in pw:
+                _walk(item)
+            return
+        _check_scalar(pw)
+
+    _walk(pad_width)
+
+
 def pad(a, pad_width, mode='constant', **kwargs):
     """Pad an array.
 
@@ -1465,6 +1519,9 @@ def pad(a, pad_width, mode='constant', **kwargs):
     # Handle callable mode (legacy vector functionality)
     if callable(mode):
         return _pad_callable(a, pad_width, mode, kwargs)
+
+    # Validate pad_width contains only integral types
+    _validate_pad_width_type(pad_width)
 
     # Normalise pad_width to array of shape (ndim, 2)
     pw = _normalize_pad_width(pad_width, a.ndim)

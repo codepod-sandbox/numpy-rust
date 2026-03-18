@@ -58,6 +58,11 @@ def _val_equal(a, b):
         if isinstance(a, float) and isinstance(b, float):
             if math.isnan(a) and math.isnan(b):
                 return True
+        if isinstance(a, complex) and isinstance(b, complex):
+            # Compare real and imaginary parts separately, treating NaN==NaN
+            re_eq = (a.real == b.real) or (math.isnan(a.real) and math.isnan(b.real))
+            im_eq = (a.imag == b.imag) or (math.isnan(a.imag) and math.isnan(b.imag))
+            return re_eq and im_eq
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             return a == b
     except (TypeError, ValueError):
@@ -240,6 +245,32 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
         )
 
 
+def _complex_nan_equal(a, b):
+    """Check if two complex values are equal, treating NaN components as equal."""
+    if isinstance(a, complex) and isinstance(b, complex):
+        re_eq = (a.real == b.real) or (math.isnan(a.real) and math.isnan(b.real))
+        im_eq = (a.imag == b.imag) or (math.isnan(a.imag) and math.isnan(b.imag))
+        return re_eq and im_eq
+    return False
+
+
+def _almost_equal_scalar(a, d, decimal):
+    """Check if two scalar values are almost equal, handling complex NaN."""
+    # For complex values with NaN components, check component-wise
+    if isinstance(a, complex) and isinstance(d, complex):
+        if _complex_nan_equal(a, d):
+            return True
+    diff = abs(a - d)
+    # NaN diff means at least one NaN component; check if they match
+    if isinstance(diff, float) and math.isnan(diff):
+        if isinstance(a, complex) and isinstance(d, complex):
+            return _complex_nan_equal(a, d)
+        if isinstance(a, float) and isinstance(d, float):
+            return math.isnan(a) and math.isnan(d)
+        return False
+    return diff < 1.5 * 10**(-decimal)
+
+
 def assert_almost_equal(actual, desired, decimal=7, err_msg="", verbose=True):
     actual = numpy.asarray(actual)
     desired = numpy.asarray(desired)
@@ -247,7 +278,7 @@ def assert_almost_equal(actual, desired, decimal=7, err_msg="", verbose=True):
         a_vals = _as_list(actual) if _is_array_like(actual) else [actual]
         d_vals = _as_list(desired) if _is_array_like(desired) else [desired]
         for a, d in zip(a_vals, d_vals):
-            if abs(a - d) >= 1.5 * 10**(-decimal):
+            if not _almost_equal_scalar(a, d, decimal):
                 raise AssertionError(
                     f"Not almost equal to {decimal} decimals:\n"
                     f" actual: {a}\n desired: {d}\n{err_msg}"
@@ -280,6 +311,16 @@ def assert_array_almost_equal(actual, desired, decimal=6, err_msg="", verbose=Tr
     assert_almost_equal(actual, desired, decimal=decimal, err_msg=err_msg, verbose=verbose)
 
 
+def _isnan_safe(v):
+    """Return True if v is NaN (works for float and complex)."""
+    if isinstance(v, complex):
+        return math.isnan(v.real) or math.isnan(v.imag)
+    try:
+        return math.isnan(v)
+    except (TypeError, ValueError):
+        return False
+
+
 def assert_allclose(actual, desired, rtol=1e-7, atol=0, equal_nan=True,
                     err_msg="", verbose=True):
     actual = numpy.asarray(actual)
@@ -287,14 +328,28 @@ def assert_allclose(actual, desired, rtol=1e-7, atol=0, equal_nan=True,
     a_vals = _as_list(actual) if _is_array_like(actual) else [float(actual)]
     d_vals = _as_list(desired) if _is_array_like(desired) else [float(desired)]
     for i, (a, d) in enumerate(zip(a_vals, d_vals)):
-        # Handle NaN
-        if equal_nan and math.isnan(a) and math.isnan(d):
-            continue
+        # Handle NaN (including complex NaN)
+        if equal_nan:
+            if isinstance(a, complex) and isinstance(d, complex):
+                if _complex_nan_equal(a, d):
+                    continue
+            elif _isnan_safe(a) and _isnan_safe(d):
+                continue
         threshold = atol + rtol * abs(d)
-        if abs(a - d) > threshold:
+        diff = abs(a - d)
+        # NaN diff: only OK if both are NaN-equal
+        if isinstance(diff, float) and math.isnan(diff):
+            if equal_nan and isinstance(a, complex) and isinstance(d, complex):
+                if _complex_nan_equal(a, d):
+                    continue
             raise AssertionError(
                 f"Not close at index {i}: {a} vs {d} "
-                f"(diff={abs(a-d)}, tol={threshold}). {err_msg}"
+                f"(diff=nan, tol={threshold}). {err_msg}"
+            )
+        if diff > threshold:
+            raise AssertionError(
+                f"Not close at index {i}: {a} vs {d} "
+                f"(diff={diff}, tol={threshold}). {err_msg}"
             )
 
 
