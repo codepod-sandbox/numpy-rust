@@ -34,6 +34,26 @@ macro_rules! impl_binary_op {
             type Output = Result<NdArray>;
 
             fn $method(self, rhs: &NdArray) -> Result<NdArray> {
+                // Cast Bool operands to Int32 before binary ops (matching NumPy)
+                if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
+                    let lhs_up = if self.dtype() == DType::Bool { self.astype(DType::Int32) } else { self.clone() };
+                    let rhs_up = if rhs.dtype() == DType::Bool { rhs.astype(DType::Int32) } else { rhs.clone() };
+                    let (a, b) = prepare_binary(&lhs_up, &rhs_up)?;
+                    let data = match (a, b) {
+                        (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
+                        (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
+                        (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(a $op b),
+                        (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(a $op b),
+                        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => ArrayData::Complex64(a $op b),
+                        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ArrayData::Complex128(a $op b),
+                        _ => {
+                            return Err(NumpyError::TypeError(
+                                format!("unsupported operand types for binary operation"),
+                            ));
+                        }
+                    };
+                    return Ok(NdArray::from_data(data));
+                }
                 let (a, b) = prepare_binary(self, rhs)?;
                 let data = match (a, b) {
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
@@ -42,7 +62,11 @@ macro_rules! impl_binary_op {
                     (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(a $op b),
                     (ArrayData::Complex64(a), ArrayData::Complex64(b)) => ArrayData::Complex64(a $op b),
                     (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ArrayData::Complex128(a $op b),
-                    _ => unreachable!("promotion ensures matching types"),
+                    _ => {
+                        return Err(NumpyError::TypeError(
+                            format!("unsupported operand types for binary operation"),
+                        ));
+                    }
                 };
                 Ok(NdArray::from_data(data))
             }
@@ -104,6 +128,20 @@ impl NdArray {
                 "floor division not supported for complex arrays".into(),
             ));
         }
+        // Cast Bool operands to Int32 before floor division (matching NumPy)
+        if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
+            let lhs_up = if self.dtype() == DType::Bool {
+                self.astype(DType::Int32)
+            } else {
+                self.clone()
+            };
+            let rhs_up = if rhs.dtype() == DType::Bool {
+                rhs.astype(DType::Int32)
+            } else {
+                rhs.clone()
+            };
+            return lhs_up.floor_div(&rhs_up);
+        }
         let (a, b) = prepare_binary(self, rhs)?;
         let data = match (a, b) {
             (ArrayData::Float64(a), ArrayData::Float64(b)) => {
@@ -146,7 +184,11 @@ impl NdArray {
                 });
                 ArrayData::Int32(out)
             }
-            _ => unreachable!("promotion ensures matching types"),
+            _ => {
+                return Err(NumpyError::TypeError(
+                    "unsupported operand types for floor division".into(),
+                ));
+            }
         };
         Ok(NdArray::from_data(data))
     }
@@ -157,6 +199,20 @@ impl NdArray {
             return Err(NumpyError::TypeError(
                 "remainder not supported for complex arrays".into(),
             ));
+        }
+        // Cast Bool operands to Int32 before remainder (matching NumPy)
+        if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
+            let lhs_up = if self.dtype() == DType::Bool {
+                self.astype(DType::Int32)
+            } else {
+                self.clone()
+            };
+            let rhs_up = if rhs.dtype() == DType::Bool {
+                rhs.astype(DType::Int32)
+            } else {
+                rhs.clone()
+            };
+            return lhs_up.remainder(&rhs_up);
         }
         let (a, b) = prepare_binary(self, rhs)?;
         let data = match (a, b) {
@@ -206,7 +262,11 @@ impl NdArray {
                 });
                 ArrayData::Int32(out)
             }
-            _ => unreachable!("promotion ensures matching types"),
+            _ => {
+                return Err(NumpyError::TypeError(
+                    "unsupported operand types for remainder".into(),
+                ));
+            }
         };
         Ok(NdArray::from_data(data))
     }

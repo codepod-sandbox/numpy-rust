@@ -496,25 +496,28 @@ fn resolve_shape(raw: &[i64], total: usize, vm: &VirtualMachine) -> PyResult<Vec
 
 /// Extract a shape tuple from a Python object (tuple or list of ints).
 pub fn extract_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
-    if let Some(tuple) = obj.downcast_ref::<PyTuple>() {
+    let shape = if let Some(tuple) = obj.downcast_ref::<PyTuple>() {
         let mut shape = Vec::new();
         for item in tuple.as_slice() {
             let n: i64 = item.clone().try_into_value(vm)?;
             shape.push(n as usize);
         }
-        Ok(shape)
+        shape
     } else if let Some(list) = obj.downcast_ref::<PyList>() {
         let mut shape = Vec::new();
         for item in list.borrow_vec().iter() {
             let n: i64 = item.clone().try_into_value(vm)?;
             shape.push(n as usize);
         }
-        Ok(shape)
+        shape
     } else if let Ok(n) = obj.clone().try_into_value::<i64>(vm) {
-        Ok(vec![n as usize])
+        vec![n as usize]
     } else {
-        Err(vm.new_type_error("shape must be a tuple, list, or integer".to_owned()))
-    }
+        return Err(vm.new_type_error("shape must be a tuple, list, or integer".to_owned()));
+    };
+    // Validate shape doesn't overflow
+    numpy_rust_core::validate_shape(&shape).map_err(|e| vm.new_value_error(e.to_string()))?;
+    Ok(shape)
 }
 
 #[vm::pyclass(
@@ -2378,6 +2381,27 @@ impl PyNdArray {
 
 /// Try to get an NdArray from a PyObject, auto-wrapping scalars (int/float/bool/str).
 pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
+    thread_local! {
+        static OBJ_TO_NDARRAY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let depth = OBJ_TO_NDARRAY_DEPTH.with(|d| {
+        let cur = d.get();
+        d.set(cur + 1);
+        cur
+    });
+    // Guard: reset depth on exit
+    struct DepthGuard;
+    impl Drop for DepthGuard {
+        fn drop(&mut self) {
+            OBJ_TO_NDARRAY_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        }
+    }
+    let _guard = DepthGuard;
+    if depth > 50 {
+        return Err(vm.new_recursion_error(
+            "maximum recursion depth exceeded in array conversion".to_owned(),
+        ));
+    }
     if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
         return Ok(arr.data.read().unwrap().clone());
     }
@@ -2562,9 +2586,22 @@ fn number_bin_op(
 ) -> PyResult {
     let a_arr = obj_to_ndarray(a, vm)?;
     let b_arr = obj_to_ndarray(b, vm)?;
-    op(&a_arr, &b_arr)
-        .map(|r| PyNdArray::from_core(r).into_pyobject(vm))
-        .map_err(|e| vm.new_value_error(e.to_string()))
+    // Catch panics from ndarray operations (e.g. shape overflow) and convert to Python errors
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&a_arr, &b_arr)));
+    match result {
+        Ok(Ok(r)) => Ok(PyNdArray::from_core(r).into_pyobject(vm)),
+        Ok(Err(e)) => Err(vm.new_value_error(e.to_string())),
+        Err(panic_info) => {
+            let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else {
+                "internal error in array operation".to_string()
+            };
+            Err(vm.new_runtime_error(msg))
+        }
+    }
 }
 
 fn number_neg(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {

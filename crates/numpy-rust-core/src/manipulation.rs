@@ -25,9 +25,13 @@ impl NdArray {
                     Err(_) => {
                         // Non-contiguous layout: make a contiguous copy first
                         let contiguous = $a.as_standard_layout().into_owned();
+                        let clen = contiguous.len();
                         contiguous
                             .into_shape_with_order($sh)
-                            .expect("contiguous reshape must succeed")
+                            .map_err(|_| NumpyError::ReshapeError {
+                                from: clen,
+                                to: shape.to_vec(),
+                            })?
                             .into_shared()
                     }
                 }

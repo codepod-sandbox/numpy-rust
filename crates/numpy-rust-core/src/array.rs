@@ -59,9 +59,6 @@ impl NdArray {
 
     /// Create an array filled with ones.
     pub fn ones(shape: &[usize], dtype: DType) -> Self {
-        if dtype == DType::Str {
-            panic!("ones() not supported for string dtype");
-        }
         let storage = dtype.storage_dtype();
         let sh = IxDyn(shape);
         let data = match storage {
@@ -76,7 +73,7 @@ impl NdArray {
             DType::Complex128 => ArrayData::Complex128(
                 ArrayD::from_elem(sh, Complex::new(1.0f64, 0.0)).into_shared(),
             ),
-            DType::Str => unreachable!(),
+            DType::Str => ArrayData::Str(ArrayD::from_elem(sh, "1".to_string()).into_shared()),
             _ => unreachable!("storage_dtype maps to canonical types"),
         };
         Self {

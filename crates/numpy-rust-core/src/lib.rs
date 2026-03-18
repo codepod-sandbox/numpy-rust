@@ -19,7 +19,7 @@ pub use array::NdArray;
 pub use array_data::ArrayData;
 pub use creation::{arange, eye, full, linspace, linspace_with_step, ones_like, zeros_like};
 pub use dtype::DType;
-pub use error::{NumpyError, Result};
+pub use error::{validate_shape, NumpyError, Result};
 pub use indexing::{ravel_multi_index, unravel_index};
 pub use manipulation::{
     column_stack, concatenate, dstack, hsplit, hstack, meshgrid, pad_constant, split, stack,

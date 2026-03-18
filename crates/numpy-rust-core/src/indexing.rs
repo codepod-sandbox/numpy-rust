@@ -79,6 +79,15 @@ impl NdArray {
         let ndim = self.ndim();
         let shape = self.shape();
 
+        // Validate that we don't have more slice args than dimensions
+        if args.len() > ndim {
+            return Err(NumpyError::ValueError(format!(
+                "too many indices for array: array is {}-dimensional, but {} were indexed",
+                ndim,
+                args.len()
+            )));
+        }
+
         // Build ndarray SliceInfoElem for each axis
         let mut slice_elems: Vec<SliceInfoElem> = Vec::with_capacity(ndim);
         let mut remove_axes: Vec<usize> = Vec::new();
@@ -96,6 +105,9 @@ impl NdArray {
                     remove_axes.push(i);
                 }
                 SliceArg::Range { start, stop, step } => {
+                    if *step == 0 {
+                        return Err(NumpyError::ValueError("slice step cannot be zero".into()));
+                    }
                     let s = start.map(|v| v).unwrap_or(0);
                     let e = stop.map(|v| v).unwrap_or(shape[i] as isize);
                     slice_elems.push(SliceInfoElem::Slice {
@@ -118,8 +130,24 @@ impl NdArray {
 
         macro_rules! do_slice {
             ($arr:expr) => {{
-                let view = $arr.slice(info.as_slice());
-                view.to_owned().into_shared()
+                let info_ref = &info;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let view = $arr.slice(info_ref.as_slice());
+                    view.to_owned().into_shared()
+                }));
+                match result {
+                    Ok(v) => v,
+                    Err(panic_info) => {
+                        let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else {
+                            "internal error during slicing".to_string()
+                        };
+                        return Err(NumpyError::ValueError(msg));
+                    }
+                }
             }};
         }
 

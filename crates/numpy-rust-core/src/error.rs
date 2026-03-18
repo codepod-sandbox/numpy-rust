@@ -22,3 +22,28 @@ pub enum NumpyError {
 }
 
 pub type Result<T> = std::result::Result<T, NumpyError>;
+
+/// Maximum total number of elements we allow in an array.
+/// This prevents panics from ndarray when shapes overflow.
+const MAX_ARRAY_SIZE: usize = 1 << 48; // ~256 TiB at 1 byte/element
+
+/// Validate that a shape's total element count doesn't overflow or exceed limits.
+/// Returns the total size on success.
+pub fn validate_shape(shape: &[usize]) -> Result<usize> {
+    let mut total: usize = 1;
+    for &dim in shape {
+        total = total.checked_mul(dim).ok_or_else(|| {
+            NumpyError::ValueError(format!(
+                "array is too big; shape {:?} would overflow",
+                shape
+            ))
+        })?;
+    }
+    if total > MAX_ARRAY_SIZE {
+        return Err(NumpyError::ValueError(format!(
+            "array is too big; shape {:?} requires {} elements",
+            shape, total
+        )));
+    }
+    Ok(total)
+}

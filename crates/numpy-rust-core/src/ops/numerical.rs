@@ -46,8 +46,14 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
             let idx = xp_slice.partition_point(|&v| v < xi);
             let lo = idx - 1;
             let hi = idx;
-            let t = (xi - xp_slice[lo]) / (xp_slice[hi] - xp_slice[lo]);
-            result.push(fp_slice[lo] + t * (fp_slice[hi] - fp_slice[lo]));
+            let denom = xp_slice[hi] - xp_slice[lo];
+            if denom == 0.0 {
+                // Duplicate x-coordinates: return the value at that point
+                result.push(fp_slice[lo]);
+            } else {
+                let t = (xi - xp_slice[lo]) / denom;
+                result.push(fp_slice[lo] + t * (fp_slice[hi] - fp_slice[lo]));
+            }
         }
     }
 
