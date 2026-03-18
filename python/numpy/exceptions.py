@@ -26,3 +26,11 @@ class VisibleDeprecationWarning(UserWarning):
 
 class RankWarning(UserWarning):
     pass
+
+
+class DTypePromotionError(TypeError):
+    pass
+
+
+class TooHardError(RuntimeError):
+    pass

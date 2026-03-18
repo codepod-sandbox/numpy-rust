@@ -36,7 +36,8 @@ impl DType {
             return a;
         }
         if a == DType::Str || b == DType::Str {
-            panic!("cannot promote string dtype with numeric dtype");
+            // When mixing string and numeric, promote to string (like NumPy object arrays)
+            return DType::Str;
         }
         // If either is complex, result is complex
         if a.is_complex() || b.is_complex() {

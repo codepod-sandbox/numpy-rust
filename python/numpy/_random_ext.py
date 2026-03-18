@@ -1053,3 +1053,96 @@ random.hypergeometric = _random_hypergeometric
 random.pareto = _random_pareto
 random.bytes = _random_bytes
 random.RandomState = _RandomState
+
+
+# ---------------------------------------------------------------------------
+# Bit generator stubs (needed for numpy.random.MT19937, etc.)
+# ---------------------------------------------------------------------------
+
+class _SeedSequence:
+    """Stub for numpy.random.SeedSequence."""
+    def __init__(self, entropy=None, spawn_key=(), pool_size=4):
+        self.entropy = entropy
+        self.spawn_key = spawn_key
+        self.pool_size = pool_size
+        self.n_children_spawned = 0
+
+    def generate_state(self, n_words, dtype='uint32'):
+        """Generate pseudorandom state — simplified stub."""
+        # Use hash-based approach for deterministic output
+        import hashlib
+        h = hashlib.sha256()
+        if self.entropy is not None:
+            h.update(str(self.entropy).encode())
+        for k in self.spawn_key:
+            h.update(str(k).encode())
+        digest = h.digest()
+        state = []
+        for i in range(n_words):
+            idx = (i * 4) % len(digest)
+            val = int.from_bytes(digest[idx:idx+4], 'little')
+            state.append(val)
+        return array(state, dtype=str(dtype))
+
+    def spawn(self, n_children):
+        seqs = []
+        for i in range(n_children):
+            child = _SeedSequence(
+                entropy=self.entropy,
+                spawn_key=self.spawn_key + (self.n_children_spawned + i,),
+                pool_size=self.pool_size,
+            )
+            seqs.append(child)
+        self.n_children_spawned += n_children
+        return seqs
+
+
+class _BitGenerator:
+    """Base class stub for bit generators."""
+    def __init__(self, seed=None):
+        if isinstance(seed, _SeedSequence):
+            self._seed_seq = seed
+            self._seed = seed.entropy
+        else:
+            self._seed_seq = _SeedSequence(seed)
+            self._seed = seed
+        if seed is not None:
+            random.seed(int(self._seed) if self._seed is not None else 0)
+
+    @property
+    def state(self):
+        return {'bit_generator': self.__class__.__name__}
+
+    @state.setter
+    def state(self, value):
+        pass
+
+
+class _MT19937(_BitGenerator):
+    """Stub for numpy.random.MT19937."""
+    pass
+
+class _PCG64(_BitGenerator):
+    """Stub for numpy.random.PCG64."""
+    pass
+
+class _PCG64DXSM(_BitGenerator):
+    """Stub for numpy.random.PCG64DXSM."""
+    pass
+
+class _SFC64(_BitGenerator):
+    """Stub for numpy.random.SFC64."""
+    pass
+
+class _Philox(_BitGenerator):
+    """Stub for numpy.random.Philox."""
+    pass
+
+
+random.MT19937 = _MT19937
+random.PCG64 = _PCG64
+random.PCG64DXSM = _PCG64DXSM
+random.SFC64 = _SFC64
+random.Philox = _Philox
+random.SeedSequence = _SeedSequence
+random.BitGenerator = _BitGenerator

@@ -519,9 +519,50 @@ def logspace(start, stop, num=50, endpoint=True, base=10.0, dtype=None, axis=0):
     return result
 
 def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
-    log_start = _math.log10(start)
-    log_stop = _math.log10(stop)
-    result = logspace(log_start, log_stop, num=num, endpoint=endpoint)
+    import cmath as _cmath
+    # Handle negative values by working in complex domain if needed
+    _start_neg = False
+    _stop_neg = False
+    if isinstance(start, complex) or isinstance(stop, complex):
+        # Complex geomspace
+        start_c = complex(start)
+        stop_c = complex(stop)
+        log_start = _cmath.log10(start_c)
+        log_stop = _cmath.log10(stop_c)
+        result = logspace(float(log_start.real), float(log_stop.real), num=num, endpoint=endpoint)
+        # Need complex path: use manual computation
+        if num == 0:
+            import numpy as _np
+            return _np.array([], dtype=dtype or 'complex128')
+        if num == 1:
+            import numpy as _np
+            return _np.array([start_c], dtype=dtype or 'complex128')
+        # Manual geomspace for complex
+        ratio = (stop_c / start_c) ** (1.0 / (num - 1 if endpoint else num))
+        vals = [start_c * (ratio ** i) for i in range(num)]
+        import numpy as _np
+        return _np.array(vals, dtype=dtype or 'complex128')
+    start_f = float(start)
+    stop_f = float(stop)
+    if start_f == 0 or stop_f == 0:
+        raise ValueError("Geometric sequence cannot include zero")
+    both_negative = start_f < 0 and stop_f < 0
+    if start_f < 0 or stop_f < 0:
+        if not both_negative:
+            raise ValueError(
+                "Geometric sequence cannot have a sign change. "
+                "Start and stop must have the same sign or be complex."
+            )
+        # Both negative: compute for abs values, then negate
+        log_start = _math.log10(-start_f)
+        log_stop = _math.log10(-stop_f)
+        result = logspace(log_start, log_stop, num=num, endpoint=endpoint)
+        import numpy as _np
+        result = -result
+    else:
+        log_start = _math.log10(start_f)
+        log_stop = _math.log10(stop_f)
+        result = logspace(log_start, log_stop, num=num, endpoint=endpoint)
     if dtype is not None:
         result = result.astype(str(dtype))
     return result

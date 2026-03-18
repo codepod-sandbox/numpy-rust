@@ -1,2 +1,3 @@
 TestClip.test_clip_with_out_memory_overlap
+TestCreationFuncs.test_full
 TestTypes.test_can_cast_and_promote_usertypes

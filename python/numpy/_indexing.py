@@ -132,27 +132,130 @@ def matrix_transpose(a):
 def histogram_bin_edges(a, bins=10, range=None, weights=None):
     """Compute the bin edges for a histogram without computing the histogram itself."""
     a = asarray(a)
+    if isinstance(bins, str):
+        return _histogram_bin_edges_from_method(a, bins, range=range)
     if isinstance(bins, int):
         flat = a.flatten().tolist()
         if range is not None:
             lo, hi = float(range[0]), float(range[1])
         else:
-            lo, hi = _builtin_min(flat), _builtin_max(flat)
+            if flat:
+                lo, hi = _builtin_min(flat), _builtin_max(flat)
+            else:
+                lo, hi = 0.0, 1.0
+        if lo == hi:
+            lo = lo - 0.5
+            hi = hi + 0.5
         edges = linspace(lo, hi, bins + 1)
         return edges
     else:
         return asarray(bins)
 
 
+def _histogram_bin_edges_from_method(a, method, range=None):
+    """Compute bin edges using an automatic bin-width method (string name)."""
+    flat = a.flatten()
+    n = flat.size
+    if range is not None:
+        lo, hi = float(range[0]), float(range[1])
+        # Filter data to range
+        vals = [float(flat[i]) for i in _builtin_range(n) if lo <= float(flat[i]) <= hi]
+        n_eff = len(vals)
+    else:
+        vals = [float(flat[i]) for i in _builtin_range(n)]
+        n_eff = n
+        if n_eff == 0:
+            lo, hi = 0.0, 1.0
+        else:
+            lo = _builtin_min(vals)
+            hi = _builtin_max(vals)
+    if lo == hi:
+        lo = lo - 0.5
+        hi = hi + 0.5
+    if n_eff <= 1:
+        return linspace(lo, hi, 2, endpoint=True)
+    # Compute std
+    mean = __import__("builtins").sum(vals) / n_eff
+    var = __import__("builtins").sum((v - mean) ** 2 for v in vals) / n_eff
+    std = var ** 0.5
+    data_range = hi - lo
+    def _sturges():
+        return data_range / (_math.log2(n_eff) + 1) if n_eff > 0 else 1.0
+    def _rice():
+        return data_range / (2.0 * n_eff ** (1.0/3.0)) if n_eff > 0 else 1.0
+    def _scott():
+        return (24.0 * 3.14159265 * var / n_eff) ** 0.5 if std > 0 else 1.0
+    def _fd():
+        # Freedman-Diaconis: 2 * IQR / n^(1/3)
+        sorted_v = sorted(vals)
+        q25 = sorted_v[int(0.25 * n_eff)]
+        q75 = sorted_v[int(0.75 * n_eff) if int(0.75 * n_eff) < n_eff else n_eff - 1]
+        iqr = q75 - q25
+        if iqr == 0:
+            return _sturges()
+        return 2.0 * iqr / (n_eff ** (1.0/3.0))
+    def _sqrt():
+        return data_range / (n_eff ** 0.5) if n_eff > 0 else 1.0
+    def _doane():
+        if std == 0:
+            return 1.0
+        sg1 = __import__("builtins").sum((v - mean) ** 3 for v in vals) / (n_eff * std ** 3)
+        sigma_g1 = (6.0 * (n_eff - 2) / ((n_eff + 1) * (n_eff + 3))) ** 0.5
+        k = 1.0 + _math.log2(n_eff) + _math.log2(1.0 + __import__("builtins").abs(sg1) / sigma_g1) if sigma_g1 > 0 else _math.log2(n_eff) + 1
+        return data_range / k if k > 0 else 1.0
+    _methods = {
+        'sturges': _sturges,
+        'rice': _rice,
+        'scott': _scott,
+        'fd': _fd,
+        'sqrt': _sqrt,
+        'doane': _doane,
+    }
+    if method == 'auto':
+        # auto = max(sturges, fd) in terms of bin count
+        w_sturges = _sturges()
+        w_fd = _fd()
+        # Smaller width = more bins; pick the one with more bins (smaller width)
+        width = _builtin_min(w_sturges, w_fd) if w_sturges > 0 and w_fd > 0 else (w_sturges if w_sturges > 0 else w_fd)
+    elif method == 'stone':
+        # Stone's method: try different bin counts, pick optimal via AIC-like
+        # Simplified: use Sturges as fallback
+        width = _sturges()
+    elif method in _methods:
+        width = _methods[method]()
+    else:
+        raise ValueError("Invalid bin estimation method: {}".format(method))
+    if width <= 0:
+        width = 1.0
+    nbins = max(1, int(_math.ceil(data_range / width)))
+    return linspace(lo, hi, nbins + 1, endpoint=True)
+
 def histogram(a, bins=10, range=None, density=None, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
+    # Validate weights
+    if weights is not None:
+        w = asarray(weights)
+        if w.shape != a.shape:
+            raise ValueError("weights should have the same shape as a")
+    # Handle string bin methods
+    if isinstance(bins, str):
+        edges = _histogram_bin_edges_from_method(a, bins, range=range)
+        return histogram(a, bins=edges, range=range, density=density, weights=weights)
     if isinstance(bins, (list, tuple, ndarray)):
         # Custom bin edges
         edges = asarray(bins).flatten()
+        if edges.ndim != 1:
+            raise ValueError("bins must be 1d")
         edge_list = edges.tolist()
-        flat = a.flatten().tolist()
         n_bins = len(edge_list) - 1
+        if n_bins < 1:
+            raise ValueError("bins must have at least 2 edges")
+        # Validate finite range
+        for e in edge_list:
+            if _math.isinf(e) or _math.isnan(e):
+                raise ValueError("bins must be finite")
+        flat = a.flatten().tolist()
         counts = [0.0] * n_bins
         w_list = None
         if weights is not None:
@@ -175,13 +278,26 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
                 counts_arr = counts_arr / (total * bin_widths)
         return counts_arr, edges
     # bins is an int
+    if range is not None:
+        lo, hi = float(range[0]), float(range[1])
+        if not (_math.isfinite(lo) and _math.isfinite(hi)):
+            raise ValueError("supplied range of [{}, {}] is not finite".format(lo, hi))
+        if lo > hi:
+            raise ValueError("max must be larger than min in range parameter")
+        if lo == hi:
+            lo = lo - 0.5
+            hi = hi + 0.5
     if weights is not None or range is not None:
         # Python fallback for weights/range with integer bins
         flat = a.flatten().tolist()
-        if range is not None:
-            lo, hi = float(range[0]), float(range[1])
-        else:
-            lo, hi = _builtin_min(flat), _builtin_max(flat)
+        if range is None:
+            if len(flat) == 0:
+                lo, hi = 0.0, 1.0
+            else:
+                lo, hi = _builtin_min(flat), _builtin_max(flat)
+            if lo == hi:
+                lo = lo - 0.5
+                hi = hi + 0.5
         edges = linspace(lo, hi, num=bins + 1, endpoint=True)
         edge_list = edges.tolist()
         counts = [0.0] * bins
@@ -189,7 +305,7 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
         if weights is not None:
             w_list = asarray(weights).flatten().tolist()
         for idx_val, val in enumerate(flat):
-            if range is not None and (val < lo or val > hi):
+            if val < lo or val > hi:
                 continue
             for j in _builtin_range(bins):
                 if (val >= edge_list[j] and val < edge_list[j + 1]) or (j == bins - 1 and val == edge_list[j + 1]):

@@ -2418,18 +2418,20 @@ def test_vectorize():
 def test_put():
     a = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
     r = np.put(a, np.array([0, 2]), np.array([10.0, 30.0]))
-    assert_close(r[0], 10.0)
-    assert_close(r[1], 2.0)
-    assert_close(r[2], 30.0)
+    assert r is None, "np.put should return None (in-place)"
+    assert_close(a[0], 10.0)
+    assert_close(a[1], 2.0)
+    assert_close(a[2], 30.0)
 
 def test_putmask():
     a = np.array([1.0, 2.0, 3.0, 4.0])
     mask = np.array([True, False, True, False])
     r = np.putmask(a, mask, np.array([10.0, 20.0]))
-    assert_close(r[0], 10.0)
-    assert_close(r[1], 2.0)
-    assert_close(r[2], 20.0)
-    assert_close(r[3], 4.0)
+    assert r is None, "np.putmask should return None (in-place)"
+    assert_close(a[0], 10.0)
+    assert_close(a[1], 2.0)
+    assert_close(a[2], 20.0)
+    assert_close(a[3], 4.0)
 
 def test_broadcast_arrays():
     a = np.array([[1.0], [2.0], [3.0]])
@@ -7835,6 +7837,598 @@ def test_t38_dtype_kind_char():
 
 
 # Run all tests
+# ---------------------------------------------------------------------------
+# numpy.ma comprehensive tests
+# ---------------------------------------------------------------------------
+
+# -- Full API surface --
+def test_ma_api_surface():
+    """All 224 public names from real numpy.ma should be present."""
+    import numpy.ma as ma
+    expected = [
+        'MAError', 'MaskError', 'MaskType', 'MaskedArray', 'abs', 'absolute',
+        'add', 'all', 'allclose', 'allequal', 'alltrue', 'amax', 'amin',
+        'angle', 'anom', 'anomalies', 'any', 'append', 'apply_along_axis',
+        'apply_over_axes', 'arange', 'arccos', 'arccosh', 'arcsin', 'arcsinh',
+        'arctan', 'arctan2', 'arctanh', 'argmax', 'argmin', 'argsort',
+        'around', 'array', 'asanyarray', 'asarray', 'atleast_1d', 'atleast_2d',
+        'atleast_3d', 'average', 'bitwise_and', 'bitwise_or', 'bitwise_xor',
+        'bool_', 'ceil', 'choose', 'clip', 'clump_masked', 'clump_unmasked',
+        'column_stack', 'common_fill_value', 'compress', 'compress_cols',
+        'compress_nd', 'compress_rowcols', 'compress_rows', 'compressed',
+        'concatenate', 'conjugate', 'convolve', 'copy', 'corrcoef', 'correlate',
+        'cos', 'cosh', 'count', 'count_masked', 'cov', 'cumprod', 'cumsum',
+        'default_fill_value', 'diag', 'diagflat', 'diagonal', 'diff', 'divide',
+        'dot', 'dstack', 'ediff1d', 'empty', 'empty_like', 'equal', 'exp',
+        'expand_dims', 'fabs', 'filled', 'fix_invalid', 'flatnotmasked_contiguous',
+        'flatnotmasked_edges', 'flatten_mask', 'flatten_structured_array',
+        'floor', 'floor_divide', 'fmod', 'frombuffer', 'fromflex', 'fromfunction',
+        'getdata', 'getmask', 'getmaskarray', 'greater', 'greater_equal',
+        'harden_mask', 'hsplit', 'hstack', 'hypot', 'identity', 'ids', 'in1d',
+        'indices', 'inner', 'innerproduct', 'intersect1d', 'isMA',
+        'isMaskedArray', 'is_mask', 'is_masked', 'isarray', 'isin',
+        'left_shift', 'less', 'less_equal', 'log', 'log10', 'log2',
+        'logical_and', 'logical_not', 'logical_or', 'logical_xor', 'make_mask',
+        'make_mask_descr', 'make_mask_none', 'mask_cols', 'mask_or',
+        'mask_rowcols', 'mask_rows', 'masked', 'masked_all', 'masked_all_like',
+        'masked_array', 'masked_equal', 'masked_greater', 'masked_greater_equal',
+        'masked_inside', 'masked_invalid', 'masked_less', 'masked_less_equal',
+        'masked_not_equal', 'masked_object', 'masked_outside',
+        'masked_print_option', 'masked_singleton', 'masked_values',
+        'masked_where', 'max', 'maximum', 'maximum_fill_value', 'mean',
+        'median', 'min', 'minimum', 'minimum_fill_value', 'mod', 'mr_',
+        'multiply', 'mvoid', 'ndenumerate', 'ndim', 'negative', 'nomask',
+        'nonzero', 'not_equal', 'notmasked_contiguous', 'notmasked_edges',
+        'ones', 'ones_like', 'outer', 'outerproduct', 'polyfit', 'power',
+        'prod', 'product', 'ptp', 'put', 'putmask', 'ravel', 'remainder',
+        'repeat', 'reshape', 'resize', 'right_shift', 'round', 'round_',
+        'row_stack', 'set_fill_value', 'setdiff1d', 'setxor1d', 'shape', 'sin',
+        'sinh', 'size', 'soften_mask', 'sometrue', 'sort', 'sqrt', 'squeeze',
+        'stack', 'std', 'subtract', 'sum', 'swapaxes', 'take', 'tan', 'tanh',
+        'trace', 'transpose', 'true_divide', 'union1d', 'unique', 'vander',
+        'var', 'vstack', 'where', 'zeros', 'zeros_like',
+    ]
+    missing = [n for n in expected if not hasattr(ma, n)]
+    assert_eq(missing, [])
+
+# -- Exceptions --
+def test_ma_exceptions():
+    import numpy.ma as ma
+    assert_eq(issubclass(ma.MAError, Exception), True)
+    assert_eq(issubclass(ma.MaskError, ma.MAError), True)
+
+# -- Constants --
+def test_ma_nomask():
+    import numpy.ma as ma
+    assert_eq(ma.nomask, False)
+    assert_eq(ma.MaskType, bool)
+
+def test_ma_masked_singleton():
+    import numpy.ma as ma
+    assert_eq(ma.masked is ma.masked_singleton, True)
+    assert_eq(bool(ma.masked), False)
+    assert_eq(repr(ma.masked), '--')
+
+def test_ma_masked_print_option():
+    import numpy.ma as ma
+    assert_eq(str(ma.masked_print_option), '--')
+    assert_eq(ma.masked_print_option.enabled(), True)
+
+# -- Creation --
+def test_ma_array_creation():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3], mask=[True, False, False])
+    assert_eq(a.shape, (3,))
+    assert_eq(a.count(), 2)
+
+def test_ma_zeros():
+    import numpy.ma as ma
+    a = ma.zeros((2, 3))
+    assert_eq(a.shape, (2, 3))
+    assert_eq(a.count(), 6)
+
+def test_ma_ones():
+    import numpy.ma as ma
+    a = ma.ones((2, 3))
+    assert_eq(a.shape, (2, 3))
+
+def test_ma_empty():
+    import numpy.ma as ma
+    a = ma.empty((2, 3))
+    assert_eq(a.shape, (2, 3))
+
+def test_ma_zeros_like():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0])
+    b = ma.zeros_like(a)
+    assert_eq(b.shape, (3,))
+
+def test_ma_ones_like():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0])
+    b = ma.ones_like(a)
+    assert_eq(b.shape, (3,))
+
+def test_ma_masked_all():
+    import numpy.ma as ma
+    a = ma.masked_all((3,))
+    assert_eq(a.count(), 0)
+
+def test_ma_arange():
+    import numpy.ma as ma
+    a = ma.arange(5)
+    assert_eq(a.count(), 5)
+    assert_eq(isinstance(a, ma.MaskedArray), True)
+
+def test_ma_identity():
+    import numpy.ma as ma
+    a = ma.identity(3)
+    assert_eq(a.shape, (3, 3))
+
+# -- Masking functions --
+def test_ma_masked_where():
+    import numpy.ma as ma
+    a = ma.masked_where([True, True, False], np.arange(3))
+    assert_eq(a.count(), 1)
+    assert_eq(a.mask.tolist(), [True, True, False])
+
+def test_ma_masked_values():
+    import numpy.ma as ma
+    a = ma.masked_values([1.0, 1.5, 2.0], 1.5)
+    assert_eq(a.mask.tolist(), [False, True, False])
+
+def test_ma_masked_object():
+    import numpy.ma as ma
+    a = ma.masked_object(np.array([1, 2, 3]), 2)
+    assert_eq(a.mask.tolist(), [False, True, False])
+
+# -- Mask query --
+def test_ma_is_mask():
+    import numpy.ma as ma
+    assert_eq(ma.is_mask(ma.nomask), True)
+    assert_eq(ma.is_mask(np.array([True, False])), True)
+
+def test_ma_getmask():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3], mask=[True, False, False])
+    m = ma.getmask(a)
+    assert_eq(m.tolist(), [True, False, False])
+    assert_eq(ma.getmask(np.array([1, 2])), False)  # nomask
+
+def test_ma_make_mask():
+    import numpy.ma as ma
+    m = ma.make_mask([1, 0, 1])
+    assert_eq(m.tolist(), [True, False, True])
+    assert_eq(ma.make_mask(False, shrink=True), False)
+
+def test_ma_make_mask_none():
+    import numpy.ma as ma
+    m = ma.make_mask_none((3,))
+    assert_eq(m.tolist(), [False, False, False])
+
+def test_ma_mask_or():
+    import numpy.ma as ma
+    m = ma.mask_or([True, False], [False, True])
+    assert_eq(m.tolist(), [True, True])
+
+# -- Aggregation --
+def test_ma_sum_module():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4], mask=[True, False, False, True])
+    assert_eq(int(ma.sum(a)), 5)
+
+def test_ma_prod_module():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4], mask=[True, False, False, True])
+    assert_eq(int(ma.prod(a)), 6)
+
+def test_ma_mean_module():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0, 4.0], mask=[True, False, False, True])
+    assert_eq(float(ma.mean(a)), 2.5)
+
+def test_ma_min_max_module():
+    import numpy.ma as ma
+    a = ma.array([10.0, 2.0, 30.0, 4.0], mask=[True, False, False, True])
+    assert_eq(int(ma.min(a)), 2)
+    assert_eq(int(ma.max(a)), 30)
+
+def test_ma_all_any_module():
+    import numpy.ma as ma
+    a = ma.array([True, False, True], mask=[True, False, False])
+    assert_eq(bool(ma.all(a)), False)
+    assert_eq(bool(ma.any(a)), True)
+
+def test_ma_allequal():
+    import numpy.ma as ma
+    assert_eq(ma.allequal([1, 2], [1, 2]), True)
+    assert_eq(ma.allequal([1, 2], [1, 3]), False)
+
+def test_ma_allclose():
+    import numpy.ma as ma
+    assert_eq(ma.allclose([1.0, 2.0], [1.0, 2.0000001]), True)
+
+def test_ma_average():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0], mask=[True, False, False])
+    r = ma.average(a)
+    assert_eq(float(r), 2.5)
+
+def test_ma_median():
+    import numpy.ma as ma
+    a = ma.array([1.0, 5.0, 3.0], mask=[True, False, False])
+    r = ma.median(a)
+    assert_eq(float(r), 4.0)
+
+def test_ma_count_masked():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3], mask=[True, False, True])
+    assert_eq(ma.count_masked(a), 2)
+
+# -- Ufunc wrappers --
+def test_ma_log():
+    import numpy.ma as ma
+    import math
+    a = ma.array([1.0, 2.0, 3.0], mask=[True, False, False])
+    r = ma.log(a)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+    assert_eq(r.mask.tolist(), [True, False, False])
+    assert_eq(abs(float(r.data[1]) - math.log(2.0)) < 1e-10, True)
+
+def test_ma_sqrt():
+    import numpy.ma as ma
+    a = ma.array([4.0, 9.0], mask=[True, False])
+    r = ma.sqrt(a)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+    assert_eq(float(r.data[1]), 3.0)
+
+def test_ma_exp():
+    import numpy.ma as ma
+    a = ma.array([0.0, 1.0], mask=[True, False])
+    r = ma.exp(a)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+    assert_eq(abs(float(r.data[1]) - 2.718281828459045) < 1e-10, True)
+
+def test_ma_sin_cos():
+    import numpy.ma as ma
+    a = ma.array([0.0, 1.0], mask=[True, False])
+    s = ma.sin(a)
+    c = ma.cos(a)
+    assert_eq(isinstance(s, ma.MaskedArray), True)
+    assert_eq(isinstance(c, ma.MaskedArray), True)
+
+def test_ma_binary_ops():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0], mask=[True, False])
+    b = ma.array([3.0, 4.0], mask=[False, False])
+    r = ma.add(a, b)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+    assert_eq(r.mask.tolist(), [True, False])
+
+def test_ma_maximum_minimum():
+    import numpy.ma as ma
+    a = ma.array([1.0, 5.0], mask=[False, False])
+    b = ma.array([3.0, 2.0], mask=[False, False])
+    mx = ma.maximum(a, b)
+    mn = ma.minimum(a, b)
+    assert_eq(mx.data.tolist(), [3.0, 5.0])
+    assert_eq(mn.data.tolist(), [1.0, 2.0])
+
+def test_ma_logical():
+    import numpy.ma as ma
+    a = ma.array([True, False], mask=[False, False])
+    b = ma.array([False, True], mask=[False, False])
+    r = ma.logical_or(a, b)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+
+# -- np.func(MaskedArray) dispatch --
+def test_np_log_masked():
+    """np.log should preserve MaskedArray type."""
+    import numpy.ma as ma
+    x = ma.array([1.0, 2.0, 3.0], mask=[True, False, False])
+    result = np.log(x)
+    assert_eq(isinstance(result, ma.MaskedArray), True)
+    assert_eq(result.mask.tolist(), [True, False, False])
+
+def test_np_sqrt_masked():
+    import numpy.ma as ma
+    x = ma.array([4.0, 9.0], mask=[True, False])
+    result = np.sqrt(x)
+    assert_eq(isinstance(result, ma.MaskedArray), True)
+    assert_eq(float(result.data[1]), 3.0)
+
+def test_np_exp_masked():
+    import numpy.ma as ma
+    x = ma.array([0.0, 1.0], mask=[True, False])
+    result = np.exp(x)
+    assert_eq(isinstance(result, ma.MaskedArray), True)
+
+def test_np_sin_cos_masked():
+    import numpy.ma as ma
+    x = ma.array([0.0, 1.0], mask=[True, False])
+    assert_eq(isinstance(np.sin(x), ma.MaskedArray), True)
+    assert_eq(isinstance(np.cos(x), ma.MaskedArray), True)
+
+def test_np_abs_masked():
+    import numpy.ma as ma
+    x = ma.array([-1.0, 2.0], mask=[True, False])
+    result = np.abs(x)
+    assert_eq(isinstance(result, ma.MaskedArray), True)
+
+def test_np_floor_ceil_masked():
+    import numpy.ma as ma
+    x = ma.array([1.5, 2.7], mask=[True, False])
+    assert_eq(isinstance(np.floor(x), ma.MaskedArray), True)
+    assert_eq(isinstance(np.ceil(x), ma.MaskedArray), True)
+
+def test_np_negative_masked():
+    import numpy.ma as ma
+    x = ma.array([1.0, -2.0], mask=[True, False])
+    result = np.negative(x)
+    assert_eq(isinstance(result, ma.MaskedArray), True)
+
+def test_np_log10_log2_masked():
+    import numpy.ma as ma
+    x = ma.array([1.0, 100.0], mask=[True, False])
+    assert_eq(isinstance(np.log10(x), ma.MaskedArray), True)
+    assert_eq(isinstance(np.log2(x), ma.MaskedArray), True)
+
+def test_np_trig_masked():
+    import numpy.ma as ma
+    x = ma.array([0.0, 0.5], mask=[True, False])
+    assert_eq(isinstance(np.sinh(x), ma.MaskedArray), True)
+    assert_eq(isinstance(np.cosh(x), ma.MaskedArray), True)
+    assert_eq(isinstance(np.tanh(x), ma.MaskedArray), True)
+
+# -- Array manipulation --
+def test_ma_concatenate():
+    import numpy.ma as ma
+    a = ma.array([1, 2], mask=[True, False])
+    b = ma.array([3, 4], mask=[False, True])
+    r = ma.concatenate([a, b])
+    assert_eq(r.mask.tolist(), [True, False, False, True])
+
+def test_ma_reshape():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4], mask=[True, False, False, True])
+    r = ma.reshape(a, (2, 2))
+    assert_eq(r.shape, (2, 2))
+
+def test_ma_ravel():
+    import numpy.ma as ma
+    a = ma.array([[1, 2], [3, 4]], mask=[[True, False], [False, True]])
+    r = ma.ravel(a)
+    assert_eq(r.shape, (4,))
+    assert_eq(r.mask.tolist(), [True, False, False, True])
+
+def test_ma_transpose():
+    import numpy.ma as ma
+    a = ma.array([[1, 2], [3, 4]], mask=[[True, False], [False, True]])
+    r = ma.transpose(a)
+    assert_eq(r.shape, (2, 2))
+
+def test_ma_expand_dims():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3])
+    r = ma.expand_dims(a, 0)
+    assert_eq(r.shape, (1, 3))
+
+def test_ma_vstack_hstack():
+    import numpy.ma as ma
+    a = ma.array([1, 2])
+    b = ma.array([3, 4])
+    v = ma.vstack([a, b])
+    h = ma.hstack([a, b])
+    assert_eq(v.shape, (2, 2))
+    assert_eq(h.shape, (4,))
+
+def test_ma_sort():
+    import numpy.ma as ma
+    a = ma.array([3, 1, 2], mask=[False, False, False])
+    r = ma.sort(a)
+    assert_eq(r.data.tolist(), [1, 2, 3])
+
+def test_ma_argsort():
+    import numpy.ma as ma
+    a = ma.array([3.0, 1.0, 2.0], mask=[False, False, False])
+    r = ma.argsort(a)
+    assert_eq(r.tolist(), [1, 2, 0])
+
+# -- Misc --
+def test_ma_where():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3])
+    b = ma.array([4, 5, 6])
+    r = ma.where(np.array([True, False, True]), a, b)
+    assert_eq(r.data.tolist(), [1, 5, 3])
+
+def test_ma_clip():
+    import numpy.ma as ma
+    a = ma.array([1, 5, 3], mask=[True, False, False])
+    r = ma.clip(a, 2, 4)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+
+def test_ma_round():
+    import numpy.ma as ma
+    a = ma.array([1.5, 2.7], mask=[True, False])
+    r = ma.round(a, 0)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+
+def test_ma_diag():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3])
+    r = ma.diag(a)
+    assert_eq(r.shape, (3, 3))
+
+def test_ma_dot():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0], mask=[True, False, False])
+    b = ma.array([4.0, 5.0, 6.0], mask=[True, False, False])
+    r = ma.dot(a, b)
+    assert_eq(float(r), 28.0)  # 0*0 + 2*5 + 3*6
+
+def test_ma_unique():
+    import numpy.ma as ma
+    a = ma.array([3, 1, 2, 1, 3], mask=[True, False, False, False, False])
+    r = ma.unique(a)
+    assert_eq(r.tolist(), [1, 2, 3])
+
+def test_ma_compressed():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4], mask=[True, False, True, False])
+    r = ma.compressed(a)
+    assert_eq(r.tolist(), [2, 4])
+
+def test_ma_filled():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0], mask=[True, False, True])
+    r = ma.filled(a, -1.0)
+    assert_eq(r.tolist(), [-1.0, 2.0, -1.0])
+
+def test_ma_isMaskedArray():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3])
+    assert_eq(ma.isMaskedArray(a), True)
+    assert_eq(ma.isMA(a), True)
+    assert_eq(ma.isarray(a), True)
+    assert_eq(ma.isMaskedArray(np.array([1, 2])), False)
+
+def test_ma_default_fill_value():
+    import numpy.ma as ma
+    assert_eq(ma.default_fill_value(0), 999999)
+    assert_eq(ma.default_fill_value(0.0), 1e20)
+
+def test_ma_common_fill_value():
+    import numpy.ma as ma
+    a = ma.array([1], fill_value=999)
+    b = ma.array([2], fill_value=999)
+    c = ma.array([3], fill_value=0)
+    assert_eq(ma.common_fill_value(a, b), 999)
+    assert_eq(ma.common_fill_value(a, c), None)
+
+def test_ma_set_fill_value():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3])
+    ma.set_fill_value(a, 42)
+    assert_eq(a.fill_value, 42)
+
+def test_ma_clump_masked():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4, 5], mask=[False, True, True, False, True])
+    slices = ma.clump_masked(a)
+    assert_eq(len(slices), 2)
+    assert_eq(slices[0], slice(1, 3))
+    assert_eq(slices[1], slice(4, 5))
+
+def test_ma_clump_unmasked():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4, 5], mask=[False, True, True, False, True])
+    slices = ma.clump_unmasked(a)
+    assert_eq(len(slices), 2)
+    assert_eq(slices[0], slice(0, 1))
+    assert_eq(slices[1], slice(3, 4))
+
+def test_ma_flatnotmasked_edges():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4], mask=[True, False, False, True])
+    edges = ma.flatnotmasked_edges(a)
+    assert_eq(edges, [1, 2])
+
+def test_ma_copy():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3], mask=[True, False, False])
+    b = ma.copy(a)
+    assert_eq(isinstance(b, ma.MaskedArray), True)
+    assert_eq(b.mask.tolist(), [True, False, False])
+
+def test_ma_MaskedArray_methods():
+    """Test key MaskedArray instance methods."""
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0, 4.0], mask=[True, False, False, True])
+    # compressed
+    assert_eq(a.compressed().tolist(), [2.0, 3.0])
+    # filled
+    assert_eq(a.filled(-1.0).tolist(), [-1.0, 2.0, 3.0, -1.0])
+    # count
+    assert_eq(a.count(), 2)
+    # flatten
+    assert_eq(a.flatten().shape, (4,))
+    # copy
+    b = a.copy()
+    assert_eq(b.mask.tolist(), a.mask.tolist())
+    # astype
+    c = a.astype('int64')
+    assert_eq(isinstance(c, ma.MaskedArray), True)
+
+def test_ma_MaskedArray_arithmetic():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0], mask=[True, False])
+    b = ma.array([3.0, 4.0], mask=[False, False])
+    r = a + b
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+    assert_eq(r.mask.tolist(), [True, False])
+    r2 = a * 2
+    assert_eq(isinstance(r2, ma.MaskedArray), True)
+
+def test_ma_MaskedArray_comparison():
+    import numpy.ma as ma
+    a = ma.array([1.0, 2.0, 3.0], mask=[False, False, False])
+    r = (a > 1.5)
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+
+def test_ma_MaskedArray_getitem():
+    import numpy.ma as ma
+    a = ma.array([10, 20, 30], mask=[True, False, False])
+    assert_eq(a[0] is ma.masked, True)
+    assert_eq(a[1], 20)
+
+def test_ma_MaskedArray_setitem():
+    import numpy.ma as ma
+    a = ma.array([10, 20, 30], mask=[False, False, False])
+    a[0] = ma.masked
+    assert_eq(a.mask.tolist(), [True, False, False])
+
+def test_ma_submodules():
+    """Test that numpy.ma.testutils and numpy.ma.core are importable."""
+    from numpy.ma.testutils import assert_equal
+    assert_equal(1, 1)
+    from numpy.ma import core
+    assert_eq(hasattr(core, 'MaskedArray'), True)
+
+def test_ma_mr_():
+    import numpy.ma as ma
+    r = ma.mr_[1:5]
+    assert_eq(isinstance(r, ma.MaskedArray), True)
+    assert_eq(r.data.tolist(), [1, 2, 3, 4])
+
+def test_ma_cumsum_cumprod():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3, 4], mask=[True, False, False, True])
+    cs = ma.cumsum(a)
+    assert_eq(isinstance(cs, ma.MaskedArray), True)
+    cp = ma.cumprod(a)
+    assert_eq(isinstance(cp, ma.MaskedArray), True)
+
+def test_ma_diff():
+    import numpy.ma as ma
+    a = ma.array([1, 3, 6])
+    r = ma.diff(a)
+    assert_eq(r.data.tolist(), [2, 3])
+
+def test_ma_harden_soften_mask():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3])
+    ma.harden_mask(a)
+    assert_eq(a.hardmask, True)
+    ma.soften_mask(a)
+    assert_eq(a.hardmask, False)
+
+def test_ma_ndenumerate():
+    import numpy.ma as ma
+    a = ma.array([1, 2, 3], mask=[True, False, False])
+    items = list(ma.ndenumerate(a))
+    assert_eq(len(items), 2)  # masked element skipped
+
 tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 passed = 0
 failed = 0

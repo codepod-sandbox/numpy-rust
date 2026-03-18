@@ -1,4 +1,5 @@
 """NumPy ufunc class and function wrapping registration."""
+from _numpy_native import ndarray
 from ._helpers import _copy_into
 from ._creation import asarray, array
 from ._math import (
@@ -315,6 +316,12 @@ class ufunc:
         if isinstance(_effective_sig, (list, tuple)):
             _check_signature_types(self, _effective_sig)
 
+        # Check for MaskedArray inputs — delegate to numpy.ma and preserve type
+        _has_masked = any(
+            hasattr(a, 'filled') and hasattr(a, 'mask') and not isinstance(a, ndarray)
+            for a in args
+        )
+
         try:
             result = self._func(*args, **kwargs)
         except TypeError as e:
@@ -324,9 +331,13 @@ class ufunc:
                     "which has no callable {} method".format(self.__name__)) from None
             raise
 
-        if _dtype is not None:
+        # Don't asarray() MaskedArray results — preserve masked type
+        if _has_masked and hasattr(result, 'filled'):
+            pass  # keep as MaskedArray
+        elif _dtype is not None:
             result = asarray(result).astype(str(_dtype))
-        result = asarray(result)
+        else:
+            result = asarray(result)
 
         # Handle where=
         if _where is not True and not (isinstance(_where, bool) and _where):

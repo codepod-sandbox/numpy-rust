@@ -49,9 +49,7 @@ fn cast_to_i32(data: &ArrayData) -> ArrayD<i32> {
         ArrayData::Float64(a) => a.mapv(|x| x as i32).into_shared(),
         ArrayData::Complex64(a) => a.mapv(|x| x.re as i32).into_shared(),
         ArrayData::Complex128(a) => a.mapv(|x| x.re as i32).into_shared(),
-        ArrayData::Str(a) => a
-            .mapv(|ref x| x.parse::<i32>().expect("cannot cast string to i32"))
-            .into_shared(),
+        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i32>().unwrap_or(0)).into_shared(),
     }
 }
 
@@ -64,9 +62,7 @@ fn cast_to_i64(data: &ArrayData) -> ArrayD<i64> {
         ArrayData::Float64(a) => a.mapv(|x| x as i64).into_shared(),
         ArrayData::Complex64(a) => a.mapv(|x| x.re as i64).into_shared(),
         ArrayData::Complex128(a) => a.mapv(|x| x.re as i64).into_shared(),
-        ArrayData::Str(a) => a
-            .mapv(|ref x| x.parse::<i64>().expect("cannot cast string to i64"))
-            .into_shared(),
+        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i64>().unwrap_or(0)).into_shared(),
     }
 }
 
@@ -80,7 +76,7 @@ fn cast_to_f32(data: &ArrayData) -> ArrayD<f32> {
         ArrayData::Complex64(a) => a.mapv(|x| x.re).into_shared(),
         ArrayData::Complex128(a) => a.mapv(|x| x.re as f32).into_shared(),
         ArrayData::Str(a) => a
-            .mapv(|ref x| x.parse::<f32>().expect("cannot cast string to f32"))
+            .mapv(|ref x| x.parse::<f32>().unwrap_or(f32::NAN))
             .into_shared(),
     }
 }
@@ -95,7 +91,7 @@ fn cast_to_f64(data: &ArrayData) -> ArrayD<f64> {
         ArrayData::Complex64(a) => a.mapv(|x| x.re as f64).into_shared(),
         ArrayData::Complex128(a) => a.mapv(|x| x.re).into_shared(),
         ArrayData::Str(a) => a
-            .mapv(|ref x| x.parse::<f64>().expect("cannot cast string to f64"))
+            .mapv(|ref x| x.parse::<f64>().unwrap_or(f64::NAN))
             .into_shared(),
     }
 }
@@ -113,7 +109,12 @@ fn cast_to_complex64(data: &ArrayData) -> ArrayD<Complex<f32>> {
         ArrayData::Complex128(a) => a
             .mapv(|x| Complex::new(x.re as f32, x.im as f32))
             .into_shared(),
-        ArrayData::Str(_) => panic!("cannot cast string to complex64"),
+        ArrayData::Str(a) => a
+            .mapv(|ref x| {
+                let f = x.parse::<f32>().unwrap_or(f32::NAN);
+                Complex::new(f, 0.0)
+            })
+            .into_shared(),
     }
 }
 
@@ -130,7 +131,12 @@ fn cast_to_complex128(data: &ArrayData) -> ArrayD<Complex<f64>> {
             .mapv(|x| Complex::new(x.re as f64, x.im as f64))
             .into_shared(),
         ArrayData::Complex128(a) => a.clone(),
-        ArrayData::Str(_) => panic!("cannot cast string to complex128"),
+        ArrayData::Str(a) => a
+            .mapv(|ref x| {
+                let f = x.parse::<f64>().unwrap_or(f64::NAN);
+                Complex::new(f, 0.0)
+            })
+            .into_shared(),
     }
 }
 

@@ -4,6 +4,7 @@ use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
+use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
 /// Create a 1-D array with evenly spaced values within [start, stop).
@@ -13,12 +14,20 @@ pub fn arange(start: f64, stop: f64, step: f64, dtype: Option<DType>) -> NdArray
     if step > 0.0 {
         while v < stop {
             values.push(v);
-            v += step;
+            let next = v + step;
+            if next == v {
+                break; // step too small relative to v, avoid infinite loop
+            }
+            v = next;
         }
     } else if step < 0.0 {
         while v > stop {
             values.push(v);
-            v += step;
+            let next = v + step;
+            if next == v {
+                break; // step too small relative to v, avoid infinite loop
+            }
+            v = next;
         }
     }
     let len = values.len();
@@ -59,9 +68,11 @@ pub fn linspace_with_step(start: f64, stop: f64, num: usize) -> (NdArray, f64) {
 /// - `n` -- number of rows
 /// - `m` -- number of columns (defaults to `n` when `None`)
 /// - `k` -- diagonal offset: 0 = main, positive = superdiagonal, negative = subdiagonal
-pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> NdArray {
+pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> Result<NdArray> {
     if dtype.is_string() {
-        panic!("eye() not supported for string dtype");
+        return Err(NumpyError::TypeError(
+            "eye() not supported for string dtype".into(),
+        ));
     }
     let cols = m.unwrap_or(n);
     let mut arr = NdArray::zeros(&[n, cols], dtype);
@@ -122,9 +133,13 @@ pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> NdArray {
                 }
             }
         }
-        ArrayData::Str(_) => unreachable!(),
+        ArrayData::Str(_) => {
+            return Err(NumpyError::TypeError(
+                "eye() not supported for string dtype".into(),
+            ));
+        }
     }
-    arr
+    Ok(arr)
 }
 
 /// Create an array filled with a given value.
@@ -232,39 +247,39 @@ mod tests {
 
     #[test]
     fn test_eye() {
-        let a = eye(3, None, 0, DType::Float64);
+        let a = eye(3, None, 0, DType::Float64).unwrap();
         assert_eq!(a.shape(), &[3, 3]);
         assert_eq!(a.dtype(), DType::Float64);
     }
 
     #[test]
     fn test_eye_i32() {
-        let a = eye(2, None, 0, DType::Int32);
+        let a = eye(2, None, 0, DType::Int32).unwrap();
         assert_eq!(a.shape(), &[2, 2]);
         assert_eq!(a.dtype(), DType::Int32);
     }
 
     #[test]
     fn test_eye_rectangular() {
-        let a = eye(3, Some(4), 0, DType::Float64);
+        let a = eye(3, Some(4), 0, DType::Float64).unwrap();
         assert_eq!(a.shape(), &[3, 4]);
     }
 
     #[test]
     fn test_eye_offset() {
-        let a = eye(3, None, 1, DType::Float64);
+        let a = eye(3, None, 1, DType::Float64).unwrap();
         assert_eq!(a.shape(), &[3, 3]);
     }
 
     #[test]
     fn test_eye_negative_offset() {
-        let a = eye(3, None, -1, DType::Float64);
+        let a = eye(3, None, -1, DType::Float64).unwrap();
         assert_eq!(a.shape(), &[3, 3]);
     }
 
     #[test]
     fn test_eye_complex() {
-        let a = eye(3, None, 0, DType::Complex128);
+        let a = eye(3, None, 0, DType::Complex128).unwrap();
         assert_eq!(a.shape(), &[3, 3]);
         assert_eq!(a.dtype(), DType::Complex128);
     }

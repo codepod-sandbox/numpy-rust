@@ -66,6 +66,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 _err_state = {"divide": "warn", "over": "warn", "under": "ignore", "invalid": "warn"}
+_UNSET_CALL = object()  # sentinel for errstate call= parameter
 
 def seterr(**kwargs):
     """Set floating point error handling."""
@@ -86,14 +87,31 @@ def geterr():
 
 class errstate:
     """Context manager for floating point error handling."""
-    def __init__(self, **kwargs):
+    def __init__(self, *, call=_UNSET_CALL, **kwargs):
         self._kwargs = kwargs
+        self._call = call
         self._old = None
+        self._old_call = None
+        self._entered = False
     def __enter__(self):
+        if self._entered:
+            raise TypeError("Cannot enter `np.errstate` twice")
+        self._entered = True
         self._old = seterr(**self._kwargs)
+        if self._call is not _UNSET_CALL:
+            self._old_call = seterrcall(self._call)
         return self
     def __exit__(self, *args):
         seterr(**self._old)
+        if self._call is not _UNSET_CALL:
+            seterrcall(self._old_call)
+    def __call__(self, func):
+        import functools
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with type(self)(**self._kwargs, call=self._call):
+                return func(*args, **kwargs)
+        return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -921,13 +939,18 @@ class memmap:
 # Misc stubs
 # ---------------------------------------------------------------------------
 
+_errcall_func = None
+
 def seterrcall(func):
-    """Set callback for floating-point error handler (no-op)."""
-    return None
+    """Set callback for floating-point error handler."""
+    global _errcall_func
+    old = _errcall_func
+    _errcall_func = func
+    return old
 
 def geterrcall():
-    """Get callback for floating-point error handler (no-op)."""
-    return None
+    """Get callback for floating-point error handler."""
+    return _errcall_func
 
 def add_newdoc(place, obj, doc):
     """Add documentation (no-op in our implementation)."""
@@ -1162,20 +1185,108 @@ def vdot(a, b):
 
 def einsum(*operands, **kwargs):
     """Evaluates the Einstein summation convention on the operands."""
-    if len(operands) < 2:
-        raise ValueError("einsum requires at least a subscript string and one operand")
-    subscripts = operands[0]
-    arrays = operands[1:]
+    out = kwargs.pop('out', None)
+    dtype = kwargs.pop('dtype', None)
+    order = kwargs.pop('order', 'K')
+    casting = kwargs.pop('casting', 'safe')
+    optimize = kwargs.pop('optimize', False)
+    if len(operands) == 0:
+        raise ValueError("No input operands")
+    # Handle interleaved subscript format: einsum(op0, subs0, op1, subs1, ..., [output_subs])
+    if not isinstance(operands[0], str):
+        # Interleaved format
+        arrays = []
+        sub_parts = []
+        # Map integer subscript labels to letters
+        label_map = {}
+        label_counter = [0]
+        def _int_to_letter(n):
+            if n == Ellipsis:
+                return '...'
+            if n not in label_map:
+                label_map[n] = chr(ord('a') + label_counter[0])
+                label_counter[0] += 1
+            return label_map[n]
+        i = 0
+        while i < len(operands):
+            arr = operands[i]
+            i += 1
+            if i >= len(operands):
+                # Last element is output subscripts
+                if isinstance(arr, list):
+                    out_sub = ''.join(_int_to_letter(x) for x in arr)
+                    sub_parts.append('->' + out_sub)
+                break
+            subs = operands[i]
+            i += 1
+            if isinstance(subs, list):
+                sub_str = ''.join(_int_to_letter(x) for x in subs)
+            else:
+                sub_str = str(subs)
+            arrays.append(asarray(arr))
+            sub_parts.append(sub_str)
+            # Check if next element is a list (output subscripts) with no following operand
+            if i < len(operands) and isinstance(operands[i], list) and (i + 1 >= len(operands) or isinstance(operands[i + 1], list)):
+                out_sub = ''.join(_int_to_letter(x) for x in operands[i])
+                sub_parts.append('->' + out_sub)
+                i += 1
+        subscripts = ','.join(p for p in sub_parts if not p.startswith('->'))
+        out_part = [p for p in sub_parts if p.startswith('->')]
+        if out_part:
+            subscripts += out_part[0]
+    else:
+        if len(operands) < 1:
+            raise ValueError("No input operands")
+        subscripts = operands[0]
+        arrays = list(operands[1:])
+    if not isinstance(subscripts, str):
+        raise TypeError("subscripts must be a string")
+    if len(arrays) == 0 and subscripts == '':
+        raise ValueError("No input operands")
+    # Validate and convert all operands to arrays
+    for i in range(len(arrays)):
+        if not isinstance(arrays[i], ndarray):
+            arrays[i] = asarray(arrays[i])
+    # Handle implicit output subscripts
     if '->' not in subscripts:
         input_subs = subscripts.replace(' ', '')
+        # Handle ellipsis
         parts = input_subs.split(',')
         from collections import Counter
         counts = Counter()
+        has_ellipsis = '...' in input_subs
         for p in parts:
-            counts.update(p)
+            p_clean = p.replace('...', '')
+            counts.update(p_clean)
         output = ''.join(sorted(c for c, n in counts.items() if n == 1))
+        if has_ellipsis:
+            output = '...' + output
         subscripts = input_subs + '->' + output
-    return _native.einsum(subscripts, *arrays)
+    try:
+        result = _native.einsum(subscripts, *arrays)
+    except TypeError as e:
+        # Handle scalar inputs that native einsum can't handle
+        err_msg = str(e)
+        if "Expected type" in err_msg and ("'int'" in err_msg or "'float'" in err_msg):
+            # Convert scalar operands to 0-d arrays
+            new_arrays = []
+            for a in arrays:
+                if not isinstance(a, ndarray):
+                    new_arrays.append(asarray(a))
+                else:
+                    new_arrays.append(a)
+            result = _native.einsum(subscripts, *new_arrays)
+        else:
+            raise
+    if dtype is not None:
+        result = result.astype(str(dtype))
+    if out is not None:
+        if isinstance(out, ndarray):
+            flat_r = result.flatten()
+            for i in range(flat_r.size):
+                out.flat[i] = flat_r[i]
+            return out
+    return result
 
 
 # ---------------------------------------------------------------------------

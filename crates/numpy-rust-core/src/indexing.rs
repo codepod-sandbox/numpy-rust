@@ -146,6 +146,17 @@ impl NdArray {
             });
         }
 
+        // Validate indices before using them
+        let axis_len = self.shape()[axis];
+        for &i in indices {
+            if i >= axis_len {
+                return Err(NumpyError::ValueError(format!(
+                    "index {} is out of bounds for axis {} with size {}",
+                    i, axis, axis_len
+                )));
+            }
+        }
+
         macro_rules! do_select {
             ($arr:expr) => {{
                 let views: Vec<_> = indices
@@ -154,7 +165,7 @@ impl NdArray {
                     .collect();
                 let view_refs: Vec<_> = views.iter().map(|v| v.view()).collect();
                 ndarray::stack(ndarray::Axis(axis), &view_refs)
-                    .unwrap()
+                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?
                     .into_shared()
             }};
         }

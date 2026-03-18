@@ -11,7 +11,8 @@ use crate::NdArray;
 /// Complex types are kept as-is.
 fn ensure_float(data: &ArrayData) -> ArrayData {
     if data.dtype().is_string() {
-        panic!("math functions not supported for string arrays");
+        // Cast string to float64 — non-numeric strings become NaN
+        return cast_array_data(data, DType::Float64);
     }
     match data.dtype() {
         DType::Float32 | DType::Float64 | DType::Complex64 | DType::Complex128 => data.clone(),
@@ -663,11 +664,12 @@ impl NdArray {
     /// posinf: replacement for +Inf (default f64::MAX)
     /// neginf: replacement for -Inf (default -f64::MAX)
     pub fn nan_to_num(&self, nan: f64, posinf: f64, neginf: f64) -> NdArray {
-        // Integer/bool arrays cannot have NaN or Inf — pass through unchanged
+        // Integer/bool/string arrays cannot have NaN or Inf — pass through unchanged
         match self.dtype() {
-            crate::dtype::DType::Bool | crate::dtype::DType::Int32 | crate::dtype::DType::Int64 => {
-                return NdArray::from_data(self.data.deep_copy())
-            }
+            crate::dtype::DType::Bool
+            | crate::dtype::DType::Int32
+            | crate::dtype::DType::Int64
+            | crate::dtype::DType::Str => return NdArray::from_data(self.data.deep_copy()),
             _ => {}
         }
         let data = ensure_float(&self.data);
@@ -700,7 +702,58 @@ impl NdArray {
                 })
                 .into_shared(),
             ),
-            _ => unreachable!(),
+            ArrayData::Complex64(a) => ArrayData::Complex64(
+                a.mapv(|x| {
+                    let re = if x.re.is_nan() {
+                        nan as f32
+                    } else if x.re == f32::INFINITY {
+                        posinf as f32
+                    } else if x.re == f32::NEG_INFINITY {
+                        neginf as f32
+                    } else {
+                        x.re
+                    };
+                    let im = if x.im.is_nan() {
+                        nan as f32
+                    } else if x.im == f32::INFINITY {
+                        posinf as f32
+                    } else if x.im == f32::NEG_INFINITY {
+                        neginf as f32
+                    } else {
+                        x.im
+                    };
+                    num_complex::Complex::new(re, im)
+                })
+                .into_shared(),
+            ),
+            ArrayData::Complex128(a) => ArrayData::Complex128(
+                a.mapv(|x| {
+                    let re = if x.re.is_nan() {
+                        nan
+                    } else if x.re.is_infinite() && x.re > 0.0 {
+                        posinf
+                    } else if x.re.is_infinite() && x.re < 0.0 {
+                        neginf
+                    } else {
+                        x.re
+                    };
+                    let im = if x.im.is_nan() {
+                        nan
+                    } else if x.im.is_infinite() && x.im > 0.0 {
+                        posinf
+                    } else if x.im.is_infinite() && x.im < 0.0 {
+                        neginf
+                    } else {
+                        x.im
+                    };
+                    num_complex::Complex::new(re, im)
+                })
+                .into_shared(),
+            ),
+            _ => {
+                // Bool/Int/Str already handled above; this shouldn't happen
+                return NdArray::from_data(self.data.deep_copy());
+            }
         };
         NdArray::from_data(result)
     }

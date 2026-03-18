@@ -296,8 +296,23 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
     }
 
     let ndim = arrays[0].ndim();
+    if ndim == 0 {
+        return Err(NumpyError::ValueError(
+            "zero-dimensional arrays cannot be concatenated".into(),
+        ));
+    }
     if axis >= ndim {
         return Err(NumpyError::InvalidAxis { axis, ndim });
+    }
+
+    // Validate all arrays have the same number of dimensions
+    for (i, a) in arrays.iter().enumerate().skip(1) {
+        if a.ndim() != ndim {
+            return Err(NumpyError::ShapeMismatch(format!(
+                "all the input array dimensions except for the concatenation axis must match exactly, but along dimension {}, the array at index 0 has size {} and the array at index {} has size {}",
+                0, ndim, i, a.ndim()
+            )));
+        }
     }
 
     // Promote all to common dtype

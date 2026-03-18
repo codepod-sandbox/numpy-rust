@@ -1,6 +1,7 @@
 """Pure-Python implementation of numpy.testing assertion functions."""
 import numpy
 import math
+import sys
 
 __all__ = [
     "assert_", "assert_equal", "assert_almost_equal", "assert_approx_equal",
@@ -8,9 +9,13 @@ __all__ = [
     "assert_array_less", "assert_raises", "assert_raises_regex",
     "assert_warns", "assert_no_warnings", "assert_array_max_ulp",
     "assert_array_compare", "assert_string_equal",
+    "assert_array_almost_equal_nulp",
     "HAS_REFCOUNT", "IS_WASM", "IS_PYPY", "IS_PYSTON",
+    "IS_64BIT", "IS_MUSL", "IS_EDITABLE", "NOGIL_BUILD", "HAS_LAPACK64",
     "suppress_warnings", "break_cycles", "check_support_sve",
     "runstring", "temppath",
+    "extbuild",
+    "BLAS_SUPPORTS_FPE", "_assert_valid_refcount", "_gen_alignment_data",
 ]
 
 # Platform flags
@@ -18,6 +23,25 @@ HAS_REFCOUNT = False
 IS_WASM = False
 IS_PYPY = False
 IS_PYSTON = False
+IS_64BIT = (sys.maxsize > 2**32)
+IS_MUSL = False
+IS_EDITABLE = False
+NOGIL_BUILD = False
+HAS_LAPACK64 = False
+
+
+def assert_array_almost_equal_nulp(x, y, nulp=1):
+    """Assert arrays equal within nulp ULPs."""
+    numpy.testing.assert_allclose(x, y, rtol=1e-7 * nulp, atol=0)
+
+
+class _ExtBuild:
+    @staticmethod
+    def build_and_import_extension(*args, **kwargs):
+        import pytest
+        pytest.skip("C extensions not available")
+
+extbuild = _ExtBuild()
 
 
 def assert_(val, msg=""):
@@ -307,3 +331,20 @@ class temppath:
             os.unlink(self.path)
         except OSError:
             pass
+
+
+# BLAS / refcount helpers
+BLAS_SUPPORTS_FPE = False
+
+def _assert_valid_refcount(*args):
+    """Stub - always returns True (no refcounting in RustPython)."""
+    return True
+
+def _gen_alignment_data(dtype="float64", type="binary", max_size=24):
+    """Generate arrays for alignment testing."""
+    import numpy as np
+    for sz in [1, 2, 4, 8, max_size]:
+        if type == "unary":
+            yield np.zeros(sz, dtype=dtype), np.zeros(sz, dtype=dtype)
+        else:
+            yield np.zeros(sz, dtype=dtype), np.zeros(sz, dtype=dtype), np.zeros(sz, dtype=dtype)

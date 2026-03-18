@@ -81,7 +81,12 @@ def _parse_dtype_json(json_str):
 class void:
     """Scalar returned by arr[i] on a structured array, or a placeholder void of N bytes."""
 
-    def __init__(self, data, dtype=None):
+    def __init__(self, data=None, dtype=None):
+        if data is None:
+            # np.void() creates an empty void scalar
+            object.__setattr__(self, '_data', {})
+            object.__setattr__(self, 'dtype', None)
+            return
         if isinstance(data, int) and dtype is None:
             # np.void(n) creates a placeholder void of n bytes
             object.__setattr__(self, '_data', {})
@@ -382,9 +387,56 @@ linalg.cross = cross        # delegate to top-level cross()
 linalg.diagonal = diagonal  # delegate to top-level diagonal()
 linalg.outer = outer        # delegate to top-level outer()
 
-# --- Import submodules so np.ma and np.polynomial are accessible ------------
+# --- Import submodules so they are accessible as np.xxx ----------------------
 import numpy.ma as ma
 import numpy.polynomial as polynomial
+import numpy._core as _core
+import numpy._utils as _utils
+import numpy.dtypes as dtypes
+import numpy.strings as strings
+import numpy.exceptions as exceptions
+
+# --- Additional type aliases -------------------------------------------------
+uintc = uint32
+intc = int32
+
+# --- Functions commonly imported from numpy ----------------------------------
+def normalize_axis_tuple(axis, ndim, argname=None, allow_duplicate=False):
+    if isinstance(axis, int):
+        axis = (axis,)
+    result = []
+    for ax in axis:
+        if ax < 0:
+            ax = ndim + ax
+        if ax < 0 or ax >= ndim:
+            raise AxisError(ax, ndim, argname)
+        result.append(ax)
+    if not allow_duplicate and len(set(result)) != len(result):
+        raise ValueError("repeated axis")
+    return tuple(result)
+
+def normalize_axis_index(axis, ndim, msg_prefix=None):
+    if axis < 0:
+        axis = ndim + axis
+    if axis < 0 or axis >= ndim:
+        raise AxisError(axis, ndim)
+    return axis
+
+def asmatrix(data, dtype=None):
+    return asarray(data, dtype=dtype)
+
+def mask_indices(n, mask_func, k=0):
+    a = ones((n, n), dtype=bool_)
+    return where(mask_func(a, k))
+
+# --- Sentinel / aliases -----------------------------------------------------
+class _NoValue:
+    """Sentinel class for missing keyword arguments."""
+    def __repr__(self):
+        return "<no value>"
+
+cumulative_sum = cumsum
+cumulative_prod = cumprod
 
 # --- Module-level __getattr__ for deprecated aliases like np.bool -----------
 def __getattr__(name):

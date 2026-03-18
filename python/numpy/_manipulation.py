@@ -1295,51 +1295,66 @@ class vectorize:
 
 
 def put(a, ind, v, mode='raise'):
-    """Replaces specified elements of an array with given values."""
-    a = asarray(a)
-    flat = a.flatten()
-    n = flat.size
+    """Replaces specified elements of an array with given values.
+
+    Modifies 'a' in-place and returns None.
+    """
+    from ._helpers import _ObjectArray
+    if not isinstance(a, (ndarray, _ObjectArray)):
+        raise TypeError("argument 1 must be numpy.ndarray")
     ind_arr = asarray(ind).flatten()
     v_arr = asarray(v).flatten()
-    vals = [flat[i] for i in range(n)]
+    n = a.size
     ni = ind_arr.size
     nv = v_arr.size
+    if nv == 0:
+        # Empty values: no-op (numpy behavior)
+        return None
     for idx in range(ni):
         i = int(ind_arr[idx])
         if mode == 'wrap':
+            if n == 0:
+                return None
             i = i % n
         elif mode == 'clip':
+            if n == 0:
+                return None
             if i < 0:
                 i = 0
             elif i >= n:
                 i = n - 1
-        vals[i] = v_arr[idx % nv]
-    result = array(vals)
-    if a.ndim > 1:
-        result = result.reshape(a.shape)
-    return result
+        elif mode == 'raise':
+            if i < 0:
+                i = n + i
+            if i < 0 or i >= n:
+                raise IndexError("index {} is out of bounds for axis 0 with size {}".format(
+                    int(ind_arr[idx]), n))
+        if isinstance(a, _ObjectArray):
+            a._data[i] = v_arr[idx % nv] if isinstance(v_arr, _ObjectArray) else float(v_arr[idx % nv])
+        else:
+            a.flat[i] = float(v_arr[idx % nv])
+    return None
 
 
 def putmask(a, mask, values):
-    """Changes elements of an array based on conditional and input values."""
-    a = asarray(a)
+    """Changes elements of an array based on conditional and input values.
+
+    Modifies 'a' in-place and returns None.
+    """
     mask = asarray(mask)
     values = asarray(values)
-    flat_a = a.flatten()
     flat_m = mask.flatten()
     flat_v = values.flatten()
-    n = flat_a.size
+    n = a.size
     nv = flat_v.size
-    vals = [flat_a[i] for i in range(n)]
+    if nv == 0:
+        return None
     vi = 0
     for i in range(n):
         if flat_m[i]:
-            vals[i] = flat_v[vi % nv]
+            a.flat[i] = float(flat_v[vi % nv])
             vi += 1
-    result = array(vals)
-    if a.ndim > 1:
-        result = result.reshape(a.shape)
-    return result
+    return None
 
 
 def broadcast_arrays(*args):

@@ -123,9 +123,10 @@ pub mod _numpy_native {
             Some(s) => py_array::parse_dtype(s.as_str(), vm)?,
             None => numpy_rust_core::DType::Float64,
         };
-        Ok(PyNdArray::from_core(numpy_rust_core::creation::eye(
-            n, m_val, k_val, dt,
-        )))
+        Ok(PyNdArray::from_core(
+            numpy_rust_core::creation::eye(n, m_val, k_val, dt)
+                .map_err(|e| py_array::numpy_err(e, vm))?,
+        ))
     }
 
     #[pyfunction]

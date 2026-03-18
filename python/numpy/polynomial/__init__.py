@@ -89,9 +89,46 @@ class polynomial:
             c = [0.0] + [c[i] / (i + 1) for i in range(len(c))]
         return np.array(c)
 
+    class Polynomial:
+        """Polynomial class using ascending coefficient order."""
+
+        def __init__(self, coef, domain=None, window=None, symbol='x'):
+            import numpy as np
+            self.coef = np.asarray(coef, dtype='float64')
+            self.domain = domain if domain is not None else [-1, 1]
+            self.window = window if window is not None else [-1, 1]
+            self.symbol = symbol
+
+        def __call__(self, x):
+            import numpy as np
+            return polynomial.polyval(x, self.coef)
+
+        def __repr__(self):
+            return "Polynomial({})".format(self.coef.tolist())
+
+        def __len__(self):
+            return len(self.coef)
+
+        def degree(self):
+            return len(self.coef) - 1
+
+        def deriv(self, m=1):
+            c = polynomial.polyder(self.coef, m)
+            return polynomial.Polynomial(c, domain=self.domain, window=self.window)
+
+        def integ(self, m=1):
+            c = polynomial.polyint(self.coef, m)
+            return polynomial.Polynomial(c, domain=self.domain, window=self.window)
+
+        @staticmethod
+        def fit(x, y, deg, domain=None, window=None):
+            import numpy as np
+            c = polynomial.polyfit(x, y, deg)
+            return polynomial.Polynomial(c, domain=domain, window=window)
+
 
 # Also expose as module-level
-Polynomial = polynomial
+Polynomial = polynomial.Polynomial
 
 
 class chebyshev:

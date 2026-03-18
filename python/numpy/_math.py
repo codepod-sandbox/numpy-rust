@@ -64,6 +64,16 @@ __all__ = [
     '_unwrap_1d_list',
 ]
 
+# --- MaskedArray duck-type check (avoids circular import) -------------------
+def _is_masked_array(x):
+    """Return True if x is a MaskedArray (duck-type check)."""
+    return hasattr(x, 'filled') and hasattr(x, 'mask') and not isinstance(x, ndarray)
+
+def _ma_unary(func_name, x, fill=0.0):
+    """Delegate a unary math op to numpy.ma when x is a MaskedArray."""
+    import numpy.ma as ma
+    return getattr(ma, func_name)(x)
+
 # --- Save builtin divmod before shadowing -----------------------------------
 _builtin_divmod = __builtins__["divmod"] if isinstance(__builtins__, dict) else __import__("builtins").divmod
 
@@ -451,6 +461,8 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
 # --- abs / absolute ----------------------------------------------------------
 
 def abs(x, out=None):
+    if _is_masked_array(x):
+        return _ma_unary('absolute', x)
     if isinstance(x, ndarray):
         result = x.abs()
         if out is not None:
@@ -466,6 +478,8 @@ absolute = abs
 # --- sqrt, exp, log family ---------------------------------------------------
 
 def sqrt(x):
+    if _is_masked_array(x):
+        return _ma_unary('sqrt', x)
     if isinstance(x, ndarray):
         return x.sqrt()
     if isinstance(x, complex):
@@ -474,35 +488,57 @@ def sqrt(x):
     return _math.sqrt(x)
 
 def exp(x):
+    if _is_masked_array(x):
+        return _ma_unary('exp', x)
     if isinstance(x, ndarray):
         return x.exp()
+    if isinstance(x, complex):
+        import cmath
+        return cmath.exp(x)
     return _math.exp(x)
 
 def exp2(x):
     """Compute 2**x element-wise."""
+    if _is_masked_array(x):
+        return _ma_unary('exp', x)  # ma doesn't have exp2, use power
     return power(2.0, asarray(x))
 
 def log(x):
+    if _is_masked_array(x):
+        return _ma_unary('log', x)
     if isinstance(x, ndarray):
         return x.log()
+    if isinstance(x, complex):
+        import cmath
+        return cmath.log(x)
     return _math.log(x)
 
 def log10(x):
+    if _is_masked_array(x):
+        return _ma_unary('log10', x)
     if isinstance(x, ndarray):
         return _native.log10(x)
     return _math.log10(x)
 
 def log2(x):
+    if _is_masked_array(x):
+        return _ma_unary('log2', x)
     if isinstance(x, ndarray):
         return _native.log2(x)
     return _math.log2(x)
 
 def log1p(x):
+    if _is_masked_array(x):
+        import numpy.ma as ma
+        return ma._apply_unary(_math.log1p, x)
     if isinstance(x, ndarray):
         return _native.log1p(x)
     return _math.log1p(x)
 
 def expm1(x):
+    if _is_masked_array(x):
+        import numpy.ma as ma
+        return ma._apply_unary(_math.expm1, x)
     if isinstance(x, ndarray):
         return _native.expm1(x)
     return _math.expm1(x)
@@ -510,6 +546,10 @@ def expm1(x):
 # --- sign --------------------------------------------------------------------
 
 def sign(x):
+    if _is_masked_array(x):
+        import numpy.ma as ma
+        import numpy as np
+        return ma._apply_unary(np.sign, x)
     if isinstance(x, ndarray):
         return _native.sign(x)
     return (x > 0) - (x < 0)
@@ -533,51 +573,72 @@ degrees = rad2deg
 # --- Trig --------------------------------------------------------------------
 
 def sin(x):
+    if _is_masked_array(x):
+        return _ma_unary('sin', x)
     if isinstance(x, ndarray):
         return x.sin()
     return _math.sin(x)
 
 def cos(x):
+    if _is_masked_array(x):
+        return _ma_unary('cos', x)
     if isinstance(x, ndarray):
         return x.cos()
     return _math.cos(x)
 
 def tan(x):
+    if _is_masked_array(x):
+        return _ma_unary('tan', x)
     if isinstance(x, ndarray):
         return x.tan()
     return _math.tan(x)
 
 def sinh(x):
+    if _is_masked_array(x):
+        return _ma_unary('sinh', x)
     if isinstance(x, ndarray):
         return _native.sinh(x)
     return _math.sinh(x)
 
 def cosh(x):
+    if _is_masked_array(x):
+        return _ma_unary('cosh', x)
     if isinstance(x, ndarray):
         return _native.cosh(x)
     return _math.cosh(x)
 
 def tanh(x):
+    if _is_masked_array(x):
+        return _ma_unary('tanh', x)
     if isinstance(x, ndarray):
         return _native.tanh(x)
     return _math.tanh(x)
 
 def arcsin(x):
+    if _is_masked_array(x):
+        return _ma_unary('arcsin', x)
     if isinstance(x, ndarray):
         return _native.arcsin(x)
     return _math.asin(x)
 
 def arccos(x):
+    if _is_masked_array(x):
+        return _ma_unary('arccos', x)
     if isinstance(x, ndarray):
         return _native.arccos(x)
     return _math.acos(x)
 
 def arctan(x):
+    if _is_masked_array(x):
+        return _ma_unary('arctan', x)
     if isinstance(x, ndarray):
         return _native.arctan(x)
     return _math.atan(x)
 
 def arctan2(y, x, out=None, where=True, **kwargs):
+    if _is_masked_array(y) or _is_masked_array(x):
+        import numpy.ma as ma
+        return ma.arctan2(y, x)
     if not isinstance(y, ndarray):
         y = array(y)
     if not isinstance(x, ndarray):
@@ -585,43 +646,61 @@ def arctan2(y, x, out=None, where=True, **kwargs):
     return _native.arctan2(y, x)
 
 def arcsinh(x):
+    if _is_masked_array(x):
+        return _ma_unary('arcsinh', x)
     if not isinstance(x, ndarray):
         x = array(x)
     return _native.arcsinh(x)
 
 def arccosh(x):
+    if _is_masked_array(x):
+        return _ma_unary('arccosh', x)
     if not isinstance(x, ndarray):
         x = array(x)
     return _native.arccosh(x)
 
 def arctanh(x):
+    if _is_masked_array(x):
+        return _ma_unary('arctanh', x)
     if not isinstance(x, ndarray):
         x = array(x)
     return _native.arctanh(x)
 
 def hypot(x1, x2):
     """Element-wise sqrt(x1**2 + x2**2)."""
+    if _is_masked_array(x1) or _is_masked_array(x2):
+        import numpy.ma as ma
+        return ma.hypot(x1, x2)
     return _native.hypot(asarray(x1), asarray(x2))
 
 # --- Rounding ----------------------------------------------------------------
 
 def trunc(x):
+    if _is_masked_array(x):
+        import numpy.ma as ma
+        return ma._apply_unary(lambda v: _native.trunc(v) if isinstance(v, ndarray) else _math.trunc(v), x)
     if isinstance(x, ndarray):
         return _native.trunc(x)
     import math as _math
     return _math.trunc(x)
 
 def floor(x):
+    if _is_masked_array(x):
+        return _ma_unary('floor', x)
     if isinstance(x, ndarray):
         return x.floor()
     return _math.floor(x)
 
 def ceil(x):
+    if _is_masked_array(x):
+        return _ma_unary('ceil', x)
     if isinstance(x, ndarray):
         return x.ceil()
     return _math.ceil(x)
 
 def around(a, decimals=0, out=None):
+    if _is_masked_array(a):
+        return _ma_unary('around', a)
     _builtin_round = __import__("builtins").round
     if not isinstance(a, ndarray):
         if isinstance(a, (list, tuple)):
@@ -640,15 +719,39 @@ round = around
 
 def rint(x):
     """Round to nearest integer."""
+    if _is_masked_array(x):
+        return _ma_unary('around', x)
     if isinstance(x, ndarray):
         return _native.around(x, 0)
     return float(round(x))
 
-def fix(x):
+def fix(x, out=None):
     """Round to nearest integer towards zero."""
+    if _is_masked_array(x):
+        import numpy.ma as ma
+        return ma._apply_unary(lambda v: _native.trunc(v) if isinstance(v, ndarray) else _math.trunc(v), x)
     if isinstance(x, ndarray):
-        return _native.trunc(x)
-    return float(_math.trunc(x))
+        result = _native.trunc(x)
+        if out is not None:
+            out_arr = out
+            if isinstance(out_arr, tuple):
+                out_arr = out_arr[0]
+            flat_r = result.flatten()
+            for i in range(flat_r.size):
+                out_arr.flat[i] = flat_r[i]
+            return out_arr
+        return result
+    if not isinstance(x, (int, float)):
+        x = asarray(x)
+        return fix(x, out=out)
+    result = float(_math.trunc(x))
+    if out is not None:
+        out_arr = out
+        if isinstance(out_arr, tuple):
+            out_arr = out_arr[0]
+        out_arr.flat[0] = result
+        return out_arr
+    return result
 
 # --- ldexp / frexp -----------------------------------------------------------
 
@@ -1033,13 +1136,20 @@ def divmod_(x1, x2):
 divmod = divmod_
 
 def negative(x):
+    if _is_masked_array(x):
+        return _ma_unary('negative', x)
     return -asarray(x)
 
 def positive(x):
+    if _is_masked_array(x):
+        return x  # positive is identity
     return asarray(x) * 1
 
 def fmod(x1, x2):
     """Return the element-wise remainder of division (C-style)."""
+    if _is_masked_array(x1) or _is_masked_array(x2):
+        import numpy.ma as ma
+        return ma.fmod(x1, x2)
     return _native.fmod(asarray(x1), asarray(x2))
 
 def modf(x):
@@ -1225,29 +1335,54 @@ def real_if_close(a, tol=100):
 
 def isneginf(x, out=None):
     """Test element-wise for negative infinity."""
+    _scalar_input = not isinstance(x, (ndarray, list, tuple))
     x = asarray(x)
     flat = x.flatten()
     n = flat.size
     vals = []
     for i in range(n):
         v = float(flat[i])
-        vals.append(1.0 if (not (v != v) and v == float('-inf')) else 0.0)
-    r = array(vals)
-    if x.ndim > 1:
+        vals.append(True if (not (v != v) and v == float('-inf')) else False)
+    r = array(vals).astype('bool')
+    if x.ndim == 0:
+        r = r.reshape(())
+    elif x.ndim > 1:
         r = r.reshape(x.shape)
-    # Convert to bool by comparing > 0
-    return r > zeros(r.shape)
+    if out is not None:
+        out_arr = out
+        if isinstance(out_arr, tuple):
+            out_arr = out_arr[0]
+        flat_r = r.flatten()
+        for i in range(flat_r.size):
+            out_arr.flat[i] = flat_r[i]
+        return out_arr
+    if _scalar_input and r.ndim == 0:
+        return bool(r)
+    return r
 
 def isposinf(x, out=None):
     """Test element-wise for positive infinity."""
+    _scalar_input = not isinstance(x, (ndarray, list, tuple))
     x = asarray(x)
     flat = x.flatten()
     n = flat.size
     vals = []
     for i in range(n):
         v = float(flat[i])
-        vals.append(1.0 if (not (v != v) and v == float('inf')) else 0.0)
-    r = array(vals)
-    if x.ndim > 1:
+        vals.append(True if (not (v != v) and v == float('inf')) else False)
+    r = array(vals).astype('bool')
+    if x.ndim == 0:
+        r = r.reshape(())
+    elif x.ndim > 1:
         r = r.reshape(x.shape)
-    return r > zeros(r.shape)
+    if out is not None:
+        out_arr = out
+        if isinstance(out_arr, tuple):
+            out_arr = out_arr[0]
+        flat_r = r.flatten()
+        for i in range(flat_r.size):
+            out_arr.flat[i] = flat_r[i]
+        return out_arr
+    if _scalar_input and r.ndim == 0:
+        return bool(r)
+    return r
