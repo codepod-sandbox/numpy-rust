@@ -219,13 +219,10 @@ def mean(a, axis=None, dtype=None, out=None, keepdims=False, where=True):
     if not isinstance(result, ndarray) and dtype is None:
         result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
-        if isinstance(out, ndarray):
-            if out.size == 1:
-                out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
-            else:
-                flat_r = result.flatten() if isinstance(result, ndarray) else array([result])
-                for i in range(out.size):
-                    out.flatten()[i] = float(flat_r[i])
+        if isinstance(result, ndarray):
+            _copy_into(out, result)
+        elif isinstance(out, ndarray) and out.size == 1:
+            out[0] = float(result)
         return out
     return result
 
@@ -266,8 +263,10 @@ def std(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
     if dtype is not None:
         result = _dtype_cast(result, dtype)
     if out is not None:
-        if isinstance(out, ndarray) and out.size == 1:
-            out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
+        if isinstance(result, ndarray):
+            _copy_into(out, result)
+        elif isinstance(out, ndarray) and out.size == 1:
+            out[0] = float(result)
         return out
     if isinstance(a, ndarray) and axis is None and not keepdims and not isinstance(result, ndarray):
         from ._core_types import float64, complex128
@@ -388,8 +387,10 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
     elif not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
-        if isinstance(out, ndarray) and out.size == 1:
-            out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
+        if isinstance(result, ndarray):
+            _copy_into(out, result)
+        elif isinstance(out, ndarray) and out.size == 1:
+            out[0] = float(result)
         return out
     return result
 

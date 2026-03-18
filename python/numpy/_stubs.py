@@ -1132,7 +1132,9 @@ def tensordot(a, b, axes=2):
     result = dot(at2, bt2)
     out_shape = free_a_shape + free_b_shape
     if len(out_shape) == 0:
-        return result
+        # 0-d result — return scalar with shape ()
+        val = float(result.flatten()[0])
+        return array(val)
     return result.reshape(out_shape)
 
 
