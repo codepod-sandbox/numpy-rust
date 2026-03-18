@@ -39,6 +39,7 @@ __all__ = [
     'longlong', 'ulonglong', 'single', 'double', 'longdouble',
     'csingle', 'cdouble', 'clongdouble',
     'string_', 'unicode_', 'half', 'float_', 'complex_', 'uint', 'long', 'ulong',
+    'longfloat', 'clongfloat', 'longcomplex',
 ]
 
 # ---------------------------------------------------------------------------
@@ -450,6 +451,9 @@ longdouble = _ScalarType("float64", float)
 csingle = _ScalarType("complex64", complex)
 cdouble = _ScalarType("complex128", complex)
 clongdouble = _ScalarType("complex128", complex)
+longfloat = _ScalarType("float64", float)
+clongfloat = _ScalarType("complex128", complex)
+longcomplex = _ScalarType("complex128", complex)
 object_ = _ScalarType("object", object)
 
 # More scalar aliases (set after datetime section in original __init__.py)
@@ -980,6 +984,14 @@ def _normalize_dtype(dt):
     # Handle unsupported type objects passed as dtype (e.g. decimal.Decimal)
     if s.startswith("<class '") and s.endswith("'>"):
         return 'object'
+    # Long double / long float aliases (no true long double in Rust, use float64/complex128)
+    _long_aliases = {
+        'longdouble': 'float64', 'longfloat': 'float64',
+        'clongdouble': 'complex128', 'clongfloat': 'complex128',
+        'longcomplex': 'complex128',
+    }
+    if s in _long_aliases:
+        return _long_aliases[s]
     return s
 
 

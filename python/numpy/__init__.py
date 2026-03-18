@@ -484,6 +484,86 @@ class _NoValue:
 cumulative_sum = cumsum
 cumulative_prod = cumprod
 
+# --- np.astype (NumPy 2.x function form) ------------------------------------
+def astype(x, dtype, copy=None, casting=None):
+    """Convert array to specified dtype (NumPy 2.x function form)."""
+    # NumPy 2.x requires x to be an ndarray or numpy scalar, not a plain list/tuple
+    if not isinstance(x, ndarray) and not hasattr(x, 'dtype'):
+        raise TypeError("Input should be a NumPy array or scalar")
+    arr = asarray(x)
+    if casting is not None and casting in ('safe', 'same_kind', 'no'):
+        from numpy._core_types import dtype as _dtype_cls
+        src_dt = arr.dtype
+        tgt_dt_obj = _dtype_cls(dtype)
+        if not can_cast(src_dt, tgt_dt_obj, casting=casting):
+            raise TypeError(
+                f"Cannot cast array data from {src_dt} to {tgt_dt_obj} "
+                f"according to the rule '{casting}'"
+            )
+    return arr.astype(dtype)
+
+# --- np.from_dlpack stub ----------------------------------------------------
+def from_dlpack(x):
+    """Stub for DLPack interop — just wraps as array."""
+    return asarray(x)
+
+# --- np.isdtype (NumPy 2.x dtype kind check) --------------------------------
+def isdtype(dtype_arg, kind):
+    """Check if dtype belongs to a specified kind category."""
+    # Normalize dtype_arg to a dtype object
+    dt = dtype(dtype_arg)
+    dt_name = dt.name if hasattr(dt, 'name') else str(dt)
+
+    # If kind is a tuple, check any
+    if isinstance(kind, tuple):
+        return any(isdtype(dtype_arg, k) for k in kind)
+
+    # If kind is an abstract type class, map to the corresponding string kind
+    _abstract_map = {
+        'bool_': 'bool',
+        'signedinteger': 'signed integer',
+        'unsignedinteger': 'unsigned integer',
+        'integer': 'integral',
+        'floating': 'real floating',
+        'complexfloating': 'complex floating',
+        'number': 'numeric',
+    }
+    if not isinstance(kind, str):
+        # Check if it's an abstract type class from our hierarchy
+        kind_scalar = getattr(kind, '_scalar_name', None)
+        if kind_scalar in _abstract_map:
+            return isdtype(dtype_arg, _abstract_map[kind_scalar])
+        # Otherwise treat as concrete dtype for exact match
+        kind_dt = dtype(kind)
+        kind_name = kind_dt.name if hasattr(kind_dt, 'name') else str(kind_dt)
+        return dt_name == kind_name
+
+    # Abstract type hierarchy checks via string kinds
+    _signed = {'int8', 'int16', 'int32', 'int64'}
+    _unsigned = {'uint8', 'uint16', 'uint32', 'uint64'}
+    _real_floating = {'float16', 'float32', 'float64'}
+    _complex_floating = {'complex64', 'complex128'}
+
+    if kind == 'bool':
+        return dt_name == 'bool'
+    elif kind == 'signed integer':
+        return dt_name in _signed
+    elif kind == 'unsigned integer':
+        return dt_name in _unsigned
+    elif kind == 'integral':
+        return dt_name in (_signed | _unsigned)
+    elif kind == 'real floating':
+        return dt_name in _real_floating
+    elif kind == 'complex floating':
+        return dt_name in _complex_floating
+    elif kind == 'numeric':
+        return dt_name in (_signed | _unsigned | _real_floating | _complex_floating)
+    else:
+        raise ValueError(f"Unrecognized kind: {kind!r}")
+
+# --- Ensure DTypePromotionError is importable from numpy ---------------------
+from numpy.exceptions import DTypePromotionError
+
 # --- Module-level __getattr__ for deprecated aliases like np.bool -----------
 def __getattr__(name):
     _bi = __import__("builtins")

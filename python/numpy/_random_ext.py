@@ -390,8 +390,14 @@ def _random_dirichlet(alpha, size=None):
 class _Generator:
     """Random number generator (simplified)."""
     def __init__(self, seed_val=None):
-        if seed_val is not None:
-            random.seed(int(seed_val))
+        if isinstance(seed_val, _BitGenerator):
+            self.bit_generator = seed_val
+            if seed_val._seed is not None:
+                random.seed(int(seed_val._seed))
+        else:
+            self.bit_generator = _PCG64(seed_val)
+            if seed_val is not None:
+                random.seed(int(seed_val))
 
     def random(self, size=None):
         if size is None:
