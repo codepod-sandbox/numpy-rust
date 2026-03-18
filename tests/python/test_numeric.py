@@ -4147,12 +4147,12 @@ def test_logical_or_broadcast():
 def test_copysign_zero():
     """copysign(5.0, 0.0) should return 5.0, not 0.0."""
     result = np.copysign(5.0, 0.0)
-    assert_close(float(result[0]), 5.0, msg="copysign(5.0, 0.0)")
+    assert_close(float(result), 5.0, msg="copysign(5.0, 0.0)")
 
 def test_copysign_neg_zero():
     """copysign(5.0, -1.0) should return -5.0."""
     result = np.copysign(5.0, -1.0)
-    assert_close(float(result[0]), -5.0, msg="copysign(5.0, -1.0)")
+    assert_close(float(result), -5.0, msg="copysign(5.0, -1.0)")
 
 def test_copysign_array():
     """copysign([1,-2,3], [-1,1,-1]) should return [-1, 2, -3]."""
