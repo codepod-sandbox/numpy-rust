@@ -103,8 +103,11 @@ class _ScalarType:
 
     def __call__(self, value=0, *args, **kwargs):
         try:
-            return self._type(value)
+            return self._type(value, *args, **kwargs)
         except (ValueError, TypeError):
+            # bytes_(x) converts via str first (e.g. bytes_(-2) == b'-2')
+            if self._type is bytes and not args and not kwargs:
+                return str(value).encode('ascii')
             # Return the value as-is for unsupported conversions (e.g. NaT)
             return value
 
@@ -167,12 +170,43 @@ class _NumpyIntScalar(int):
     def round(self, ndigits=0):
         return _NumpyIntScalar(__import__("builtins").round(int(self), ndigits), self._numpy_dtype_name)
 
+    def is_integer(self):
+        return True
+
+    def bit_count(self):
+        return int.bit_count(int(self))
+
+    @property
+    def device(self):
+        return "cpu"
+
+    def to_device(self, device):
+        if device == "cpu":
+            return self
+        raise ValueError(f"Unsupported device: {device}")
+
+
+def _truncate_float(value, dtype_name):
+    """Truncate a float value to the precision of the target dtype."""
+    import struct as _struct
+    fval = float(value)
+    if dtype_name == "float32":
+        return _struct.unpack('f', _struct.pack('f', fval))[0]
+    elif dtype_name == "float16":
+        # Use struct 'e' format for IEEE 754 half-precision
+        try:
+            return _struct.unpack('e', _struct.pack('e', fval))[0]
+        except (OverflowError, struct.error):
+            return fval
+    return fval
+
 
 class _NumpyFloatScalar(float):
     _numpy_dtype_name: str
 
     def __new__(cls, value=0.0, dtype_name="float64"):
-        obj = float.__new__(cls, float(value))
+        fval = _truncate_float(float(value), dtype_name)
+        obj = float.__new__(cls, fval)
         obj._numpy_dtype_name = dtype_name
         return obj
 
@@ -218,6 +252,22 @@ class _NumpyFloatScalar(float):
             return _np.multiply(other, self)
         return float.__rmul__(self, other)
 
+    def as_integer_ratio(self):
+        """Return (numerator, denominator) pair."""
+        return float.as_integer_ratio(float(self))
+
+    def is_integer(self):
+        return float.is_integer(float(self))
+
+    @property
+    def device(self):
+        return "cpu"
+
+    def to_device(self, device):
+        if device == "cpu":
+            return self
+        raise ValueError(f"Unsupported device: {device}")
+
 
 class _NumpyComplexScalar(complex):
     _numpy_dtype_name: str
@@ -242,6 +292,19 @@ class _NumpyComplexScalar(complex):
     @property
     def size(self):
         return 1
+
+    def __array_namespace__(self, *, api_version=None):
+        import numpy
+        return numpy
+
+    @property
+    def device(self):
+        return "cpu"
+
+    def to_device(self, device):
+        if device == "cpu":
+            return self
+        raise ValueError(f"Unsupported device: {device}")
 
 
 # Void scalar placeholder
@@ -274,10 +337,42 @@ class _ScalarTypeMeta(type):
     def __call__(cls, value=0, *args, **kwargs):
         scalar_name = cls._scalar_name
         if scalar_name in ('complex64', 'complex128') and len(args) == 1:
+            real_part = value
+            imag_part = args[0]
+            # NumPy requires both parts to be real numbers (int/float), not
+            # complex or None.
+            if isinstance(real_part, complex) or isinstance(imag_part, complex):
+                raise TypeError(
+                    "complex() can't take second arg if first is a complex")
+            if real_part is None or imag_part is None:
+                raise TypeError(
+                    "complex() first argument must be a string or a number, "
+                    "not 'NoneType'")
             try:
-                value = complex(value, args[0])
+                value = complex(real_part, imag_part)
             except (ValueError, TypeError):
+                raise
+        # Unsigned integer overflow check
+        if scalar_name in ('uint8', 'uint16', 'uint32', 'uint64'):
+            try:
+                iv = int(value)
+            except (ValueError, TypeError):
+                pass
+            else:
+                if iv < 0:
+                    raise OverflowError(
+                        "can't convert negative value to " + scalar_name)
+        # For str/bytes, pass through extra args (e.g. encoding)
+        if scalar_name in ('str', 'bytes'):
+            try:
+                base_value = cls._python_type(value, *args, **kwargs)
+            except UnicodeError:
+                raise  # Let encoding errors propagate
+            except (ValueError, TypeError):
+                if cls._python_type is bytes and not args and not kwargs:
+                    return str(value).encode('ascii')
                 return value
+            return base_value
         try:
             base_value = cls._python_type(value)
         except (ValueError, TypeError):
@@ -356,10 +451,43 @@ typecodes = {
 # ---------------------------------------------------------------------------
 # Type hierarchy classes
 # ---------------------------------------------------------------------------
+_ABSTRACT_SCALAR_TYPES = {
+    'number', 'integer', 'signedinteger', 'unsignedinteger',
+    'inexact', 'floating', 'complexfloating',
+}
+# Concrete types that are intentionally subscriptable
+_SUBSCRIPTABLE_CONCRETE = {'bool', 'datetime64', 'timedelta64'}
+
+
 class generic(metaclass=_ScalarTypeMeta, scalar_name="generic"):
     """Base class for all numpy scalar types."""
     def __class_getitem__(cls, item):
-        return cls
+        import types as _types
+        name = cls._scalar_name
+        if name in _ABSTRACT_SCALAR_TYPES:
+            # complexfloating accepts 1 or 2 type args
+            if name == 'complexfloating':
+                if isinstance(item, tuple):
+                    if len(item) < 1 or len(item) > 2:
+                        what = 'few' if len(item) == 0 else 'many'
+                        raise TypeError(
+                            f"Too {what} arguments for "
+                            f"{cls}")
+                else:
+                    item = (item,)
+            else:
+                # Other abstract types accept exactly 1 type arg
+                if isinstance(item, tuple):
+                    if len(item) != 1:
+                        raise TypeError(
+                            f"Too {'few' if len(item) == 0 else 'many'} "
+                            f"arguments for {cls}")
+                    item = item[0]
+            return _types.GenericAlias(cls, item)
+        if name in _SUBSCRIPTABLE_CONCRETE:
+            return _types.GenericAlias(cls, item)
+        raise TypeError(
+            f"There are no type variables left in {cls}")
 
 class number(generic, metaclass=_ScalarTypeMeta, scalar_name="number"):
     """Base class for all numeric scalar types."""
@@ -443,32 +571,34 @@ class bytes_(character, metaclass=_ScalarTypeMeta, scalar_name="bytes", python_t
 class void(flexible, metaclass=_ScalarTypeMeta, scalar_name="void", python_type=float):
     pass
 
-# Aliases using _ScalarType (for types that don't need hierarchy participation)
+# Aliases — point to the _ScalarTypeMeta classes so that ``dtype.type is alias``
+# holds (identity check).  ``_ScalarType`` instances are only kept for types
+# that have no _ScalarTypeMeta class counterpart (float128, object_, string_…).
 float128 = _ScalarType("float128", float)
 intp = int64
-intc = _ScalarType("int32", int)
-uintp = _ScalarType("uint64", int)
-byte = _ScalarType("int8", int)
-ubyte = _ScalarType("uint8", int)
-short = _ScalarType("int16", int)
-ushort = _ScalarType("uint16", int)
-longlong = _ScalarType("int64", int)
-ulonglong = _ScalarType("uint64", int)
-single = _ScalarType("float32", float)
-double = _ScalarType("float64", float)
-longdouble = _ScalarType("float64", float)
-csingle = _ScalarType("complex64", complex)
-cdouble = _ScalarType("complex128", complex)
-clongdouble = _ScalarType("complex128", complex)
-longfloat = _ScalarType("float64", float)
-clongfloat = _ScalarType("complex128", complex)
-longcomplex = _ScalarType("complex128", complex)
+intc = int32
+uintp = uint64
+byte = int8
+ubyte = uint8
+short = int16
+ushort = uint16
+longlong = int64
+ulonglong = uint64
+single = float32
+double = float64
+longdouble = float64
+csingle = complex64
+cdouble = complex128
+clongdouble = complex128
+longfloat = float64
+clongfloat = complex128
+longcomplex = complex128
 object_ = _ScalarType("object", object)
 
 # More scalar aliases (set after datetime section in original __init__.py)
 string_ = _ScalarType("str", str)
 unicode_ = _ScalarType("str", str)
-half = _ScalarType("float16", float)
+half = float16
 int_ = int64
 float_ = float64
 complex_ = complex128

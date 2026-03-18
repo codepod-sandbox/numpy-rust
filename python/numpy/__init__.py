@@ -28,6 +28,7 @@ from ._indexing import *
 from ._window import *
 from ._io import *
 from ._stubs import *
+from ._string_ops import char, chararray  # override _stubs char with full chararray support
 from ._linalg_ext import *
 from ._fft_ext import *
 from ._random_ext import *
@@ -447,6 +448,11 @@ uintc = uint32
 intc = int32
 
 # --- Functions commonly imported from numpy ----------------------------------
+def shape(a):
+    """Return the shape of an array."""
+    arr = asarray(a)
+    return arr.shape
+
 def normalize_axis_tuple(axis, ndim, argname=None, allow_duplicate=False):
     if isinstance(axis, int):
         axis = (axis,)
@@ -575,17 +581,17 @@ def isdtype(dtype_arg, kind):
 # --- Ensure DTypePromotionError is importable from numpy ---------------------
 from numpy.exceptions import DTypePromotionError
 
-# --- Module-level __getattr__ for deprecated aliases like np.bool -----------
+# --- Module-level __getattr__ for np.bool etc. (NumPy 2.x style) -----------
 def __getattr__(name):
-    _bi = __import__("builtins")
-    _deprecated_aliases = {
-        'bool': _bi.bool,
-        'int': _bi.int,
-        'float': _bi.float,
-        'complex': _bi.complex,
-        'str': _bi.str,
-        'object': _bi.object,
+    # NumPy 2.x: np.bool → np.bool_, np.int → np.int_, etc.
+    _type_aliases = {
+        'bool': bool_,
+        'int': int_,
+        'float': float_,
+        'complex': complex_,
+        'str': str_,
+        'object': object_,
     }
-    if name in _deprecated_aliases:
-        return _deprecated_aliases[name]
+    if name in _type_aliases:
+        return _type_aliases[name]
     raise AttributeError(f"module 'numpy' has no attribute '{name}'")

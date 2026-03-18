@@ -939,7 +939,22 @@ impl PyNdArray {
                     is_fortran: AtomicBool::new(is_f),
                     is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
                 };
-                return Ok(result.into_ref_with_type(vm, py_type)?.into());
+                // Try into_ref_with_type first; if it fails (not a real ndarray subclass),
+                // try calling the type's _from_array classmethod as a fallback.
+                match result.into_ref_with_type(vm, py_type.clone()) {
+                    Ok(obj) => return Ok(obj.into()),
+                    Err(_) => {
+                        // Fallback: try _from_array classmethod (e.g. chararray)
+                        let self_obj = PyNdArray::from_core(data.clone()).into_pyobject(vm);
+                        if let Ok(from_array) = py_type.as_object().get_attr("_from_array", vm) {
+                            return from_array.call((self_obj,), vm);
+                        }
+                        return Err(vm.new_type_error(format!(
+                            "'{}' is not a subtype of 'ndarray'",
+                            py_type.name()
+                        )));
+                    }
+                }
             }
             // Try to parse as dtype string
             let dtype_str: String = match dtype_obj.try_into_value::<String>(vm) {

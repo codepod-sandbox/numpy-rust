@@ -5,6 +5,7 @@ ALLOW_THREADS = 1
 CLIP = 0
 WRAP = 1
 RAISE = 2
+MAXDIMS = 64
 
 
 def _reconstruct(subtype, shape, dtype):

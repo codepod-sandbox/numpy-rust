@@ -118,21 +118,55 @@ class errstate:
 # Print options
 # ---------------------------------------------------------------------------
 
-def set_printoptions(**kwargs):
-    pass
+_print_options = {
+    'precision': 8,
+    'threshold': 1000,
+    'edgeitems': 3,
+    'linewidth': 75,
+    'suppress': False,
+    'nanstr': 'nan',
+    'infstr': 'inf',
+    'formatter': None,
+    'sign': '-',
+    'floatmode': 'maxprec',
+    'legacy': False,
+    'override_repr': None,
+}
+
+def set_printoptions(precision=None, threshold=None, edgeitems=None,
+                     linewidth=None, suppress=None, nanstr=None, infstr=None,
+                     formatter=None, sign=None, floatmode=None, legacy=None,
+                     override_repr=None, **kwargs):
+    """Set printing options."""
+    if precision is not None: _print_options['precision'] = precision
+    if threshold is not None: _print_options['threshold'] = threshold
+    if edgeitems is not None: _print_options['edgeitems'] = edgeitems
+    if linewidth is not None: _print_options['linewidth'] = linewidth
+    if suppress is not None: _print_options['suppress'] = suppress
+    if nanstr is not None: _print_options['nanstr'] = nanstr
+    if infstr is not None: _print_options['infstr'] = infstr
+    if formatter is not None: _print_options['formatter'] = formatter
+    if sign is not None: _print_options['sign'] = sign
+    if floatmode is not None: _print_options['floatmode'] = floatmode
+    if legacy is not None: _print_options['legacy'] = legacy
+    if override_repr is not None: _print_options['override_repr'] = override_repr
 
 def get_printoptions():
-    return {}
+    """Get current printing options."""
+    return dict(_print_options)
 
 class printoptions:
     """Context manager for print options."""
     def __init__(self, **kwargs):
         self._opts = kwargs
+        self._old_opts = None
     def __enter__(self):
+        self._old_opts = dict(_print_options)
         set_printoptions(**self._opts)
-        return self
+        return self._old_opts.copy()
     def __exit__(self, *args):
-        pass  # We don't actually track old options
+        _print_options.clear()
+        _print_options.update(self._old_opts)
 
 
 # ---------------------------------------------------------------------------

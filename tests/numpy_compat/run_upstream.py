@@ -109,8 +109,7 @@ def _warns(cls, *args, **kwargs):
     if args:
         fn = args[0]
         fargs = args[1:]
-        fn(*fargs, **kwargs)
-        return
+        return fn(*fargs, **kwargs)
     return _WarnsContext()
 
 
@@ -209,12 +208,17 @@ def _param(*args, **kwargs):
     return args
 
 
+def _xfail_func(reason=""):
+    """Immediately mark the current test as an expected failure (like pytest.xfail)."""
+    raise _SkipException("[XFAIL] " + reason)
+
 _pytest.raises = _raises
 _pytest.warns = _warns
 _pytest.approx = _approx
 _pytest.mark = _Mark()
 _pytest.param = _param
 _pytest.skip = _skip_func
+_pytest.xfail = _xfail_func
 _pytest.fixture = _fixture
 _pytest.importorskip = _importorskip
 _pytest.SkipException = _SkipException
@@ -728,7 +732,10 @@ def _run_test_file(test_path, label=None):
             if getattr(obj, "_skip", False):
                 _skipped += 1
                 continue
-            _run_single_test(name, obj)
+            if hasattr(obj, "_parametrize"):
+                _run_parametrized(name, obj)
+            else:
+                _run_single_test(name, obj)
 
     return (_passed, _failed, _skipped, _errored, _xfailed, True)
 

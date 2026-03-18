@@ -66,6 +66,9 @@ def _val_equal(a, b):
 
 def _as_list(arr):
     """Convert ndarray to flat Python list for element-wise comparison."""
+    # Handle MaskedArray by converting to its data array
+    if hasattr(arr, 'data') and hasattr(arr, 'mask') and hasattr(arr, 'filled'):
+        return _as_list(arr.data)
     if isinstance(arr, numpy._ObjectArray):
         result = []
         for v in arr._data:
@@ -108,14 +111,70 @@ def _as_list(arr):
 
 
 def _is_array_like(x):
-    """Return True if x is numpy array, _ObjectArray, or a list/tuple of numbers."""
+    """Return True if x is numpy array, _ObjectArray, MaskedArray, or a list/tuple of numbers."""
     if isinstance(x, (numpy.ndarray, numpy._ObjectArray)):
+        return True
+    # Check for MaskedArray (from numpy.ma)
+    if hasattr(x, 'data') and hasattr(x, 'mask') and hasattr(x, 'filled'):
         return True
     if isinstance(x, (list, tuple)) and len(x) > 0:
         return True
     return False
 
+def _is_masked_array(x):
+    """Check if x is a MaskedArray."""
+    return hasattr(x, 'data') and hasattr(x, 'mask') and hasattr(x, 'filled')
+
 def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
+    # Handle MaskedArray comparison: skip masked positions
+    if _is_masked_array(actual) and _is_masked_array(desired):
+        if actual.shape != desired.shape:
+            raise AssertionError(
+                f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"
+            )
+        a_data = _as_list(actual.data) if _is_array_like(actual.data) else [actual.data]
+        d_data = _as_list(desired.data) if _is_array_like(desired.data) else [desired.data]
+        a_mask = actual.mask.flatten().tolist() if hasattr(actual.mask, 'flatten') else [bool(actual.mask)]
+        d_mask = desired.mask.flatten().tolist() if hasattr(desired.mask, 'flatten') else [bool(desired.mask)]
+        for i in range(len(a_data)):
+            am = bool(a_mask[i]) if i < len(a_mask) else False
+            dm = bool(d_mask[i]) if i < len(d_mask) else False
+            # Both masked: skip
+            if am and dm:
+                continue
+            # One masked, one not: skip (NumPy's assert_equal for masked arrays skips)
+            if am or dm:
+                continue
+            if not _val_equal(a_data[i], d_data[i]):
+                raise AssertionError(
+                    f"Arrays not equal at index {i}: {a_data[i]} != {d_data[i]}. {err_msg}"
+                )
+        return
+    # Handle MaskedArray vs non-MaskedArray
+    if _is_masked_array(actual) and _is_array_like(desired):
+        # Compare data only for unmasked positions
+        if isinstance(desired, (list, tuple)):
+            desired = numpy.asarray(desired)
+        if actual.shape != desired.shape:
+            raise AssertionError(
+                f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"
+            )
+        a_data = _as_list(actual.data)
+        d_data = _as_list(desired)
+        a_mask = actual.mask.flatten().tolist() if hasattr(actual.mask, 'flatten') else [bool(actual.mask)]
+        for i in range(len(a_data)):
+            am = bool(a_mask[i]) if i < len(a_mask) else False
+            if am:
+                continue
+            if not _val_equal(a_data[i], d_data[i]):
+                raise AssertionError(
+                    f"Arrays not equal at index {i}: {a_data[i]} != {d_data[i]}. {err_msg}"
+                )
+        return
+    if _is_masked_array(desired) and _is_array_like(actual):
+        # Reverse: actual is plain array, desired is masked
+        assert_equal(desired, actual, err_msg=err_msg, verbose=verbose, strict=strict)
+        return
     # Handle tuples and lists recursively
     if isinstance(actual, (tuple, list)) and isinstance(desired, (tuple, list)):
         if len(actual) != len(desired):

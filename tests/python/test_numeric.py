@@ -8275,7 +8275,8 @@ def test_ma_unique():
     import numpy.ma as ma
     a = ma.array([3, 1, 2, 1, 3], mask=[True, False, False, False, False])
     r = ma.unique(a)
-    assert_eq(r.tolist(), [1, 2, 3])
+    # Real NumPy returns [1, 2, 3, --] (masked element appended)
+    assert_eq(r.tolist(), [1, 2, 3, None])
 
 def test_ma_compressed():
     import numpy.ma as ma

@@ -2078,54 +2078,219 @@ def correlate(a, v, mode='valid', propagate_mask=True):
 # ---------------------------------------------------------------------------
 
 def unique(ar, return_index=False, return_inverse=False):
+    """Return the unique values of a masked array."""
     import numpy as np
     if isinstance(ar, MaskedArray):
-        data = ar.compressed()
+        # Get data and mask
+        data = np.asarray(ar._data) if hasattr(ar, '_data') else np.asarray(ar.data)
+        m = ar._mask if hasattr(ar, '_mask') else getattr(ar, 'mask', nomask)
+        if m is not nomask and m is not False:
+            if isinstance(m, (list, tuple)):
+                m = np.asarray(m).astype('bool')
+            elif isinstance(m, np.ndarray):
+                pass
+            else:
+                m = np.asarray([m]).astype('bool')
+            # Get unmasked data
+            unmasked_data = []
+            unmasked_indices = []
+            for i in range(len(data)):
+                mi = m[i] if i < len(m) else False
+                if isinstance(mi, np.ndarray):
+                    mi = bool(mi)
+                if not mi:
+                    unmasked_data.append(float(data[i]) if hasattr(data, '__getitem__') else float(data))
+                    unmasked_indices.append(i)
+            has_masked = len(unmasked_data) < len(data)
+            if len(unmasked_data) == 0:
+                # All masked
+                result_data = np.array([float(data[0]) if hasattr(data, '__getitem__') else float(data)])
+                result_mask = np.array([True])
+                result = MaskedArray(result_data, mask=result_mask)
+                if return_index or return_inverse:
+                    ret = [result]
+                    if return_index:
+                        ret.append(np.array([0]))
+                    if return_inverse:
+                        ret.append(np.zeros(len(data), dtype='int64'))
+                    return tuple(ret)
+                return result
+            # Get unique from unmasked data
+            unmasked_arr = np.array(unmasked_data)
+            res = np.unique(unmasked_arr, return_index=True, return_inverse=True)
+            uvals = res[0]
+            uidx_in_unmasked = res[1]
+            uinv_in_unmasked = res[2]
+            # Map indices back to original array
+            orig_indices = np.array(unmasked_indices)
+            uidx = np.array([int(orig_indices[int(i)]) for i in uidx_in_unmasked])
+            # Build full inverse mapping
+            uinv = np.zeros(len(data), dtype='int64')
+            for i, idx in enumerate(unmasked_indices):
+                uinv[idx] = int(uinv_in_unmasked[i])
+            if has_masked:
+                # Add masked entry at end
+                result_data = np.concatenate([uvals, np.array([-1.0])])
+                result_mask_data = [False] * len(uvals) + [True]
+                result = MaskedArray(result_data, mask=result_mask_data)
+                masked_idx = len(uvals)  # index of the masked entry
+                # Update indices
+                first_masked_orig = -1
+                for i in range(len(data)):
+                    mi = m[i] if i < len(m) else False
+                    if isinstance(mi, np.ndarray):
+                        mi = bool(mi)
+                    if mi:
+                        if first_masked_orig < 0:
+                            first_masked_orig = i
+                        uinv[i] = masked_idx
+                uidx = np.concatenate([uidx, np.array([first_masked_orig])])
+            else:
+                result = MaskedArray(uvals, mask=False)
+            if return_index or return_inverse:
+                ret = [result]
+                if return_index:
+                    ret.append(uidx)
+                if return_inverse:
+                    ret.append(uinv)
+                return tuple(ret)
+            return result
+        else:
+            # No mask
+            res = np.unique(data, return_index=return_index, return_inverse=return_inverse)
+            if isinstance(res, tuple):
+                return (MaskedArray(res[0], mask=False),) + res[1:]
+            return MaskedArray(res, mask=False)
     else:
         data = np.asarray(ar)
-    return np.unique(data, return_index=return_index, return_inverse=return_inverse)
+        res = np.unique(data, return_index=return_index, return_inverse=return_inverse)
+        if isinstance(res, tuple):
+            return (MaskedArray(res[0], mask=False),) + res[1:]
+        return MaskedArray(res, mask=False)
 
 def ediff1d(ary, to_end=None, to_begin=None):
+    """Compute the differences between consecutive elements of a masked array."""
     import numpy as np
     if isinstance(ary, MaskedArray):
-        return np.ediff1d(ary.data, to_end=to_end, to_begin=to_begin)
-    return np.ediff1d(ary, to_end=to_end, to_begin=to_begin)
+        data = np.asarray(ary._data) if hasattr(ary, '_data') else np.asarray(ary.data)
+        m = ary._mask if hasattr(ary, '_mask') else getattr(ary, 'mask', nomask)
+        # Compute differences
+        diff_data = np.ediff1d(data)
+        # Build mask: diff[i] is masked if ary[i] or ary[i+1] is masked
+        if m is not nomask and m is not False:
+            if isinstance(m, (list, tuple)):
+                m = np.asarray(m).astype('bool')
+            diff_mask = []
+            for i in range(len(diff_data)):
+                m_i = bool(m[i]) if i < len(m) else False
+                m_ip1 = bool(m[i + 1]) if (i + 1) < len(m) else False
+                diff_mask.append(m_i or m_ip1)
+        else:
+            diff_mask = [False] * len(diff_data)
+        # Handle to_begin and to_end
+        result_data = list(diff_data.tolist())
+        result_mask = list(diff_mask)
+        if to_begin is not None:
+            if isinstance(to_begin, MaskedConstant) or to_begin is masked:
+                result_data = [0.0] + result_data
+                result_mask = [True] + result_mask
+            elif isinstance(to_begin, (list, tuple)):
+                result_data = list(to_begin) + result_data
+                result_mask = [False] * len(to_begin) + result_mask
+            elif isinstance(to_begin, MaskedArray):
+                tb_data = to_begin._data if hasattr(to_begin, '_data') else to_begin.data
+                tb_mask = to_begin._mask if hasattr(to_begin, '_mask') else getattr(to_begin, 'mask', nomask)
+                if isinstance(tb_data, (list, tuple)):
+                    result_data = list(tb_data) + result_data
+                else:
+                    result_data = list(np.asarray(tb_data).tolist()) + result_data
+                if tb_mask is nomask or tb_mask is False:
+                    result_mask = [False] * len(tb_data) + result_mask
+                else:
+                    result_mask = list(tb_mask) + result_mask
+            else:
+                result_data = [float(to_begin)] + result_data
+                result_mask = [False] + result_mask
+        if to_end is not None:
+            if isinstance(to_end, MaskedConstant) or to_end is masked:
+                result_data = result_data + [0.0]
+                result_mask = result_mask + [True]
+            elif isinstance(to_end, (list, tuple)):
+                result_data = result_data + list(to_end)
+                result_mask = result_mask + [False] * len(to_end)
+            elif isinstance(to_end, MaskedArray):
+                te_data = to_end._data if hasattr(to_end, '_data') else to_end.data
+                te_mask = to_end._mask if hasattr(to_end, '_mask') else getattr(to_end, 'mask', nomask)
+                if isinstance(te_data, (list, tuple)):
+                    result_data = result_data + list(te_data)
+                else:
+                    result_data = result_data + list(np.asarray(te_data).tolist())
+                if te_mask is nomask or te_mask is False:
+                    result_mask = result_mask + [False] * len(te_data)
+                else:
+                    result_mask = result_mask + list(te_mask)
+            else:
+                result_data = result_data + [float(to_end)]
+                result_mask = result_mask + [False]
+        return MaskedArray(np.array(result_data), mask=result_mask)
+    else:
+        result = np.ediff1d(ary, to_end=to_end, to_begin=to_begin)
+        return MaskedArray(result, mask=False)
 
 def intersect1d(ar1, ar2, assume_unique=False):
+    """Return the intersection of two masked arrays."""
     import numpy as np
     if isinstance(ar1, MaskedArray): ar1 = ar1.compressed()
     if isinstance(ar2, MaskedArray): ar2 = ar2.compressed()
-    return np.intersect1d(ar1, ar2)
+    result = np.intersect1d(ar1, ar2)
+    return MaskedArray(result, mask=False)
 
 def union1d(ar1, ar2):
+    """Return the union of two masked arrays."""
     import numpy as np
     if isinstance(ar1, MaskedArray): ar1 = ar1.compressed()
     if isinstance(ar2, MaskedArray): ar2 = ar2.compressed()
-    return np.union1d(ar1, ar2)
+    result = np.union1d(ar1, ar2)
+    return MaskedArray(result, mask=False)
 
 def setdiff1d(ar1, ar2, assume_unique=False):
+    """Return the set difference of two masked arrays."""
     import numpy as np
     if isinstance(ar1, MaskedArray): ar1 = ar1.compressed()
     if isinstance(ar2, MaskedArray): ar2 = ar2.compressed()
-    return np.setdiff1d(ar1, ar2)
+    result = np.setdiff1d(ar1, ar2)
+    return MaskedArray(result, mask=False)
 
 def setxor1d(ar1, ar2, assume_unique=False):
+    """Return the set exclusive-or of two masked arrays."""
     import numpy as np
     if isinstance(ar1, MaskedArray): ar1 = ar1.compressed()
     if isinstance(ar2, MaskedArray): ar2 = ar2.compressed()
-    return np.setxor1d(ar1, ar2)
+    result = np.setxor1d(ar1, ar2)
+    return MaskedArray(result, mask=False)
 
 def in1d(ar1, ar2, assume_unique=False, invert=False):
+    """Test whether each element of ar1 is in ar2, masked-aware."""
     import numpy as np
-    if isinstance(ar1, MaskedArray): ar1 = ar1.compressed()
-    if isinstance(ar2, MaskedArray): ar2 = ar2.compressed()
-    return np.in1d(ar1, ar2, assume_unique=assume_unique, invert=invert)
+    a1_data = ar1.compressed() if isinstance(ar1, MaskedArray) else np.asarray(ar1)
+    a2_data = ar2.compressed() if isinstance(ar2, MaskedArray) else np.asarray(ar2)
+    result = np.in1d(a1_data, a2_data, assume_unique=assume_unique, invert=invert)
+    return result
 
 def isin(element, test_elements, assume_unique=False, invert=False):
+    """Test whether elements are in test_elements, masked-aware."""
     import numpy as np
-    if isinstance(element, MaskedArray): element = element.compressed()
-    if isinstance(test_elements, MaskedArray): test_elements = test_elements.compressed()
-    return np.isin(element, test_elements, assume_unique=assume_unique, invert=invert)
+    if isinstance(element, MaskedArray):
+        data = np.asarray(element._data) if hasattr(element, '_data') else np.asarray(element.data)
+        m = element._mask if hasattr(element, '_mask') else getattr(element, 'mask', nomask)
+        te = test_elements.compressed() if isinstance(test_elements, MaskedArray) else np.asarray(test_elements)
+        result = np.isin(data, te, assume_unique=assume_unique, invert=invert)
+        if m is not nomask and m is not False:
+            return MaskedArray(result, mask=m)
+        return MaskedArray(result, mask=False)
+    elem = np.asarray(element)
+    te = test_elements.compressed() if isinstance(test_elements, MaskedArray) else np.asarray(test_elements)
+    return np.isin(elem, te, assume_unique=assume_unique, invert=invert)
 
 
 # ---------------------------------------------------------------------------

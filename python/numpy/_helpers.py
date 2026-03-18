@@ -397,6 +397,34 @@ class _ObjectArray:
                 except TypeError:
                     pass
         return _ObjectArray(data, self._dtype)
+    def view(self, dtype=None):
+        """View the array as a different type. Supports chararray."""
+        if dtype is None:
+            return self
+        # Check if dtype is the chararray class
+        type_name = getattr(dtype, '__name__', '')
+        if type_name == 'chararray':
+            # Convert _ObjectArray to a proper ndarray of strings, then wrap
+            import numpy as _np
+
+            # Flatten nested data to 1D list of scalars
+            def _flatten(d):
+                if isinstance(d, (list, tuple)):
+                    result = []
+                    for item in d:
+                        result.extend(_flatten(item))
+                    return result
+                return [d]
+
+            flat = _flatten(self._data)
+            # Create a 1D ndarray from flat items, then reshape to original shape
+            arr = _np.array(flat)
+            if self._ndim > 1 and len(flat) > 0:
+                arr = arr.reshape(list(self._shape))
+            return dtype._from_array(arr)
+        # Default: try to return self with new dtype
+        return _ObjectArray(list(self._data), str(dtype) if not isinstance(dtype, str) else dtype, shape=self._shape)
+
     def __repr__(self): return f"array({self._data!r}, dtype='{self._dtype}')"
 
 
