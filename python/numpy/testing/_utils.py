@@ -94,12 +94,26 @@ def _as_list(arr):
             else:
                 result.append(float(v))
         return result
+    if isinstance(arr, (list, tuple)):
+        result = []
+        for v in arr:
+            if isinstance(v, (list, tuple)):
+                result.extend(_as_list(v))
+            elif isinstance(v, (numpy.ndarray, numpy._ObjectArray)):
+                result.extend(_as_list(v))
+            else:
+                result.append(v)
+        return result
     return [arr]
 
 
 def _is_array_like(x):
-    """Return True if x is numpy array or _ObjectArray."""
-    return isinstance(x, (numpy.ndarray, numpy._ObjectArray))
+    """Return True if x is numpy array, _ObjectArray, or a list/tuple of numbers."""
+    if isinstance(x, (numpy.ndarray, numpy._ObjectArray)):
+        return True
+    if isinstance(x, (list, tuple)) and len(x) > 0:
+        return True
+    return False
 
 def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
     # Handle tuples and lists recursively
@@ -112,6 +126,10 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
             assert_equal(a, d, err_msg=err_msg, verbose=verbose, strict=strict)
         return
     if _is_array_like(actual) and _is_array_like(desired):
+        if isinstance(actual, (list, tuple)):
+            actual = numpy.asarray(actual)
+        if isinstance(desired, (list, tuple)):
+            desired = numpy.asarray(desired)
         if actual.shape != desired.shape:
             raise AssertionError(
                 f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"

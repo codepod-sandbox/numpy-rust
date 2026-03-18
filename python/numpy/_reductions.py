@@ -34,6 +34,28 @@ def _mean_result_dtype(input_arr):
     return 'float64'
 
 
+def _nan_result_like(a, axis, keepdims):
+    """Return NaN-filled result matching what a reduction on `a` would produce."""
+    dt = str(a.dtype) if isinstance(a, ndarray) else 'float64'
+    if axis is None:
+        return _scalar_result(float('nan'), a, dt)
+    ax = axis if axis >= 0 else a.ndim + axis
+    shape = list(a.shape)
+    if keepdims:
+        shape[ax] = 1
+    else:
+        shape.pop(ax)
+    if not shape:
+        return _scalar_result(float('nan'), a, dt)
+    result = full(shape, float('nan'))
+    if str(result.dtype) != dt:
+        try:
+            result = result.astype(dt)
+        except Exception:
+            pass
+    return result
+
+
 # Keep builtin sum reference before it gets shadowed
 _builtin_sum = __builtins__["sum"] if isinstance(__builtins__, dict) else __import__("builtins").sum
 
@@ -87,6 +109,8 @@ def sum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=
         result = a.sum(None, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
+    elif not isinstance(result, ndarray):
+        result = _scalar_result(result, a)
     if initial is not None:
         result = result + initial
     return result
@@ -101,6 +125,8 @@ def prod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where
     result = a.prod(axis, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
+    elif not isinstance(result, ndarray):
+        result = _scalar_result(result, a)
     if initial is not None:
         result = result * initial
     return result
@@ -190,6 +216,8 @@ def mean(a, axis=None, dtype=None, out=None, keepdims=False, where=True):
         result = array([float(result)]).reshape((1,) * a.ndim)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
+    if not isinstance(result, ndarray) and dtype is None:
+        result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
         if isinstance(out, ndarray):
             if out.size == 1:
@@ -350,6 +378,8 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
         result = a.var(None, ddof, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
+    elif not isinstance(result, ndarray):
+        result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
         if isinstance(out, ndarray) and out.size == 1:
             out[0] = float(result) if not isinstance(result, ndarray) else float(result.flatten()[0])
@@ -360,6 +390,7 @@ def var(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, 
 def nansum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
+    _in_dt = str(a.dtype)
     if where is not True:
         w = asarray(where).astype("bool").astype("float64")
         a = a * w
@@ -368,6 +399,12 @@ def nansum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, whe
         result = _dtype_cast(result, dtype)
     elif not isinstance(result, ndarray):
         result = _scalar_result(result, a)
+    elif isinstance(result, ndarray) and _in_dt.startswith('float') and str(result.dtype) != _in_dt:
+        # Only preserve dtype for float types (not int — int sums upcast to int64)
+        try:
+            result = result.astype(_in_dt)
+        except Exception:
+            pass
     if initial is not None:
         result = result + initial
     return result
@@ -382,15 +419,26 @@ def nanmean(a, axis=None, dtype=None, out=None, keepdims=False, where=True):
         c = w.sum(axis, keepdims)
         result = s / c
     else:
-        result = _native.nanmean(a, axis, keepdims)
+        try:
+            result = _native.nanmean(a, axis, keepdims)
+        except (ValueError, ZeroDivisionError):
+            import warnings
+            warnings.warn("Mean of empty slice", RuntimeWarning, stacklevel=2)
+            result = _nan_result_like(a, axis, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
     elif not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
+    if out is not None:
+        if isinstance(out, ndarray):
+            _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
+            return out
     return result
 
 
 def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, mean=None, correction=None):
+    if correction is not None and ddof != 0:
+        raise ValueError("ddof and correction can't be provided simultaneously.")
     if correction is not None:
         ddof = correction
     if not isinstance(a, ndarray):
@@ -399,7 +447,16 @@ def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=Tru
         import numpy as _np
         result = _np.sqrt(nanvar(a, axis=axis, ddof=ddof, keepdims=keepdims, where=where))
     else:
-        result = _native.nanstd(a, axis, ddof, keepdims)
+        try:
+            result = _native.nanstd(a, axis, int(ddof) if isinstance(ddof, float) and ddof == int(ddof) else ddof, keepdims)
+        except TypeError:
+            # ddof is a float — use nanvar + sqrt
+            import numpy as _np
+            result = _np.sqrt(nanvar(a, axis=axis, ddof=ddof, keepdims=keepdims))
+        except (ValueError, ZeroDivisionError):
+            import warnings
+            warnings.warn("Degrees of freedom <= 0 for slice", RuntimeWarning, stacklevel=2)
+            result = _nan_result_like(a, axis, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
     elif not isinstance(result, ndarray):
@@ -408,6 +465,8 @@ def nanstd(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=Tru
 
 
 def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=True, mean=None, correction=None):
+    if correction is not None and ddof != 0:
+        raise ValueError("ddof and correction can't be provided simultaneously.")
     if correction is not None:
         ddof = correction
     if not isinstance(a, ndarray):
@@ -423,7 +482,24 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=Tru
         if not keepdims and isinstance(result, ndarray) and result.ndim > 0:
             result = result.squeeze()
     else:
-        result = _native.nanvar(a, axis, ddof, keepdims)
+        try:
+            result = _native.nanvar(a, axis, int(ddof) if isinstance(ddof, float) and ddof == int(ddof) else ddof, keepdims)
+        except TypeError:
+            # ddof is a float (e.g. 0.5) — compute in Python
+            import numpy as _np
+            _mask = ~_np.isnan(a)
+            _count = _mask.astype('float64').sum(axis, True)
+            _m = nanmean(a, axis=axis, keepdims=True)
+            _diff = a - _m
+            # Replace NaN with 0 for the squared diff
+            _diff_clean = _np.where(_mask, _diff, 0.0)
+            result = (_diff_clean ** 2).sum(axis, keepdims) / (_count - ddof)
+            if not keepdims and isinstance(result, ndarray) and result.ndim > 0:
+                result = result.squeeze()
+        except (ValueError, ZeroDivisionError):
+            import warnings
+            warnings.warn("Degrees of freedom <= 0 for slice", RuntimeWarning, stacklevel=2)
+            result = _nan_result_like(a, axis, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
     elif not isinstance(result, ndarray):
@@ -434,9 +510,20 @@ def nanvar(a, axis=None, dtype=None, out=None, ddof=0, keepdims=False, where=Tru
 def nanmin(a, axis=None, out=None, keepdims=False, initial=None, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
-    result = _native.nanmin(a, axis, keepdims)
+    _in_dt = str(a.dtype)
+    try:
+        result = _native.nanmin(a, axis, keepdims)
+    except ValueError:
+        import warnings
+        warnings.warn("All-NaN slice encountered", RuntimeWarning, stacklevel=2)
+        result = _nan_result_like(a, axis, keepdims)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a)
+    elif isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+        try:
+            result = result.astype(_in_dt)
+        except Exception:
+            pass
     if initial is not None:
         import numpy as _np
         result = _np.minimum(result, initial)
@@ -446,9 +533,20 @@ def nanmin(a, axis=None, out=None, keepdims=False, initial=None, where=True):
 def nanmax(a, axis=None, out=None, keepdims=False, initial=None, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
-    result = _native.nanmax(a, axis, keepdims)
+    _in_dt = str(a.dtype)
+    try:
+        result = _native.nanmax(a, axis, keepdims)
+    except ValueError:
+        import warnings
+        warnings.warn("All-NaN slice encountered", RuntimeWarning, stacklevel=2)
+        result = _nan_result_like(a, axis, keepdims)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a)
+    elif isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+        try:
+            result = result.astype(_in_dt)
+        except Exception:
+            pass
     if initial is not None:
         import numpy as _np
         result = _np.maximum(result, initial)
@@ -458,6 +556,8 @@ def nanmax(a, axis=None, out=None, keepdims=False, initial=None, where=True):
 def nanargmin(a, axis=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
+    if a.size == 0:
+        raise ValueError("attempt to get argmin of an empty sequence")
     result = _native.nanargmin(a, axis)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, 'int64')
@@ -469,6 +569,8 @@ def nanargmin(a, axis=None, out=None, keepdims=False):
 def nanargmax(a, axis=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = array(a)
+    if a.size == 0:
+        raise ValueError("attempt to get argmax of an empty sequence")
     result = _native.nanargmax(a, axis)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, 'int64')
@@ -480,6 +582,7 @@ def nanargmax(a, axis=None, out=None, keepdims=False):
 def nanprod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
     if not isinstance(a, ndarray):
         a = array(a)
+    _in_dt = str(a.dtype)
     if where is not True:
         w = asarray(where).astype("bool").astype("float64")
         a = a * w + (1.0 - w)
@@ -488,6 +591,11 @@ def nanprod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, wh
         result = _dtype_cast(result, dtype)
     elif not isinstance(result, ndarray):
         result = _scalar_result(result, a)
+    elif isinstance(result, ndarray) and _in_dt.startswith('float') and str(result.dtype) != _in_dt:
+        try:
+            result = result.astype(_in_dt)
+        except Exception:
+            pass
     if initial is not None:
         result = result * initial
     return result
@@ -496,13 +604,35 @@ def nanprod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, wh
 def nancumsum(a, axis=None, dtype=None, out=None):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.nancumsum(a, axis)
+    _in_dt = str(a.dtype)
+    if axis is not None and axis < 0:
+        axis = a.ndim + axis
+    result = _native.nancumsum(a, axis)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    elif isinstance(result, ndarray) and _in_dt.startswith('float') and str(result.dtype) != _in_dt:
+        try:
+            result = result.astype(_in_dt)
+        except Exception:
+            pass
+    return result
 
 
 def nancumprod(a, axis=None, dtype=None, out=None):
     if not isinstance(a, ndarray):
         a = array(a)
-    return _native.nancumprod(a, axis)
+    _in_dt = str(a.dtype)
+    if axis is not None and axis < 0:
+        axis = a.ndim + axis
+    result = _native.nancumprod(a, axis)
+    if dtype is not None:
+        result = _dtype_cast(result, dtype)
+    elif isinstance(result, ndarray) and _in_dt.startswith('float') and str(result.dtype) != _in_dt:
+        try:
+            result = result.astype(_in_dt)
+        except Exception:
+            pass
+    return result
 
 
 def _apply_keepdims(result, a, axis):
@@ -551,6 +681,8 @@ def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
     result = _native.quantile(a, 0.5, axis)
     if keepdims and axis is not None:
         result = _apply_keepdims(result, a, axis)
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a, _mean_result_dtype(a))
     return result
 
 
@@ -594,41 +726,51 @@ def average(a, axis=None, weights=None, returned=False, keepdims=False):
     return avg
 
 
+def _nan_quantile_1d(vals_flat, q):
+    """Compute quantile of a 1D array, ignoring NaNs. Returns scalar."""
+    vals = []
+    for i in range(vals_flat.size):
+        v = vals_flat[i]
+        if v == v:  # not NaN
+            vals.append(float(v))
+    if len(vals) == 0:
+        return float('nan')
+    vals.sort()
+    idx = q * (len(vals) - 1)
+    lo = int(idx)
+    hi = lo + 1
+    if hi >= len(vals):
+        return vals[lo]
+    frac = idx - lo
+    return vals[lo] * (1 - frac) + vals[hi] * frac
+
+
 def _nan_quantile_impl(a, q, axis):
     """Helper for nanmedian/nanpercentile/nanquantile with axis support."""
     a = asarray(a)
     if axis is None:
-        flat = a.flatten()
-        n = flat.size
-        vals = []
-        for i in range(n):
-            v = flat[i]
-            if v == v:
-                vals.append(v)
-        if len(vals) == 0:
-            return float('nan')
-        vals.sort()
-        idx = q * (len(vals) - 1)
-        lo = int(idx)
-        hi = lo + 1
-        if hi >= len(vals):
-            return vals[lo]
-        frac = idx - lo
-        return vals[lo] * (1 - frac) + vals[hi] * frac
-    # With axis: apply along axis manually
-    # Move target axis to last, then iterate over other dims
-    # Simplified: just handle 2D case
+        return _nan_quantile_1d(a.flatten(), q)
+    # Normalize negative axis
+    if axis < 0:
+        axis = a.ndim + axis
     if a.ndim == 1:
-        return _nan_quantile_impl(a, q, None)
+        return _nan_quantile_1d(a.flatten(), q)
+    # General n-d: move target axis to last, iterate over remaining dims
+    import numpy as _np
+    a_moved = _np.moveaxis(a, axis, -1)
+    # Reshape to (product_of_other_dims, axis_len)
+    other_shape = a_moved.shape[:-1]
+    axis_len = a_moved.shape[-1]
+    flat_2d = a_moved.reshape((-1, axis_len)) if a_moved.ndim > 1 else a_moved.reshape((1, axis_len))
+    n_slices = flat_2d.shape[0]
     results = []
-    if axis == 0:
-        for j in range(a.shape[1]):
-            col = array([a[i][j] for i in range(a.shape[0])])
-            results.append(_nan_quantile_impl(col, q, None))
-    else:
-        for i in range(a.shape[0]):
-            results.append(_nan_quantile_impl(a[i], q, None))
-    return array(results)
+    for i in range(n_slices):
+        row = flat_2d[i]
+        results.append(_nan_quantile_1d(row if isinstance(row, ndarray) else asarray(row), q))
+    result = array(results)
+    if len(other_shape) > 1:
+        result = result.reshape(other_shape)
+    return result
 
 
 def nanmedian(a, axis=None, out=None, overwrite_input=False, keepdims=False):
@@ -648,12 +790,34 @@ def nanmedian(a, axis=None, out=None, overwrite_input=False, keepdims=False):
 
 def nanpercentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     """Compute the qth percentile, ignoring NaNs."""
-    return _nan_quantile_impl(asarray(a), q / 100.0, axis)
+    a = asarray(a)
+    if isinstance(q, (list, tuple, ndarray)):
+        q_list = q.tolist() if isinstance(q, ndarray) else list(q)
+        results = [_nan_quantile_impl(a, float(qi) / 100.0, axis) for qi in q_list]
+        import numpy as _np
+        return array(results) if axis is None else _np.stack(results)
+    result = _nan_quantile_impl(a, float(q) / 100.0, axis)
+    if keepdims and axis is not None:
+        result = _apply_keepdims(result, a, axis) if isinstance(result, ndarray) else _apply_keepdims(array([float(result)]), a, axis)
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a, _mean_result_dtype(a))
+    return result
 
 
 def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False):
     """Compute the qth quantile, ignoring NaNs."""
-    return _nan_quantile_impl(asarray(a), q, axis)
+    a = asarray(a)
+    if isinstance(q, (list, tuple, ndarray)):
+        q_list = q.tolist() if isinstance(q, ndarray) else list(q)
+        results = [_nan_quantile_impl(a, float(qi), axis) for qi in q_list]
+        import numpy as _np
+        return array(results) if axis is None else _np.stack(results)
+    result = _nan_quantile_impl(a, float(q), axis)
+    if keepdims and axis is not None:
+        result = _apply_keepdims(result, a, axis) if isinstance(result, ndarray) else _apply_keepdims(array([float(result)]), a, axis)
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a, _mean_result_dtype(a))
+    return result
 
 
 def ediff1d(ary, to_end=None, to_begin=None):
@@ -691,8 +855,12 @@ def max(a, axis=None, out=None, keepdims=False, where=True):
         masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
         a = array(masked).reshape(a.shape)
     if axis is not None:
-        return a.max(axis, keepdims)
-    return a.max(None, keepdims)
+        result = a.max(axis, keepdims)
+    else:
+        result = a.max(None, keepdims)
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a)
+    return result
 
 
 amax = max
@@ -709,8 +877,12 @@ def min(a, axis=None, out=None, keepdims=False, where=True):
         masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
         a = array(masked).reshape(a.shape)
     if axis is not None:
-        return a.min(axis, keepdims)
-    return a.min(None, keepdims)
+        result = a.min(axis, keepdims)
+    else:
+        result = a.min(None, keepdims)
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a)
+    return result
 
 
 amin = min
@@ -719,13 +891,19 @@ amin = min
 def argmax(a, axis=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = asarray(a)
-    return a.argmax(axis)
+    result = a.argmax(axis)
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a, 'int64')
+    return result
 
 
 def argmin(a, axis=None, out=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = asarray(a)
-    return a.argmin(axis)
+    result = a.argmin(axis)
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a, 'int64')
+    return result
 
 
 def ptp(a, axis=None):

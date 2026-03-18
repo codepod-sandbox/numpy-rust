@@ -67,10 +67,28 @@ class _RaisesContext:
 class _WarnsContext:
     def __init__(self):
         self.list = []
+        self._warnings = []
     def __enter__(self):
+        import warnings as _w
+        self._old_filters = _w.filters[:]
+        self._old_showwarning = _w.showwarning
+        ctx = self
+        def _capture(message, category, filename, lineno, file=None, line=None):
+            ctx._warnings.append(type('W', (), {'category': category, 'message': message})())
+        _w.showwarning = _capture
+        _w.simplefilter('always')
         return self
-    def __exit__(self, *args):
-        return True
+    def __exit__(self, exc_type, exc_val, tb):
+        import warnings as _w
+        _w.filters[:] = self._old_filters
+        _w.showwarning = self._old_showwarning
+        return False
+    def __len__(self):
+        return len(self._warnings)
+    def __iter__(self):
+        return iter(self._warnings)
+    def __getitem__(self, idx):
+        return self._warnings[idx]
 
 
 def _raises(exc, *args, match=None, **kwargs):
