@@ -1656,6 +1656,83 @@ class _RandomState:
     def multivariate_normal(self, mean, cov, size=None):
         return _random_multivariate_normal(mean, cov, size)
 
+    def geometric(self, p, size=None):
+        return _random_geometric(p, size)
+
+    def dirichlet(self, alpha, size=None):
+        return _random_dirichlet(alpha, size)
+
+    def multinomial(self, n, pvals, size=None):
+        return _random_multinomial(n, pvals, size)
+
+    def laplace(self, loc=0.0, scale=1.0, size=None):
+        return _random_laplace(loc, scale, size)
+
+    def triangular(self, left, mode, right, size=None):
+        return _random_triangular(left, mode, right, size)
+
+    def rayleigh(self, scale=1.0, size=None):
+        return _random_rayleigh(scale, size)
+
+    def weibull(self, a, size=None):
+        return _random_weibull(a, size)
+
+    def logistic(self, loc=0.0, scale=1.0, size=None):
+        return _random_logistic(loc, scale, size)
+
+    def gumbel(self, loc=0.0, scale=1.0, size=None):
+        return _random_gumbel(loc, scale, size)
+
+    def negative_binomial(self, n, p, size=None):
+        return _random_negative_binomial(n, p, size)
+
+    def power(self, a, size=None):
+        return _random_power(a, size)
+
+    def vonmises(self, mu, kappa, size=None):
+        return _random_vonmises(mu, kappa, size)
+
+    def wald(self, mean, scale, size=None):
+        return _random_wald(mean, scale, size)
+
+    def zipf(self, a, size=None):
+        return _random_zipf(a, size)
+
+    def hypergeometric(self, ngood, nbad, nsample, size=None):
+        return _random_hypergeometric(ngood, nbad, nsample, size)
+
+    def pareto(self, a, size=None):
+        return _random_pareto(a, size)
+
+    def f(self, dfnum, dfden, size=None):
+        return _broadcast_call_2(lambda n, d: _random_f(n, d), dfnum, dfden, size)
+
+    def noncentral_chisquare(self, df, nonc, size=None):
+        return _broadcast_call_2(lambda d, n: _random_noncentral_chisquare(d, n), df, nonc, size)
+
+    def noncentral_f(self, dfnum, dfden, nonc, size=None):
+        return _broadcast_call_3(lambda n, d, nc: _random_noncentral_f(n, d, nc), dfnum, dfden, nonc, size)
+
+    def standard_gamma(self, shape, size=None):
+        return _random_gamma(shape, 1.0, size)
+
+    def standard_t(self, df, size=None):
+        return _random_standard_t(df, size)
+
+    def standard_cauchy(self, size=None):
+        return _random_standard_cauchy(size)
+
+    def standard_exponential(self, size=None):
+        return _random_exponential(1.0, size)
+
+    def logseries(self, p, size=None):
+        return _random_logseries(p, size)
+
+    def bytes(self, length):
+        return _random_bytes(length)
+
+    _poisson_lam_max = 2**62
+
     def get_state(self):
         return {'state': 'not_implemented'}
 

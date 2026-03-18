@@ -4,6 +4,7 @@ import numpy as np
 
 def _apply_unary(func, a):
     """Apply a unary string method element-wise."""
+    scalar_input = isinstance(a, (str, bytes))
     arr = np.asarray(a)
     flat = arr.flatten()
     result = []
@@ -12,12 +13,15 @@ def _apply_unary(func, a):
         if isinstance(v, bytes):
             v = v.decode('latin-1')
         result.append(func(str(v)))
+    if scalar_input and len(result) == 1:
+        return result[0]
     out = np.array(result)
     return out.reshape(arr.shape) if len(arr.shape) > 0 else out
 
 
 def _apply_binary(func, a, b):
     """Apply a binary string method element-wise."""
+    scalar_input = isinstance(a, (str, bytes))
     arr_a = np.asarray(a)
     arr_b = np.asarray(b)
     flat_a = arr_a.flatten()
@@ -32,6 +36,8 @@ def _apply_binary(func, a, b):
         if isinstance(vb, bytes):
             vb = vb.decode('latin-1')
         result.append(func(str(va), vb))
+    if scalar_input and len(result) == 1:
+        return result[0]
     out = np.array(result)
     shape = arr_a.shape if arr_a.size >= arr_b.size else arr_b.shape
     return out.reshape(shape) if len(shape) > 0 else out
@@ -41,6 +47,7 @@ def add(x1, x2):
     return _apply_binary(lambda a, b: a + str(b), x1, x2)
 
 def multiply(a, i):
+    scalar_input = isinstance(a, (str, bytes))
     arr = np.asarray(a)
     flat = arr.flatten()
     result = []
@@ -51,6 +58,8 @@ def multiply(a, i):
             v = v.decode('latin-1')
         rep = i_val if i_val is not None else int(i)
         result.append(str(v) * rep)
+    if scalar_input and len(result) == 1:
+        return result[0]
     out = np.array(result)
     return out.reshape(arr.shape) if len(arr.shape) > 0 else out
 
@@ -279,6 +288,7 @@ def expandtabs(a, tabsize=8):
 
 def mod(a, values):
     """String formatting with % operator, element-wise."""
+    scalar_input = isinstance(a, (str, bytes))
     arr = np.asarray(a)
     flat = arr.flatten()
     if not isinstance(values, (tuple, list)):
@@ -294,6 +304,8 @@ def mod(a, values):
             result.append(str(v) % tuple(values_list))
         except TypeError:
             result.append(str(v) % values_list[0] if len(values_list) == 1 else str(v) % tuple(values_list))
+    if scalar_input and len(result) == 1:
+        return result[0]
     out = np.array(result)
     return out.reshape(arr.shape) if len(arr.shape) > 0 else out
 

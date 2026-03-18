@@ -1779,6 +1779,38 @@ impl PyNdArray {
         Ok(scalar_to_py(s, vm))
     }
 
+    /// as_integer_ratio() for 0-d float arrays.
+    #[pymethod]
+    fn as_integer_ratio(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let data = self.data.read().unwrap();
+        if data.ndim() != 0 {
+            return Err(
+                vm.new_type_error("as_integer_ratio() only supported for 0-d arrays".to_owned())
+            );
+        }
+        let s = data.get(&[]).map_err(|e| numpy_err(e, vm))?;
+        let f = match s {
+            Scalar::Float32(v) => v as f64,
+            Scalar::Float64(v) => v,
+            _ => {
+                return Err(
+                    vm.new_type_error("as_integer_ratio() requires a float dtype".to_owned())
+                );
+            }
+        };
+        if f.is_infinite() {
+            return Err(
+                vm.new_overflow_error("cannot convert Infinity to integer ratio".to_owned())
+            );
+        }
+        if f.is_nan() {
+            return Err(vm.new_value_error("cannot convert NaN to integer ratio".to_owned()));
+        }
+        let py_float: PyObjectRef = vm.ctx.new_float(f).into();
+        let method = py_float.get_attr("as_integer_ratio", vm)?;
+        method.call((), vm)
+    }
+
     // --- clip / fill / nonzero methods ---
 
     #[pymethod]
