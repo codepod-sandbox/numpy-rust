@@ -135,6 +135,10 @@ class _NumpyIntScalar(int):
         obj._numpy_dtype_name = dtype_name
         return obj
 
+    def __array_namespace__(self, *, api_version=None):
+        import numpy
+        return numpy
+
     @property
     def dtype(self):
         return dtype(self._numpy_dtype_name)
@@ -171,6 +175,10 @@ class _NumpyFloatScalar(float):
         obj = float.__new__(cls, float(value))
         obj._numpy_dtype_name = dtype_name
         return obj
+
+    def __array_namespace__(self, *, api_version=None):
+        import numpy
+        return numpy
 
     @property
     def dtype(self):
@@ -350,7 +358,8 @@ typecodes = {
 # ---------------------------------------------------------------------------
 class generic(metaclass=_ScalarTypeMeta, scalar_name="generic"):
     """Base class for all numpy scalar types."""
-    pass
+    def __class_getitem__(cls, item):
+        return cls
 
 class number(generic, metaclass=_ScalarTypeMeta, scalar_name="number"):
     """Base class for all numeric scalar types."""
