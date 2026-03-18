@@ -423,70 +423,8 @@ except ImportError as _ie:
 sys.modules["numpy.testing"] = _testing
 
 # ---------------------------------------------------------------------------
-# 3b. Patch numpy functions to tolerate unsupported dtypes at class-def time
-#
-# Some tests use dtype=object or dtype='m8' (timedelta) in @parametrize
-# arguments, which are evaluated when the class body runs at import time.
-# Since RustPython's numpy doesn't support these dtypes, we wrap the
-# creation functions to fall back to float64 instead of crashing.
-# This allows the test module to load; the individual tests using these
-# dtypes will still fail/skip at runtime.
+# 3b. Patch np.timedelta64 and np.datetime64 to handle string args like 'NaT'
 # ---------------------------------------------------------------------------
-
-_UNSUPPORTED_DTYPE_STRINGS = {"V0", "V3", "V10", "S", "S0", "U0"}
-
-
-def _is_unsupported_dtype(dt):
-    """Check if a dtype specification is unsupported by our numpy."""
-    if dt is object:
-        return True
-    if isinstance(dt, str):
-        if dt in _UNSUPPORTED_DTYPE_STRINGS:
-            return True
-        # Void/structured dtypes
-        if dt.startswith("V"):
-            return True
-    return False
-
-
-def _make_safe_wrapper(orig_fn, fn_name):
-    """Wrap a numpy array creation function to handle unsupported dtypes."""
-    def wrapper(*args, **kwargs):
-        dt = kwargs.get("dtype", None)
-        # Also check positional dtype argument for some functions
-        if dt is not None and _is_unsupported_dtype(dt):
-            kwargs["dtype"] = np.float64
-        try:
-            return orig_fn(*args, **kwargs)
-        except (TypeError, ValueError) as e:
-            if "unsupported dtype" in str(e) or "dtype" in str(e).lower():
-                # Try again with float64
-                kwargs["dtype"] = np.float64
-                try:
-                    return orig_fn(*args, **kwargs)
-                except Exception:
-                    raise e
-            raise
-    wrapper.__name__ = fn_name
-    wrapper.__qualname__ = fn_name
-    wrapper._original = orig_fn
-    return wrapper
-
-
-# Save originals and apply wrappers
-_orig_array = np.array
-_orig_zeros = np.zeros
-_orig_ones = np.ones
-_orig_full = np.full
-_orig_arange = np.arange
-_orig_empty = np.empty
-
-np.array = _make_safe_wrapper(_orig_array, "array")
-np.zeros = _make_safe_wrapper(_orig_zeros, "zeros")
-np.ones = _make_safe_wrapper(_orig_ones, "ones")
-np.full = _make_safe_wrapper(_orig_full, "full")
-np.arange = _make_safe_wrapper(_orig_arange, "arange")
-np.empty = _make_safe_wrapper(_orig_empty, "empty")
 
 # Patch np.timedelta64 and np.datetime64 to handle string args like 'NaT'
 _orig_timedelta64 = getattr(np, "timedelta64", None)

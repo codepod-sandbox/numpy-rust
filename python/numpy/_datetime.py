@@ -209,7 +209,7 @@ class datetime64:
         if value is None:
             self._value = 0  # epoch
             self._unit = unit or 'us'
-        elif isinstance(value, str) and value.strip() == 'NaT':
+        elif isinstance(value, str) and value.strip().lower() == 'nat':
             self._value = _NAT_VALUE
             self._unit = unit or 'generic'
         elif isinstance(value, str):
@@ -363,7 +363,7 @@ class timedelta64:
         if getattr(value, '_is_timedelta64', False):
             self._value = value._value
             self._unit = unit if unit != 'generic' else value._unit
-        elif isinstance(value, str) and value.strip() == 'NaT':
+        elif isinstance(value, str) and value.strip().lower() == 'nat':
             self._value = _NAT_VALUE
             self._unit = unit
         else:

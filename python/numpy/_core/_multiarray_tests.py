@@ -32,6 +32,16 @@ def get_buffer_info(arr, *args):
     return (arr.shape, arr.strides)
 
 
+def run_scalar_intp_converter(*args, **kwargs):
+    """Stub for C extension scalar intp converter test."""
+    raise NotImplementedError("C extension test helper not available")
+
+
+def run_scalar_intp_from_sequence(*args, **kwargs):
+    """Stub for C extension scalar intp from sequence test."""
+    raise NotImplementedError("C extension test helper not available")
+
+
 def __getattr__(name):
     if hasattr(numpy, name):
         return getattr(numpy, name)

@@ -61,6 +61,46 @@ impl NdArray {
         NdArray::from_data(data)
     }
 
+    /// Transpose the array with a given permutation of axes.
+    pub fn transpose_axes(&self, axes: &[usize]) -> Result<NdArray> {
+        let ndim = self.ndim();
+        if axes.len() != ndim {
+            return Err(NumpyError::ValueError(format!(
+                "axes don't match array: expected {} axes, got {}",
+                ndim,
+                axes.len()
+            )));
+        }
+        for &ax in axes {
+            if ax >= ndim {
+                return Err(NumpyError::ValueError(format!(
+                    "axis {} out of bounds for array of dimension {}",
+                    ax, ndim
+                )));
+            }
+        }
+        let perm: Vec<usize> = axes.to_vec();
+
+        macro_rules! do_perm {
+            ($arr:expr) => {{
+                let view = $arr.view().permuted_axes(perm.clone());
+                view.to_owned().into_shared()
+            }};
+        }
+
+        let data = match &self.data {
+            ArrayData::Bool(a) => ArrayData::Bool(do_perm!(a)),
+            ArrayData::Int32(a) => ArrayData::Int32(do_perm!(a)),
+            ArrayData::Int64(a) => ArrayData::Int64(do_perm!(a)),
+            ArrayData::Float32(a) => ArrayData::Float32(do_perm!(a)),
+            ArrayData::Float64(a) => ArrayData::Float64(do_perm!(a)),
+            ArrayData::Complex64(a) => ArrayData::Complex64(do_perm!(a)),
+            ArrayData::Complex128(a) => ArrayData::Complex128(do_perm!(a)),
+            ArrayData::Str(a) => ArrayData::Str(do_perm!(a)),
+        };
+        Ok(NdArray::from_data(data))
+    }
+
     /// Swap two axes of the array.
     pub fn swapaxes(&self, axis1: usize, axis2: usize) -> Result<NdArray> {
         let ndim = self.ndim();

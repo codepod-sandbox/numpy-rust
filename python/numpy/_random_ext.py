@@ -1146,3 +1146,29 @@ random.SFC64 = _SFC64
 random.Philox = _Philox
 random.SeedSequence = _SeedSequence
 random.BitGenerator = _BitGenerator
+
+
+# ---------------------------------------------------------------------------
+# bit_generator submodule stub (numpy.random.bit_generator)
+# ---------------------------------------------------------------------------
+
+import types as _types
+import sys as _sys
+
+_bit_generator_mod = _types.ModuleType("numpy.random.bit_generator")
+
+
+class _SeedlessSeedSequence:
+    """Stub for SeedlessSeedSequence (a seedless seed sequence placeholder)."""
+    def generate_state(self, n_words, dtype='uint32'):
+        return array([0] * n_words, dtype=str(dtype))
+
+    def spawn(self, n_children):
+        return [_SeedlessSeedSequence() for _ in range(n_children)]
+
+
+_bit_generator_mod.SeedSequence = _SeedSequence
+_bit_generator_mod.SeedlessSeedSequence = _SeedlessSeedSequence
+_bit_generator_mod.BitGenerator = _BitGenerator
+random.bit_generator = _bit_generator_mod
+_sys.modules["numpy.random.bit_generator"] = _bit_generator_mod

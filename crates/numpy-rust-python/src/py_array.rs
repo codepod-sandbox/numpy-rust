@@ -423,6 +423,8 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "complex64" | "c64" | "c8" => Ok(DType::Complex64),
         "complex128" | "c128" | "c16" | "complex" | "<class 'complex'>" => Ok(DType::Complex128),
         "str" | "U" | "<class 'str'>" => Ok(DType::Str),
+        // object dtype: map to Float64 as fallback (no true object array support)
+        "object" | "O" | "<class 'object'>" => Ok(DType::Float64),
         _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),
     }
@@ -581,6 +583,70 @@ impl PyNdArray {
             .is_aligned
             .store(self.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
         result
+    }
+
+    #[pymethod]
+    fn transpose(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let inner = self.data.read().unwrap();
+
+        // No args or single None arg => simple transpose (reverse axes)
+        if args.args.is_empty() {
+            return Ok(PyNdArray::from_core(inner.transpose()));
+        }
+
+        // Extract axes from args - could be transpose(1, 0, 2) or transpose((1, 0, 2))
+        let mut axes: Vec<usize> = Vec::new();
+        if args.args.len() == 1 {
+            let first = &args.args[0];
+            if vm.is_none(first) {
+                return Ok(PyNdArray::from_core(inner.transpose()));
+            }
+            // Try as tuple/list
+            if let Ok(tuple) = first.clone().try_into_value::<vm::builtins::PyTupleRef>(vm) {
+                for item in tuple.as_slice() {
+                    let idx: i64 = item.clone().try_into_value(vm)?;
+                    let ndim = inner.ndim();
+                    let ax = if idx < 0 {
+                        (ndim as i64 + idx) as usize
+                    } else {
+                        idx as usize
+                    };
+                    axes.push(ax);
+                }
+            } else if let Ok(list) = first.clone().try_into_value::<vm::builtins::PyListRef>(vm) {
+                for item in list.borrow_vec().iter() {
+                    let idx: i64 = item.clone().try_into_value(vm)?;
+                    let ndim = inner.ndim();
+                    let ax = if idx < 0 {
+                        (ndim as i64 + idx) as usize
+                    } else {
+                        idx as usize
+                    };
+                    axes.push(ax);
+                }
+            } else {
+                let _idx: i64 = first.clone().try_into_value(vm)?;
+                // Single int arg for 1-d: just return copy
+                return Ok(PyNdArray::from_core(inner.transpose()));
+            }
+        } else {
+            // Multiple positional args: transpose(1, 0, 2)
+            for arg in &args.args {
+                let idx: i64 = arg.clone().try_into_value(vm)?;
+                let ndim = inner.ndim();
+                let ax = if idx < 0 {
+                    (ndim as i64 + idx) as usize
+                } else {
+                    idx as usize
+                };
+                axes.push(ax);
+            }
+        }
+
+        inner
+            .transpose_axes(&axes)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     #[pygetset]
@@ -2288,13 +2354,10 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn setflags(
-        &self,
-        _write: vm::function::OptionalArg<bool>,
-        _align: vm::function::OptionalArg<bool>,
-        _uic: vm::function::OptionalArg<bool>,
-    ) {
+    #[allow(unused_variables)]
+    fn setflags(&self, args: vm::function::FuncArgs) {
         // No-op: flags are fixed in our implementation
+        // Accepts any combination of write=, align=, uic= kwargs
     }
 
     #[pymethod]

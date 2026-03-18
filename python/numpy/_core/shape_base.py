@@ -46,6 +46,11 @@ def _block_setup(arrays):
     return result, list_ndim, result_ndim
 
 
+def _block_slicing(arrays, list_ndim, result_ndim):
+    """Internal helper for np.block using slicing (stub)."""
+    raise NotImplementedError("_block_slicing is not implemented")
+
+
 def __getattr__(name):
     if hasattr(numpy, name):
         return getattr(numpy, name)

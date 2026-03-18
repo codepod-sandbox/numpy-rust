@@ -101,7 +101,13 @@ def _approx(x, rel=None, abs=None, nan_ok=False):
 
 
 class _Mark:
-    def parametrize(self, names, values, **kwargs):
+    def parametrize(self, names=None, values=None, *, argnames=None, argvalues=None, **kwargs):
+        if argnames is not None:
+            names = argnames
+        if argvalues is not None:
+            values = argvalues
+        if names is None or values is None:
+            raise TypeError("parametrize() missing required arguments")
         def dec(fn):
             if not hasattr(fn, '_parametrize_list'):
                 fn._parametrize_list = []
@@ -232,7 +238,7 @@ for _sname in ['data', 'integers', 'floats', 'text', 'sampled_from', 'one_of',
                'fractions', 'decimals', 'datetimes', 'dates', 'times',
                'timedeltas', 'uuids', 'from_type', 'builds', 'fixed_dictionaries',
                'dictionaries', 'sets', 'frozensets', 'recursive',
-               'deferred', 'shared', 'runner', 'permutations']:
+               'deferred', 'shared', 'runner', 'permutations', 'randoms']:
     setattr(_hyp_strategies, _sname, lambda *a, **kw: _fake)
 _hyp_strategies.composite = lambda fn: fn
 
@@ -242,12 +248,13 @@ sys.modules["hypothesis.strategies"] = _hyp_strategies
 
 _hyp_extra = types.ModuleType("hypothesis.extra")
 _hyp_extra_np = types.ModuleType("hypothesis.extra.numpy")
-for _sname in ['arrays', 'integer_dtypes', 'floating_dtypes', 'array_shapes',
-               'mutually_broadcastable_shapes', 'from_dtype', 'scalar_dtypes',
-               'unsigned_integer_dtypes', 'complex_number_dtypes',
-               'boolean_dtypes', 'byte_string_dtypes', 'unicode_string_dtypes',
-               'datetime64_dtypes', 'timedelta64_dtypes', 'nested_dtypes',
-               'valid_tuple_axes', 'broadcastable_shapes', 'basic_indices']:
+for _sname in ['arrays', 'array_dtypes', 'integer_dtypes', 'floating_dtypes',
+               'array_shapes', 'mutually_broadcastable_shapes', 'from_dtype',
+               'scalar_dtypes', 'unsigned_integer_dtypes',
+               'complex_number_dtypes', 'boolean_dtypes', 'byte_string_dtypes',
+               'unicode_string_dtypes', 'datetime64_dtypes',
+               'timedelta64_dtypes', 'nested_dtypes', 'valid_tuple_axes',
+               'broadcastable_shapes', 'basic_indices']:
     setattr(_hyp_extra_np, _sname, lambda *a, **kw: _fake)
 _hyp_extra.numpy = _hyp_extra_np
 _hyp_mod.extra = _hyp_extra
@@ -255,59 +262,10 @@ sys.modules["hypothesis.extra"] = _hyp_extra
 sys.modules["hypothesis.extra.numpy"] = _hyp_extra_np
 
 # ---------------------------------------------------------------------------
-# 3. Import numpy and apply safe dtype wrappers
+# 3. Import numpy
 # ---------------------------------------------------------------------------
 
 import numpy as np
-
-_UNSUPPORTED_DTYPE_STRINGS = {"V0", "V3", "V10", "S", "S0", "U0"}
-
-
-def _is_unsupported_dtype(dt):
-    if dt is object:
-        return True
-    if isinstance(dt, str):
-        if dt in _UNSUPPORTED_DTYPE_STRINGS:
-            return True
-        if dt.startswith("V"):
-            return True
-    return False
-
-
-def _make_safe_wrapper(orig_fn, fn_name):
-    def wrapper(*args, **kwargs):
-        dt = kwargs.get("dtype", None)
-        if dt is not None and _is_unsupported_dtype(dt):
-            kwargs["dtype"] = np.float64
-        try:
-            return orig_fn(*args, **kwargs)
-        except (TypeError, ValueError) as e:
-            if "dtype" in str(e).lower():
-                kwargs["dtype"] = np.float64
-                try:
-                    return orig_fn(*args, **kwargs)
-                except Exception:
-                    raise e
-            raise
-    wrapper.__name__ = fn_name
-    wrapper.__qualname__ = fn_name
-    wrapper._original = orig_fn
-    return wrapper
-
-
-_orig_array = np.array
-_orig_zeros = np.zeros
-_orig_ones = np.ones
-_orig_full = np.full
-_orig_arange = np.arange
-_orig_empty = np.empty
-
-np.array = _make_safe_wrapper(_orig_array, "array")
-np.zeros = _make_safe_wrapper(_orig_zeros, "zeros")
-np.ones = _make_safe_wrapper(_orig_ones, "ones")
-np.full = _make_safe_wrapper(_orig_full, "full")
-np.arange = _make_safe_wrapper(_orig_arange, "arange")
-np.empty = _make_safe_wrapper(_orig_empty, "empty")
 
 # ---------------------------------------------------------------------------
 # 4. Test runner engine

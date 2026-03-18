@@ -277,6 +277,78 @@ def rpartition(a, sep):
 def expandtabs(a, tabsize=8):
     return _apply_unary(lambda s: s.expandtabs(int(tabsize)), a)
 
+def mod(a, values):
+    """String formatting with % operator, element-wise."""
+    arr = np.asarray(a)
+    flat = arr.flatten()
+    if not isinstance(values, (tuple, list)):
+        values_list = [values]
+    else:
+        values_list = list(values)
+    result = []
+    for i in range(flat.size):
+        v = flat[i]
+        if isinstance(v, bytes):
+            v = v.decode('latin-1')
+        try:
+            result.append(str(v) % tuple(values_list))
+        except TypeError:
+            result.append(str(v) % values_list[0] if len(values_list) == 1 else str(v) % tuple(values_list))
+    out = np.array(result)
+    return out.reshape(arr.shape) if len(arr.shape) > 0 else out
+
+
+def equal(x1, x2):
+    """Return element-wise string equality comparison."""
+    arr1 = np.asarray(x1)
+    arr2 = np.asarray(x2)
+    flat1 = arr1.flatten()
+    flat2 = arr2.flatten()
+    size = max(flat1.size, flat2.size)
+    result = []
+    for i in range(size):
+        v1 = flat1[i % flat1.size]
+        v2 = flat2[i % flat2.size]
+        if isinstance(v1, bytes):
+            v1 = v1.decode('latin-1')
+        if isinstance(v2, bytes):
+            v2 = v2.decode('latin-1')
+        result.append(str(v1) == str(v2))
+    out = np.array(result)
+    shape = arr1.shape if arr1.size >= arr2.size else arr2.shape
+    return out.reshape(shape) if len(shape) > 0 else out
+
+
+def not_equal(x1, x2):
+    """Return element-wise string inequality comparison."""
+    return ~equal(x1, x2)
+
+
+def greater(x1, x2):
+    """Return element-wise string greater-than comparison."""
+    return _apply_binary(lambda a, b: a > str(b), x1, x2)
+
+
+def greater_equal(x1, x2):
+    """Return element-wise string greater-equal comparison."""
+    return _apply_binary(lambda a, b: a >= str(b), x1, x2)
+
+
+def less(x1, x2):
+    """Return element-wise string less-than comparison."""
+    return _apply_binary(lambda a, b: a < str(b), x1, x2)
+
+
+def less_equal(x1, x2):
+    """Return element-wise string less-equal comparison."""
+    return _apply_binary(lambda a, b: a <= str(b), x1, x2)
+
+
+def str_len(a):
+    """Return element-wise string lengths."""
+    return _apply_unary(lambda s: len(s), a)
+
+
 def translate(a, table, deletechars=None):
     def _translate(s):
         if deletechars:

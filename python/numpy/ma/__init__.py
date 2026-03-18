@@ -2387,6 +2387,13 @@ class _TestUtils:
             raise AssertionError("{} == {}".format(a, b))
 
     @staticmethod
+    def fail_if_equal(actual, desired, err_msg=""):
+        """Raise AssertionError if two arrays are equal."""
+        import numpy as np
+        if np.all(np.asarray(actual) == np.asarray(desired)):
+            raise AssertionError(err_msg or "{} == {}".format(actual, desired))
+
+    @staticmethod
     def assert_almost_equal(actual, desired, decimal=7, err_msg="", verbose=True):
         import numpy as np
         np.testing.assert_almost_equal(actual, desired, decimal=decimal,

@@ -1,5 +1,14 @@
 """numpy.dtypes - dtype class stubs."""
 
+__all__ = [
+    'Float64DType', 'Float32DType', 'Float16DType',
+    'Int64DType', 'Int32DType', 'Int16DType', 'Int8DType',
+    'UInt64DType', 'UInt32DType', 'UInt16DType', 'UInt8DType',
+    'BoolDType', 'Complex128DType', 'Complex64DType',
+    'StringDType', 'StrDType', 'BytesDType', 'VoidDType',
+    'ObjectDType', 'DateTime64DType', 'TimeDelta64DType',
+]
+
 
 class Float64DType:
     pass

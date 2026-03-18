@@ -494,8 +494,16 @@ def exp(x):
         return x.exp()
     if isinstance(x, complex):
         import cmath
-        return cmath.exp(x)
-    return _math.exp(x)
+        try:
+            return cmath.exp(x)
+        except (ValueError, OverflowError):
+            return complex(float('nan'), float('nan'))
+    try:
+        return _math.exp(x)
+    except (ValueError, OverflowError):
+        if x > 0:
+            return float('inf')
+        return 0.0
 
 def exp2(x):
     """Compute 2**x element-wise."""
@@ -510,8 +518,16 @@ def log(x):
         return x.log()
     if isinstance(x, complex):
         import cmath
-        return cmath.log(x)
-    return _math.log(x)
+        try:
+            return cmath.log(x)
+        except (ValueError, OverflowError):
+            return complex(float('-inf'), _math.pi if x.real < 0 or (x.real == 0 and _math.copysign(1.0, x.real) < 0) else 0.0)
+    try:
+        return _math.log(x)
+    except ValueError:
+        if x == 0 or x == -0.0:
+            return float('-inf')
+        return float('nan')
 
 def log10(x):
     if _is_masked_array(x):

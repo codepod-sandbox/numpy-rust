@@ -31,3 +31,6 @@ def broadcast_shapes(*shapes):
 
 def _broadcast_shape(*args):
     return broadcast_shapes(*[np.asarray(a).shape for a in args])
+
+
+from numpy.lib._stride_tricks_impl import sliding_window_view

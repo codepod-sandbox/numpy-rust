@@ -230,6 +230,13 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 shape = (len(data), inner_len)
                 return _ObjectArray(flat, "object", shape=shape)
             return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], "object")
+        if dt == "void" or dt.startswith("V"):
+            data_list = data if isinstance(data, (list, tuple)) else [data]
+            kind, itemsize = _string_dtype_info(dt)
+            return _make_void_result((len(data_list),), dt, 0, itemsize=itemsize or 0)
+        if dt == "bytes":
+            data_list = data if isinstance(data, (list, tuple)) else [data]
+            return _ObjectArray([bytes(str(x), 'ascii') if not isinstance(x, bytes) else x for x in data_list], "bytes")
         # Structured dtype: route to columnar Rust-backed StructuredArray
         # Note: str(structured_dtype) returns "void", not a comma-separated string,
         # so we must check _is_structured_dtype on the original dtype object.
@@ -325,7 +332,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 result = result.astype(dt)
         return result
     # Nested lists/tuples: infer shape, flatten, reshape
-    if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (list, tuple, ndarray)):
+    if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (list, tuple, ndarray, _ObjectArray)):
         shape = _infer_shape(data)
         if shape is not None:
             # First try: check for complex elements before flattening
@@ -334,6 +341,31 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
 
             def _flatten_complex(d):
                 """Flatten nested lists including complex values."""
+                if isinstance(d, _ObjectArray):
+                    flat = d.flatten().tolist()
+                    result = []
+                    for v in flat:
+                        if isinstance(v, complex):
+                            result.append(v)
+                        elif isinstance(v, tuple):
+                            result.append(complex(v[0], v[1]))
+                        else:
+                            try:
+                                result.append(complex(float(v), 0.0))
+                            except (TypeError, ValueError):
+                                return None
+                    return result
+                if isinstance(d, ndarray):
+                    flat = d.flatten().tolist()
+                    result = []
+                    for v in flat:
+                        if isinstance(v, tuple):
+                            result.append(complex(v[0], v[1]))
+                        elif isinstance(v, complex):
+                            result.append(v)
+                        else:
+                            result.append(complex(float(v), 0.0))
+                    return result
                 if isinstance(d, (list, tuple)):
                     result = []
                     for item in d:
@@ -355,6 +387,12 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             def _has_any_complex(d):
                 if isinstance(d, complex):
                     return True
+                if isinstance(d, _ObjectArray):
+                    dt = str(d.dtype)
+                    return dt.startswith("complex") or dt.startswith("c")
+                if isinstance(d, ndarray):
+                    dt = str(d.dtype)
+                    return dt.startswith("complex") or dt.startswith("c")
                 if isinstance(d, (list, tuple)):
                     return _any(_has_any_complex(x) for x in d)
                 return False

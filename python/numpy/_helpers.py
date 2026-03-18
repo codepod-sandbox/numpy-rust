@@ -555,6 +555,8 @@ def _infer_shape(data):
     """Infer the shape of a nested list/tuple structure. Returns None if ragged."""
     if isinstance(data, ndarray):
         return data.shape
+    if isinstance(data, _ObjectArray):
+        return data.shape
     if isinstance(data, (list, tuple)):
         if len(data) == 0:
             return (0,)
@@ -582,10 +584,18 @@ def _infer_shape(data):
 def _flatten_nested(data):
     """Flatten a nested list/tuple/ndarray structure to a flat list of floats.
     Returns None if it encounters non-numeric data."""
+    if isinstance(data, _ObjectArray):
+        return None  # ObjectArrays (e.g. complex) need special handling
     if isinstance(data, ndarray):
-        return data.flatten().tolist()
+        flat = data.flatten().tolist()
+        # Check if any element is a tuple (complex number from Rust backend)
+        if flat and isinstance(flat[0], tuple):
+            return None  # Let _array_core handle complex arrays via stack path
+        return flat
     if isinstance(data, (int, float, bool)):
         return [float(data)]
+    if isinstance(data, complex):
+        return None  # Complex data needs special handling
     if isinstance(data, (list, tuple)):
         result = []
         for item in data:

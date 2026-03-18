@@ -120,11 +120,120 @@ class polynomial:
             c = polynomial.polyint(self.coef, m)
             return polynomial.Polynomial(c, domain=self.domain, window=self.window)
 
+        def _check_symbol(self, other):
+            if isinstance(other, polynomial.Polynomial):
+                if self.symbol != other.symbol:
+                    raise ValueError(
+                        "Polynomials have different symbols: "
+                        "'{}' != '{}'".format(self.symbol, other.symbol))
+
+        def __add__(self, other):
+            if isinstance(other, polynomial.Polynomial):
+                self._check_symbol(other)
+                c = polynomial.polyadd(self.coef, other.coef)
+            else:
+                import numpy as np
+                c = self.coef.copy()
+                c_list = c.tolist()
+                c_list[0] = c_list[0] + float(other)
+                c = np.array(c_list)
+            return polynomial.Polynomial(c, domain=self.domain, window=self.window, symbol=self.symbol)
+
+        def __radd__(self, other):
+            return self.__add__(other)
+
+        def __sub__(self, other):
+            if isinstance(other, polynomial.Polynomial):
+                self._check_symbol(other)
+                c = polynomial.polysub(self.coef, other.coef)
+            else:
+                import numpy as np
+                c = self.coef.copy()
+                c_list = c.tolist()
+                c_list[0] = c_list[0] - float(other)
+                c = np.array(c_list)
+            return polynomial.Polynomial(c, domain=self.domain, window=self.window, symbol=self.symbol)
+
+        def __rsub__(self, other):
+            import numpy as np
+            c = (-self.coef).copy()
+            c_list = c.tolist()
+            c_list[0] = c_list[0] + float(other)
+            c = np.array(c_list)
+            return polynomial.Polynomial(c, domain=self.domain, window=self.window, symbol=self.symbol)
+
+        def __mul__(self, other):
+            if isinstance(other, polynomial.Polynomial):
+                self._check_symbol(other)
+                c = polynomial.polymul(self.coef, other.coef)
+            else:
+                import numpy as np
+                c = self.coef * float(other)
+            return polynomial.Polynomial(c, domain=self.domain, window=self.window, symbol=self.symbol)
+
+        def __rmul__(self, other):
+            return self.__mul__(other)
+
+        def __floordiv__(self, other):
+            if isinstance(other, polynomial.Polynomial):
+                self._check_symbol(other)
+            raise NotImplementedError("Polynomial floor division not implemented")
+
+        def __mod__(self, other):
+            if isinstance(other, polynomial.Polynomial):
+                self._check_symbol(other)
+            raise NotImplementedError("Polynomial modulo not implemented")
+
+        def __eq__(self, other):
+            if not isinstance(other, polynomial.Polynomial):
+                return NotImplemented
+            import numpy as np
+            return (self.symbol == other.symbol and
+                    np.array_equal(self.coef, other.coef))
+
+        def __ne__(self, other):
+            eq = self.__eq__(other)
+            if eq is NotImplemented:
+                return eq
+            return not eq
+
+        def __neg__(self):
+            return polynomial.Polynomial(-self.coef, domain=self.domain, window=self.window, symbol=self.symbol)
+
+        def __pos__(self):
+            return polynomial.Polynomial(self.coef.copy(), domain=self.domain, window=self.window, symbol=self.symbol)
+
+        def copy(self):
+            return polynomial.Polynomial(self.coef.copy(), domain=list(self.domain),
+                                          window=list(self.window), symbol=self.symbol)
+
+        def trim(self, tol=0):
+            import numpy as np
+            c = self.coef.tolist()
+            while len(c) > 1 and abs(c[-1]) <= tol:
+                c.pop()
+            return polynomial.Polynomial(np.array(c), domain=self.domain,
+                                          window=self.window, symbol=self.symbol)
+
         @staticmethod
-        def fit(x, y, deg, domain=None, window=None):
+        def fit(x, y, deg, domain=None, window=None, symbol='x'):
             import numpy as np
             c = polynomial.polyfit(x, y, deg)
-            return polynomial.Polynomial(c, domain=domain, window=window)
+            return polynomial.Polynomial(c, domain=domain, window=window, symbol=symbol)
+
+        @staticmethod
+        def fromroots(roots, domain=None, window=None, symbol='x'):
+            import numpy as np
+            roots = list(np.asarray(roots).flatten().tolist())
+            c = [1.0]
+            for r in roots:
+                # Multiply (c) by (x - r) in ascending order
+                new_c = [0.0] * (len(c) + 1)
+                for i in range(len(c)):
+                    new_c[i] -= r * c[i]
+                    new_c[i + 1] += c[i]
+                c = new_c
+            return polynomial.Polynomial(np.array(c), domain=domain, window=window, symbol=symbol)
 
 
 # Also expose as module-level

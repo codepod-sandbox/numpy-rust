@@ -77,7 +77,13 @@ _DTYPE_CHAR_MAP = {
     # Python type class names for bytes
     "<class 'bytes'>": 'bytes',
     # Object dtype aliases
-    'O': 'object', '|O': 'object',
+    'O': 'object', '|O': 'object', 'object': 'object',
+    "<class 'object'>": 'object',
+    # Pointer types (map to int64 on 64-bit)
+    'p': 'int64', 'P': 'uint64',
+    # Void/string fallback aliases
+    'V0': 'void', 'V3': 'void', 'V10': 'void',
+    'S': 'bytes', 'S0': 'bytes', 'U0': 'str',
     # Byte string aliases (all map to 'bytes')
     '|S0': 'bytes', '|S1': 'bytes', '|S2': 'bytes',
     '|S4': 'bytes', '|S8': 'bytes',
@@ -553,21 +559,29 @@ class dtype:
         if cls is dtype:
             # Determine canonical dtype name to pick the right subclass
             name = None
-            if isinstance(tp, type) and isinstance(tp, _DTypeClassMeta):
+            if isinstance(tp, type) and hasattr(tp, '_dtype_class_name'):
                 name = tp._dtype_class_name
             elif isinstance(tp, str):
                 name = _DTYPE_CHAR_MAP.get(tp, tp)
-                # Handle arbitrary |Sn -> 'bytes', |Vn -> 'void', <Un -> 'str'
+                # Handle arbitrary |Sn/Sn -> 'bytes', |Vn/Vn -> 'void', <Un/Un -> 'str'
                 if isinstance(name, str):
                     if name.startswith('|S') and len(name) > 2 and name[2:].isdigit():
                         name = 'bytes'
+                    elif name.startswith('S') and len(name) > 1 and name[1:].isdigit():
+                        name = 'bytes'
                     elif name.startswith('|V') and len(name) > 2 and name[2:].isdigit():
+                        name = 'void'
+                    elif name.startswith('V') and len(name) > 1 and name[1:].isdigit():
                         name = 'void'
                     elif len(name) > 1 and (name.startswith('<U') or name.startswith('>U')):
                         if name[2:].isdigit():
                             name = 'str'
                     elif name.startswith('U') and len(name) > 1 and name[1:].isdigit():
                         name = 'str'
+                    elif len(name) >= 2 and name[0].isdigit():
+                        name = 'void'
+            elif tp is object:
+                name = 'object'
             elif tp is float or tp is float64:
                 name = 'float64'
             elif tp is int or tp is int64:
@@ -619,11 +633,18 @@ class dtype:
                 self.descr = tp.descr
         elif isinstance(tp, str):
             tp = _DTYPE_CHAR_MAP.get(tp, tp)
-            # Handle arbitrary |Sn byte strings -> 'bytes'
+            # Handle arbitrary |Sn or Sn byte strings -> 'bytes'
             if tp.startswith('|S') and len(tp) > 2 and tp[2:].isdigit():
                 tp = 'bytes'
-            # Handle arbitrary |Vn void dtypes -> 'void'
+            elif tp.startswith('S') and len(tp) > 1 and tp[1:].isdigit():
+                tp = 'bytes'
+            # Handle arbitrary |Vn or Vn void dtypes -> 'void'
             elif tp.startswith('|V') and len(tp) > 2 and tp[2:].isdigit():
+                tp = 'void'
+            elif tp.startswith('V') and len(tp) > 1 and tp[1:].isdigit():
+                tp = 'void'
+            # Handle repeat-count dtypes like '2i' -> 'void'
+            elif len(tp) >= 2 and tp[0].isdigit():
                 tp = 'void'
             # Handle arbitrary <Un / Un unicode strings -> 'str'
             elif len(tp) > 1 and (tp.startswith('<U') or tp.startswith('>U')):
@@ -659,6 +680,11 @@ class dtype:
                 return
             self.name = tp
             self._init_from_name(tp)
+        elif tp is object:
+            self.name = "object"
+            self.kind = "O"
+            self.itemsize = 8
+            self.char = "O"
         elif tp is float or tp is float64:
             self.name = "float64"
             self.kind = "f"
@@ -680,7 +706,7 @@ class dtype:
         elif isinstance(tp, type) and isinstance(tp, _ScalarTypeMeta):
             self.name = tp._scalar_name
             self._init_from_name(tp._scalar_name)
-        elif isinstance(tp, type) and isinstance(tp, _DTypeClassMeta):
+        elif isinstance(tp, type) and hasattr(tp, '_dtype_class_name'):
             self.name = tp._dtype_class_name
             self._init_from_name(tp._dtype_class_name)
         else:
@@ -747,6 +773,7 @@ class dtype:
             "uint32": ("u", 4, "L"), "uint16": ("u", 2, "H"),
             "uint8": ("u", 1, "B"), "bool": ("b", 1, "?"),
             "complex128": ("c", 16, "D"), "complex64": ("c", 8, "F"),
+            "object": ("O", 8, "O"),
         }
         if name in _info:
             self.kind, self.itemsize, self.char = _info[name]
@@ -914,8 +941,14 @@ def _normalize_dtype(dt):
     """Normalize dtype string/type to a canonical name our Rust backend understands."""
     if dt is None:
         return None
-    if isinstance(dt, type) and isinstance(dt, _DTypeClassMeta):
+    if dt is object:
+        return 'object'
+    if isinstance(dt, type) and hasattr(dt, '_dtype_class_name'):
         return dt._dtype_class_name
+    # Non-numpy type classes (e.g. decimal.Decimal) → treat as object
+    if isinstance(dt, type) and not hasattr(dt, '_scalar_name') and not hasattr(dt, '_name'):
+        if dt not in (float, int, bool, complex, str, bytes):
+            return 'object'
     s = str(dt)
     result = _DTYPE_CHAR_MAP.get(s, None)
     if result is not None:
@@ -935,11 +968,29 @@ def _normalize_dtype(dt):
     if _is_temporal_dtype(s):
         _, _, canonical, _ = _temporal_dtype_info(s)
         return canonical
+    # Handle repeat-count dtypes like '2i', '3f8' → treat as void/structured
+    if len(s) >= 2 and s[0].isdigit():
+        return 'void'
+    # Handle bare Vn (without | prefix)
+    if s.startswith('V') and len(s) > 1 and s[1:].isdigit():
+        return 'void'
+    # Handle bare Sn (without | prefix)
+    if s.startswith('S') and len(s) > 1 and s[1:].isdigit():
+        return 'bytes'
+    # Handle unsupported type objects passed as dtype (e.g. decimal.Decimal)
+    if s.startswith("<class '") and s.endswith("'>"):
+        return 'object'
     return s
 
 
 def _normalize_dtype_with_size(dt):
     """Normalize dtype, preserving size for string/void dtype objects."""
+    if dt is None:
+        return None
+    if dt is object:
+        return 'object'
+    if isinstance(dt, type) and hasattr(dt, '_dtype_class_name'):
+        return dt._dtype_class_name
     if isinstance(dt, dtype):
         if getattr(dt, 'kind', None) == 'S':
             return 'S{}'.format(dt.itemsize)
@@ -949,7 +1000,7 @@ def _normalize_dtype_with_size(dt):
         if getattr(dt, 'kind', None) == 'V':
             return 'V{}'.format(dt.itemsize)
         return _normalize_dtype(str(dt))
-    return _normalize_dtype(str(dt)) if dt is not None else None
+    return _normalize_dtype(str(dt))
 
 
 def _string_dtype_info(dt):
