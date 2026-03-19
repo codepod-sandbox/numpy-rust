@@ -1,12 +1,14 @@
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
+use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
 /// Prepare two NdArrays for bitwise ops: promote types and broadcast shapes.
 /// Only Bool and integer types are supported.
-fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
+/// Returns `(lhs_data, rhs_data, logical_result_dtype)`.
+fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData, DType)> {
     if lhs.dtype().is_string() || rhs.dtype().is_string() {
         return Err(NumpyError::TypeError(
             "bitwise operations not supported for string arrays".into(),
@@ -23,16 +25,17 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
         ));
     }
 
-    let common_dtype = lhs.dtype().promote(rhs.dtype());
+    let logical_dtype = lhs.dtype().promote(rhs.dtype());
+    let storage_dtype = logical_dtype.storage_dtype();
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(&lhs.data, common_dtype);
-    let b = cast_array_data(&rhs.data, common_dtype);
+    let a = cast_array_data(&lhs.data, storage_dtype);
+    let b = cast_array_data(&rhs.data, storage_dtype);
 
     let a = broadcast_array_data(&a, &out_shape);
     let b = broadcast_array_data(&b, &out_shape);
 
-    Ok((a, b))
+    Ok((a, b, logical_dtype))
 }
 
 /// Prepare two NdArrays for logical ops: broadcast shapes. All dtypes allowed.
@@ -46,7 +49,7 @@ fn prepare_logical(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
 impl NdArray {
     /// Element-wise bitwise AND. For Bool arrays: logical AND. For integers: bitwise &.
     pub fn bitwise_and(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b) = prepare_bitwise(self, other)?;
+        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
                 let r = ndarray::Zip::from(&a)
@@ -69,12 +72,16 @@ impl NdArray {
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
-        Ok(NdArray::from_data(result))
+        let mut r = NdArray::from_data(result);
+        if logical_dtype.is_narrow() {
+            r.declared_dtype = Some(logical_dtype);
+        }
+        Ok(r)
     }
 
     /// Element-wise bitwise OR. For Bool arrays: logical OR. For integers: bitwise |.
     pub fn bitwise_or(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b) = prepare_bitwise(self, other)?;
+        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
                 let r = ndarray::Zip::from(&a)
@@ -97,12 +104,16 @@ impl NdArray {
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
-        Ok(NdArray::from_data(result))
+        let mut r = NdArray::from_data(result);
+        if logical_dtype.is_narrow() {
+            r.declared_dtype = Some(logical_dtype);
+        }
+        Ok(r)
     }
 
     /// Element-wise bitwise XOR. For Bool arrays: logical XOR. For integers: bitwise ^.
     pub fn bitwise_xor(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b) = prepare_bitwise(self, other)?;
+        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
                 let r = ndarray::Zip::from(&a)
@@ -125,13 +136,17 @@ impl NdArray {
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
-        Ok(NdArray::from_data(result))
+        let mut r = NdArray::from_data(result);
+        if logical_dtype.is_narrow() {
+            r.declared_dtype = Some(logical_dtype);
+        }
+        Ok(r)
     }
 
     /// Element-wise left shift. Bool arrays are cast to Int64 first.
     /// Shift amounts are masked to avoid overflow panics.
     pub fn left_shift(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b) = prepare_bitwise(self, other)?;
+        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
                 // Cast bools to i64 first for shift operations
@@ -158,13 +173,17 @@ impl NdArray {
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
-        Ok(NdArray::from_data(result))
+        let mut r = NdArray::from_data(result);
+        if logical_dtype.is_narrow() {
+            r.declared_dtype = Some(logical_dtype);
+        }
+        Ok(r)
     }
 
     /// Element-wise right shift. Bool arrays are cast to Int64 first.
     /// Shift amounts are masked to avoid overflow panics.
     pub fn right_shift(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b) = prepare_bitwise(self, other)?;
+        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
                 // Cast bools to i64 first for shift operations
@@ -191,7 +210,11 @@ impl NdArray {
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
-        Ok(NdArray::from_data(result))
+        let mut r = NdArray::from_data(result);
+        if logical_dtype.is_narrow() {
+            r.declared_dtype = Some(logical_dtype);
+        }
+        Ok(r)
     }
 
     /// Element-wise logical NOT. Returns Bool array (true where element is falsy).
@@ -312,7 +335,9 @@ impl NdArray {
                 ));
             }
         };
-        Ok(NdArray::from_data(result))
+        let mut r = NdArray::from_data(result);
+        r.declared_dtype = self.declared_dtype;
+        Ok(r)
     }
 }
 

@@ -10,22 +10,26 @@ use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
 /// Prepare two NdArrays for a binary operation: promote types and broadcast shapes.
-fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
+/// Returns `(lhs_data, rhs_data, logical_result_dtype)`.
+/// The logical dtype may be a narrow type (e.g. Int8) while the actual data
+/// is stored as the corresponding storage type (e.g. Int32).
+fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData, DType)> {
     if lhs.dtype().is_string() || rhs.dtype().is_string() {
         return Err(crate::error::NumpyError::TypeError(
             "arithmetic not supported for string arrays".into(),
         ));
     }
-    let common_dtype = lhs.dtype().promote(rhs.dtype());
+    let logical_dtype = lhs.dtype().promote(rhs.dtype());
+    let storage_dtype = logical_dtype.storage_dtype();
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(&lhs.data, common_dtype);
-    let b = cast_array_data(&rhs.data, common_dtype);
+    let a = cast_array_data(&lhs.data, storage_dtype);
+    let b = cast_array_data(&rhs.data, storage_dtype);
 
     let a = broadcast_array_data(&a, &out_shape);
     let b = broadcast_array_data(&b, &out_shape);
 
-    Ok((a, b))
+    Ok((a, b, logical_dtype))
 }
 
 macro_rules! impl_binary_op {
@@ -35,26 +39,18 @@ macro_rules! impl_binary_op {
 
             fn $method(self, rhs: &NdArray) -> Result<NdArray> {
                 // Cast Bool operands to Int32 before binary ops (matching NumPy)
+                let (lhs_ref, rhs_ref);
+                let (lhs_tmp, rhs_tmp);
                 if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
-                    let lhs_up = if self.dtype() == DType::Bool { self.astype(DType::Int32) } else { self.clone() };
-                    let rhs_up = if rhs.dtype() == DType::Bool { rhs.astype(DType::Int32) } else { rhs.clone() };
-                    let (a, b) = prepare_binary(&lhs_up, &rhs_up)?;
-                    let data = match (a, b) {
-                        (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
-                        (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
-                        (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(a $op b),
-                        (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(a $op b),
-                        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => ArrayData::Complex64(a $op b),
-                        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ArrayData::Complex128(a $op b),
-                        _ => {
-                            return Err(NumpyError::TypeError(
-                                format!("unsupported operand types for binary operation"),
-                            ));
-                        }
-                    };
-                    return Ok(NdArray::from_data(data));
+                    lhs_tmp = if self.dtype() == DType::Bool { self.astype(DType::Int32) } else { self.clone() };
+                    rhs_tmp = if rhs.dtype() == DType::Bool { rhs.astype(DType::Int32) } else { rhs.clone() };
+                    lhs_ref = &lhs_tmp;
+                    rhs_ref = &rhs_tmp;
+                } else {
+                    lhs_ref = self;
+                    rhs_ref = rhs;
                 }
-                let (a, b) = prepare_binary(self, rhs)?;
+                let (a, b, logical_dtype) = prepare_binary(lhs_ref, rhs_ref)?;
                 let data = match (a, b) {
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
                     (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
@@ -68,7 +64,11 @@ macro_rules! impl_binary_op {
                         ));
                     }
                 };
-                Ok(NdArray::from_data(data))
+                let mut result = NdArray::from_data(data);
+                if logical_dtype.is_narrow() {
+                    result.declared_dtype = Some(logical_dtype);
+                }
+                Ok(result)
             }
         }
     };
@@ -93,7 +93,7 @@ impl NdArray {
         if self.dtype().is_complex() || rhs.dtype().is_complex() {
             let lhs_c = self.astype(DType::Complex128);
             let rhs_c = rhs.astype(DType::Complex128);
-            let (a, b) = prepare_binary(&lhs_c, &rhs_c)?;
+            let (a, b, _) = prepare_binary(&lhs_c, &rhs_c)?;
             return match (a, b) {
                 (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
                     let mut out = a.clone();
@@ -108,7 +108,7 @@ impl NdArray {
         // Cast both to Float64 for uniform powf handling
         let lhs_f = self.astype(DType::Float64);
         let rhs_f = rhs.astype(DType::Float64);
-        let (a, b) = prepare_binary(&lhs_f, &rhs_f)?;
+        let (a, b, _) = prepare_binary(&lhs_f, &rhs_f)?;
         match (a, b) {
             (ArrayData::Float64(a), ArrayData::Float64(b)) => {
                 let mut out = a.clone();
@@ -142,7 +142,7 @@ impl NdArray {
             };
             return lhs_up.floor_div(&rhs_up);
         }
-        let (a, b) = prepare_binary(self, rhs)?;
+        let (a, b, logical_dtype) = prepare_binary(self, rhs)?;
         let data = match (a, b) {
             (ArrayData::Float64(a), ArrayData::Float64(b)) => {
                 let mut out = a.clone();
@@ -190,7 +190,11 @@ impl NdArray {
                 ));
             }
         };
-        Ok(NdArray::from_data(data))
+        let mut result = NdArray::from_data(data);
+        if logical_dtype.is_narrow() {
+            result.declared_dtype = Some(logical_dtype);
+        }
+        Ok(result)
     }
 
     /// Element-wise remainder: self % rhs (sign of divisor, matching NumPy).
@@ -214,7 +218,7 @@ impl NdArray {
             };
             return lhs_up.remainder(&rhs_up);
         }
-        let (a, b) = prepare_binary(self, rhs)?;
+        let (a, b, logical_dtype) = prepare_binary(self, rhs)?;
         let data = match (a, b) {
             (ArrayData::Float64(a), ArrayData::Float64(b)) => {
                 let mut out = a.clone();
@@ -268,7 +272,11 @@ impl NdArray {
                 ));
             }
         };
-        Ok(NdArray::from_data(data))
+        let mut result = NdArray::from_data(data);
+        if logical_dtype.is_narrow() {
+            result.declared_dtype = Some(logical_dtype);
+        }
+        Ok(result)
     }
 }
 

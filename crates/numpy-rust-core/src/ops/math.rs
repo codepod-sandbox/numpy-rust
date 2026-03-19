@@ -366,7 +366,12 @@ impl NdArray {
             ArrayData::Complex128(a) => ArrayData::Float64(a.mapv(|x| x.norm()).into_shared()),
             ArrayData::Str(_) => panic!("abs not supported for string arrays"),
         };
-        NdArray::from_data(result)
+        let mut r = NdArray::from_data(result);
+        // Preserve narrow dtype for non-complex (complex abs returns float)
+        if !self.dtype().is_complex() {
+            r.declared_dtype = self.declared_dtype;
+        }
+        r
     }
 
     /// Return the real part of the array.
@@ -522,7 +527,9 @@ impl NdArray {
             ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|x| -x).into_shared()),
             ArrayData::Str(_) => panic!("negation not supported for string arrays"),
         };
-        NdArray::from_data(result)
+        let mut r = NdArray::from_data(result);
+        r.declared_dtype = self.declared_dtype;
+        r
     }
 }
 

@@ -28,15 +28,15 @@ impl DType {
     ///   Float16 -> Float32 -> Float64
     ///   Complex64 / Complex128 follow float promotion lifted to complex
     pub fn promote(self, other: DType) -> DType {
-        // Always work with storage types so the result is a canonical type
-        // that ArrayData can represent directly.
-        let a = self.storage_dtype();
-        let b = other.storage_dtype();
+        // Use the actual (logical) dtypes, not storage types, so that
+        // narrow dtypes like Int8 are preserved when both operands match
+        // (NumPy "same-kind" promotion: int8 + int8 -> int8).
+        let a = self;
+        let b = other;
         if a == b {
             return a;
         }
         if a == DType::Str || b == DType::Str {
-            // When mixing string and numeric, promote to string (like NumPy object arrays)
             return DType::Str;
         }
         // If either is complex, result is complex
@@ -54,12 +54,50 @@ impl DType {
             };
         }
         let (hi, lo) = if a.rank() >= b.rank() { (a, b) } else { (b, a) };
+
+        // Bool + integer/float -> the non-bool type (NumPy: bool_ treated as int8 for promotion)
+        if lo == DType::Bool {
+            return hi;
+        }
+
+        // Both integer: use NumPy rules
+        if hi.is_integer() && lo.is_integer() {
+            let hi_signed = hi.is_signed_int();
+            let lo_signed = lo.is_signed_int();
+            if hi_signed == lo_signed {
+                // Same signedness: pick the wider one
+                return hi;
+            }
+            // Mixed signed/unsigned: if signed bits > unsigned bits, use signed
+            let hi_bits = hi.bit_width();
+            let lo_bits = lo.bit_width();
+            let (s_bits, u_bits) = if hi_signed {
+                (hi_bits, lo_bits)
+            } else {
+                (lo_bits, hi_bits)
+            };
+            if s_bits > u_bits {
+                // Signed type can hold unsigned values
+                return if hi_signed { hi } else { lo };
+            }
+            // Need wider signed type
+            return match u_bits {
+                8 => DType::Int16,
+                16 => DType::Int32,
+                32 => DType::Int64,
+                _ => DType::Float64,
+            };
+        }
+
         // Special case: mixing i64 with f32 promotes to f64 to avoid precision loss
         if (hi == DType::Float32 && lo == DType::Int64)
             || (hi == DType::Int64 && lo == DType::Float32)
         {
             return DType::Float64;
         }
+
+        // Integer + float -> float (pick the float type, or widen if needed)
+        // Float + float -> wider float
         hi
     }
 
@@ -141,6 +179,25 @@ impl DType {
     /// Returns true if this is a complex type.
     pub fn is_complex(self) -> bool {
         matches!(self, DType::Complex64 | DType::Complex128)
+    }
+
+    /// Returns true if this is a signed integer type.
+    pub fn is_signed_int(self) -> bool {
+        matches!(
+            self,
+            DType::Int8 | DType::Int16 | DType::Int32 | DType::Int64
+        )
+    }
+
+    /// Returns the bit width for integer types. Returns 0 for non-integer types.
+    pub fn bit_width(self) -> u32 {
+        match self {
+            DType::Int8 | DType::UInt8 => 8,
+            DType::Int16 | DType::UInt16 => 16,
+            DType::Int32 | DType::UInt32 => 32,
+            DType::Int64 | DType::UInt64 => 64,
+            _ => 0,
+        }
     }
 
     /// Returns true if this is a string type.
