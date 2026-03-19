@@ -2632,12 +2632,18 @@ fn obj_to_ndarray_nep50(
     if obj.class().is(vm.ctx.types.bool_type) {
         return obj_to_ndarray(obj, vm);
     }
-    // Plain Python float or int: weak typing → cast to target_dtype
+    // Plain Python float: weak typing, but only adopts float/complex target dtypes.
+    // For int targets, float stays as float64 (normal promotion will widen).
     if obj.class().is(vm.ctx.types.float_type) {
-        if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
-            return Ok(NdArray::from_scalar(f).astype(target_dtype));
+        if target_dtype.is_float() || target_dtype.is_complex() {
+            if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
+                return Ok(NdArray::from_scalar(f).astype(target_dtype));
+            }
         }
+        // Fall through to normal conversion (creates float64)
+        return obj_to_ndarray(obj, vm);
     }
+    // Plain Python int: weak typing → cast to target_dtype
     if obj.class().is(vm.ctx.types.int_type) {
         if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
             if let Ok(val) = i.try_to_primitive::<i64>(vm) {
@@ -2687,8 +2693,37 @@ fn number_bin_op(
     op: fn(&NdArray, &NdArray) -> numpy_rust_core::Result<NdArray>,
     vm: &VirtualMachine,
 ) -> PyResult {
-    let a_arr = obj_to_ndarray(a, vm)?;
-    let b_arr = obj_to_ndarray(b, vm)?;
+    // Use NEP 50 weak-type semantics: if one operand is a Python scalar (int/float/complex)
+    // and the other is an ndarray or numpy scalar, cast the Python scalar to the array's dtype.
+    let a_is_arr =
+        a.downcast_ref::<PyNdArray>().is_some() || a.get_attr("_numpy_dtype_name", vm).is_ok();
+    let b_is_arr =
+        b.downcast_ref::<PyNdArray>().is_some() || b.get_attr("_numpy_dtype_name", vm).is_ok();
+
+    let (a_arr, b_arr) = if a_is_arr && !b_is_arr {
+        let a_arr = obj_to_ndarray(a, vm)?;
+        let target = a_arr.dtype();
+        // Don't use NEP 50 weak typing for Bool arrays (Bool arithmetic promotes to int)
+        let b_arr = if target == DType::Bool {
+            obj_to_ndarray(b, vm)?
+        } else {
+            obj_to_ndarray_nep50(b, target, vm)?
+        };
+        (a_arr, b_arr)
+    } else if b_is_arr && !a_is_arr {
+        let b_arr = obj_to_ndarray(b, vm)?;
+        let target = b_arr.dtype();
+        let a_arr = if target == DType::Bool {
+            obj_to_ndarray(a, vm)?
+        } else {
+            obj_to_ndarray_nep50(a, target, vm)?
+        };
+        (a_arr, b_arr)
+    } else {
+        let a_arr = obj_to_ndarray(a, vm)?;
+        let b_arr = obj_to_ndarray(b, vm)?;
+        (a_arr, b_arr)
+    };
     // Catch panics from ndarray operations (e.g. shape overflow) and convert to Python errors
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&a_arr, &b_arr)));
     match result {

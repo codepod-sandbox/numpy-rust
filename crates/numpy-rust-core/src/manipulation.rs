@@ -389,7 +389,7 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
         }};
     }
 
-    let data = match common_dtype {
+    let data = match common_dtype.storage_dtype() {
         crate::DType::Bool => concat_variant!(Bool),
         crate::DType::Int32 => concat_variant!(Int32),
         crate::DType::Int64 => concat_variant!(Int64),
@@ -640,7 +640,12 @@ pub fn tile(a: &NdArray, reps: &[usize]) -> Result<NdArray> {
 
     // Concatenate along each axis
     for (ax, &r) in full_reps.iter().enumerate() {
-        if r > 1 {
+        if r == 0 {
+            // Zero repetitions: produce an array with size 0 along this axis
+            let mut new_shape = arr.shape().to_vec();
+            new_shape[ax] = 0;
+            arr = NdArray::zeros(&new_shape, arr.dtype());
+        } else if r > 1 {
             let copies: Vec<NdArray> = (0..r).map(|_| arr.clone()).collect();
             let refs: Vec<&NdArray> = copies.iter().collect();
             arr = concatenate(&refs, ax)?;

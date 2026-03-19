@@ -1047,10 +1047,24 @@ def broadcast_to(arr, shape):
     """Broadcast an array to a new shape using reshape + tile."""
     arr = asarray(arr)
     arr_shape = arr.shape
-    if arr_shape == tuple(shape):
+    # Normalize shape: int -> (int,)
+    if isinstance(shape, (int,)):
+        shape = (shape,)
+    else:
+        shape = tuple(shape)
+    # Validate: no negative dimensions
+    for s in shape:
+        if s < 0:
+            raise ValueError(f"all elements of broadcast shape must be non-negative")
+    if arr_shape == shape:
         return arr
     ndim = len(shape)
     arr_ndim = len(arr_shape)
+    # Cannot reduce dimensionality
+    if arr_ndim > ndim:
+        raise ValueError(
+            f"input operand has more dimensions than allowed by the axis remapping"
+        )
     # Prepend 1s to make same ndim
     if arr_ndim < ndim:
         new_shape = [1] * (ndim - arr_ndim) + list(arr_shape)
@@ -1064,7 +1078,10 @@ def broadcast_to(arr, shape):
         elif arr_shape[i] == 1:
             reps.append(shape[i])
         else:
-            raise ValueError(f"cannot broadcast shape {arr_shape} to {tuple(shape)}")
+            raise ValueError(
+                f"operands could not be broadcast together with remapped shapes "
+                f"[original->remapped]: {arr.shape}->... and requested shape {shape}"
+            )
     return tile(arr, reps)
 
 
@@ -1520,6 +1537,9 @@ def broadcast_shapes(*shapes):
     """Compute the broadcast result shape from multiple shapes."""
     if not shapes:
         return ()
+    # Normalize: integers are treated as 1-d shapes
+    # Normalize: integers are treated as 1-d shapes
+    shapes = [s if hasattr(s, '__len__') else (s,) for s in shapes]
     ndim = _builtin_max(len(s) for s in shapes)
     result = [1] * ndim
     for shape in shapes:

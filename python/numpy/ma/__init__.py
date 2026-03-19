@@ -174,14 +174,30 @@ class MaskedArray:
                  keep_mask=True, hard_mask=False, shrink=True,
                  copy=False, subok=True, ndmin=0, order=None):
         import numpy as np
+        # Extract mask from MaskedArray input before converting data
+        _input_mask = None
+        if isinstance(data, MaskedArray):
+            _input_mask = data.mask
+            if fill_value is None and hasattr(data, '_fill_value'):
+                fill_value = data._fill_value
         if dtype is not None:
             self.data = np.asarray(data, dtype=dtype)
         else:
             self.data = np.asarray(data)
         if mask is None or mask is nomask:
-            self.mask = np.zeros(self.data.shape, dtype="bool")
+            if _input_mask is not None and keep_mask:
+                self.mask = np.asarray(_input_mask, dtype="bool")
+                if self.mask.shape != self.data.shape:
+                    self.mask = np.broadcast_to(self.mask, self.data.shape).copy()
+            else:
+                self.mask = np.zeros(self.data.shape, dtype="bool")
         elif isinstance(mask, bool) and not mask:
-            self.mask = np.zeros(self.data.shape, dtype="bool")
+            if _input_mask is not None and keep_mask:
+                self.mask = np.asarray(_input_mask, dtype="bool")
+                if self.mask.shape != self.data.shape:
+                    self.mask = np.broadcast_to(self.mask, self.data.shape).copy()
+            else:
+                self.mask = np.zeros(self.data.shape, dtype="bool")
         elif isinstance(mask, bool) and mask:
             self.mask = np.ones(self.data.shape, dtype="bool")
         else:
@@ -189,6 +205,12 @@ class MaskedArray:
             # broadcast mask to data shape if needed
             if self.mask.shape != self.data.shape:
                 self.mask = np.broadcast_to(self.mask, self.data.shape).copy()
+            # Combine with input mask if keep_mask is True
+            if _input_mask is not None and keep_mask:
+                _im = np.asarray(_input_mask, dtype="bool")
+                if _im.shape != self.mask.shape:
+                    _im = np.broadcast_to(_im, self.mask.shape).copy()
+                self.mask = np.logical_or(self.mask, _im)
         if fill_value is not None:
             self._fill_value = _check_fill_value(fill_value, self.data.dtype)
         else:
@@ -345,7 +367,10 @@ class MaskedArray:
     def count(self, axis=None, keepdims=False):
         import numpy as np
         not_masked = np.logical_not(self.mask).astype("int64")
-        return int(np.sum(not_masked, axis=axis, keepdims=keepdims))
+        result = np.sum(not_masked, axis=axis, keepdims=keepdims)
+        if axis is None:
+            return int(result)
+        return result
 
     def nonzero(self):
         import numpy as np
@@ -409,13 +434,31 @@ class MaskedArray:
 
     def all(self, axis=None, out=None, keepdims=False):
         import numpy as np
-        c = self.compressed()
-        return np.all(c)
+        if axis is None:
+            c = self.compressed()
+            return np.all(c)
+        # For axis-specific all, fill masked values with True (identity for AND)
+        filled = self.filled(True)
+        result_data = np.all(filled, axis=axis, keepdims=keepdims)
+        # Result mask: True only if ALL values along axis are masked
+        result_mask = np.all(self.mask, axis=axis, keepdims=keepdims)
+        if isinstance(result_data, np.ndarray):
+            return MaskedArray(result_data, mask=result_mask)
+        return result_data
 
     def any(self, axis=None, out=None, keepdims=False):
         import numpy as np
-        c = self.compressed()
-        return np.any(c)
+        if axis is None:
+            c = self.compressed()
+            return np.any(c)
+        # For axis-specific any, fill masked values with False (identity for OR)
+        filled = self.filled(False)
+        result_data = np.any(filled, axis=axis, keepdims=keepdims)
+        # Result mask: True only if ALL values along axis are masked
+        result_mask = np.all(self.mask, axis=axis, keepdims=keepdims)
+        if isinstance(result_data, np.ndarray):
+            return MaskedArray(result_data, mask=result_mask)
+        return result_data
 
     def trace(self, offset=0, axis1=0, axis2=1, dtype=None, out=None):
         import numpy as np
@@ -430,7 +473,15 @@ class MaskedArray:
         return MaskedArray(np.cumprod(self.filled(1), axis=axis), mask=self.mask)
 
     def anom(self, axis=None, dtype=None):
+        import numpy as np
         m = self.mean(axis=axis)
+        if axis is not None and isinstance(m, MaskedArray):
+            # Keep dims for broadcasting: expand along the collapsed axis
+            m_data = np.expand_dims(m.data, axis=axis)
+            m_mask = np.expand_dims(m.mask, axis=axis)
+            m = MaskedArray(m_data, mask=m_mask)
+        elif axis is not None and isinstance(m, np.ndarray):
+            m = np.expand_dims(m, axis=axis)
         return self - m
 
     # -- shape manipulation --
@@ -445,7 +496,7 @@ class MaskedArray:
                            fill_value=self._fill_value)
 
     def ravel(self, order='C'):
-        return self.flatten(order=order)
+        return self.flatten()
 
     def reshape(self, *args, **kwargs):
         if len(args) == 1 and isinstance(args[0], (tuple, list)):
@@ -615,13 +666,28 @@ class MaskedArray:
         import numpy as np
         if isinstance(other, MaskedConstant):
             # Operation with masked → result is fully masked
-            return MaskedArray(self.data, mask=True, fill_value=self._fill_value)
+            return MaskedArray(self.data.copy(), mask=True, fill_value=self._fill_value)
         if isinstance(other, MaskedArray):
-            d = op(self.data, other.data)
             m = np.logical_or(self.mask, other.mask)
+            d = op(self.data, other.data)
+            # Preserve self data at positions where self is masked
+            try:
+                self_m = np.broadcast_to(self.mask, d.shape)
+                self_d = np.broadcast_to(self.data, d.shape)
+                d = np.where(self_m, self_d, d)
+            except Exception:
+                pass
         else:
             d = op(self.data, other)
             m = self.mask
+            # Preserve self data at masked positions
+            if isinstance(m, np.ndarray):
+                try:
+                    self_m = np.broadcast_to(self.mask, d.shape)
+                    self_d = np.broadcast_to(self.data, d.shape)
+                    d = np.where(self_m, self_d, d)
+                except Exception:
+                    pass
         return MaskedArray(d, mask=m, fill_value=self._fill_value)
 
     def __add__(self, other): return self._binop(other, lambda a, b: a + b)
@@ -735,7 +801,7 @@ class MaskedArray:
     def sort(self, axis=-1, kind=None, order=None, endwith=True, fill_value=None):
         import numpy as np
         if fill_value is None:
-            fill_value = minimum_fill_value(self.data) if endwith else maximum_fill_value(self.data)
+            fill_value = maximum_fill_value(self.data) if endwith else minimum_fill_value(self.data)
         filled = self.filled(fill_value)
         idx = np.argsort(filled, axis=axis)
         self.data = np.take_along_axis(self.data, idx, axis=axis)
@@ -744,19 +810,19 @@ class MaskedArray:
     def argsort(self, axis=None, kind=None, order=None, endwith=True, fill_value=None):
         import numpy as np
         if fill_value is None:
-            fill_value = minimum_fill_value(self.data) if endwith else maximum_fill_value(self.data)
+            fill_value = maximum_fill_value(self.data) if endwith else minimum_fill_value(self.data)
         return np.argsort(self.filled(fill_value), axis=axis)
 
     def argmin(self, axis=None, fill_value=None, out=None, keepdims=False):
         import numpy as np
         if fill_value is None:
-            fill_value = minimum_fill_value(self.data)
+            fill_value = maximum_fill_value(self.data)
         return np.argmin(self.filled(fill_value), axis=axis)
 
     def argmax(self, axis=None, fill_value=None, out=None, keepdims=False):
         import numpy as np
         if fill_value is None:
-            fill_value = maximum_fill_value(self.data)
+            fill_value = minimum_fill_value(self.data)
         return np.argmax(self.filled(fill_value), axis=axis)
 
     def argpartition(self, kth, axis=-1, kind='introselect', order=None):
@@ -775,7 +841,9 @@ class MaskedArray:
 
     def compress(self, condition, axis=None, out=None):
         import numpy as np
-        return MaskedArray(np.compress(condition, self.data, axis=axis))
+        d = np.compress(condition, self.data, axis=axis)
+        m = np.compress(condition, self.mask, axis=axis)
+        return MaskedArray(d, mask=m, fill_value=self._fill_value)
 
     def put(self, indices, values, mode='raise'):
         import numpy as np
@@ -1107,19 +1175,31 @@ def array(data, mask=None, dtype=None, fill_value=None, keep_mask=True,
 def zeros(shape, dtype=None, order='C', **kw):
     """Return a masked array of zeros."""
     import numpy as np
-    return MaskedArray(np.zeros(shape, dtype=dtype or "float64"))
+    fv = kw.get('fill_value', None)
+    result = MaskedArray(np.zeros(shape, dtype=dtype or "float64"))
+    if fv is not None:
+        result.fill_value = fv
+    return result
 
 
 def ones(shape, dtype=None, order='C', **kw):
     """Return a masked array of ones."""
     import numpy as np
-    return MaskedArray(np.ones(shape, dtype=dtype or "float64"))
+    fv = kw.get('fill_value', None)
+    result = MaskedArray(np.ones(shape, dtype=dtype or "float64"))
+    if fv is not None:
+        result.fill_value = fv
+    return result
 
 
 def empty(shape, dtype=None, order='C', **kw):
     """Return an empty masked array."""
     import numpy as np
-    return MaskedArray(np.zeros(shape, dtype=dtype or "float64"))
+    fv = kw.get('fill_value', None)
+    result = MaskedArray(np.zeros(shape, dtype=dtype or "float64"))
+    if fv is not None:
+        result.fill_value = fv
+    return result
 
 
 def zeros_like(a, dtype=None, order='K', subok=True, shape=None, **kw):
@@ -1470,6 +1550,10 @@ def soften_mask(a):
 
 def filled(a, fill_value=None):
     """Return input with masked values replaced by fill_value."""
+    if isinstance(a, MaskedConstant):
+        if fill_value is not None:
+            return fill_value
+        return default_fill_value(0.)
     if isinstance(a, MaskedArray):
         return a.filled(fill_value)
     import numpy as np
@@ -1487,13 +1571,30 @@ def compressed(x):
 def fix_invalid(a, mask=None, copy=True, fill_value=None):
     """Return with invalid data (NaN/Inf) masked and replaced."""
     import numpy as np
-    a = np.asarray(a)
-    invalid_mask = np.logical_or(np.isnan(a), np.isinf(a))
-    if mask is not None:
-        combined = np.logical_or(invalid_mask, np.asarray(mask))
+    if isinstance(a, MaskedArray):
+        orig_mask = a.mask
+        data = a.data.copy() if copy else a.data
+        fv = fill_value if fill_value is not None else a._fill_value
+    else:
+        orig_mask = None
+        data = np.array(a, copy=copy)
+        fv = fill_value
+    invalid_mask = np.logical_or(np.isnan(data), np.isinf(data))
+    if orig_mask is not None:
+        combined = np.logical_or(invalid_mask, orig_mask)
     else:
         combined = invalid_mask
-    return MaskedArray(a, mask=combined, fill_value=fill_value)
+    if mask is not None:
+        combined = np.logical_or(combined, np.asarray(mask))
+    result = MaskedArray(data, mask=combined, fill_value=fv)
+    # Replace invalid data with fill_value in underlying array
+    if fv is not None:
+        fv_scalar = float(fv) if isinstance(fv, np.ndarray) else fv
+        inv_flat = invalid_mask.flatten().tolist()
+        for i, is_inv in enumerate(inv_flat):
+            if is_inv:
+                result.data.flat[i] = fv_scalar
+    return result
 
 
 def count(a, axis=None, keepdims=False):
@@ -2238,7 +2339,7 @@ def sort(a, axis=-1, kind=None, order=None, endwith=True, fill_value=None, stabl
     if isinstance(a, MaskedArray):
         fv = fill_value
         if fv is None:
-            fv = minimum_fill_value(a.data) if endwith else maximum_fill_value(a.data)
+            fv = maximum_fill_value(a.data) if endwith else minimum_fill_value(a.data)
         idx = np.argsort(a.filled(fv), axis=axis)
         if axis is None:
             return MaskedArray(np.take(a.data.flatten(), idx),
@@ -2253,7 +2354,7 @@ def argsort(a, axis=None, kind=None, order=None, endwith=True, fill_value=None, 
     if isinstance(a, MaskedArray):
         fv = fill_value
         if fv is None:
-            fv = minimum_fill_value(a.data) if endwith else maximum_fill_value(a.data)
+            fv = maximum_fill_value(a.data) if endwith else minimum_fill_value(a.data)
         return np.argsort(a.filled(fv), axis=axis)
     return np.argsort(a, axis=axis)
 
@@ -2314,7 +2415,9 @@ round_ = round
 def compress(condition, a, axis=None, out=None):
     import numpy as np
     if isinstance(a, MaskedArray):
-        return MaskedArray(np.compress(condition, a.data, axis=axis))
+        d = np.compress(condition, a.data, axis=axis)
+        m = np.compress(condition, a.mask, axis=axis)
+        return MaskedArray(d, mask=m, fill_value=a._fill_value)
     return np.compress(condition, a, axis=axis)
 
 def take(a, indices, axis=None, out=None, mode='raise'):

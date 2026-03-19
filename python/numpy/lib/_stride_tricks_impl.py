@@ -11,22 +11,60 @@ def sliding_window_view(x, window_shape, axis=None, *, subok=False, writeable=Fa
     import numpy as np
     x = np.asarray(x)
 
-    if axis is None:
-        if isinstance(window_shape, int):
-            window_shape = (window_shape,)
+    if isinstance(window_shape, int):
+        window_shape = (window_shape,)
+    else:
+        window_shape = tuple(window_shape)
+
+    if axis is not None:
+        # Normalize axis to tuple
+        if isinstance(axis, int):
+            axis = (axis,)
+        else:
+            axis = tuple(axis)
+
+        if len(window_shape) != len(axis):
+            raise ValueError(
+                "Must provide matching length window_shape and axis; "
+                "got {} window_shape entries and {} axes".format(
+                    len(window_shape), len(axis)))
+
+        # Normalize negative axes
+        axis = tuple(a if a >= 0 else x.ndim + a for a in axis)
+
+        # Apply sliding windows sequentially along each axis
+        result = x
+        # Track how many new dims have been appended (each step adds one at end)
+        for w, ax in zip(window_shape, axis):
+            n = result.shape[ax]
+            if w > n:
+                raise ValueError(
+                    "window shape cannot be larger than input array shape")
+            n_windows = n - w + 1
+            slices = []
+            for i in range(n_windows):
+                sl = [slice(None)] * result.ndim
+                sl[ax] = slice(i, i + w)
+                slices.append(result[tuple(sl)])
+            result = np.stack(slices, axis=ax)
+        return result
+    else:
         if len(window_shape) != x.ndim:
             raise ValueError(
-                "window_shape length {} must match x.ndim {}".format(
-                    len(window_shape), x.ndim))
+                "Since axis is `None`, must provide window_shape for all "
+                "dimensions of `x`; got {} window_shape entries for array "
+                "with {} dimensions.".format(len(window_shape), x.ndim))
         # Multi-dimensional sliding window
-        out_shape = tuple(s - w + 1 for s, w in zip(x.shape, window_shape))
         for s, w in zip(x.shape, window_shape):
             if w < 0:
                 raise ValueError(
                     "window_shape cannot contain negative values")
             if w > s:
                 raise ValueError(
-                    "window size {} too large for axis of size {}".format(w, s))
+                    "window shape cannot be larger than input array shape")
+
+        out_shape = tuple(s - w + 1 for s, w in zip(x.shape, window_shape))
+
         if x.ndim == 1:
             w = window_shape[0]
             n = x.shape[0] - w + 1
@@ -44,26 +82,6 @@ def sliding_window_view(x, window_shape, axis=None, *, subok=False, writeable=Fa
         result = np.array([s.tolist() for s in slices_list])
         # Reshape to (*out_shape, *window_shape)
         return result.reshape(out_shape + tuple(window_shape))
-    else:
-        # Single axis
-        if isinstance(window_shape, (list, tuple)):
-            if len(window_shape) != 1:
-                raise ValueError("axis specified but window_shape has multiple elements")
-            w = window_shape[0]
-        else:
-            w = int(window_shape)
-        if axis < 0:
-            axis = x.ndim + axis
-        n = x.shape[axis] - w + 1
-        if n <= 0:
-            raise ValueError("window size {} too large for axis of size {}".format(
-                w, x.shape[axis]))
-        slices = []
-        for i in range(n):
-            sl = [slice(None)] * x.ndim
-            sl[axis] = slice(i, i + w)
-            slices.append(x[tuple(sl)])
-        return np.stack(slices, axis=axis)
 
 
 def __getattr__(name):

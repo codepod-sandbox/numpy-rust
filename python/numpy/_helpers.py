@@ -352,20 +352,28 @@ class _ObjectArray:
         return flat
     def _to_bool_array(self, data):
         return _native.array([1.0 if x else 0.0 for x in data]).astype("bool")
-    def __eq__(self, other):
+    def _broadcast_other(self, other):
+        """Get other's data list, broadcast scalar/single-element to match self size."""
         if isinstance(other, _ObjectArray):
-            return self._to_bool_array([a == b for a, b in zip(self._data, other._data)])
+            odata = other._data
+            if len(odata) == 1 and len(self._data) > 1:
+                odata = odata * len(self._data)
+            return odata
         if isinstance(other, ndarray):
-            return self._to_bool_array([a == b for a, b in zip(self._data, other.flatten().tolist())])
-        if other is None or isinstance(other, (int, float, complex, str)):
+            return other.flatten().tolist()
+        return None
+    def __eq__(self, other):
+        odata = self._broadcast_other(other)
+        if odata is not None:
+            return self._to_bool_array([a == b for a, b in zip(self._data, odata)])
+        if other is None or isinstance(other, (int, float, complex, str, bytes)):
             return self._to_bool_array([x == other for x in self._data])
         return NotImplemented
     def __ne__(self, other):
-        if isinstance(other, _ObjectArray):
-            return self._to_bool_array([a != b for a, b in zip(self._data, other._data)])
-        if isinstance(other, ndarray):
-            return self._to_bool_array([a != b for a, b in zip(self._data, other.flatten().tolist())])
-        if other is None or isinstance(other, (int, float, complex, str)):
+        odata = self._broadcast_other(other)
+        if odata is not None:
+            return self._to_bool_array([a != b for a, b in zip(self._data, odata)])
+        if other is None or isinstance(other, (int, float, complex, str, bytes)):
             return self._to_bool_array([x != other for x in self._data])
         return NotImplemented
     @staticmethod

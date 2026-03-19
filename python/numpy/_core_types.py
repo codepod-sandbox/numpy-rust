@@ -360,17 +360,38 @@ def _scalar_binop_result(self_val, self_dn, other, op_name):
     """Perform self OP other, return wrapped numpy scalar or NotImplemented."""
     other_dn = _get_numpy_dtype_name(other)
     if other_dn is not None:
+        # Both are numpy scalars: strong-typed promotion
         res_dn = _scalar_promote(self_dn, other_dn)
     elif isinstance(other, (ndarray, _ObjectArray)):
         return NotImplemented
     elif isinstance(other, bool):
+        # NEP 50: Python bool is weak, promote with bool
         res_dn = _scalar_promote(self_dn, 'bool')
     elif isinstance(other, int):
-        res_dn = _scalar_promote(self_dn, 'int64')
+        # NEP 50: Python int is weak — adopt the numpy scalar's dtype
+        if self_dn == 'bool':
+            res_dn = 'int8'
+        elif self_dn in ('float16', 'float32', 'float64', 'complex64', 'complex128'):
+            res_dn = self_dn
+        else:
+            res_dn = self_dn  # int types keep their dtype
     elif isinstance(other, float):
-        res_dn = _scalar_promote(self_dn, 'float64')
+        # NEP 50: Python float is weak — but float wins over int
+        if self_dn in ('float16', 'float32', 'float64'):
+            res_dn = self_dn
+        elif self_dn in ('complex64', 'complex128'):
+            res_dn = self_dn
+        else:
+            # int/bool + python float -> float64
+            res_dn = 'float64'
     elif isinstance(other, complex):
-        res_dn = _scalar_promote(self_dn, 'complex128')
+        # NEP 50: Python complex is weak
+        if self_dn in ('complex64', 'complex128'):
+            res_dn = self_dn
+        elif self_dn in ('float16', 'float32'):
+            res_dn = 'complex64'
+        else:
+            res_dn = 'complex128'
     else:
         return NotImplemented
 
@@ -398,17 +419,36 @@ def _scalar_rbinop_result(self_val, self_dn, other, op_name):
     """Perform other OP self (reverse), return wrapped numpy scalar or NotImplemented."""
     other_dn = _get_numpy_dtype_name(other)
     if other_dn is not None:
+        # Both numpy scalars: strong-typed promotion
         res_dn = _scalar_promote(other_dn, self_dn)
     elif isinstance(other, (ndarray, _ObjectArray)):
         return NotImplemented
     elif isinstance(other, bool):
         res_dn = _scalar_promote('bool', self_dn)
     elif isinstance(other, int):
-        res_dn = _scalar_promote('int64', self_dn)
+        # NEP 50: Python int is weak — adopt self's dtype
+        if self_dn == 'bool':
+            res_dn = 'int8'
+        elif self_dn in ('float16', 'float32', 'float64', 'complex64', 'complex128'):
+            res_dn = self_dn
+        else:
+            res_dn = self_dn
     elif isinstance(other, float):
-        res_dn = _scalar_promote('float64', self_dn)
+        # NEP 50: Python float is weak — but float wins over int
+        if self_dn in ('float16', 'float32', 'float64'):
+            res_dn = self_dn
+        elif self_dn in ('complex64', 'complex128'):
+            res_dn = self_dn
+        else:
+            res_dn = 'float64'
     elif isinstance(other, complex):
-        res_dn = _scalar_promote('complex128', self_dn)
+        # NEP 50: Python complex is weak
+        if self_dn in ('complex64', 'complex128'):
+            res_dn = self_dn
+        elif self_dn in ('float16', 'float32'):
+            res_dn = 'complex64'
+        else:
+            res_dn = 'complex128'
     else:
         return NotImplemented
 

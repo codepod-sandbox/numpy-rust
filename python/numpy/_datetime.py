@@ -19,6 +19,7 @@ __all__ = [
     '_datetime64_cls',
     '_timedelta64_cls',
     'isnat',
+    'datetime_data',
     'busday_count',
     'is_busday',
     'busday_offset',
@@ -490,6 +491,24 @@ def isnat(x):
         # For ndarray, check element-wise - unlikely to have NaT but handle gracefully
         return _native.array([0.0] * x.size).astype('bool').reshape(list(x.shape))
     return False
+
+
+def datetime_data(dtype):
+    """Return (unit, step) for a datetime64 or timedelta64 dtype or scalar."""
+    if _is_dt64(dtype) or _is_td64(dtype):
+        u = dtype._unit
+        if isinstance(u, tuple):
+            return u
+        return (u, 1)
+    # Handle dtype objects
+    dt_str = str(dtype)
+    if 'datetime64' in dt_str or 'timedelta64' in dt_str:
+        import re
+        m = re.search(r'\[(\w+)\]', dt_str)
+        if m:
+            return (m.group(1), 1)
+        return ('generic', 1)
+    return ('generic', 1)
 
 
 def busday_count(begindates, enddates, weekmask='1111100', holidays=None):
