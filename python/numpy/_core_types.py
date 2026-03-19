@@ -938,6 +938,34 @@ class _ScalarTypeMeta(type):
     def __init__(cls, name, bases, namespace, scalar_name=None, python_type=float):
         super().__init__(name, bases, namespace)
 
+    def __subclasscheck__(cls, subclass):
+        """Allow issubclass(type(scalar), np.floating) etc."""
+        # Standard check first
+        if super().__subclasscheck__(subclass):
+            return True
+        # Map Python scalar types to abstract numpy types
+        _abstract_map = {
+            'generic': (int, float, complex, bool),
+            'number': (int, float, complex),
+            'integer': (int,),
+            'signedinteger': (int,),
+            'inexact': (float, complex),
+            'floating': (float,),
+            'complexfloating': (complex,),
+        }
+        name = getattr(cls, '_scalar_name', '')
+        if name in _abstract_map:
+            for pytype in _abstract_map[name]:
+                if issubclass(subclass, pytype):
+                    return True
+        return False
+
+    def __instancecheck__(cls, instance):
+        """Allow isinstance(scalar, np.floating) etc."""
+        if super().__instancecheck__(instance):
+            return True
+        return cls.__subclasscheck__(type(instance))
+
     def __call__(cls, value=0, *args, **kwargs):
         scalar_name = cls._scalar_name
         # Reject unexpected keyword arguments for non-str/bytes types
