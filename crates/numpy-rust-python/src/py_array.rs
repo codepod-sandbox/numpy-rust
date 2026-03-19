@@ -892,14 +892,16 @@ impl PyNdArray {
     /// Clone is O(1) via ArcArray reference counting.
     /// When passed a Python type (subclass of ndarray), returns an instance of that type.
     #[pymethod]
-    fn view(
-        &self,
-        dtype_arg: vm::function::OptionalArg<PyObjectRef>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn view(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        // Accept view(dtype) positionally or view(dtype=dtype) as keyword
+        let dtype_opt: Option<PyObjectRef> = if let Some(pos) = args.args.first() {
+            Some(pos.clone())
+        } else {
+            args.kwargs.get("dtype").cloned()
+        };
         let data = self.data.read().unwrap();
         let is_f = self.is_fortran.load(Ordering::Relaxed);
-        if let Some(dtype_obj) = dtype_arg.into_option() {
+        if let Some(dtype_obj) = dtype_opt {
             // If it's a Python type/class (e.g. MyNDArray subclass), check if it's
             // actually an ndarray subclass vs a scalar type like np.int8
             if let Ok(py_type) = dtype_obj.clone().downcast::<vm::builtins::PyType>() {

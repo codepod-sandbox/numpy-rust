@@ -2187,8 +2187,62 @@ def find_common_type(array_types, scalar_types):
 
 class finfo:
     """Machine limits for floating point types."""
+
+    _finfo_cache = {}
+
+    def __new__(cls, dtype=None):
+        key = cls._resolve_key(dtype)
+        if key in cls._finfo_cache:
+            return cls._finfo_cache[key]
+        obj = super().__new__(cls)
+        obj._init_from_key(key)
+        cls._finfo_cache[key] = obj
+        return obj
+
     def __init__(self, dtype=None):
-        if dtype is None or dtype is float or str(dtype) in ('float64', 'f8', 'float', 'd', 'longdouble', 'longfloat', 'g'):
+        # __new__ already initialised the instance via _init_from_key
+        pass
+
+    @staticmethod
+    def _resolve_key(dtype):
+        """Normalise *dtype* to one of 'float16', 'float32', 'float64'."""
+        if dtype is None or dtype is float:
+            return 'float64'
+        # Handle objects with .dtype attribute (e.g. ndarray, custom objects)
+        if hasattr(dtype, 'dtype') and not isinstance(dtype, type):
+            dtype = dtype.dtype
+        # Handle scalar instances (e.g. float32(1.0))
+        if hasattr(dtype, '_numpy_dtype_name') and not isinstance(dtype, type):
+            dtype = dtype._numpy_dtype_name
+        # Handle _ScalarTypeMeta classes (float64, float32, etc.)
+        if isinstance(dtype, type) and hasattr(dtype, '_scalar_name'):
+            dtype = dtype._scalar_name
+        # Handle dtype objects
+        if hasattr(dtype, 'name') and not isinstance(dtype, str):
+            dtype = dtype.name
+        s = str(dtype)
+        _f64 = ('float64', 'f8', 'float', 'd', 'longdouble', 'longfloat', 'g',
+                'double', 'float_')
+        _f32 = ('float32', 'f4', 'f', 'single')
+        _f16 = ('float16', 'half', 'f2', 'e')
+        # Complex types map to their float component
+        _c128 = ('complex128', 'c16', 'complex', 'cdouble', 'clongdouble',
+                 'clongfloat', 'complex_', 'D')
+        _c64 = ('complex64', 'c8', 'csingle', 'F')
+        if s in _f64:
+            return 'float64'
+        if s in _f32:
+            return 'float32'
+        if s in _f16:
+            return 'float16'
+        if s in _c128:
+            return 'float64'
+        if s in _c64:
+            return 'float32'
+        raise ValueError("finfo only supports float16, float32 and float64")
+
+    def _init_from_key(self, key):
+        if key == 'float64':
             self.bits = 64
             self.eps = float64(2.220446049250313e-16)
             self.epsneg = float64(1.1102230246251565e-16)
@@ -2207,7 +2261,7 @@ class finfo:
             self.machep = -52
             self.negep = -53
             self.iexp = 11
-        elif str(dtype) in ('float32', 'f4', 'f'):
+        elif key == 'float32':
             self.bits = 32
             self.eps = float32(1.1920929e-07)
             self.epsneg = float32(5.960464477539063e-08)
@@ -2226,7 +2280,7 @@ class finfo:
             self.machep = -23
             self.negep = -24
             self.iexp = 8
-        elif str(dtype) in ('float16', 'half', 'f2', 'e'):
+        elif key == 'float16':
             self.bits = 16
             self.eps = float16(9.765625e-04)
             self.epsneg = float16(4.8828125e-04)
@@ -2245,13 +2299,24 @@ class finfo:
             self.machep = -10
             self.negep = -11
             self.iexp = 5
-        else:
-            raise ValueError("finfo only supports float16, float32 and float64")
         # Legacy _machar attribute (deprecated but accessed by some tests)
         self._machar = _MachAr(self)
 
     def __repr__(self):
         return f"finfo(resolution={self.resolution}, min={self.min}, max={self.max}, dtype={self.dtype})"
+
+    def __eq__(self, other):
+        if not isinstance(other, finfo):
+            return NotImplemented
+        return self.bits == other.bits
+
+    def __ne__(self, other):
+        if not isinstance(other, finfo):
+            return NotImplemented
+        return self.bits != other.bits
+
+    def __class_getitem__(cls, item):
+        return cls
 
 
 class _MachAr:

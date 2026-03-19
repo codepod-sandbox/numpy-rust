@@ -516,14 +516,53 @@ def digitize(x, bins, right=False):
 def unravel_index(indices, shape, order='C'):
     if isinstance(indices, float):
         raise TypeError("Expected type 'int' but 'float' found.")
-    if not isinstance(indices, ndarray):
+    # Handle 0-d shape
+    shape = tuple(shape) if not isinstance(shape, tuple) else shape
+    if len(shape) == 0:
+        if isinstance(indices, int):
+            if indices == 0:
+                return ()
+            raise ValueError("index {} is out of bounds for array with size 1".format(indices))
+        # Check if it's a sequence with a single element that's out of bounds
+        _idx_seq = list(indices) if not isinstance(indices, ndarray) else indices.tolist()
+        if not isinstance(_idx_seq, list):
+            _idx_seq = [_idx_seq]
+        for _v in _idx_seq:
+            if int(_v) != 0:
+                raise ValueError(
+                    "index {} is out of bounds for array with size 1".format(int(_v)))
+        # Array/sequence with 0-d shape
+        raise ValueError("multiple indices for 0d array")
+    # Validate: reject empty sequences
+    if isinstance(indices, (list, tuple)) and len(indices) == 0:
+        raise TypeError(
+            "indices must be integral: the provided empty sequence was"
+            " inferred as float. Wrap it with np.intp for clarity.")
+    _was_ndarray = isinstance(indices, ndarray)
+    if not _was_ndarray:
         if isinstance(indices, int):
             indices = array([indices])
         else:
             indices = array(indices)
+    # Reject empty float-typed arrays (ambiguous - could be int or float)
+    if _was_ndarray and indices.size == 0:
+        _dt = str(indices.dtype)
+        if _dt.startswith('float'):
+            raise TypeError("only int indices permitted")
     if indices.size == 0:
         # Return empty arrays per dimension
         return tuple([array([], dtype='int64') for _ in shape])
+    # Validate bounds
+    total_size = 1
+    for s in shape:
+        total_size *= s
+    idx_list = indices.flatten().tolist()
+    for idx in idx_list:
+        idx_val = int(idx)
+        if idx_val < 0 or idx_val >= total_size:
+            raise ValueError(
+                "index {} is out of bounds for array with size {}".format(
+                    idx_val, total_size))
     return _native.unravel_index(indices, shape)
 
 
@@ -533,6 +572,37 @@ def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
         if isinstance(a, float):
             raise TypeError("Expected type 'int' but 'float' found.")
     arrays = tuple(array([a]) if isinstance(a, (int, float)) else (a if isinstance(a, ndarray) else array(a)) for a in multi_index)
+    # Validate dimensions - check for 0 in dims with non-empty indices
+    dims = tuple(int(d) for d in dims)
+    for d in dims:
+        if d == 0:
+            # Check if any indices are non-empty
+            for arr in arrays:
+                if arr.size > 0:
+                    raise ValueError(
+                        "invalid entry in coordinates array")
+    # Validate bounds in 'raise' mode
+    if mode == 'raise':
+        for i, (arr, d) in enumerate(zip(arrays, dims)):
+            vals = arr.flatten().tolist()
+            for v in vals:
+                v_int = int(v)
+                if v_int < 0 or v_int >= d:
+                    raise ValueError(
+                        "index {} is out of bounds for array "
+                        "with size {}".format(v_int, d))
+    # Check for overflow: total product of dims
+    total = 1
+    for d in dims:
+        new_total = total * d
+        if d != 0 and new_total // d != total:
+            raise ValueError(
+                "invalid dims: product of dims would overflow")
+        total = new_total
+    import sys
+    if total > sys.maxsize:
+        raise ValueError(
+            "invalid dims: product of dims too large")
     return _native.ravel_multi_index(arrays, dims)
 
 
@@ -960,6 +1030,10 @@ class ndindex:
     def __init__(self, *shape):
         if len(shape) == 1 and isinstance(shape[0], tuple):
             shape = shape[0]
+        for s in shape:
+            if int(s) < 0:
+                raise ValueError(
+                    "negative dimensions are not allowed")
         self._shape = shape
         self._size = 1
         for s in shape:

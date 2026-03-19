@@ -20,7 +20,13 @@ def sliding_window_view(x, window_shape, axis=None, *, subok=False, writeable=Fa
                     len(window_shape), x.ndim))
         # Multi-dimensional sliding window
         out_shape = tuple(s - w + 1 for s, w in zip(x.shape, window_shape))
-        # Only support 1D for now
+        for s, w in zip(x.shape, window_shape):
+            if w < 0:
+                raise ValueError(
+                    "window_shape cannot contain negative values")
+            if w > s:
+                raise ValueError(
+                    "window size {} too large for axis of size {}".format(w, s))
         if x.ndim == 1:
             w = window_shape[0]
             n = x.shape[0] - w + 1
@@ -28,7 +34,16 @@ def sliding_window_view(x, window_shape, axis=None, *, subok=False, writeable=Fa
             for i in range(n):
                 result.append(x[i:i + w].tolist())
             return np.array(result)
-        raise NotImplementedError("multi-dim sliding_window_view")
+        # General N-d case: iterate over all window positions
+        import itertools
+        ranges = [range(s - w + 1) for s, w in zip(x.shape, window_shape)]
+        slices_list = []
+        for pos in itertools.product(*ranges):
+            sl = tuple(slice(p, p + w) for p, w in zip(pos, window_shape))
+            slices_list.append(x[sl])
+        result = np.array([s.tolist() for s in slices_list])
+        # Reshape to (*out_shape, *window_shape)
+        return result.reshape(out_shape + tuple(window_shape))
     else:
         # Single axis
         if isinstance(window_shape, (list, tuple)):

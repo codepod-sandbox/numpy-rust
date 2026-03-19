@@ -852,8 +852,26 @@ class _RecModule:
     def __init__(self):
         self.recarray = None  # placeholder
 
-    def array(self, data, dtype=None):
+    def array(self, data, dtype=None, formats=None, names=None, shape=None, byteorder=None):
         """Create a record array (falls back to regular array)."""
+        import numpy as np
+        # Build dtype from formats if provided
+        if dtype is None and formats is not None:
+            if isinstance(formats, str):
+                fmt_list = [f.strip() for f in formats.split(',')]
+            else:
+                fmt_list = list(formats)
+            if names is None:
+                names = ['f{}'.format(i) for i in range(len(fmt_list))]
+            elif isinstance(names, str):
+                names = [n.strip() for n in names.split(',')]
+            fields = list(zip(names, fmt_list))
+            dtype = StructuredDtype(fields)
+        if isinstance(data, (list, tuple)):
+            if dtype is not None:
+                if isinstance(dtype, list):
+                    dtype = StructuredDtype(dtype)
+                return np.array(data, dtype=dtype)
         arr = asarray(data)
         if dtype is not None:
             dt = dtype if isinstance(dtype, StructuredDtype) else StructuredDtype(dtype) if isinstance(dtype, list) else dtype
@@ -866,15 +884,38 @@ class _RecModule:
 
     def fromarrays(self, arrays, dtype=None, names=None):
         """Create a record array from separate arrays."""
-        if names is not None and dtype is None:
-            fields = [(n, 'float64') for n in names]
+        import numpy as np
+        if isinstance(names, str):
+            names = [n.strip() for n in names.split(',')]
+        if dtype is None and names is not None:
+            # Infer dtype from each array
+            fields = []
+            for i, (name, arr) in enumerate(zip(names, arrays)):
+                a = np.asarray(arr)
+                fields.append((name, str(a.dtype)))
             dtype = StructuredDtype(fields)
-        return self.array(arrays, dtype=dtype)
+        if dtype is not None:
+            if not isinstance(dtype, StructuredDtype):
+                if isinstance(dtype, list):
+                    dtype = StructuredDtype(dtype)
+            # Build structured array from column arrays
+            col_arrays = [np.asarray(a) for a in arrays]
+            n = len(col_arrays[0]) if len(col_arrays) > 0 else 0
+            records = []
+            for i in range(n):
+                rec = tuple(a[i] if hasattr(a, '__getitem__') else a for a in col_arrays)
+                records.append(rec)
+            return np.array(records, dtype=dtype)
+        return np.array(arrays)
 
     def fromrecords(self, reclist, dtype=None, names=None, formats=None):
         """Create a record array from a list of records (tuples)."""
         import numpy as np
+        if isinstance(names, str):
+            names = [n.strip() for n in names.split(',')]
         if dtype is not None:
+            if isinstance(dtype, list):
+                dtype = StructuredDtype(dtype)
             return np.array(reclist, dtype=dtype)
         if names is not None and formats is not None:
             if isinstance(formats, str):
@@ -884,6 +925,26 @@ class _RecModule:
             return np.array(reclist, dtype=dt)
         if names is not None:
             # Infer types from first record
+            if len(reclist) > 0:
+                first = reclist[0]
+                fields = []
+                for i, name in enumerate(names):
+                    val = first[i] if isinstance(first, (list, tuple)) else first
+                    if isinstance(val, int):
+                        fields.append((name, 'int64'))
+                    elif isinstance(val, float):
+                        fields.append((name, 'float64'))
+                    elif isinstance(val, str):
+                        # Find max string length
+                        max_len = max(len(str(r[i] if isinstance(r, (list, tuple)) else r)) for r in reclist)
+                        fields.append((name, 'U' + str(max(max_len, 1))))
+                    elif isinstance(val, bytes):
+                        max_len = max(len(r[i] if isinstance(r, (list, tuple)) else r) for r in reclist)
+                        fields.append((name, 'S' + str(max(max_len, 1))))
+                    else:
+                        fields.append((name, 'float64'))
+                dt = StructuredDtype(fields)
+                return np.array(reclist, dtype=dt)
             return np.array(reclist)
         return np.array(reclist)
 
@@ -1320,6 +1381,11 @@ def einsum(*operands, **kwargs):
                 break
             subs = operands[i]
             i += 1
+            # Convert ndarray subscripts to a list
+            if isinstance(subs, ndarray):
+                subs = subs.tolist()
+                if not isinstance(subs, list):
+                    subs = [subs]
             if isinstance(subs, list):
                 sub_str = ''.join(_int_to_letter(x) for x in subs)
             else:
@@ -1348,8 +1414,15 @@ def einsum(*operands, **kwargs):
     for i in range(len(arrays)):
         if not isinstance(arrays[i], ndarray):
             arrays[i] = asarray(arrays[i])
+    # When dtype is specified, cast all inputs to that dtype for computation
+    if dtype is not None:
+        import numpy as _np
+        _compute_dt = str(_np.dtype(dtype))
+        for i in range(len(arrays)):
+            if str(arrays[i].dtype) != _compute_dt:
+                arrays[i] = arrays[i].astype(_compute_dt)
     # Upcast all arrays to a common dtype to avoid Rust type mismatch errors
-    if len(arrays) > 1 and dtype is None:
+    elif len(arrays) > 1:
         import numpy as _np
         common_dt = str(arrays[0].dtype)
         for a in arrays[1:]:
@@ -1437,8 +1510,11 @@ def einsum(*operands, **kwargs):
             result = _native.einsum(subscripts, *new_arrays)
         else:
             raise
-    if dtype is not None:
-        result = result.astype(str(dtype))
+    if dtype is not None and isinstance(result, ndarray):
+        import numpy as _np
+        _out_dt = str(_np.dtype(dtype))
+        if str(result.dtype) != _out_dt:
+            result = result.astype(_out_dt)
     if out is not None:
         if isinstance(out, ndarray):
             flat_r = result.flatten()

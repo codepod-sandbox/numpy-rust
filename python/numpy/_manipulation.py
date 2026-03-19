@@ -812,8 +812,23 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
     unique_inverse : ndarray (optional)
     unique_counts : ndarray (optional)
     """
+    from ._helpers import _ObjectArray
     if not isinstance(a, ndarray):
         a = asarray(a)
+
+    def _get_slice(arr, ax, i):
+        if ax == 0:
+            return arr[i]
+        tmp = swapaxes(arr, 0, ax)
+        return tmp[i]
+
+    def _slice_key(sl):
+        if isinstance(sl, ndarray):
+            return tuple(sl.flatten().tolist())
+        if isinstance(sl, _ObjectArray):
+            return tuple(sl._data)
+        return (sl,)
+
     if axis is not None:
         # For axis=0: find unique rows (or slices along axis 0)
         if axis < 0:
@@ -823,14 +838,8 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
         seen = {}
         unique_indices_list = []
         for i in range(n_slices):
-            # Build index to extract slice along axis
-            if axis == 0:
-                sl = a[i]
-            else:
-                # General case: use swapaxes to bring target axis to front
-                tmp = swapaxes(a, 0, axis)
-                sl = tmp[i]
-            key = tuple(sl.flatten().tolist())
+            sl = _get_slice(a, axis, i)
+            key = _slice_key(sl)
             if key not in seen:
                 seen[key] = i
                 unique_indices_list.append(i)
@@ -842,75 +851,92 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
             rows = [tmp[i] for i in unique_indices_list]
         # Sort by the first element of each row for consistent ordering
         pairs = list(zip(unique_indices_list, rows))
-        pairs.sort(key=lambda p: tuple(p[1].flatten().tolist()))
+        pairs.sort(key=lambda p: _slice_key(p[1]))
         unique_indices_list = [p[0] for p in pairs]
         rows = [p[1] for p in pairs]
-        result = stack(rows, axis=0)
-        if axis != 0:
-            result = swapaxes(result, 0, axis)
+        # For 1D arrays, rows are scalars — use array() directly
+        if len(rows) > 0 and not isinstance(rows[0], (ndarray, _ObjectArray)):
+            result = array(rows, dtype=a.dtype)
+        else:
+            result = stack(rows, axis=0)
+            if axis != 0:
+                result = swapaxes(result, 0, axis)
         extras = return_index or return_inverse or return_counts
         if not extras:
             return result
         ret = (result,)
         if return_index:
-            ret = ret + (array([float(i) for i in unique_indices_list]),)
+            ret = ret + (array(unique_indices_list, dtype='int64'),)
         if return_inverse:
             # Map each original slice index to its position in unique result
             key_to_pos = {}
             for pos, idx in enumerate(unique_indices_list):
-                if axis == 0:
-                    sl = a[idx]
-                else:
-                    tmp = swapaxes(a, 0, axis)
-                    sl = tmp[idx]
-                key = tuple(sl.flatten().tolist())
+                sl = _get_slice(a, axis, idx)
+                key = _slice_key(sl)
                 key_to_pos[key] = pos
             inv = []
             for i in range(n_slices):
-                if axis == 0:
-                    sl = a[i]
-                else:
-                    tmp = swapaxes(a, 0, axis)
-                    sl = tmp[i]
-                key = tuple(sl.flatten().tolist())
-                inv.append(float(key_to_pos[key]))
-            ret = ret + (array(inv),)
+                sl = _get_slice(a, axis, i)
+                key = _slice_key(sl)
+                inv.append(key_to_pos[key])
+            ret = ret + (array(inv, dtype='int64'),)
         if return_counts:
             # Count occurrences of each unique
             count_map = {}
             for i in range(n_slices):
-                if axis == 0:
-                    sl = a[i]
-                else:
-                    tmp = swapaxes(a, 0, axis)
-                    sl = tmp[i]
-                key = tuple(sl.flatten().tolist())
+                sl = _get_slice(a, axis, i)
+                key = _slice_key(sl)
                 if key not in count_map:
                     count_map[key] = 0
                 count_map[key] += 1
             counts_list = []
             for idx in unique_indices_list:
-                if axis == 0:
-                    sl = a[idx]
-                else:
-                    tmp = swapaxes(a, 0, axis)
-                    sl = tmp[idx]
-                key = tuple(sl.flatten().tolist())
-                counts_list.append(float(count_map[key]))
-            ret = ret + (array(counts_list),)
+                sl = _get_slice(a, axis, idx)
+                key = _slice_key(sl)
+                counts_list.append(count_map[key])
+            ret = ret + (array(counts_list, dtype='int64'),)
         return ret
     flat = a.flatten()
     n = flat.shape[0]
-    vals = [float(flat[i]) for i in range(n)]
+    vals = flat.tolist()
+
+    # If dtype is complex, convert (re, im) tuples from tolist() to Python complex
+    _dt = str(a.dtype)
+    if 'complex' in _dt:
+        new_vals = []
+        for v in vals:
+            if isinstance(v, tuple) and len(v) == 2:
+                new_vals.append(complex(v[0], v[1]))
+            elif isinstance(v, complex):
+                new_vals.append(v)
+            else:
+                new_vals.append(complex(v))
+        vals = new_vals
+
+    # Sort key that handles complex, tuples, and mixed types
+    def _sort_key(t):
+        v = t[1]
+        if isinstance(v, complex):
+            return (v.real, v.imag)
+        if isinstance(v, tuple):
+            return v
+        try:
+            return (v,)
+        except TypeError:
+            return (str(v),)
 
     # Build sorted unique with tracking info
-    indexed = sorted(enumerate(vals), key=lambda t: t[1])
+    try:
+        indexed = sorted(enumerate(vals), key=lambda t: t[1])
+    except TypeError:
+        indexed = sorted(enumerate(vals), key=_sort_key)
     unique_vals = []
     first_indices = []
     counts = []
-    prev = None
+    _sentinel = object()
+    prev = _sentinel
     for orig_idx, v in indexed:
-        if prev is None or v != prev:
+        if prev is _sentinel or v != prev:
             unique_vals.append(v)
             first_indices.append(orig_idx)
             counts.append(1)
@@ -921,22 +947,22 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
             if orig_idx < first_indices[-1]:
                 first_indices[-1] = orig_idx
 
-    result_unique = array(unique_vals)
+    result_unique = array(unique_vals, dtype=a.dtype)
     extras = return_index or return_inverse or return_counts
     if not extras:
         return result_unique
     ret = (result_unique,)
     if return_index:
-        ret = ret + (array([float(i) for i in first_indices]),)
+        ret = ret + (array(first_indices, dtype='int64'),)
     if return_inverse:
         # For each element in the original flat array, find its position in unique_vals
         val_to_pos = {}
         for i, v in enumerate(unique_vals):
             val_to_pos[v] = i
-        inverse = [float(val_to_pos[v]) for v in vals]
-        ret = ret + (array(inverse),)
+        inverse = [val_to_pos[v] for v in vals]
+        ret = ret + (array(inverse, dtype='int64'),)
     if return_counts:
-        ret = ret + (array([float(c) for c in counts]),)
+        ret = ret + (array(counts, dtype='int64'),)
     return ret
 
 

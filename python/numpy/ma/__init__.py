@@ -173,6 +173,10 @@ class MaskedArray:
         return self._hardmask
 
     @property
+    def _data(self):
+        return self.data
+
+    @property
     def sharedmask(self):
         return False
 
@@ -1460,11 +1464,61 @@ def logical_not(x):
     return _apply_unary(np.logical_not, x)
 
 
+# -- _MaskedBinaryFunc: callable with .reduce/.accumulate support --
+
+class _MaskedBinaryFunc:
+    """Wraps a binary function with reduce/accumulate methods for ma ufunc compatibility."""
+
+    def __init__(self, np_func_name, fill=0.0):
+        self._np_func_name = np_func_name
+        self._fill = fill
+
+    def _get_np_func(self):
+        import numpy as np
+        return getattr(np, self._np_func_name)
+
+    def __call__(self, a, b, *args, **kwargs):
+        return _apply_binary(self._get_np_func(), a, b, fill=self._fill)
+
+    def reduce(self, a, axis=0, **kwargs):
+        """Reduce using the underlying numpy ufunc, respecting masks."""
+        import numpy as np
+        np_func = self._get_np_func()
+        a_ma = isinstance(a, MaskedArray)
+        if a_ma:
+            a_data = a.filled(self._fill)
+            mask = a.mask
+        else:
+            a_data = np.asarray(a)
+            mask = None
+        # Use the numpy ufunc's reduce
+        result = np_func.reduce(a_data, axis=axis, **kwargs)
+        return result
+
+    def accumulate(self, a, axis=0, **kwargs):
+        """Accumulate using the underlying numpy ufunc, respecting masks."""
+        import numpy as np
+        np_func = self._get_np_func()
+        a_ma = isinstance(a, MaskedArray)
+        if a_ma:
+            a_data = a.filled(self._fill)
+        else:
+            a_data = np.asarray(a)
+        result = np_func.accumulate(a_data, axis=axis, **kwargs)
+        return result
+
+    def outer(self, a, b, **kwargs):
+        """Outer using the underlying numpy ufunc."""
+        import numpy as np
+        np_func = self._get_np_func()
+        a_data = a.filled(self._fill) if isinstance(a, MaskedArray) else np.asarray(a)
+        b_data = b.filled(self._fill) if isinstance(b, MaskedArray) else np.asarray(b)
+        return np_func.outer(a_data, b_data, **kwargs)
+
+
 # -- binary math --
 
-def add(a, b):
-    import numpy as np
-    return _apply_binary(np.add, a, b)
+add = _MaskedBinaryFunc('add', fill=0.0)
 
 def subtract(a, b):
     import numpy as np
@@ -1498,13 +1552,9 @@ def power(a, b, third=None):
     import numpy as np
     return _apply_binary(np.power, a, b, fill=1.0)
 
-def maximum(a, b):
-    import numpy as np
-    return _apply_binary(np.maximum, a, b)
+maximum = _MaskedBinaryFunc('maximum', fill=0.0)
 
-def minimum(a, b):
-    import numpy as np
-    return _apply_binary(np.minimum, a, b)
+minimum = _MaskedBinaryFunc('minimum', fill=0.0)
 
 def hypot(a, b):
     import numpy as np

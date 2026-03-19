@@ -147,30 +147,85 @@ class chararray:
     # --- Comparison operators (strip trailing whitespace) ---
     def _compare(self, other, op):
         import numpy as _np
-        items_a = self._arr.flatten().tolist()
-        if isinstance(other, chararray):
-            items_b = other._arr.flatten().tolist()
-        elif isinstance(other, ndarray):
-            items_b = other.flatten().tolist()
-        elif isinstance(other, (str, bytes)):
+
+        def _flat_items(x):
+            """Recursively flatten to a list of scalar items."""
+            if isinstance(x, chararray):
+                return _flat_items(x._arr)
+            if isinstance(x, _ObjectArray):
+                result = []
+                for item in x._data:
+                    if isinstance(item, (list, tuple)):
+                        result.extend(item)
+                    else:
+                        result.append(item)
+                return result
+            if isinstance(x, ndarray):
+                raw = x.flatten().tolist()
+                out = []
+                for item in raw:
+                    if isinstance(item, (list, tuple)):
+                        out.extend(item)
+                    else:
+                        out.append(item)
+                return out
+            if isinstance(x, (list, tuple)):
+                out = []
+                for item in x:
+                    if isinstance(item, (list, tuple)):
+                        out.extend(item)
+                    else:
+                        out.append(item)
+                return out
+            return [x]
+
+        items_a = _flat_items(self)
+        if isinstance(other, (str, bytes)):
             items_b = [other] * len(items_a)
-        elif isinstance(other, (list, tuple)):
-            items_b = []
-            for item in other:
-                if isinstance(item, (list, tuple)):
-                    items_b.extend(item)
-                else:
-                    items_b.append(item)
         else:
-            items_b = [other] * len(items_a)
+            items_b = _flat_items(other)
+        # Handle broadcasting: if sizes don't match, broadcast
+        if len(items_b) == 1 and len(items_a) > 1:
+            items_b = items_b * len(items_a)
+        elif len(items_a) == 1 and len(items_b) > 1:
+            items_a = items_a * len(items_b)
+        # Determine output shape from broadcasting
+        shape_a = self._arr.shape if hasattr(self._arr, 'shape') else (len(items_a),)
+        if isinstance(other, chararray):
+            shape_b = other._arr.shape if hasattr(other._arr, 'shape') else (len(items_b),)
+        elif isinstance(other, ndarray):
+            shape_b = other.shape
+        elif isinstance(other, _ObjectArray):
+            shape_b = other.shape
+        else:
+            shape_b = shape_a
         result = []
         for a, b in zip(items_a, items_b):
             sa = _strip_whitespace(a) if isinstance(a, (str, bytes)) else a
             sb = _strip_whitespace(b) if isinstance(b, (str, bytes)) else b
+            # Convert between bytes/str for comparison
+            if isinstance(sa, bytes) and isinstance(sb, str):
+                try:
+                    sa = sa.decode('latin-1')
+                except Exception:
+                    pass
+            elif isinstance(sa, str) and isinstance(sb, bytes):
+                try:
+                    sb = sb.decode('latin-1')
+                except Exception:
+                    pass
             result.append(op(sa, sb))
         out = _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
+        # Use the larger shape for output
+        out_shape = shape_a if len(shape_a) >= len(shape_b) else shape_b
+        if len(out_shape) > 1 and out.size == 1:
+            # scalar result broadcasted
+            pass
+        elif len(out_shape) > 1:
+            try:
+                out = out.reshape(out_shape)
+            except Exception:
+                pass
         return out
 
     def __eq__(self, other):
