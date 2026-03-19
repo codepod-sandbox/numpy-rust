@@ -374,30 +374,73 @@ def assert_array_less(x, y, err_msg="", verbose=True, *, strict=False):
             raise AssertionError(f"Not less at index {i}: {a} >= {b}. {err_msg}")
 
 
+class _RaisesContext:
+    """Context manager for assert_raises."""
+    def __init__(self, exc_type, match=None):
+        self.exc_type = exc_type
+        self.match = match
+        self.value = None
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, tb):
+        if exc_type is None:
+            raise AssertionError(f"Expected {self.exc_type.__name__} but no exception was raised")
+        if issubclass(exc_type, self.exc_type):
+            self.value = exc_val
+            if self.match is not None:
+                import re
+                if not re.search(self.match, str(exc_val)):
+                    raise AssertionError(f"Regex {self.match!r} did not match {str(exc_val)!r}")
+            return True
+        return False
+
+
 def assert_raises(exception_class, *args, **kwargs):
-    import pytest
     if not args:
-        return pytest.raises(exception_class)
+        return _RaisesContext(exception_class)
     callable_obj, *call_args = args
-    with pytest.raises(exception_class):
+    try:
         callable_obj(*call_args, **kwargs)
+        raise AssertionError(f"Expected {exception_class.__name__} but no exception was raised")
+    except exception_class:
+        pass
 
 
 def assert_raises_regex(exception_class, expected_regexp, *args, **kwargs):
-    import pytest
     if not args:
-        return pytest.raises(exception_class, match=expected_regexp)
+        return _RaisesContext(exception_class, match=expected_regexp)
     callable_obj, *call_args = args
-    with pytest.raises(exception_class, match=expected_regexp):
+    import re
+    try:
         callable_obj(*call_args, **kwargs)
+        raise AssertionError(f"Expected {exception_class.__name__} but no exception was raised")
+    except exception_class as e:
+        if not re.search(expected_regexp, str(e)):
+            raise AssertionError(f"Regex {expected_regexp!r} did not match {str(e)!r}")
+
+
+class _WarnsContext:
+    """Context manager for assert_warns."""
+    def __init__(self):
+        self.list = []
+    def __enter__(self):
+        import warnings
+        self._filters = warnings.filters[:]
+        warnings.simplefilter("always")
+        return self
+    def __exit__(self, *args):
+        import warnings
+        warnings.filters[:] = self._filters
+        return True
 
 
 def assert_warns(warning_class, *args, **kwargs):
-    import pytest
     if not args:
-        return pytest.warns(warning_class)
+        return _WarnsContext()
     callable_obj, *call_args = args
-    with pytest.warns(warning_class):
+    import warnings
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
         callable_obj(*call_args, **kwargs)
 
 
