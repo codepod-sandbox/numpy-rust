@@ -2670,11 +2670,11 @@ def test_modf():
 
 def test_fill_diagonal():
     a = np.zeros((3, 3))
-    r = np.fill_diagonal(a, 5.0)
-    assert_close(r[0][0], 5.0)
-    assert_close(r[1][1], 5.0)
-    assert_close(r[2][2], 5.0)
-    assert_close(r[0][1], 0.0)
+    np.fill_diagonal(a, 5.0)
+    assert_close(a[0][0], 5.0)
+    assert_close(a[1][1], 5.0)
+    assert_close(a[2][2], 5.0)
+    assert_close(a[0][1], 0.0)
 
 def test_diag_indices():
     ri, ci = np.diag_indices(3)
@@ -4720,11 +4720,11 @@ def test_block():
 
 def test_fill_diagonal_func():
     a = np.zeros((3, 3))
-    r = np.fill_diagonal(a, 5.0)
-    assert_close(float(r[0][0]), 5.0)
-    assert_close(float(r[1][1]), 5.0)
-    assert_close(float(r[2][2]), 5.0)
-    assert_close(float(r[0][1]), 0.0)
+    np.fill_diagonal(a, 5.0)
+    assert_close(float(a[0][0]), 5.0)
+    assert_close(float(a[1][1]), 5.0)
+    assert_close(float(a[2][2]), 5.0)
+    assert_close(float(a[0][1]), 0.0)
 
 def test_dsplit_v2():
     a = np.arange(0, 24).reshape((2, 3, 4))

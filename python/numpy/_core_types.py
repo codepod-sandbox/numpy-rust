@@ -130,6 +130,203 @@ class _ScalarType:
         return hash(self._name)
 
 
+def _get_numpy_dtype_name(x):
+    """Get the numpy dtype name of a scalar value, or None for non-numpy scalars."""
+    return getattr(x, '_numpy_dtype_name', None)
+
+
+def _wrap_scalar_result(value, dtype_name):
+    """Wrap a Python value in the appropriate numpy scalar type for the given dtype."""
+    if dtype_name in ('bool', 'int8', 'int16', 'int32', 'int64',
+                      'uint8', 'uint16', 'uint32', 'uint64'):
+        return _NumpyIntScalar(value, dtype_name)
+    if dtype_name in ('float16', 'float32', 'float64'):
+        return _NumpyFloatScalar(value, dtype_name)
+    if dtype_name in ('complex64', 'complex128'):
+        return _NumpyComplexScalar(value, dtype_name)
+    return value
+
+
+def _scalar_promote(dn1, dn2):
+    """Promote two dtype names and return the result dtype name string."""
+    # Inlined fast promotion table to avoid constructing dtype objects.
+    _PROMOTE = {
+        # same type -> same type
+    }
+    key = (dn1, dn2)
+    # Fast path: same dtype
+    if dn1 == dn2:
+        return dn1
+
+    # Integer promotion tables (manual for speed)
+    _INT_RANK = {
+        'bool': 0, 'int8': 1, 'uint8': 2, 'int16': 3, 'uint16': 4,
+        'int32': 5, 'uint32': 6, 'int64': 7, 'uint64': 8,
+    }
+    _FLOAT_RANK = {'float16': 0, 'float32': 1, 'float64': 2}
+    _COMPLEX_RANK = {'complex64': 0, 'complex128': 1}
+
+    # Both integers
+    if dn1 in _INT_RANK and dn2 in _INT_RANK:
+        if dn1 == 'bool':
+            return dn2
+        if dn2 == 'bool':
+            return dn1
+        a_signed = not dn1.startswith('uint')
+        b_signed = not dn2.startswith('uint')
+        _bits = {'int8': 8, 'uint8': 8, 'int16': 16, 'uint16': 16,
+                 'int32': 32, 'uint32': 32, 'int64': 64, 'uint64': 64}
+        ab = _bits[dn1]
+        bb = _bits[dn2]
+        bmax = ab if ab > bb else bb
+        if a_signed == b_signed:
+            _names = {8: 'int8', 16: 'int16', 32: 'int32', 64: 'int64'} if a_signed else \
+                     {8: 'uint8', 16: 'uint16', 32: 'uint32', 64: 'uint64'}
+            return _names[bmax]
+        # signed/unsigned mix
+        sbits = ab if a_signed else bb
+        ubits = ab if not a_signed else bb
+        if sbits > ubits:
+            return {8: 'int8', 16: 'int16', 32: 'int32', 64: 'int64'}[sbits]
+        for b in (8, 16, 32, 64):
+            if b > ubits:
+                return {8: 'int8', 16: 'int16', 32: 'int32', 64: 'int64'}[b]
+        return 'float64'
+
+    # Both floats
+    if dn1 in _FLOAT_RANK and dn2 in _FLOAT_RANK:
+        return dn1 if _FLOAT_RANK[dn1] >= _FLOAT_RANK[dn2] else dn2
+
+    # Both complex
+    if dn1 in _COMPLEX_RANK and dn2 in _COMPLEX_RANK:
+        return dn1 if _COMPLEX_RANK[dn1] >= _COMPLEX_RANK[dn2] else dn2
+
+    # Complex + anything -> complex
+    if dn1 in _COMPLEX_RANK or dn2 in _COMPLEX_RANK:
+        def _real_bits(d):
+            if d in _COMPLEX_RANK:
+                return 32 if d == 'complex64' else 64
+            if d in _FLOAT_RANK:
+                return {'float16': 16, 'float32': 32, 'float64': 64}[d]
+            return 64  # integers -> 64
+        rb = _real_bits(dn1)
+        rc = _real_bits(dn2)
+        m = rb if rb > rc else rc
+        return 'complex64' if m <= 32 else 'complex128'
+
+    # Float + int -> float (at least float32)
+    if dn1 in _FLOAT_RANK or dn2 in _FLOAT_RANK:
+        fd = dn1 if dn1 in _FLOAT_RANK else dn2
+        other = dn2 if dn1 in _FLOAT_RANK else dn1
+        fb = {'float16': 16, 'float32': 32, 'float64': 64}[fd]
+        if other in _INT_RANK:
+            ob = {'bool': 1, 'int8': 8, 'uint8': 8, 'int16': 16, 'uint16': 16,
+                  'int32': 32, 'uint32': 32, 'int64': 64, 'uint64': 64}[other]
+            if fb == 16:
+                return 'float16' if ob <= 8 else 'float32'
+            if fb == 32:
+                return 'float64' if ob >= 32 else 'float32'
+            return 'float64'
+        return fd
+
+    return 'float64'
+
+
+import operator as _operator
+
+_BINOP_MAP = {
+    '__add__': _operator.add, '__sub__': _operator.sub, '__mul__': _operator.mul,
+    '__truediv__': _operator.truediv, '__floordiv__': _operator.floordiv,
+    '__mod__': _operator.mod, '__pow__': _operator.pow,
+    '__lshift__': _operator.lshift, '__rshift__': _operator.rshift,
+    '__and__': _operator.and_, '__or__': _operator.or_, '__xor__': _operator.xor,
+}
+
+
+def _coerce_for_op(val, res_dn):
+    """Coerce a value to the Python type matching res_dn."""
+    if res_dn in ('complex64', 'complex128'):
+        return complex(val)
+    if res_dn in ('float16', 'float32', 'float64'):
+        return float(val)
+    return int(val)
+
+
+def _scalar_binop_result(self_val, self_dn, other, op_name):
+    """Perform self OP other, return wrapped numpy scalar or NotImplemented."""
+    other_dn = _get_numpy_dtype_name(other)
+    if other_dn is not None:
+        res_dn = _scalar_promote(self_dn, other_dn)
+    elif isinstance(other, (ndarray, _ObjectArray)):
+        return NotImplemented
+    elif isinstance(other, bool):
+        res_dn = _scalar_promote(self_dn, 'bool')
+    elif isinstance(other, int):
+        res_dn = _scalar_promote(self_dn, 'int64')
+    elif isinstance(other, float):
+        res_dn = _scalar_promote(self_dn, 'float64')
+    elif isinstance(other, complex):
+        res_dn = _scalar_promote(self_dn, 'complex128')
+    else:
+        return NotImplemented
+
+    # truediv of integers always returns float
+    if op_name == '__truediv__' and res_dn in ('bool', 'int8', 'int16', 'int32', 'int64',
+                                                'uint8', 'uint16', 'uint32', 'uint64'):
+        res_dn = 'float64'
+
+    op_func = _BINOP_MAP.get(op_name)
+    if op_func is None:
+        return NotImplemented
+
+    a = _coerce_for_op(self_val, res_dn)
+    b = _coerce_for_op(other, res_dn)
+    try:
+        val = op_func(a, b)
+    except TypeError:
+        return NotImplemented
+    if val is NotImplemented:
+        return NotImplemented
+    return _wrap_scalar_result(val, res_dn)
+
+
+def _scalar_rbinop_result(self_val, self_dn, other, op_name):
+    """Perform other OP self (reverse), return wrapped numpy scalar or NotImplemented."""
+    other_dn = _get_numpy_dtype_name(other)
+    if other_dn is not None:
+        res_dn = _scalar_promote(other_dn, self_dn)
+    elif isinstance(other, (ndarray, _ObjectArray)):
+        return NotImplemented
+    elif isinstance(other, bool):
+        res_dn = _scalar_promote('bool', self_dn)
+    elif isinstance(other, int):
+        res_dn = _scalar_promote('int64', self_dn)
+    elif isinstance(other, float):
+        res_dn = _scalar_promote('float64', self_dn)
+    elif isinstance(other, complex):
+        res_dn = _scalar_promote('complex128', self_dn)
+    else:
+        return NotImplemented
+
+    if op_name == '__truediv__' and res_dn in ('bool', 'int8', 'int16', 'int32', 'int64',
+                                                'uint8', 'uint16', 'uint32', 'uint64'):
+        res_dn = 'float64'
+
+    op_func = _BINOP_MAP.get(op_name)
+    if op_func is None:
+        return NotImplemented
+
+    a = _coerce_for_op(other, res_dn)
+    b = _coerce_for_op(self_val, res_dn)
+    try:
+        val = op_func(a, b)
+    except TypeError:
+        return NotImplemented
+    if val is NotImplemented:
+        return NotImplemented
+    return _wrap_scalar_result(val, res_dn)
+
+
 class _NumpyIntScalar(int):
     _numpy_dtype_name: str
 
@@ -184,6 +381,130 @@ class _NumpyIntScalar(int):
         if device == "cpu":
             return self
         raise ValueError(f"Unsupported device: {device}")
+
+    def view(self, dtype_arg):
+        """Reinterpret the bytes of this integer scalar as another dtype."""
+        import struct as _struct
+        dn = str(dtype_arg).replace('numpy.', '')
+        src_name = self._numpy_dtype_name
+        val = int(self)
+        _int_fmts = {'int64': ('q', 8), 'intp': ('q', 8), 'int32': ('i', 4),
+                      'int16': ('h', 2), 'int8': ('b', 1),
+                      'uint64': ('Q', 8), 'uint32': ('I', 4),
+                      'uint16': ('H', 2), 'uint8': ('B', 1)}
+        if src_name not in _int_fmts:
+            raise TypeError(f"Cannot view {src_name} as {dn}")
+        src_fmt, src_size = _int_fmts[src_name]
+        raw = _struct.pack(src_fmt, val)
+        _dst_map = {
+            'float64': ('d', 8, 'float64', True), 'f8': ('d', 8, 'float64', True),
+            'float32': ('f', 4, 'float32', True), 'f4': ('f', 4, 'float32', True),
+            'float16': ('e', 2, 'float16', True), 'f2': ('e', 2, 'float16', True),
+            'int64': ('q', 8, 'int64', False), 'i8': ('q', 8, 'int64', False),
+            'int32': ('i', 4, 'int32', False), 'i4': ('i', 4, 'int32', False),
+            'int16': ('h', 2, 'int16', False), 'i2': ('h', 2, 'int16', False),
+            'int8': ('b', 1, 'int8', False), 'i1': ('b', 1, 'int8', False),
+            'uint64': ('Q', 8, 'uint64', False), 'u8': ('Q', 8, 'uint64', False),
+            'uint32': ('I', 4, 'uint32', False), 'u4': ('I', 4, 'uint32', False),
+            'uint16': ('H', 2, 'uint16', False), 'u2': ('H', 2, 'uint16', False),
+            'uint8': ('B', 1, 'uint8', False), 'u1': ('B', 1, 'uint8', False),
+        }
+        if dn not in _dst_map:
+            raise TypeError(f"Cannot view {src_name} as {dn}")
+        dst_fmt, dst_size, dst_name, is_float = _dst_map[dn]
+        if src_size != dst_size:
+            raise TypeError(f"Cannot view {src_name} ({src_size} bytes) as {dn} ({dst_size} bytes)")
+        bits = _struct.unpack(dst_fmt, raw)[0]
+        if is_float:
+            return _NumpyFloatScalar(bits, dst_name)
+        return _NumpyIntScalar(bits, dst_name)
+
+    # Arithmetic operators
+    def __add__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__add__')
+
+    def __radd__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__add__')
+
+    def __sub__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__sub__')
+
+    def __rsub__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__sub__')
+
+    def __mul__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__mul__')
+
+    def __rmul__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__mul__')
+
+    def __truediv__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__truediv__')
+
+    def __rtruediv__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__truediv__')
+
+    def __floordiv__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__floordiv__')
+
+    def __rfloordiv__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__floordiv__')
+
+    def __mod__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__mod__')
+
+    def __rmod__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__mod__')
+
+    def __pow__(self, other, mod=None):
+        if mod is not None:
+            return int.__pow__(self, other, mod)
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__pow__')
+
+    def __rpow__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__pow__')
+
+    def __lshift__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__lshift__')
+
+    def __rlshift__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__lshift__')
+
+    def __rshift__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__rshift__')
+
+    def __rrshift__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__rshift__')
+
+    def __and__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__and__')
+
+    def __rand__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__and__')
+
+    def __or__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__or__')
+
+    def __ror__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__or__')
+
+    def __xor__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__xor__')
+
+    def __rxor__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__xor__')
+
+    def __neg__(self):
+        return _NumpyIntScalar(int.__neg__(self), self._numpy_dtype_name)
+
+    def __pos__(self):
+        return _NumpyIntScalar(int.__pos__(self), self._numpy_dtype_name)
+
+    def __abs__(self):
+        return _NumpyIntScalar(int.__abs__(self), self._numpy_dtype_name)
+
+    def __invert__(self):
+        return _NumpyIntScalar(int.__invert__(self), self._numpy_dtype_name)
 
 
 def _truncate_float(value, dtype_name):
@@ -240,18 +561,6 @@ class _NumpyFloatScalar(float):
         _builtin_round = __import__("builtins").round
         return _NumpyFloatScalar(_builtin_round(float(self), ndigits), self._numpy_dtype_name)
 
-    def __mul__(self, other):
-        if isinstance(other, (ndarray, _ObjectArray)) or hasattr(other, "_numpy_dtype_name"):
-            import numpy as _np
-            return _np.multiply(self, other)
-        return float.__mul__(self, other)
-
-    def __rmul__(self, other):
-        if isinstance(other, (ndarray, _ObjectArray)) or hasattr(other, "_numpy_dtype_name"):
-            import numpy as _np
-            return _np.multiply(other, self)
-        return float.__rmul__(self, other)
-
     def as_integer_ratio(self):
         """Return (numerator, denominator) pair."""
         return float.as_integer_ratio(float(self))
@@ -267,6 +576,94 @@ class _NumpyFloatScalar(float):
         if device == "cpu":
             return self
         raise ValueError(f"Unsupported device: {device}")
+
+    def view(self, dtype_arg):
+        """Reinterpret the bytes of this float scalar as another dtype."""
+        import struct as _struct
+        dn = str(dtype_arg).replace('numpy.', '')
+        src_name = self._numpy_dtype_name
+        val = float(self)
+        _float_fmts = {'float64': ('d', 8), 'float32': ('f', 4), 'float16': ('e', 2)}
+        if src_name not in _float_fmts:
+            raise TypeError(f"Cannot view {src_name} as {dn}")
+        src_fmt, src_size = _float_fmts[src_name]
+        raw = _struct.pack(src_fmt, val)
+        _dst_map = {
+            'float64': ('d', 8, 'float64', True), 'f8': ('d', 8, 'float64', True),
+            'float32': ('f', 4, 'float32', True), 'f4': ('f', 4, 'float32', True),
+            'float16': ('e', 2, 'float16', True), 'f2': ('e', 2, 'float16', True),
+            'int64': ('q', 8, 'int64', False), 'i8': ('q', 8, 'int64', False),
+            'int32': ('i', 4, 'int32', False), 'i4': ('i', 4, 'int32', False),
+            'int16': ('h', 2, 'int16', False), 'i2': ('h', 2, 'int16', False),
+            'int8': ('b', 1, 'int8', False), 'i1': ('b', 1, 'int8', False),
+            'uint64': ('Q', 8, 'uint64', False), 'u8': ('Q', 8, 'uint64', False),
+            'uint32': ('I', 4, 'uint32', False), 'u4': ('I', 4, 'uint32', False),
+            'uint16': ('H', 2, 'uint16', False), 'u2': ('H', 2, 'uint16', False),
+            'uint8': ('B', 1, 'uint8', False), 'u1': ('B', 1, 'uint8', False),
+        }
+        if dn not in _dst_map:
+            raise TypeError(f"Cannot view {src_name} as {dn}")
+        dst_fmt, dst_size, dst_name, is_float = _dst_map[dn]
+        if src_size != dst_size:
+            raise TypeError(f"Cannot view {src_name} ({src_size} bytes) as {dn} ({dst_size} bytes)")
+        bits = _struct.unpack(dst_fmt, raw)[0]
+        if is_float:
+            return _NumpyFloatScalar(bits, dst_name)
+        return _NumpyIntScalar(bits, dst_name)
+
+    # Arithmetic operators
+    def __add__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__add__')
+
+    def __radd__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__add__')
+
+    def __sub__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__sub__')
+
+    def __rsub__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__sub__')
+
+    def __mul__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__mul__')
+
+    def __rmul__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__mul__')
+
+    def __truediv__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__truediv__')
+
+    def __rtruediv__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__truediv__')
+
+    def __floordiv__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__floordiv__')
+
+    def __rfloordiv__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__floordiv__')
+
+    def __mod__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__mod__')
+
+    def __rmod__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__mod__')
+
+    def __pow__(self, other, mod=None):
+        if mod is not None:
+            return NotImplemented
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__pow__')
+
+    def __rpow__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__pow__')
+
+    def __neg__(self):
+        return _NumpyFloatScalar(float.__neg__(self), self._numpy_dtype_name)
+
+    def __pos__(self):
+        return _NumpyFloatScalar(float.__pos__(self), self._numpy_dtype_name)
+
+    def __abs__(self):
+        return _NumpyFloatScalar(float.__abs__(self), self._numpy_dtype_name)
 
 
 class _NumpyComplexScalar(complex):
@@ -306,6 +703,55 @@ class _NumpyComplexScalar(complex):
             return self
         raise ValueError(f"Unsupported device: {device}")
 
+    # Arithmetic operators
+    def __add__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__add__')
+
+    def __radd__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__add__')
+
+    def __sub__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__sub__')
+
+    def __rsub__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__sub__')
+
+    def __mul__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__mul__')
+
+    def __rmul__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__mul__')
+
+    def __truediv__(self, other):
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__truediv__')
+
+    def __rtruediv__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__truediv__')
+
+    def __pow__(self, other, mod=None):
+        if mod is not None:
+            return NotImplemented
+        return _scalar_binop_result(self, self._numpy_dtype_name, other, '__pow__')
+
+    def __rpow__(self, other):
+        return _scalar_rbinop_result(self, self._numpy_dtype_name, other, '__pow__')
+
+    def __neg__(self):
+        return _NumpyComplexScalar(complex.__neg__(self), self._numpy_dtype_name)
+
+    def __pos__(self):
+        return _NumpyComplexScalar(complex.__pos__(self), self._numpy_dtype_name)
+
+    def __abs__(self):
+        # abs(complex) returns float
+        res_dn = 'float32' if self._numpy_dtype_name == 'complex64' else 'float64'
+        return _NumpyFloatScalar(complex.__abs__(self), res_dn)
+
+    def to_device(self, device):
+        if device == "cpu":
+            return self
+        raise ValueError(f"Unsupported device: {device}")
+
 
 # Void scalar placeholder
 class _NumpyVoidScalar:
@@ -336,6 +782,12 @@ class _ScalarTypeMeta(type):
 
     def __call__(cls, value=0, *args, **kwargs):
         scalar_name = cls._scalar_name
+        # If given a list/tuple/ndarray, create an array with this dtype
+        if isinstance(value, (list, tuple)):
+            import numpy as _np
+            return _np.array(value, dtype=scalar_name)
+        if isinstance(value, ndarray):
+            return value.astype(scalar_name)
         if scalar_name in ('complex64', 'complex128') and len(args) == 1:
             real_part = value
             imag_part = args[0]
@@ -1738,58 +2190,61 @@ class finfo:
     def __init__(self, dtype=None):
         if dtype is None or dtype is float or str(dtype) in ('float64', 'f8', 'float', 'd', 'longdouble', 'longfloat', 'g'):
             self.bits = 64
-            self.eps = 2.220446049250313e-16
+            self.eps = float64(2.220446049250313e-16)
+            self.epsneg = float64(1.1102230246251565e-16)
             self.max = 1.7976931348623157e+308
             self.min = -1.7976931348623157e+308
             self.tiny = 2.2250738585072014e-308
             self.smallest_normal = 2.2250738585072014e-308
             self.smallest_subnormal = 5e-324
-            self.resolution = 1e-15
+            self.precision = 15
+            self.resolution = float64(10) ** (-self.precision)
             self.dtype = float64
             self.maxexp = 1024
-            self.minexp = -1021
+            self.minexp = -1022
             self.nmant = 52
             self.nexp = 11
             self.machep = -52
             self.negep = -53
             self.iexp = 11
-            self.precision = 15
         elif str(dtype) in ('float32', 'f4', 'f'):
             self.bits = 32
-            self.eps = 1.1920929e-07
+            self.eps = float32(1.1920929e-07)
+            self.epsneg = float32(5.960464477539063e-08)
             self.max = 3.4028235e+38
             self.min = -3.4028235e+38
             self.tiny = 1.1754944e-38
             self.smallest_normal = 1.1754944e-38
             self.smallest_subnormal = 1e-45
-            self.resolution = 1e-6
+            self.precision = 6
+            self.resolution = float32(10) ** (-self.precision)
             self.dtype = float32
             self.maxexp = 128
-            self.minexp = -125
+            self.minexp = -126
             self.nmant = 23
             self.nexp = 8
             self.machep = -23
             self.negep = -24
             self.iexp = 8
-            self.precision = 6
         elif str(dtype) in ('float16', 'half', 'f2', 'e'):
             self.bits = 16
-            self.eps = 9.765625e-04
+            self.eps = float16(9.765625e-04)
+            self.epsneg = float16(4.8828125e-04)
             self.max = 65504.0
             self.min = -65504.0
             self.tiny = 6.103515625e-05
             self.smallest_normal = 6.103515625e-05
             self.smallest_subnormal = 5.96e-08
-            self.resolution = 0.001
+            self.precision = 3
+            self.resolution = float16(10) ** (-self.precision)
             self.dtype = float16
             self.maxexp = 16
-            self.minexp = -13
+            self.minexp = -14
             self.nmant = 10
             self.nexp = 5
             self.machep = -10
             self.negep = -11
             self.iexp = 5
-            self.precision = 3
         else:
             raise ValueError("finfo only supports float16, float32 and float64")
         # Legacy _machar attribute (deprecated but accessed by some tests)
@@ -1812,7 +2267,7 @@ class _MachAr:
 class iinfo:
     """Machine limits for integer types."""
     def __init__(self, dtype=None):
-        if dtype is None or str(dtype) in ('int64', 'i8', 'int', 'l'):
+        if dtype is None or str(dtype) in ('int64', 'i8', 'int', 'l', 'q'):
             self.bits = 64
             self.min = -9223372036854775808
             self.max = 9223372036854775807
@@ -1824,13 +2279,13 @@ class iinfo:
             self.max = 2147483647
             self.dtype = int32
             self.kind = 'i'
-        elif str(dtype) in ('int8', 'i1'):
+        elif str(dtype) in ('int8', 'i1', 'b'):
             self.bits = 8
             self.min = -128
             self.max = 127
             self.dtype = int8
             self.kind = 'i'
-        elif str(dtype) in ('int16', 'i2'):
+        elif str(dtype) in ('int16', 'i2', 'h'):
             self.bits = 16
             self.min = -32768
             self.max = 32767
@@ -1854,13 +2309,23 @@ class iinfo:
             self.max = 4294967295
             self.dtype = uint32
             self.kind = 'u'
-        elif str(dtype) in ('uint64', 'u8', 'Q'):
+        elif str(dtype) in ('uint64', 'u8', 'Q', 'L'):
             self.bits = 64
             self.min = 0
             self.max = 18446744073709551615
             self.dtype = uint64
             self.kind = 'u'
         else:
+            # Try normalizing via dtype()
+            try:
+                _dt = dtype(str(dtype))
+                _name = _dt.name
+                if _name in ('int8', 'int16', 'int32', 'int64',
+                             'uint8', 'uint16', 'uint32', 'uint64'):
+                    self.__init__(_name)
+                    return
+            except Exception:
+                pass
             raise ValueError("iinfo does not support this dtype")
 
     def __repr__(self):

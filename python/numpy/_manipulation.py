@@ -326,11 +326,23 @@ def block(arrays):
         return arrays
     if not isinstance(arrays, list):
         return asarray(arrays)
+    if isinstance(arrays, tuple):
+        raise TypeError("tuple is not allowed, use lists instead")
     if len(arrays) == 0:
-        return array([])
+        raise ValueError("block requires at least one element but got empty list")
+    def _has_empty(lst):
+        """Check for empty sub-lists."""
+        for item in lst:
+            if isinstance(item, list) and len(item) == 0:
+                return True
+        return False
+    if _has_empty(arrays):
+        raise ValueError("block requires at least one element but got empty list")
     if isinstance(arrays[0], list):
         rows = []
         for row_blocks in arrays:
+            if isinstance(row_blocks, list) and len(row_blocks) == 0:
+                raise ValueError("block requires at least one element but got empty list")
             row = hstack([asarray(b) for b in row_blocks])
             rows.append(row)
         return vstack(rows)

@@ -2700,6 +2700,26 @@ _hermegrid3d = _make_grid3d(_hermeval)
 _hermevander2d = _make_vander2d(_hermevander)
 _hermevander3d = _make_vander3d(_hermevander)
 
+def _hermegauss(n):
+    """Hermite-Gauss quadrature (probabilist's)."""
+    import math
+    n = int(n)
+    # Build symmetric tridiagonal matrix for He polynomials
+    # He_n has recurrence: x*He_i = He_{i+1} + i*He_{i-1}
+    # So the companion tridiagonal has off-diagonal sqrt(i+1)
+    comp = np.zeros((n, n))
+    for i in range(n - 1):
+        comp[i, i + 1] = math.sqrt(i + 1)
+        comp[i + 1, i] = math.sqrt(i + 1)
+    x = np.linalg.eigvalsh(comp)
+    x = np.sort(x)
+    w = np.zeros(n)
+    for i in range(n):
+        hen1 = _hermeval_scalar(float(x[i]), [0.0] * (n - 1) + [1.0])
+        if abs(hen1) > 1e-300:
+            w[i] = math.sqrt(2.0 * math.pi) * math.factorial(n) / (float(n) * hen1) ** 2
+    return x, w
+
 
 class hermite_e:
     hermedomain = np.array([-1., 1.])
@@ -2730,6 +2750,7 @@ class hermite_e:
     hermeline = staticmethod(lambda off, scl: np.array([off, scl]))
     hermemulx = staticmethod(lambda c: _hermemulx(c))
     hermeweight = staticmethod(lambda x: np.exp(-np.asarray(x)**2 / 2.0))
+    hermegauss = staticmethod(lambda n: _hermegauss(n))
     herme2poly = staticmethod(_herme2poly)
     poly2herme = staticmethod(_poly2herme)
 

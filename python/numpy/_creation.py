@@ -42,8 +42,20 @@ __all__ = [
 
 def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
     """Wrapper around native concatenate that handles tuples and auto-converts to arrays."""
+    _valid_castings = ('no', 'equiv', 'safe', 'same_kind', 'unsafe')
+    if casting not in _valid_castings:
+        raise ValueError("casting must be one of {}".format(_valid_castings))
     arrs = [asarray(a) if not isinstance(a, ndarray) else a for a in arrays]
-    return _native_concatenate(arrs, axis)
+    result = _native_concatenate(arrs, axis)
+    if out is not None:
+        out_arr = asarray(out) if not isinstance(out, ndarray) else out
+        if out_arr.shape != result.shape:
+            raise ValueError(
+                "Output array shape {} does not match "
+                "concatenation result shape {}".format(out_arr.shape, result.shape))
+        out_arr[:] = result
+        return out_arr
+    return result
 
 def _make_complex_array(values, shape):
     """Create a complex128 ndarray from a list of Python complex/float values.
@@ -554,6 +566,16 @@ def arange(*args, dtype=None, like=None, **kwargs):
         else:
             vals = list(range(int(float_args[0]), int(float_args[1]), int(float_args[2])))
         return _ObjectArray(vals, "object")
+    # Detect if all args are integers (for integer output dtype)
+    _all_int = all(isinstance(a, (int, bool)) and not isinstance(a, float) for a in args)
+    # Also check for numpy int scalars
+    if not _all_int:
+        _all_int = all(
+            (isinstance(a, int) and not isinstance(a, float)) or
+            (hasattr(a, '_numpy_dtype_name') and a._numpy_dtype_name in
+             ('bool', 'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64'))
+            for a in args
+        )
     float_args = [float(a) for a in args]
     # Normalize to (start, stop, step) form
     if len(float_args) == 1:
@@ -562,7 +584,11 @@ def arange(*args, dtype=None, like=None, **kwargs):
         float_args = [float_args[0], float_args[1], 1.0]
     if dtype is not None:
         return _native.arange(float_args[0], float_args[1], float_args[2], dt)
-    return _native.arange(float_args[0], float_args[1], float_args[2])
+    result = _native.arange(float_args[0], float_args[1], float_args[2])
+    # If all inputs were integers and no explicit dtype, cast to int64
+    if _all_int and dt is None:
+        result = result.astype('int64')
+    return result
 
 def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis=0):
     start = float(start)

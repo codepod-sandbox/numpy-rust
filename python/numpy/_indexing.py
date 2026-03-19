@@ -514,15 +514,24 @@ def digitize(x, bins, right=False):
 
 
 def unravel_index(indices, shape, order='C'):
+    if isinstance(indices, float):
+        raise TypeError("Expected type 'int' but 'float' found.")
     if not isinstance(indices, ndarray):
         if isinstance(indices, int):
             indices = array([indices])
         else:
             indices = array(indices)
+    if indices.size == 0:
+        # Return empty arrays per dimension
+        return tuple([array([], dtype='int64') for _ in shape])
     return _native.unravel_index(indices, shape)
 
 
 def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
+    # Validate types - reject floats
+    for a in multi_index:
+        if isinstance(a, float):
+            raise TypeError("Expected type 'int' but 'float' found.")
     arrays = tuple(array([a]) if isinstance(a, (int, float)) else (a if isinstance(a, ndarray) else array(a)) for a in multi_index)
     return _native.ravel_multi_index(arrays, dims)
 
@@ -602,22 +611,55 @@ def triu(m, k=0):
 
 
 def fill_diagonal(a, val, wrap=False):
-    """Fill the main diagonal of the given array. Returns new array (our arrays are immutable)."""
-    a = asarray(a)
-    if a.ndim != 2:
-        raise ValueError("array must be 2-d")
+    """Fill the main diagonal of the given array of at least 2-d in place."""
+    if not isinstance(a, ndarray):
+        raise ValueError("Input must be an ndarray")
+    if a.ndim < 2:
+        raise ValueError("Input must be at least 2-d.")
+    if a.ndim > 2:
+        # All dimensions must be equal length
+        s0 = a.shape[0]
+        for d in a.shape[1:]:
+            if d != s0:
+                raise ValueError(
+                    "All dimensions of input must be of equal length")
+        # N-d: step through all equal-indexed elements
+        for k in _builtin_range(s0):
+            idx = tuple([k] * a.ndim)
+            a[idx] = val
+        return
+
     n = a.shape[0]
     m = a.shape[1]
-    rows = []
-    for i in range(n):
-        row = []
-        for j in range(m):
-            if i == j:
-                row.append(float(val) if not isinstance(val, (list, tuple)) else float(val[i % len(val)]))
+    if wrap:
+        # wrap mode: after reaching end of row, wrap around to continue
+        # filling diagonal elements for tall matrices
+        step = m + 1
+        total = n * m
+        k = 0
+        while k < total:
+            i = k // m
+            j = k % m
+            if isinstance(val, (list, tuple, ndarray)):
+                vl = val if not isinstance(val, ndarray) else val.tolist()
+                if isinstance(vl, list):
+                    a[i, j] = vl[(k // step) % len(vl)]
+                else:
+                    a[i, j] = vl
             else:
-                row.append(a[i][j])
-        rows.append(row)
-    return array(rows)
+                a[i, j] = val
+            k += step
+    else:
+        diag_len = _builtin_min(n, m)
+        for k in _builtin_range(diag_len):
+            if isinstance(val, (list, tuple, ndarray)):
+                vl = val if not isinstance(val, ndarray) else val.tolist()
+                if isinstance(vl, list):
+                    a[k, k] = vl[k % len(vl)]
+                else:
+                    a[k, k] = vl
+            else:
+                a[k, k] = val
 
 
 def diag_indices(n, ndim=2):
@@ -629,12 +671,15 @@ def diag_indices(n, ndim=2):
 def diag_indices_from(arr):
     """Return the indices to access the main diagonal of an n-dimensional array."""
     arr = asarray(arr)
-    if arr.ndim != 2:
-        raise ValueError("array must be 2-d")
-    n = arr.shape[0]
-    if arr.shape[0] != arr.shape[1]:
-        raise ValueError("array must be square")
-    return diag_indices(n, 2)
+    if arr.ndim < 2:
+        raise ValueError("input array must be at least 2-d")
+    # All dimensions must be equal length
+    s0 = arr.shape[0]
+    for d in arr.shape[1:]:
+        if d != s0:
+            raise ValueError(
+                "All dimensions of input must be of equal length")
+    return diag_indices(s0, arr.ndim)
 
 
 def tril_indices(n, k=0, m=None):
@@ -703,6 +748,27 @@ def advanced_fancy_index(arr, indices):
 
 # --- mgrid / ogrid / ix_ ----------------------------------------------------
 
+def _grid_slice(s):
+    """Process a single slice for mgrid/ogrid. Returns (array, is_complex_step)."""
+    start = s.start if s.start is not None else 0
+    stop = s.stop if s.stop is not None else 0
+    step = s.step if s.step is not None else 1
+    # Complex step means "use linspace with this many points"
+    _step_is_complex = isinstance(step, complex)
+    if not _step_is_complex and hasattr(step, 'imag'):
+        try:
+            _step_is_complex = (step.imag != 0)
+        except Exception:
+            _step_is_complex = False
+    if _step_is_complex:
+        num = int(abs(step))
+        grid = linspace(float(start), float(stop), num=num, endpoint=True)
+        return grid, True
+    # Use arange for numeric steps
+    grid = arange(start, stop, step)
+    return grid, False
+
+
 class _MGrid:
     """Return dense multi-dimensional 'meshgrid' arrays via slice notation."""
     def __getitem__(self, key):
@@ -712,43 +778,25 @@ class _MGrid:
         arrays = []
         for s in key:
             if isinstance(s, slice):
-                start = s.start if s.start is not None else 0
-                stop = s.stop if s.stop is not None else 0
-                step = s.step if s.step is not None else 1
-                # Complex step means "use linspace with this many points"
-                if isinstance(step, complex) or (hasattr(step, 'imag') and step.imag != 0):
-                    num = int(abs(step))
-                    grid = linspace(float(start), float(stop), num=num, endpoint=True)
-                    arrays.append(grid)
-                else:
-                    vals = []
-                    v = float(start)
-                    if step > 0:
-                        while v < float(stop):
-                            vals.append(v)
-                            v += float(step)
-                    else:
-                        while v > float(stop):
-                            vals.append(v)
-                            v += float(step)
-                    arrays.append(array(vals) if vals else array([]))
+                grid, _ = _grid_slice(s)
+                arrays.append(grid)
             else:
                 arrays.append(array([float(s)]))
 
         if ndim == 1:
             return arrays[0]
 
-        # Create dense meshgrid
-        shapes = [len(a) for a in arrays]
-        result = []
+        # Create dense meshgrid, return as stacked ndarray
+        shapes = [a.size for a in arrays]
+        grids = []
         for i, arr in enumerate(arrays):
             shape = [1] * ndim
             shape[i] = shapes[i]
             reshaped = arr.reshape(shape)
             reps = list(shapes)
             reps[i] = 1
-            result.append(tile(reshaped, reps))
-        return result
+            grids.append(tile(reshaped, reps))
+        return stack(grids)
 
 mgrid = _MGrid()
 
@@ -762,26 +810,8 @@ class _OGrid:
         arrays = []
         for s in key:
             if isinstance(s, slice):
-                start = s.start if s.start is not None else 0
-                stop = s.stop if s.stop is not None else 0
-                step = s.step if s.step is not None else 1
-                # Complex step means "use linspace with this many points"
-                if isinstance(step, complex) or (hasattr(step, 'imag') and step.imag != 0):
-                    num = int(abs(step))
-                    grid = linspace(float(start), float(stop), num=num, endpoint=True)
-                    arrays.append(grid)
-                else:
-                    vals = []
-                    v = float(start)
-                    if step > 0:
-                        while v < float(stop):
-                            vals.append(v)
-                            v += float(step)
-                    else:
-                        while v > float(stop):
-                            vals.append(v)
-                            v += float(step)
-                    arrays.append(array(vals) if vals else array([]))
+                grid, _ = _grid_slice(s)
+                arrays.append(grid)
             else:
                 arrays.append(array([float(s)]))
 
@@ -792,7 +822,7 @@ class _OGrid:
         result = []
         for i, arr in enumerate(arrays):
             shape = [1] * ndim
-            shape[i] = len(arr)
+            shape[i] = arr.size
             result.append(arr.reshape(shape))
         return result
 
@@ -804,9 +834,14 @@ def ix_(*args):
     ndim = len(args)
     result = []
     for i, arg in enumerate(args):
-        arr = asarray(arg).flatten()
+        arr = asarray(arg)
+        if arr.ndim != 1:
+            raise ValueError("Cross index must be 1 dimensional")
+        # Boolean arrays: convert to integer index via nonzero/where
+        if str(arr.dtype) == 'bool':
+            arr = array([j for j in _builtin_range(arr.size) if arr[j]])
         shape = [1] * ndim
-        shape[i] = len(arr)
+        shape[i] = arr.size
         result.append(arr.reshape(shape))
     return tuple(result)
 
@@ -824,11 +859,26 @@ class _RClass:
                 step = item.step if item.step is not None else 1
                 if stop is None:
                     raise ValueError("r_ requires explicit stop for slices")
-                pieces.append(arange(start, stop, step))
+                # Complex step: linspace
+                _step_is_complex = isinstance(step, complex)
+                if not _step_is_complex and hasattr(step, 'imag'):
+                    try:
+                        _step_is_complex = (step.imag != 0)
+                    except Exception:
+                        _step_is_complex = False
+                if _step_is_complex:
+                    num = int(abs(step))
+                    pieces.append(linspace(float(start), float(stop), num=num, endpoint=True))
+                else:
+                    pieces.append(arange(start, stop, step))
             elif isinstance(item, (int, float)):
                 pieces.append(array([item]))
             else:
-                pieces.append(asarray(item))
+                arr = asarray(item)
+                # Ensure at least 1-d
+                if arr.ndim == 0:
+                    arr = arr.reshape((1,))
+                pieces.append(arr)
         if len(pieces) == 0:
             return array([])
         return concatenate(pieces)
@@ -854,6 +904,8 @@ class _CClass:
                 arr = array([item])
             else:
                 arr = asarray(item)
+                if arr.ndim == 0:
+                    arr = arr.reshape((1,))
             # Ensure 2D
             if arr.ndim == 1:
                 arr = arr.reshape((-1 if arr.size > 0 else 0, 1))

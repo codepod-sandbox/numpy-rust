@@ -445,6 +445,21 @@ def _cross_product(param_lists, method=None):
     return result
 
 
+_module_fixtures = {}  # populated by _run_test_file for module-level @pytest.fixture functions
+
+
+class _MockRequest:
+    """Minimal mock of pytest's request object for fixture resolution."""
+    def __init__(self, fixtures_dict):
+        self._fixtures = fixtures_dict
+
+    def getfixturevalue(self, name):
+        if name in self._fixtures:
+            fn = self._fixtures[name]
+            return fn()  # call the fixture function
+        raise ValueError("Fixture '{}' not found".format(name))
+
+
 def _run_parametrized(full_name, method):
     global _passed, _failed, _skipped, _xfailed, _xpassed, _errored
 
@@ -454,6 +469,18 @@ def _run_parametrized(full_name, method):
     else:
         names_str, values = method._parametrize
     is_xfail = getattr(method, "_xfail", False)
+
+    # Detect if the method needs a 'request' parameter
+    _needs_request = False
+    try:
+        _code = getattr(method, '__code__', None)
+        if _code is None:
+            _wrapped = getattr(method, '__wrapped__', method)
+            _code = getattr(_wrapped, '__code__', None)
+        if _code and 'request' in _code.co_varnames[:_code.co_argcount]:
+            _needs_request = True
+    except Exception:
+        pass
 
     try:
         if not isinstance(values, (list, tuple)):
@@ -469,10 +496,13 @@ def _run_parametrized(full_name, method):
     for i, vals in enumerate(values):
         param_name = "{}[{}]".format(full_name, i)
         try:
-            if isinstance(vals, (tuple, list)):
-                method(*vals)
+            call_vals = vals if isinstance(vals, (tuple, list)) else (vals,)
+            if _needs_request:
+                call_vals = tuple(call_vals) + (_MockRequest(_module_fixtures),)
+            if len(call_vals) == 1:
+                method(call_vals[0])
             else:
-                method(vals)
+                method(*call_vals)
         except _SkipException:
             _skipped += 1
             continue
@@ -649,6 +679,17 @@ def _run_test_file(test_path, label=None):
         return (0, 0, 0, 1, 0, False)
 
     names = sorted(test_ns.keys())
+
+    # Collect module-level @pytest.fixture functions for request.getfixturevalue()
+    global _module_fixtures
+    _module_fixtures = {}
+    for name in names:
+        obj = test_ns[name]
+        if callable(obj) and not isinstance(obj, type) and not name.startswith("test_"):
+            # Check if it was decorated with @pytest.fixture (our shim sets _fixture_params on parameterized ones)
+            # For non-parameterized fixtures, they're just callables returned by _fixture
+            if hasattr(obj, '_fixture_params') or (not name.startswith("_") and not name.startswith("Test")):
+                _module_fixtures[name] = obj
 
     for name in names:
         obj = test_ns[name]

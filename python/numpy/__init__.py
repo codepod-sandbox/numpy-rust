@@ -360,6 +360,46 @@ class _RecModule:
             arr[name] = array(col)
         return recarray._from_structured(arr)
 
+    def fromrecords(self, reclist, dtype=None, names=None, formats=None, **kwargs):
+        """Create a recarray from a list of records (tuples)."""
+        if dtype is not None:
+            arr = array(reclist, dtype=dtype)
+            if isinstance(arr, StructuredArray):
+                return recarray._from_structured(arr)
+            return arr
+        if names is not None and formats is not None:
+            if isinstance(formats, str):
+                formats = [f.strip() for f in formats.split(',')]
+            fields = list(zip(names, formats))
+            dt = globals()['dtype'](fields)
+            arr = array(reclist, dtype=dt)
+            if isinstance(arr, StructuredArray):
+                return recarray._from_structured(arr)
+            return arr
+        if names is not None:
+            # Infer types from the first record
+            if len(reclist) > 0:
+                rec0 = reclist[0]
+                fields = []
+                for i, name in enumerate(names):
+                    val = rec0[i] if isinstance(rec0, (tuple, list)) else rec0
+                    if isinstance(val, int):
+                        fields.append((name, 'int64'))
+                    elif isinstance(val, float):
+                        fields.append((name, 'float64'))
+                    elif isinstance(val, str):
+                        fields.append((name, 'U'))
+                    elif isinstance(val, bytes):
+                        fields.append((name, 'S'))
+                    else:
+                        fields.append((name, 'float64'))
+                dt = globals()['dtype'](fields)
+                arr = array(reclist, dtype=dt)
+                if isinstance(arr, StructuredArray):
+                    return recarray._from_structured(arr)
+                return arr
+        return array(reclist)
+
 
 rec = _RecModule()
 

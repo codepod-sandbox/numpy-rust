@@ -871,6 +871,22 @@ class _RecModule:
             dtype = StructuredDtype(fields)
         return self.array(arrays, dtype=dtype)
 
+    def fromrecords(self, reclist, dtype=None, names=None, formats=None):
+        """Create a record array from a list of records (tuples)."""
+        import numpy as np
+        if dtype is not None:
+            return np.array(reclist, dtype=dtype)
+        if names is not None and formats is not None:
+            if isinstance(formats, str):
+                formats = [f.strip() for f in formats.split(',')]
+            fields = list(zip(names, formats))
+            dt = StructuredDtype(fields)
+            return np.array(reclist, dtype=dt)
+        if names is not None:
+            # Infer types from first record
+            return np.array(reclist)
+        return np.array(reclist)
+
 rec = _RecModule()
 
 
