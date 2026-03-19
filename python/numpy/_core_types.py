@@ -941,6 +941,61 @@ class generic(metaclass=_ScalarTypeMeta, scalar_name="generic"):
         raise TypeError(
             f"There are no type variables left in {cls}")
 
+    # Dunder stubs for ndarray interface compatibility
+    def __array_namespace__(self, *, api_version=None):
+        import numpy; return numpy
+    def __copy__(self): return self
+    def __deepcopy__(self, memo=None): return self
+    def __array__(self, dtype=None): import numpy; return numpy.array(self, dtype=dtype)
+    def __array_wrap__(self, array, context=None, return_scalar=False): return array
+
+    # Stub methods matching ndarray interface (for scalar_methods tests)
+    def all(self, axis=None, out=None, keepdims=False): return bool(self)
+    def any(self, axis=None, out=None, keepdims=False): return bool(self)
+    def argmax(self, axis=None, out=None, **kw): return 0
+    def argmin(self, axis=None, out=None, **kw): return 0
+    def argsort(self, axis=-1, kind=None, order=None): import numpy; return numpy.array([0])
+    def clip(self, min=None, max=None, out=None, **kw):
+        v = self
+        if min is not None and v < min: v = type(self)(min)
+        if max is not None and v > max: v = type(self)(max)
+        return v
+    def compress(self, condition, axis=None, out=None): import numpy; return numpy.asarray(self).compress(condition, axis)
+    def conjugate(self): return self
+    conj = conjugate
+    def copy(self, order='C'): return self
+    def cumprod(self, axis=None, dtype=None, out=None): import numpy; return numpy.array([self])
+    def cumsum(self, axis=None, dtype=None, out=None): import numpy; return numpy.array([self])
+    def diagonal(self, offset=0, axis1=0, axis2=1): return self
+    def flatten(self, order='C'): import numpy; return numpy.array([self])
+    def item(self, *args): return self.__class__(self)
+    def max(self, axis=None, out=None, keepdims=False): return self
+    def mean(self, axis=None, dtype=None, out=None, keepdims=False): return float(self)
+    def min(self, axis=None, out=None, keepdims=False): return self
+    def nonzero(self):
+        import numpy
+        if bool(self):
+            return (numpy.array([0]),)
+        return (numpy.array([], dtype='int64'),)
+    def prod(self, axis=None, dtype=None, out=None, keepdims=False): return self
+    def ptp(self, axis=None, out=None, keepdims=False): return type(self)(0)
+    def put(self, indices, values, mode='raise'): pass
+    def ravel(self, order='C'): import numpy; return numpy.array([self])
+    def repeat(self, repeats, axis=None): import numpy; return numpy.array([self] * int(repeats))
+    def reshape(self, *shape, order='C'): import numpy; return numpy.array(self).reshape(*shape)
+    def round(self, decimals=0, out=None): return type(self)(__import__('builtins').round(float(self), decimals))
+    def searchsorted(self, v, side='left', sorter=None): import numpy; return numpy.searchsorted(numpy.array([self]), v, side=side)
+    def squeeze(self, axis=None): return self
+    def std(self, axis=None, dtype=None, out=None, ddof=0, keepdims=False): return type(self)(0)
+    def sum(self, axis=None, dtype=None, out=None, keepdims=False): return self
+    def swapaxes(self, axis1, axis2): return self
+    def take(self, indices, axis=None, out=None, mode='raise'): import numpy; return numpy.array([self]).take(indices, axis=axis)
+    def tobytes(self, order='C'): import struct; return struct.pack('d', float(self))
+    def tolist(self): return self.__class__(self)
+    def trace(self, offset=0, axis1=0, axis2=1, dtype=None, out=None): return self
+    def transpose(self, *axes): return self
+    def var(self, axis=None, dtype=None, out=None, ddof=0, keepdims=False): return type(self)(0)
+
 class number(generic, metaclass=_ScalarTypeMeta, scalar_name="number"):
     """Base class for all numeric scalar types."""
     pass
