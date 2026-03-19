@@ -25,7 +25,7 @@ pub type Result<T> = std::result::Result<T, NumpyError>;
 
 /// Maximum total number of elements we allow in an array.
 /// This prevents panics from ndarray when shapes overflow.
-const MAX_ARRAY_SIZE: usize = 1 << 48; // ~256 TiB at 1 byte/element
+const MAX_ARRAY_SIZE: usize = if usize::BITS >= 64 { 1 << 48 } else { 1 << 30 };
 
 /// Validate that a shape's total element count doesn't overflow or exceed limits.
 /// Returns the total size on success.
