@@ -240,7 +240,15 @@ pub(crate) fn numpy_err(
     e: numpy_rust_core::NumpyError,
     vm: &VirtualMachine,
 ) -> vm::builtins::PyBaseExceptionRef {
-    vm.new_value_error(e.to_string())
+    let msg = e.to_string();
+    // Map index-related errors to IndexError
+    if msg.contains("index") && msg.contains("out of bounds") {
+        return vm.new_index_error(msg);
+    }
+    if msg.contains("too many indices") {
+        return vm.new_index_error(msg);
+    }
+    vm.new_value_error(msg)
 }
 
 /// Convert a Scalar to a Python object.
@@ -611,6 +619,21 @@ impl PyNdArray {
             .is_aligned
             .store(self.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
         result
+    }
+
+    #[pygetset(name = "mT")]
+    fn matrix_transpose_prop(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let inner = self.data.read().unwrap();
+        let ndim = inner.ndim();
+        if ndim < 2 {
+            return Err(
+                vm.new_value_error("matrix transpose with ndim < 2 is undefined".to_owned())
+            );
+        }
+        inner
+            .swapaxes(ndim - 2, ndim - 1)
+            .map(PyNdArray::from_core)
+            .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
@@ -1383,15 +1406,32 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn take(
-        &self,
-        indices: PyRef<PyNdArray>,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
-        let ax = parse_optional_axis(axis, vm)?;
+    fn take(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        if args.args.is_empty() {
+            return Err(vm.new_type_error("take() requires at least 1 argument".to_owned()));
+        }
+        let indices_obj = &args.args[0];
+        let axis_obj = if args.args.len() > 1 {
+            vm::function::OptionalArg::Present(args.args[1].clone())
+        } else {
+            match args.kwargs.get("axis") {
+                Some(v) => vm::function::OptionalArg::Present(v.clone()),
+                None => vm::function::OptionalArg::Missing,
+            }
+        };
+        let ax = parse_optional_axis(axis_obj, vm)?;
+        let idx_array = if let Ok(arr) = indices_obj.clone().downcast::<PyNdArray>() {
+            arr
+        } else {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let asarray_fn = numpy_mod.get_attr("asarray", vm)?;
+            let idx_arr_obj = asarray_fn.call(vec![indices_obj.clone()], vm)?;
+            idx_arr_obj
+                .downcast::<PyNdArray>()
+                .map_err(|_| vm.new_type_error("indices must be array-like".to_owned()))?
+        };
         let inner = self.data.read().unwrap();
-        let idx_arr = indices.data.read().unwrap();
+        let idx_arr = idx_array.data.read().unwrap();
         let dim_size = match ax {
             Some(a) => inner.shape()[a],
             None => inner.size(),
@@ -1659,17 +1699,66 @@ impl PyNdArray {
         if let Some(tuple) = key.downcast_ref::<PyTuple>() {
             let items = tuple.as_slice();
 
-            // Filter out Ellipsis from tuple items (Ellipsis = all remaining dims)
+            // Expand Ellipsis and handle None (newaxis) in index tuples
             let has_ellipsis = items.iter().any(|item| item.is(&vm.ctx.ellipsis));
-            let filtered_items: Vec<PyObjectRef>;
+            let is_newaxis_item =
+                |item: &PyObjectRef| -> bool { vm.is_none(item) && !item.is(&vm.ctx.ellipsis) };
+            let expanded_items: Vec<PyObjectRef>;
             let items = if has_ellipsis {
-                filtered_items = items
+                let ndim = data.ndim();
+                // None/newaxis don't consume array dimensions
+                let indexing_count = items
                     .iter()
-                    .filter(|item| !item.is(&vm.ctx.ellipsis))
-                    .cloned()
+                    .filter(|item| !item.is(&vm.ctx.ellipsis) && !is_newaxis_item(item))
+                    .count();
+                let expand_count = ndim.saturating_sub(indexing_count);
+                let slice_type: PyObjectRef = vm.ctx.types.slice_type.to_owned().into();
+                let none_val: PyObjectRef = vm.ctx.none();
+                expanded_items = items
+                    .iter()
+                    .flat_map(|item| {
+                        if item.is(&vm.ctx.ellipsis) {
+                            (0..expand_count)
+                                .map(|_| {
+                                    slice_type
+                                        .call(vec![none_val.clone()], vm)
+                                        .unwrap_or_else(|_| none_val.clone())
+                                })
+                                .collect::<Vec<_>>()
+                        } else {
+                            vec![item.clone()]
+                        }
+                    })
                     .collect();
-                &filtered_items
+                &expanded_items
             } else {
+                items
+            };
+
+            // Separate None (newaxis) entries from real indexing items
+            let has_any_newaxis = items.iter().any(is_newaxis_item);
+            let newaxis_positions: Vec<usize>;
+            let real_items_vec: Vec<PyObjectRef>;
+            let items = if has_any_newaxis {
+                let mut positions = Vec::new();
+                let mut real = Vec::new();
+                let mut out_pos = 0usize;
+                for item in items.iter() {
+                    if is_newaxis_item(item) {
+                        positions.push(out_pos);
+                        out_pos += 1;
+                    } else {
+                        if item.downcast_ref::<PySlice>().is_some() {
+                            out_pos += 1;
+                        }
+                        real.push(item.clone());
+                    }
+                }
+                newaxis_positions = positions;
+                real_items_vec = real;
+                &real_items_vec
+            } else {
+                newaxis_positions = Vec::new();
                 items
             };
 
@@ -1682,8 +1771,6 @@ impl PyNdArray {
                 .any(|item| item.downcast_ref::<PySlice>().is_some());
 
             if has_ndarray {
-                // Multi-dimensional fancy indexing: a[arr1, arr2, ...]
-                // Also handles mixed: a[:, arr] or a[arr, 3]
                 return multi_dim_fancy_getitem(&data, items, vm);
             }
 
@@ -1692,11 +1779,22 @@ impl PyNdArray {
                     .iter()
                     .map(|item| py_obj_to_slice_arg(item, vm))
                     .collect::<PyResult<Vec<_>>>()?;
-                let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
+                let mut result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
+                if !newaxis_positions.is_empty() {
+                    let mut shape = result.shape().to_vec();
+                    for &pos in newaxis_positions.iter() {
+                        let p = if pos <= shape.len() { pos } else { shape.len() };
+                        shape.insert(p, 1);
+                    }
+                    if let Ok(reshaped) = result.reshape(&shape) {
+                        result = reshaped;
+                    }
+                    return Ok(PyNdArray::from_core(result).to_py(vm));
+                }
                 return Ok(ndarray_or_scalar(result, vm));
             }
 
-            // All integers
+            // All integers (with possible newaxis insertions)
             let mut indices = Vec::new();
             for item in items {
                 let i: i64 = item.clone().try_into_value(vm)?;
@@ -1819,17 +1917,139 @@ impl PyNdArray {
         Ok(ndarray_to_pylist(&data, vm))
     }
 
-    #[pymethod]
-    fn item(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-        let data = self.data.read().unwrap();
-        if data.size() != 1 {
-            return Err(vm.new_value_error(
-                "can only convert an array of size 1 to a Python scalar".to_owned(),
-            ));
+    #[pymethod(name = "__array_wrap__")]
+    fn array_wrap(
+        &self,
+        args: vm::function::FuncArgs,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let arr_obj = args.args.first().ok_or_else(|| {
+            vm.new_type_error("__array_wrap__ requires at least 1 argument".to_owned())
+        })?;
+        let return_scalar = if args.args.len() >= 3 {
+            let third = &args.args[2];
+            if vm.is_none(third) {
+                false
+            } else {
+                third.clone().try_into_value::<bool>(vm).unwrap_or(false)
+            }
+        } else {
+            false
+        };
+        if let Ok(arr) = arr_obj.clone().downcast::<PyNdArray>() {
+            let data = arr.data.read().unwrap();
+            if return_scalar && data.ndim() == 0 && data.size() == 1 {
+                let s = data.get(&[]).map_err(|e| numpy_err(e, vm))?;
+                let dname = data.dtype().to_string();
+                drop(data);
+                let py_val = scalar_to_py(s, vm);
+                if let Ok(numpy_mod) = vm.import("numpy", 0) {
+                    let numpy_obj: PyObjectRef = numpy_mod;
+                    let attr_name: &str = match dname.as_str() {
+                        "int8" => "int8",
+                        "int16" => "int16",
+                        "int32" => "int32",
+                        "int64" => "int64",
+                        "uint8" => "uint8",
+                        "uint16" => "uint16",
+                        "uint32" => "uint32",
+                        "uint64" => "uint64",
+                        "float16" => "float16",
+                        "float32" => "float32",
+                        "float64" => "float64",
+                        "bool" => "bool_",
+                        "complex64" => "complex64",
+                        "complex128" => "complex128",
+                        _ => "float64",
+                    };
+                    if let Ok(dtype_cls) = numpy_obj.get_attr(attr_name, vm) {
+                        if let Ok(result) = dtype_cls.call(vec![py_val.clone()], vm) {
+                            return Ok(result);
+                        }
+                    }
+                }
+                return Ok(py_val);
+            }
         }
-        let s = data
-            .get(&vec![0; data.ndim()])
-            .map_err(|e| numpy_err(e, vm))?;
+        Ok(arr_obj.clone())
+    }
+
+    #[pymethod]
+    fn item(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let data = self.data.read().unwrap();
+        if args.args.is_empty() {
+            if data.size() != 1 {
+                return Err(vm.new_value_error(
+                    "can only convert an array of size 1 to a Python scalar".to_owned(),
+                ));
+            }
+            let s = data
+                .get(&vec![0; data.ndim()])
+                .map_err(|e| numpy_err(e, vm))?;
+            return Ok(scalar_to_py(s, vm));
+        }
+        let mut indices: Vec<usize> = Vec::new();
+        if args.args.len() == 1 {
+            let arg = &args.args[0];
+            if let Some(tuple) = arg.downcast_ref::<PyTuple>() {
+                for elem in tuple.as_slice() {
+                    let idx: i64 = elem.clone().try_into_value(vm)?;
+                    let shape = data.shape();
+                    let dim_idx = indices.len();
+                    if dim_idx >= data.ndim() {
+                        return Err(vm.new_index_error("too many indices".to_owned()));
+                    }
+                    let dim = shape[dim_idx] as i64;
+                    let r = if idx < 0 { dim + idx } else { idx };
+                    if r < 0 || r >= dim {
+                        return Err(vm.new_index_error(format!(
+                            "index {} is out of bounds for axis {} with size {}",
+                            idx, dim_idx, dim
+                        )));
+                    }
+                    indices.push(r as usize);
+                }
+            } else {
+                let flat_idx: i64 = arg.clone().try_into_value(vm)?;
+                let total = data.size() as i64;
+                let r = if flat_idx < 0 {
+                    total + flat_idx
+                } else {
+                    flat_idx
+                };
+                if r < 0 || r >= total {
+                    return Err(vm.new_index_error(format!(
+                        "index {} is out of bounds for size {}",
+                        flat_idx, total
+                    )));
+                }
+                let mut rem = r as usize;
+                let shape = data.shape();
+                indices = vec![0; data.ndim()];
+                for d in (0..data.ndim()).rev() {
+                    indices[d] = rem % shape[d];
+                    rem /= shape[d];
+                }
+            }
+        } else {
+            let shape = data.shape();
+            for (d, arg) in args.args.iter().enumerate() {
+                if d >= data.ndim() {
+                    return Err(vm.new_index_error("too many indices".to_owned()));
+                }
+                let idx: i64 = arg.clone().try_into_value(vm)?;
+                let dim = shape[d] as i64;
+                let r = if idx < 0 { dim + idx } else { idx };
+                if r < 0 || r >= dim {
+                    return Err(vm.new_index_error(format!(
+                        "index {} is out of bounds for axis {} with size {}",
+                        idx, d, dim
+                    )));
+                }
+                indices.push(r as usize);
+            }
+        }
+        let s = data.get(&indices).map_err(|e| numpy_err(e, vm))?;
         Ok(scalar_to_py(s, vm))
     }
 
@@ -2258,12 +2478,20 @@ impl PyNdArray {
     // --- Tier 35 Group A methods ---
 
     #[pymethod]
-    fn put(
-        &self,
-        indices: PyRef<PyNdArray>,
-        values: PyRef<PyNdArray>,
-        vm: &VirtualMachine,
-    ) -> PyResult<()> {
+    fn put(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<()> {
+        if args.args.len() < 2 {
+            return Err(vm.new_type_error("put() requires at least 2 arguments".to_owned()));
+        }
+        let numpy_mod = vm.import("numpy", 0)?;
+        let asarray_fn = numpy_mod.get_attr("asarray", vm)?;
+        let idx_arr_obj = asarray_fn.call(vec![args.args[0].clone()], vm)?;
+        let indices = idx_arr_obj
+            .downcast::<PyNdArray>()
+            .map_err(|_| vm.new_type_error("indices must be array-like".to_owned()))?;
+        let val_arr_obj = asarray_fn.call(vec![args.args[1].clone()], vm)?;
+        let values = val_arr_obj
+            .downcast::<PyNdArray>()
+            .map_err(|_| vm.new_type_error("values must be array-like".to_owned()))?;
         let idx_data = indices.data.read().unwrap();
         let val_data = values.data.read().unwrap();
 
@@ -3168,7 +3396,7 @@ fn extract_int_indices(
             v as usize
         };
         if resolved >= dim_size {
-            return Err(vm.new_value_error(format!(
+            return Err(vm.new_index_error(format!(
                 "index {v} is out of bounds for axis with size {dim_size}"
             )));
         }

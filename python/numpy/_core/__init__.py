@@ -77,6 +77,19 @@ class flatiter:
         self._idx += 1
         return val
 
+    def __array__(self, dtype=None, copy=None):
+        """Return the flattened array."""
+        import numpy
+        result = self._arr.flatten()
+        if dtype is not None:
+            result = result.astype(str(dtype))
+        return result
+
+    def __len__(self):
+        if self._arr is None:
+            return 0
+        return self._arr.size
+
 
 def __getattr__(name):
     if hasattr(numpy, name):

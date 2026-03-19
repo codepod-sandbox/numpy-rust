@@ -570,6 +570,79 @@ class _ObjectArray:
         # Default: try to return self with new dtype
         return _ObjectArray(list(self._data), str(dtype) if not isinstance(dtype, str) else dtype, shape=self._shape)
 
+    def item(self, *args):
+        """Return element at given index as a Python scalar."""
+        if not args:
+            if self.size != 1:
+                raise ValueError("can only convert an array of size 1 to a Python scalar")
+            return self._data[0]
+        if len(args) == 1:
+            idx = args[0]
+            if isinstance(idx, tuple):
+                flat = self._flat_index(idx)
+                return self._data[flat]
+            idx = int(idx)
+            if idx < 0:
+                idx += self.size
+            if idx < 0 or idx >= self.size:
+                raise IndexError("index {} is out of bounds for size {}".format(args[0], self.size))
+            return self._data[idx]
+        raise ValueError("incorrect number of indices for array")
+
+    def take(self, indices, axis=None, out=None, mode='raise'):
+        """Take elements from array along an axis."""
+        import numpy as _np
+        if not isinstance(indices, (list, tuple)):
+            indices = [int(indices)]
+        else:
+            indices = [int(i) for i in indices]
+        if axis is not None:
+            dim_size = self._shape[axis]
+        else:
+            dim_size = self.size
+        result = []
+        for idx in indices:
+            if mode == 'wrap':
+                if dim_size == 0:
+                    raise IndexError("cannot take from a 0-length dimension")
+                idx = idx % dim_size
+            elif mode == 'clip':
+                if dim_size == 0:
+                    raise IndexError("cannot take from a 0-length dimension")
+                idx = max(0, min(idx, dim_size - 1))
+            else:
+                if idx < 0:
+                    idx += dim_size
+                if idx < 0 or idx >= dim_size:
+                    raise IndexError("index {} is out of bounds for axis with size {}".format(idx, dim_size))
+            result.append(self._data[idx])
+        return _ObjectArray(result, self._dtype)
+
+    def put(self, indices, values, mode='raise'):
+        """Replace specified elements of the array."""
+        if not isinstance(indices, (list, tuple)):
+            indices = [int(indices)]
+        if not isinstance(values, (list, tuple)):
+            values = [values]
+        n = self.size
+        nv = len(values)
+        for i_idx, idx in enumerate(indices):
+            idx = int(idx)
+            if mode == 'wrap':
+                if n == 0:
+                    return
+                idx = idx % n
+            elif mode == 'clip':
+                if n == 0:
+                    return
+                idx = max(0, min(idx, n - 1))
+            else:
+                if idx < 0:
+                    idx += n
+                if idx < 0 or idx >= n:
+                    raise IndexError("index {} is out of bounds for axis 0 with size {}".format(indices[i_idx], n))
+            self._data[idx] = values[i_idx % nv]
+
     def __repr__(self): return f"array({self._data!r}, dtype='{self._dtype}')"
 
 

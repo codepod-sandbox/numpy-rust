@@ -9,7 +9,7 @@ __version__ = "1.26.0"
 # Import from native Rust module
 import _numpy_native as _native
 from _numpy_native import ndarray
-from _numpy_native import dot
+from _numpy_native import dot as _native_dot
 from _numpy_native import concatenate as _native_concatenate
 from ._helpers import *
 from ._core_types import *
@@ -72,6 +72,24 @@ class __config__:
 # numpy 1.x compat: np.bool (deprecated, can't shadow builtin 'bool' in module
 # scope since isinstance checks recurse). We set it via __getattr__ below.
 
+
+# ---------------------------------------------------------------------------
+# Wrap native dot to handle non-ndarray inputs (e.g. flatiter)
+def dot(a, b, out=None):
+    """Dot product of two arrays."""
+    if type(a).__name__ == 'flatiter':
+        a = asarray(a)
+    elif not isinstance(a, ndarray):
+        a = asarray(a)
+    if type(b).__name__ == 'flatiter':
+        b = asarray(b)
+    elif not isinstance(b, ndarray):
+        b = asarray(b)
+    result = _native_dot(a, b)
+    if out is not None:
+        out[:] = result
+        return out
+    return result
 
 # ---------------------------------------------------------------------------
 # _parse_dtype_json, void scalar, StructuredArray wrapper

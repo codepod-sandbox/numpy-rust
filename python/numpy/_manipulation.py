@@ -875,13 +875,19 @@ def take(a, indices, axis=None, out=None, mode="raise"):
     if not isinstance(indices, ndarray):
         indices = asarray(indices).astype('int64')
     # Handle empty arrays or empty indices
-    if a.size == 0 or indices.size == 0:
+    if axis is not None:
+        ax = axis if axis >= 0 else a.ndim + axis
+        dim_size = a.shape[ax]
+        if dim_size == 0 and indices.size > 0:
+            raise IndexError("cannot take from a 0-length dimension")
+    elif a.size == 0 and indices.size > 0:
+        raise IndexError("cannot take from a 0-length dimension")
+    if indices.size == 0:
         if axis is None:
             return array([]).astype(a.dtype)
-        # Compute result shape: replace axis dim with len(indices)
         shape = list(a.shape)
         ax = axis if axis >= 0 else a.ndim + axis
-        shape[ax] = indices.size
+        shape[ax] = 0
         return zeros(shape, dtype=a.dtype)
     return _native.take(a, indices, axis)
 

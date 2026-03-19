@@ -593,9 +593,14 @@ class ufunc:
     def outer(self, a, b, **kwargs):
         if self.nin != 2:
             raise ValueError("outer only supported for binary functions")
-        a = asarray(a).ravel()
-        b = asarray(b).ravel()
-        result = self._func(a.reshape((-1, 1)), b.reshape((1, -1)))
+        a = asarray(a)
+        b = asarray(b)
+        a_shape = a.shape
+        b_shape = b.shape
+        # Reshape a to a.shape + (1,)*b.ndim and b to (1,)*a.ndim + b.shape
+        a_rs = a.reshape(a_shape + (1,) * len(b_shape))
+        b_rs = b.reshape((1,) * len(a_shape) + b_shape)
+        result = self._func(a_rs, b_rs)
         out = kwargs.get('out', None)
         if out is not None:
             out = out[0] if isinstance(out, tuple) else out

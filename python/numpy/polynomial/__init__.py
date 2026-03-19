@@ -608,24 +608,33 @@ def _polypow(c, n, maxpower=None):
         result = _polymul(result, c)
     return result
 
+def _validate_fit_args(x, y, w=None):
+    """Validate arguments for polynomial fitting functions."""
+    if x.ndim != 1:
+        raise TypeError("expected 1D vector for x")
+    if y.ndim > 2:
+        raise TypeError("expected 1D or 2D array for y")
+    if x.size == 0:
+        raise TypeError("expected non-empty vector for x")
+    if len(x) != (y.shape[0] if y.ndim > 0 else 1):
+        raise TypeError("expected x and y to have the same length")
+    if w is not None:
+        w_arr = np.asarray(w, dtype='float64')
+        if w_arr.ndim != 1:
+            raise TypeError("expected 1D vector for w")
+        if len(w_arr) != len(x):
+            raise TypeError("expected w and x to have the same length")
+
 def _polyval(x, c):
     x = np.asarray(x)
     c_list = list(np.asarray(c).flatten().tolist())
     if len(c_list) == 0:
-        return np.zeros(x.shape) if hasattr(x, 'shape') and len(x.shape) > 0 else 0.0
-    if hasattr(x, 'shape') and len(x.shape) > 0:
-        # Horner's method (ascending order)
-        result = np.full(x.shape, c_list[-1])
-        for i in range(len(c_list) - 2, -1, -1):
-            result = result * x + c_list[i]
-        return result
-    else:
-        # scalar
-        xv = float(x) if hasattr(x, 'item') else float(x)
-        result = float(c_list[-1])
-        for i in range(len(c_list) - 2, -1, -1):
-            result = result * xv + c_list[i]
-        return result
+        return np.zeros_like(x)
+    # Horner's method (ascending order) - works for any shape including 0-d
+    result = np.full(x.shape, c_list[-1]) + np.zeros_like(x)
+    for i in range(len(c_list) - 2, -1, -1):
+        result = result * x + c_list[i]
+    return result
 
 def _polyval2d(x, y, c):
     c = np.asarray(c)
@@ -903,6 +912,7 @@ def _polyfit(x, y, deg, w=None):
     """Fit polynomial (power series) of given degree."""
     x = np.asarray(x, dtype='float64')
     y = np.asarray(y, dtype='float64')
+    _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
         deg_list = list(np.asarray(deg).flatten().tolist())
         deg_list = [int(d) for d in deg_list]
@@ -1100,15 +1110,12 @@ def _chebval(x, c):
     x = np.asarray(x)
     c_list = list(np.asarray(c).flatten().tolist())
     if len(c_list) == 0:
-        return np.zeros_like(x) if hasattr(x, 'shape') else 0.0
+        return np.zeros_like(x)
     if len(c_list) == 1:
-        result = c_list[0]
-        if hasattr(x, 'shape') and len(x.shape) > 0:
-            return np.full(x.shape, result)
-        return float(result)
+        return np.full(x.shape, c_list[0]) + np.zeros_like(x)
     nd = len(c_list)
-    c0 = float(c_list[-2])
-    c1 = float(c_list[-1])
+    c0 = np.asarray(c_list[-2]) + np.zeros_like(x)
+    c1 = np.asarray(c_list[-1]) + np.zeros_like(x)
     x2 = x * 2.0
     for i in range(3, nd + 1):
         tmp = c0
@@ -1376,8 +1383,11 @@ def _chebroots(c):
         return np.array([])
     if len(c) == 2:
         return np.array([-c[0] / c[1]])
-    poly_c = _cheb2poly(c)
-    return _polyroots(list(poly_c.flatten().tolist()))
+    m = _chebcompanion(c)
+    r = np.linalg.eigvals(m)
+    r_list = list(r.flatten().tolist())
+    r_list.sort(key=lambda x: (x.real if isinstance(x, complex) else x, x.imag if isinstance(x, complex) else 0))
+    return np.array(r_list)
 
 def _chebcompanion(c):
     c = list(np.asarray(c).flatten().tolist())
@@ -1385,8 +1395,26 @@ def _chebcompanion(c):
         c.pop()
     if len(c) < 2:
         raise ValueError("Series must have maximum degree >= 1")
-    poly_c = _cheb2poly(c)
-    return _polycompanion(list(poly_c.flatten().tolist()))
+    n = len(c) - 1
+    mat = np.zeros((n, n))
+    if n == 1:
+        mat[0, 0] = -c[0] / c[1]
+        return mat
+    import math
+    sqrt_half = math.sqrt(0.5)
+    # Build symmetric Chebyshev companion matrix (scaled form)
+    scl = [1.0] + [sqrt_half] * (n - 1)
+    # Super-diagonal: [sqrt(0.5), 0.5, 0.5, ...]
+    # Sub-diagonal: same (symmetric)
+    mat[0, 1] = sqrt_half
+    mat[1, 0] = sqrt_half
+    for i in range(1, n - 1):
+        mat[i, i + 1] = 0.5
+        mat[i + 1, i] = 0.5
+    # Modify last column
+    for j in range(n):
+        mat[j, n - 1] -= (c[j] / c[n]) * (scl[j] / scl[n - 1]) * 0.5
+    return mat
 
 def _chebvander(x, deg):
     x = np.asarray(x)
@@ -1394,7 +1422,12 @@ def _chebvander(x, deg):
     if deg < 0:
         raise ValueError("deg must be non-negative")
     shape = x.shape + (deg + 1,)
-    v = np.zeros(shape)
+    # Use same dtype as x (important for complex inputs)
+    _dt = str(x.dtype) if hasattr(x, 'dtype') else None
+    if _dt and 'complex' in _dt:
+        v = np.zeros(shape, dtype=x.dtype)
+    else:
+        v = np.zeros(shape)
     _set_last(v, 0, np.ones(x.shape) if len(x.shape) > 0 else 1.0)
     if deg >= 1:
         _set_last(v, 1, x)
@@ -1436,8 +1469,14 @@ def _chebvander3d(x, y, z, deg):
     return v
 
 def _chebfit(x, y, deg, w=None):
-    x = np.asarray(x, dtype='float64')
-    y = np.asarray(y, dtype='float64')
+    x = np.asarray(x)
+    y = np.asarray(y)
+    # Only cast to float64 if not complex
+    if not (hasattr(x, 'dtype') and 'complex' in str(x.dtype)):
+        x = np.asarray(x, dtype='float64')
+    if not (hasattr(y, 'dtype') and 'complex' in str(y.dtype)):
+        y = np.asarray(y, dtype='float64')
+    _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
         deg_list = list(np.asarray(deg).flatten().tolist())
         deg_list = [int(d) for d in deg_list]
@@ -1709,11 +1748,11 @@ def _legval(x, c):
     x = np.asarray(x)
     c_list = list(np.asarray(c).flatten().tolist())
     if len(c_list) == 0:
-        return np.zeros_like(x) if hasattr(x, 'shape') else 0.0
+        return np.zeros_like(x)
     if len(c_list) == 1:
-        return np.full(x.shape, c_list[0]) if hasattr(x, 'shape') and len(x.shape) > 0 else float(c_list[0])
+        return np.full(x.shape, c_list[0]) + np.zeros_like(x)
     nd = len(c_list)
-    p0 = np.ones(x.shape) if hasattr(x, 'shape') else 1.0
+    p0 = np.ones(x.shape) + np.zeros_like(x)
     p1 = x * 1.0
     result = c_list[0] * p0 + c_list[1] * p1
     for i in range(2, nd):
@@ -1852,6 +1891,7 @@ def _legvander(x, deg):
 def _legfit(x, y, deg, w=None):
     x = np.asarray(x, dtype='float64')
     y = np.asarray(y, dtype='float64')
+    _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
         deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")
@@ -2125,8 +2165,8 @@ def _hermval(x, c):
     c_list = list(np.asarray(c).flatten().tolist())
     if len(c_list) == 0: return np.zeros_like(x)
     if len(c_list) == 1:
-        return np.full(x.shape, c_list[0]) if hasattr(x, 'shape') and len(x.shape) > 0 else float(c_list[0])
-    h0 = np.ones(x.shape) if hasattr(x, 'shape') else 1.0
+        return np.full(x.shape, c_list[0]) + np.zeros_like(x)
+    h0 = np.ones(x.shape) + np.zeros_like(x)
     h1 = x * 2.0
     result = c_list[0] * h0 + c_list[1] * h1
     for i in range(2, len(c_list)):
@@ -2203,9 +2243,12 @@ def _hermder(c, m=1, scl=1, axis=0):
     return np.array(c)
 
 def _hermint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
-    if isinstance(m, float): raise TypeError("m must be an integer, not float")
+    if isinstance(m, float) or (hasattr(m, 'is_integer') and not isinstance(m, int)):
+        raise TypeError("m must be an integer, not float")
     m = int(m)
     if m < 0: raise ValueError("m must be non-negative")
+    if isinstance(axis, float) or (hasattr(axis, 'is_integer') and not isinstance(axis, int)):
+        raise TypeError("axis must be an integer")
     c = np.asarray(c)
     if isinstance(k, (int, float)): k = [k]
     if isinstance(lbnd, (list, tuple, np.ndarray)): raise ValueError("lbnd must be a scalar")
@@ -2254,6 +2297,7 @@ def _hermvander(x, deg):
 def _hermfit(x, y, deg, w=None):
     x = np.asarray(x, dtype='float64')
     y = np.asarray(y, dtype='float64')
+    _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
         deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")
@@ -2452,8 +2496,8 @@ def _hermeval(x, c):
     c_list = list(np.asarray(c).flatten().tolist())
     if len(c_list) == 0: return np.zeros_like(x)
     if len(c_list) == 1:
-        return np.full(x.shape, c_list[0]) if hasattr(x, 'shape') and len(x.shape) > 0 else float(c_list[0])
-    h0 = np.ones(x.shape) if hasattr(x, 'shape') else 1.0
+        return np.full(x.shape, c_list[0]) + np.zeros_like(x)
+    h0 = np.ones(x.shape) + np.zeros_like(x)
     h1 = x * 1.0
     result = c_list[0] * h0 + c_list[1] * h1
     for i in range(2, len(c_list)):
@@ -2576,6 +2620,7 @@ def _hermevander(x, deg):
 def _hermefit(x, y, deg, w=None):
     x = np.asarray(x, dtype='float64')
     y = np.asarray(y, dtype='float64')
+    _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
         deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")
@@ -2776,8 +2821,8 @@ def _lagval(x, c):
     c_list = list(np.asarray(c).flatten().tolist())
     if len(c_list) == 0: return np.zeros_like(x)
     if len(c_list) == 1:
-        return np.full(x.shape, c_list[0]) if hasattr(x, 'shape') and len(x.shape) > 0 else float(c_list[0])
-    l0 = np.ones(x.shape) if hasattr(x, 'shape') else 1.0
+        return np.full(x.shape, c_list[0]) + np.zeros_like(x)
+    l0 = np.ones(x.shape) + np.zeros_like(x)
     l1 = (np.ones(x.shape) if hasattr(x, 'shape') else 1.0) - x
     result = c_list[0] * l0 + c_list[1] * l1
     for i in range(2, len(c_list)):
@@ -2913,6 +2958,7 @@ def _lagvander(x, deg):
 def _lagfit(x, y, deg, w=None):
     x = np.asarray(x, dtype='float64')
     y = np.asarray(y, dtype='float64')
+    _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
         deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")

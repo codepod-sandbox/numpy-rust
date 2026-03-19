@@ -278,6 +278,16 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     return result
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
+    # Handle flatiter: convert to flattened array
+    if type(data).__name__ == 'flatiter':
+        if hasattr(data, '_arr'):
+            # Python flatiter
+            arr = data._arr.flatten() if data._arr is not None else ndarray._native([])
+            return _array_core(arr, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
+        else:
+            # Rust flatiter - iterate to list
+            vals = list(data)
+            return _array_core(vals, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
     # Support __array__ protocol: objects with __array__() method
     if (not isinstance(data, (ndarray, _ObjectArray, list, tuple, int, float, complex, bool, str, bytes))
             and hasattr(data, '__array__')):
