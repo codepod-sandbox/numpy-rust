@@ -88,6 +88,76 @@ class MaskedConstant:
     def __hash__(self):
         return hash('--')
 
+    # Arithmetic with masked always returns masked
+    def __add__(self, other): return self
+    def __radd__(self, other): return self
+    def __sub__(self, other): return self
+    def __rsub__(self, other): return self
+    def __mul__(self, other): return self
+    def __rmul__(self, other): return self
+    def __truediv__(self, other): return self
+    def __rtruediv__(self, other): return self
+    def __floordiv__(self, other): return self
+    def __rfloordiv__(self, other): return self
+    def __mod__(self, other): return self
+    def __rmod__(self, other): return self
+    def __pow__(self, other): return self
+    def __rpow__(self, other): return self
+    def __neg__(self): return self
+    def __pos__(self): return self
+    def __abs__(self): return self
+    def __lt__(self, other): return self
+    def __le__(self, other): return self
+    def __gt__(self, other): return self
+    def __ge__(self, other): return self
+    def __int__(self): raise MaskError("Cannot convert masked to int")
+    def __float__(self): return float('nan')
+
+    @property
+    def dtype(self):
+        import numpy as np
+        return np.dtype('float64')
+
+    @property
+    def data(self):
+        import numpy as np
+        return np.array(0.0)
+
+    @property
+    def _data(self):
+        import numpy as np
+        return np.array(0.0)
+
+    @property
+    def mask(self):
+        return True
+
+    @property
+    def _mask(self):
+        return True
+
+    @property
+    def shape(self):
+        return ()
+
+    @property
+    def ndim(self):
+        return 0
+
+    @property
+    def size(self):
+        return 1
+
+    def __array__(self, dtype=None, copy=None):
+        import numpy as np
+        return np.array(float('nan'))
+
+    def view(self, *args, **kwargs):
+        return self
+
+    def __getitem__(self, key):
+        return self
+
 
 masked = MaskedConstant()
 masked_singleton = masked
@@ -119,7 +189,10 @@ class MaskedArray:
             # broadcast mask to data shape if needed
             if self.mask.shape != self.data.shape:
                 self.mask = np.broadcast_to(self.mask, self.data.shape).copy()
-        self._fill_value = fill_value if fill_value is not None else _default_fill_value_for(self.data)
+        if fill_value is not None:
+            self._fill_value = _check_fill_value(fill_value, self.data.dtype)
+        else:
+            self._fill_value = _default_fill_value_for(self.data)
         self._hardmask = hard_mask
 
     # -- properties --
@@ -161,7 +234,7 @@ class MaskedArray:
 
     @fill_value.setter
     def fill_value(self, value):
-        self._fill_value = value
+        self._fill_value = _check_fill_value(value, self.data.dtype)
 
     @property
     def baseclass(self):
@@ -173,8 +246,36 @@ class MaskedArray:
         return self._hardmask
 
     @property
+    def flags(self):
+        return self.data.flags
+
+    @property
     def _data(self):
         return self.data
+
+    @property
+    def _mask(self):
+        return self.mask
+
+    @_mask.setter
+    def _mask(self, value):
+        import numpy as np
+        if value is None or value is nomask:
+            self.mask = np.zeros(self.data.shape, dtype="bool")
+        elif isinstance(value, bool) and not value:
+            self.mask = np.zeros(self.data.shape, dtype="bool")
+        elif isinstance(value, bool) and value:
+            self.mask = np.ones(self.data.shape, dtype="bool")
+        else:
+            self.mask = np.asarray(value, dtype="bool")
+            if self.mask.shape != self.data.shape:
+                self.mask = np.broadcast_to(self.mask, self.data.shape).copy()
+
+    @property
+    def _optinfo(self):
+        if not hasattr(self, '_optinfo_dict'):
+            self._optinfo_dict = {}
+        return self._optinfo_dict
 
     @property
     def sharedmask(self):
@@ -210,11 +311,23 @@ class MaskedArray:
         result = self.data.copy()
         if not _any_true(self.mask):
             return result
+        # Convert fill value to a native Python type matching the array's dtype
+        if isinstance(fv, np.ndarray):
+            fv_native = fv.flatten().tolist()[0]
+            if isinstance(fv_native, tuple):
+                fv_native = complex(fv_native[0], fv_native[1])
+        else:
+            fv_native = fv
+        dt_kind = str(self.data.dtype.kind) if hasattr(self.data.dtype, 'kind') else ''
+        if dt_kind in ('f',) and isinstance(fv_native, int):
+            fv_native = float(fv_native)
+        elif dt_kind in ('i', 'u') and isinstance(fv_native, float):
+            fv_native = int(fv_native)
         mask_flat = self.mask.flatten().tolist()
         result_flat = result.flatten().tolist()
         for i in range(len(result_flat)):
             if mask_flat[i]:
-                result_flat[i] = fv
+                result_flat[i] = fv_native
         return np.array(result_flat, dtype=self.data.dtype).reshape(self.data.shape)
 
     def compressed(self):
@@ -318,7 +431,12 @@ class MaskedArray:
     # -- shape manipulation --
 
     def flatten(self, order='C'):
-        return MaskedArray(self.data.flatten(), mask=self.mask.flatten(),
+        import numpy as np
+        if isinstance(self.mask, np.ndarray):
+            m = self.mask.flatten()
+        else:
+            m = self.mask
+        return MaskedArray(self.data.flatten(), mask=m,
                            fill_value=self._fill_value)
 
     def ravel(self, order='C'):
@@ -408,52 +526,91 @@ class MaskedArray:
 
     # -- comparison --
 
-    def __eq__(self, other):
+    def _comparison(self, other, compare):
+        """Compare self with other using a comparison operator.
+
+        For == and !=, masked positions get data values based on whether
+        both sides are masked (considered equal) or only one side is masked
+        (considered unequal).  For other comparisons, raw data comparison
+        is kept at masked positions.
+        """
         import numpy as np
-        if isinstance(other, MaskedArray):
-            return MaskedArray(self.data == other.data,
-                               mask=np.logical_or(self.mask, other.mask))
-        return MaskedArray(self.data == other, mask=self.mask)
+        import operator as _op
+
+        # MaskedConstant: entire result is masked
+        if isinstance(other, MaskedConstant):
+            if self.ndim == 0:
+                return masked
+            mask = np.ones(self.data.shape, dtype='bool')
+            if compare in (_op.eq, _op.ne):
+                smask = self.mask if isinstance(self.mask, np.ndarray) else (np.ones(self.data.shape, dtype='bool') if self.mask else np.zeros(self.data.shape, dtype='bool'))
+                om = np.ones(smask.shape, dtype='bool')
+                check = compare(smask, om)
+            else:
+                check = np.zeros(self.data.shape, dtype='bool')
+            return MaskedArray(check, mask=mask, fill_value=True)
+
+        omask = getmask(other)
+        smask = self.mask if isinstance(self.mask, np.ndarray) else (np.ones(self.data.shape, dtype='bool') if self.mask else np.zeros(self.data.shape, dtype='bool'))
+        odata = getdata(other)
+        mask = mask_or(smask, omask)
+
+        check = compare(self.data, odata)
+
+        if isinstance(check, (bool, int)):
+            if _any_true(mask):
+                return masked
+            return check
+
+        if _any_true(mask):
+            if compare in (_op.eq, _op.ne):
+                # At masked positions, consider equal if both masked,
+                # unequal if only one masked.
+                if isinstance(omask, np.ndarray):
+                    check = np.where(mask, compare(smask, omask), check)
+                elif omask is nomask or (isinstance(omask, bool) and not omask):
+                    om = np.zeros(smask.shape, dtype='bool')
+                    check = np.where(mask, compare(smask, om), check)
+                else:
+                    om = np.ones(smask.shape, dtype='bool')
+                    check = np.where(mask, compare(smask, om), check)
+
+            if isinstance(mask, np.ndarray) and mask.shape != check.shape:
+                mask = np.broadcast_to(mask, check.shape).copy()
+
+        return MaskedArray(check, mask=mask, fill_value=True)
+
+    def __eq__(self, other):
+        import operator
+        return self._comparison(other, operator.eq)
 
     def __ne__(self, other):
-        import numpy as np
-        if isinstance(other, MaskedArray):
-            return MaskedArray(self.data != other.data,
-                               mask=np.logical_or(self.mask, other.mask))
-        return MaskedArray(self.data != other, mask=self.mask)
+        import operator
+        return self._comparison(other, operator.ne)
 
     def __lt__(self, other):
-        import numpy as np
-        if isinstance(other, MaskedArray):
-            return MaskedArray(self.data < other.data,
-                               mask=np.logical_or(self.mask, other.mask))
-        return MaskedArray(self.data < other, mask=self.mask)
+        import operator
+        return self._comparison(other, operator.lt)
 
     def __le__(self, other):
-        import numpy as np
-        if isinstance(other, MaskedArray):
-            return MaskedArray(self.data <= other.data,
-                               mask=np.logical_or(self.mask, other.mask))
-        return MaskedArray(self.data <= other, mask=self.mask)
+        import operator
+        return self._comparison(other, operator.le)
 
     def __gt__(self, other):
-        import numpy as np
-        if isinstance(other, MaskedArray):
-            return MaskedArray(self.data > other.data,
-                               mask=np.logical_or(self.mask, other.mask))
-        return MaskedArray(self.data > other, mask=self.mask)
+        import operator
+        return self._comparison(other, operator.gt)
 
     def __ge__(self, other):
-        import numpy as np
-        if isinstance(other, MaskedArray):
-            return MaskedArray(self.data >= other.data,
-                               mask=np.logical_or(self.mask, other.mask))
-        return MaskedArray(self.data >= other, mask=self.mask)
+        import operator
+        return self._comparison(other, operator.ge)
 
     # -- arithmetic --
 
     def _binop(self, other, op):
         import numpy as np
+        if isinstance(other, MaskedConstant):
+            # Operation with masked → result is fully masked
+            return MaskedArray(self.data, mask=True, fill_value=self._fill_value)
         if isinstance(other, MaskedArray):
             d = op(self.data, other.data)
             m = np.logical_or(self.mask, other.mask)
@@ -503,8 +660,11 @@ class MaskedArray:
                            fill_value=self._fill_value)
 
     def astype(self, dtype, order='K', casting='unsafe', subok=True, copy=True):
-        return MaskedArray(self.data.astype(dtype), mask=self.mask,
-                           fill_value=self._fill_value)
+        import numpy as np
+        dt = np.dtype(dtype)
+        new_data = self.data.astype(str(dt))
+        new_fv = _check_fill_value(self._fill_value, new_data.dtype)
+        return MaskedArray(new_data, mask=self.mask, fill_value=new_fv)
 
     def tolist(self):
         if self.ndim == 0:
@@ -676,10 +836,38 @@ class MaskedArray:
     # -- repr --
 
     def __repr__(self):
-        return "masked_array(data={}, mask={})".format(
-            self.data.tolist(), self.mask.tolist())
+        import numpy as np
+        if self.ndim == 0:
+            if isinstance(self.mask, np.ndarray):
+                is_masked = bool(self.mask.flatten().tolist()[0]) if self.mask.size > 0 else False
+            else:
+                is_masked = bool(self.mask)
+            if is_masked:
+                return str(masked_print_option)
+            return repr(self.data.tolist())
+        # Build data representation with masked values shown as '--'
+        data_list = self.data.flatten().tolist()
+        mask_list = self.mask.flatten().tolist() if isinstance(self.mask, np.ndarray) else [bool(self.mask)] * len(data_list)
+        displayed = []
+        for d, m in zip(data_list, mask_list):
+            if m:
+                displayed.append('--')
+            else:
+                displayed.append(repr(d))
+        return "masked_array(data=[{}], mask={})".format(
+            ', '.join(displayed),
+            self.mask.tolist() if isinstance(self.mask, np.ndarray) else self.mask)
 
     def __str__(self):
+        import numpy as np
+        if self.ndim == 0:
+            if isinstance(self.mask, np.ndarray):
+                is_masked = bool(self.mask.flatten().tolist()[0]) if self.mask.size > 0 else False
+            else:
+                is_masked = bool(self.mask)
+            if is_masked:
+                return str(masked_print_option)
+            return str(self.data.tolist())
         return self.__repr__()
 
     def __array__(self, dtype=None):
@@ -773,19 +961,56 @@ def _default_fill_value_for(data):
     try:
         dt = np.asarray(data).dtype
     except Exception:
-        return 1e20
+        return np.full([], 1e20, 'float64')
     kind = str(dt.kind) if hasattr(dt, 'kind') else str(dt)[0]
+    dt_str = str(dt)
     if kind in ('i', 'u'):
-        return 999999
+        return np.full([], 999999.0, 'float64').astype(dt_str)
     if kind == 'f':
-        return 1e20
+        return np.full([], 1e20, dt_str)
     if kind == 'c':
-        return complex(1e20, 0)
+        return np.full([], 1e20, dt_str)
     if kind in ('U', 'S', 'O'):
         return 'N/A'
     if kind == 'b':
-        return True
-    return 1e20
+        return np.full([], 1.0, 'float64').astype('bool')
+    if kind == 'M':
+        return 'NaT'
+    if kind == 'm':
+        return 'NaT'
+    return np.full([], 1e20, 'float64')
+
+
+def _check_fill_value(value, dtype):
+    """Cast fill_value to the given dtype, returning an array scalar."""
+    import numpy as np
+    if value is None:
+        return _default_fill_value_for(np.zeros(0, dtype=dtype))
+    if isinstance(value, str):
+        return value
+    try:
+        dt_str = str(np.dtype(dtype))
+        # If value is already a 0-d ndarray with the correct dtype, return as-is
+        if isinstance(value, np.ndarray) and value.ndim == 0 and str(value.dtype) == dt_str:
+            return value
+        # Convert value to float, then use np.full([], ...) for proper 0-d array
+        # (reshape(()) has a bug that loses dtype for int8/int16/etc.)
+        if isinstance(value, (int, float, bool)):
+            v = float(value)
+        elif isinstance(value, complex):
+            v = value.real
+        elif isinstance(value, np.ndarray):
+            elem = value.flatten().tolist()[0]
+            if isinstance(elem, tuple):
+                # Complex array: tolist returns (real, imag) tuples
+                v = float(elem[0])
+            else:
+                v = float(elem)
+        else:
+            v = float(value)
+        return np.full([], v, 'float64').astype(dt_str)
+    except (TypeError, ValueError):
+        return _default_fill_value_for(np.zeros(0, dtype=dtype))
 
 
 def default_fill_value(obj):
@@ -1095,6 +1320,9 @@ isarray = isMaskedArray
 
 def getdata(a, subok=True):
     """Return data of a masked array as ndarray."""
+    if isinstance(a, MaskedConstant):
+        import numpy as np
+        return np.array(0.0)
     if isinstance(a, MaskedArray):
         return a.data
     import numpy as np
@@ -1103,6 +1331,8 @@ def getdata(a, subok=True):
 
 def getmask(a):
     """Return the mask of a masked array, or nomask."""
+    if isinstance(a, MaskedConstant):
+        return True
     if isinstance(a, MaskedArray):
         if _any_true(a.mask):
             return a.mask
@@ -1702,17 +1932,48 @@ alltrue = all
 sometrue = any
 
 def allequal(a, b, fill_value=True):
-    """Test whether two arrays are element-wise equal (ignoring masked)."""
+    """Test whether two arrays are element-wise equal.
+
+    If fill_value is True (default), masked values are considered equal.
+    If fill_value is False, masked values make the comparison False.
+    """
     import numpy as np
-    if isinstance(a, MaskedArray):
-        a = a.compressed()
-    if isinstance(b, MaskedArray):
-        b = b.compressed()
-    a = np.asarray(a)
-    b = np.asarray(b)
-    if a.size != b.size:
-        return False
-    return bool(np.all(a == b))
+    ma = getmaskarray(a) if isinstance(a, MaskedArray) else np.zeros(np.asarray(a).shape, dtype='bool')
+    mb = getmaskarray(b) if isinstance(b, MaskedArray) else np.zeros(np.asarray(b).shape, dtype='bool')
+    da = getdata(a) if isinstance(a, MaskedArray) else np.asarray(a)
+    db = getdata(b) if isinstance(b, MaskedArray) else np.asarray(b)
+
+    if fill_value:
+        # Masked values are considered equal: only compare unmasked positions
+        m = np.logical_or(ma, mb)
+        if _any_true(m):
+            # Only compare where both are unmasked
+            not_m = np.logical_not(m)
+            if not _any_true(not_m):
+                return True  # All masked
+            da_flat = da.flatten().tolist()
+            db_flat = db.flatten().tolist()
+            m_flat = not_m.flatten().tolist()
+            for i in range(len(da_flat)):
+                if m_flat[i] and da_flat[i] != db_flat[i]:
+                    return False
+            return True
+        return bool(np.all(da == db))
+    else:
+        # Masked values make equality False: masks must match exactly
+        if not bool(np.all(ma == mb)):
+            return False
+        # Compare data at unmasked positions
+        if _any_true(ma):
+            not_m = np.logical_not(ma)
+            da_flat = da.flatten().tolist()
+            db_flat = db.flatten().tolist()
+            m_flat = not_m.flatten().tolist()
+            for i in range(len(da_flat)):
+                if m_flat[i] and da_flat[i] != db_flat[i]:
+                    return False
+            return True
+        return bool(np.all(da == db))
 
 def allclose(a, b, masked_equal=True, rtol=1e-5, atol=1e-8):
     import numpy as np
@@ -2637,7 +2898,8 @@ class _CoreModule:
             return getattr(ma, name)
         raise AttributeError("module 'numpy.ma.core' has no attribute '{}'".format(name))
 
-_sys.modules['numpy.ma.core'] = _CoreModule()
+core = _CoreModule()
+_sys.modules['numpy.ma.core'] = core
 
 
 class _ExtrasModule:
@@ -2648,4 +2910,5 @@ class _ExtrasModule:
             return getattr(ma, name)
         raise AttributeError("module 'numpy.ma.extras' has no attribute '{}'".format(name))
 
-_sys.modules['numpy.ma.extras'] = _ExtrasModule()
+extras = _ExtrasModule()
+_sys.modules['numpy.ma.extras'] = extras

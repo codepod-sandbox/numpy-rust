@@ -374,18 +374,20 @@ def convolve(a, v, mode='full'):
     """Discrete, linear convolution of two one-dimensional sequences."""
     a = asarray(a).flatten()
     v = asarray(v).flatten()
-    # Normalize mode: support integer and abbreviated string modes
+    # Validate empty inputs
+    if len(a) == 0:
+        raise ValueError("a cannot be empty")
+    if len(v) == 0:
+        raise ValueError("v cannot be empty")
+    # Normalize mode: support integer modes
     if isinstance(mode, int):
         _mode_map = {0: 'valid', 1: 'same', 2: 'full'}
         if mode not in _mode_map:
             raise ValueError("mode must be 0, 1, or 2")
         mode = _mode_map[mode]
     elif isinstance(mode, str):
-        _abbrev = {'v': 'valid', 's': 'same', 'f': 'full'}
-        if mode in _abbrev:
-            import warnings as _w
-            _w.warn("Use of abbreviated mode '{}' is deprecated. Use the full string.".format(mode), DeprecationWarning, stacklevel=3)
-            mode = _abbrev[mode]
+        if mode not in ('full', 'same', 'valid'):
+            raise ValueError("mode must be 'full', 'same', or 'valid', got '" + str(mode) + "'")
     elif mode is None:
         raise TypeError("mode must not be None")
     na = len(a)
@@ -438,11 +440,8 @@ def correlate(a, v, mode='valid'):
             raise ValueError("mode must be 0, 1, or 2")
         mode = _mode_map[mode]
     elif isinstance(mode, str):
-        _abbrev = {'v': 'valid', 's': 'same', 'f': 'full'}
-        if mode in _abbrev:
-            import warnings as _w
-            _w.warn("Use of abbreviated mode '{}' is deprecated. Use the full string.".format(mode), DeprecationWarning, stacklevel=2)
-            mode = _abbrev[mode]
+        if mode not in ('full', 'same', 'valid'):
+            raise ValueError("mode must be 'full', 'same', or 'valid', got '" + str(mode) + "'")
     elif mode is None:
         raise TypeError("mode must not be None")
     na = a.size

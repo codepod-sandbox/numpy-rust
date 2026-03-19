@@ -259,6 +259,31 @@ class StructuredArray:
         from ._helpers import _ArrayFlags
         return _ArrayFlags(c_contiguous=True, f_contiguous=False)
 
+    def copy(self):
+        """Return a deep copy of this structured array."""
+        native = object.__getattribute__(self, '_native_arr')
+        py_shape = object.__getattribute__(self, '_py_shape')
+        # Create a new native array by copying field data
+        new_native = native.copy() if hasattr(native, 'copy') else native
+        return StructuredArray(new_native, py_shape=py_shape)
+
+    def flatten(self):
+        """Return a flattened copy of the structured array."""
+        native = object.__getattribute__(self, '_native_arr')
+        return StructuredArray(native)
+
+    @property
+    def size(self):
+        s = self.shape
+        result = 1
+        for d in s:
+            result *= d
+        return result
+
+    def astype(self, dtype):
+        """Return a copy with the given dtype (stub — returns self for same dtype)."""
+        return self.copy()
+
     def tolist(self):
         """Return the array as a nested Python list of tuples."""
         dt = object.__getattribute__(self, 'dtype')

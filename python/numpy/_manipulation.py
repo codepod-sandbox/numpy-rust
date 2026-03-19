@@ -246,19 +246,20 @@ def stack(arrays, axis=0, out=None):
 
 
 def vstack(tup):
-    arrs = [asarray(a) for a in tup]
-    # For 1D inputs, reshape to 2D first (row vectors)
-    expanded = []
-    for a in arrs:
-        if a.ndim == 1:
-            expanded.append(a.reshape([1, a.shape[0]]))
-        else:
-            expanded.append(a)
-    return concatenate(expanded, 0)
+    if not isinstance(tup, (list, tuple)):
+        raise TypeError("arrays to stack must be passed as a list or tuple, not " + type(tup).__name__)
+    arrs = [atleast_2d(asarray(a)) for a in tup]
+    if len(arrs) == 0:
+        raise ValueError("need at least one array to concatenate")
+    return concatenate(arrs, 0)
 
 
 def hstack(tup):
-    arrs = [asarray(a) for a in tup]
+    if not isinstance(tup, (list, tuple)):
+        raise TypeError("arrays to stack must be passed as a list or tuple, not " + type(tup).__name__)
+    arrs = [atleast_1d(asarray(a)) for a in tup]
+    if len(arrs) == 0:
+        raise ValueError("need at least one array to concatenate")
     if arrs[0].ndim > 1:
         return concatenate(arrs, 1)
     return concatenate(arrs, 0)
@@ -321,33 +322,102 @@ def dsplit(ary, indices_or_sections):
 
 
 def block(arrays):
-    """Assemble an nd-array from nested lists of blocks."""
+    """Assemble an nd-array from nested lists of blocks.
+
+    Follows NumPy's algorithm: determine list_ndim (nesting depth) and
+    result_ndim = max(list_ndim, max leaf ndim), then promote all leaves
+    to result_ndim dimensions and concatenate bottom-up.
+    """
     if isinstance(arrays, ndarray):
         return arrays
-    if not isinstance(arrays, list):
-        return asarray(arrays)
     if isinstance(arrays, tuple):
         raise TypeError("tuple is not allowed, use lists instead")
+    if not isinstance(arrays, list):
+        return asarray(arrays)
     if len(arrays) == 0:
         raise ValueError("block requires at least one element but got empty list")
-    def _has_empty(lst):
+
+    def _check_tuples(lst):
+        """Check for tuples (not allowed in block)."""
+        for item in lst:
+            if isinstance(item, tuple):
+                raise TypeError("tuple is not allowed, use lists instead")
+            if isinstance(item, list):
+                _check_tuples(item)
+    _check_tuples(arrays)
+
+    def _block_depth(lst):
+        if not isinstance(lst, list):
+            return 0
+        if len(lst) == 0:
+            return 1
+        return 1 + _block_depth(lst[0])
+
+    def _check_depths(lst, parent_depth=0):
+        if not isinstance(lst, list):
+            return
+        depths = []
+        for item in lst:
+            depths.append(_block_depth(item))
+        if len(set(depths)) > 1:
+            raise ValueError(
+                "List depths are mismatched. First element was at depth "
+                "{}, but there is an element at depth {}".format(
+                    depths[0] + parent_depth,
+                    [d for d in depths if d != depths[0]][0] + parent_depth))
+        for item in lst:
+            if isinstance(item, list):
+                _check_depths(item, parent_depth + 1)
+
+    _check_depths(arrays)
+
+    def _check_empty(lst):
         """Check for empty sub-lists."""
         for item in lst:
-            if isinstance(item, list) and len(item) == 0:
-                return True
-        return False
-    if _has_empty(arrays):
-        raise ValueError("block requires at least one element but got empty list")
-    if isinstance(arrays[0], list):
-        rows = []
-        for row_blocks in arrays:
-            if isinstance(row_blocks, list) and len(row_blocks) == 0:
-                raise ValueError("block requires at least one element but got empty list")
-            row = hstack([asarray(b) for b in row_blocks])
-            rows.append(row)
-        return vstack(rows)
-    else:
-        return concatenate([asarray(a) for a in arrays])
+            if isinstance(item, list):
+                if len(item) == 0:
+                    raise ValueError("block requires at least one element but got empty list")
+                _check_empty(item)
+    _check_empty(arrays)
+
+    # Collect all leaf arrays and find max ndim
+    list_ndim = _block_depth(arrays)
+
+    def _collect_leaves(lst):
+        if not isinstance(lst, list):
+            return [atleast_1d(asarray(lst))]
+        result = []
+        for item in lst:
+            result.extend(_collect_leaves(item))
+        return result
+
+    leaves = _collect_leaves(arrays)
+    max_leaf_ndim = _builtin_max(a.ndim for a in leaves) if leaves else 0
+    result_ndim = _builtin_max(list_ndim, max_leaf_ndim)
+
+    def _block_rec(lst, depth):
+        """Recursively assemble blocks."""
+        if not isinstance(lst, list):
+            a = atleast_1d(asarray(lst))
+            while a.ndim < result_ndim:
+                a = expand_dims(a, 0)
+            return a
+        # Recurse into sub-elements
+        sub_results = [_block_rec(item, depth + 1) for item in lst]
+        # Concatenate along axis = depth
+        # But we need to account for the fact that result_ndim may be
+        # larger than list_ndim. The axis mapping is:
+        # nesting depth d -> axis (result_ndim - list_ndim + d)
+        # This is because the list dimensions correspond to the LAST
+        # list_ndim axes of result_ndim... wait, no.
+        # In NumPy: nesting depth d maps to axis d. But arrays are
+        # promoted to result_ndim by prepending 1s. So a scalar at
+        # depth 2 in a depth-2 nesting becomes shape (1,1,...,1).
+        # Concatenation at depth 0 is axis 0, depth 1 is axis 1, etc.
+        axis = result_ndim - list_ndim + depth
+        return concatenate(sub_results, axis=axis)
+
+    return _block_rec(arrays, 0)
 
 
 def copyto(dst, src, casting='same_kind', where=True):
@@ -746,6 +816,13 @@ def size(a, axis=None):
         a = asarray(a)
     if axis is None:
         return a.size
+    if isinstance(axis, tuple):
+        if len(axis) == 0:
+            return 1
+        result = 1
+        for ax in axis:
+            result *= a.shape[ax]
+        return result
     return a.shape[axis]
 
 

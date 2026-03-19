@@ -35,16 +35,4 @@ class _ArrayMemoryError(MemoryError):
         )
 
 
-class AxisError(ValueError, IndexError):
-    """Exception for invalid axis."""
-
-    def __init__(self, axis, ndim=None, msg_prefix=None):
-        if ndim is not None:
-            msg = f"axis {axis} is out of bounds for array of dimension {ndim}"
-            if msg_prefix:
-                msg = f"{msg_prefix}: {msg}"
-        else:
-            msg = str(axis)
-        self.axis = axis
-        self.ndim = ndim
-        super().__init__(msg)
+from numpy._helpers import AxisError

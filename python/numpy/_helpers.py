@@ -11,8 +11,8 @@ _builtin_range = __builtins__["range"] if isinstance(__builtins__, dict) else __
 __all__ = [
     'AxisError', '_ArrayFlags', '_ObjectArray', '_ComplexResultArray',
     '_copy_into', '_apply_order', '_is_temporal_dtype', '_temporal_dtype_info',
-    '_make_temporal_array', '_infer_shape', '_flatten_nested', '_to_float_list',
-    '_unsupported_numeric_dtype', '_CLIP_UNSET',
+    '_make_temporal_array', '_infer_shape', '_flatten_nested', '_all_bools_nested',
+    '_to_float_list', '_unsupported_numeric_dtype', '_CLIP_UNSET',
     '_builtin_min', '_builtin_max', '_builtin_range',
 ]
 
@@ -664,6 +664,19 @@ def _flatten_nested(data):
         return [float(data)]
     except (TypeError, ValueError):
         return None
+
+
+def _all_bools_nested(data):
+    """Check if all leaf elements in a nested list/tuple are bools."""
+    if isinstance(data, bool):
+        return True
+    if isinstance(data, ndarray):
+        return str(data.dtype) == 'bool'
+    if isinstance(data, (int, float)):
+        return False
+    if isinstance(data, (list, tuple)):
+        return all(_all_bools_nested(x) for x in data)
+    return False
 
 
 def _to_float_list(data):

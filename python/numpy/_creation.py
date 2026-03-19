@@ -7,7 +7,7 @@ from _numpy_native import concatenate as _native_concatenate
 from ._helpers import (
     AxisError, _ObjectArray, _ComplexResultArray,
     _copy_into, _apply_order, _infer_shape,
-    _flatten_nested, _to_float_list, _is_temporal_dtype,
+    _flatten_nested, _all_bools_nested, _to_float_list, _is_temporal_dtype,
     _temporal_dtype_info, _make_temporal_array, _CLIP_UNSET, _builtin_range,
     _unsupported_numeric_dtype,
 )
@@ -53,6 +53,15 @@ def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
     else:
         # Promote 0-d arrays to 1-d (numpy treats scalars as 1-element 1-d arrays)
         arrs = [a.reshape([1]) if a.ndim == 0 else a for a in arrs]
+    # Normalize negative axis and validate
+    ndim = arrs[0].ndim if len(arrs) > 0 else 1
+    if axis < 0:
+        orig_axis = axis
+        axis = ndim + axis
+        if axis < 0:
+            raise AxisError(orig_axis, ndim)
+    elif axis >= ndim:
+        raise AxisError(axis, ndim)
     result = _native_concatenate(arrs, axis)
     if out is not None:
         out_arr = asarray(out) if not isinstance(out, ndarray) else out
@@ -481,6 +490,8 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                     dt = str(dtype)
                     if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                         result = result.astype(dt)
+                elif _all_bools_nested(data):
+                    result = result.astype("bool")
                 return result
     # Try the native array constructor
     try:
