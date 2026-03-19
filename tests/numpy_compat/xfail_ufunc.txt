@@ -344,3 +344,5 @@ TestUfuncGenericLoops.test_unary_PyUFunc_O_O_method_full[0]
 TestUfuncGenericLoops.test_unary_PyUFunc_O_O_method_full[1]
 TestUfuncGenericLoops.test_unary_PyUFunc_O_O_method_full[2]
 TestUfuncGenericLoops.test_unary_PyUFunc_O_O_method_full[3]
+TestUfunc.test_sum
+TestUfunc.test_sum_stability
