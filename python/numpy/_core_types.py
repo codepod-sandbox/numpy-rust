@@ -95,6 +95,14 @@ _DTYPE_CHAR_MAP = {
 # Scalar type helpers
 # ---------------------------------------------------------------------------
 
+_DTYPE_ITEMSIZE = {
+    'bool': 1, 'int8': 1, 'uint8': 1, 'int16': 2, 'uint16': 2,
+    'int32': 4, 'uint32': 4, 'int64': 8, 'uint64': 8,
+    'float16': 2, 'float32': 4, 'float64': 8,
+    'complex64': 8, 'complex128': 16,
+}
+
+
 class _ScalarType:
     """A callable dtype alias that can construct scalars and be used as a dtype string."""
     def __init__(self, name, python_type=float):
@@ -139,6 +147,30 @@ def _wrap_scalar_result(value, dtype_name):
     """Wrap a Python value in the appropriate numpy scalar type for the given dtype."""
     if dtype_name in ('bool', 'int8', 'int16', 'int32', 'int64',
                       'uint8', 'uint16', 'uint32', 'uint64'):
+        # Handle integer overflow wrapping
+        try:
+            iv = int(value)
+        except (TypeError, ValueError, OverflowError):
+            iv = value
+        else:
+            _INT_OVERFLOW = {
+                'int8': (-128, 127, 256),
+                'int16': (-32768, 32767, 65536),
+                'int32': (-2147483648, 2147483647, 4294967296),
+                'int64': (-9223372036854775808, 9223372036854775807, 18446744073709551616),
+                'uint8': (0, 255, 256),
+                'uint16': (0, 65535, 65536),
+                'uint32': (0, 4294967295, 4294967296),
+                'uint64': (0, 18446744073709551615, 18446744073709551616),
+                'bool': (0, 1, 2),
+            }
+            if dtype_name in _INT_OVERFLOW:
+                lo, hi, mod = _INT_OVERFLOW[dtype_name]
+                if iv < lo or iv > hi:
+                    iv = iv % mod
+                    if dtype_name.startswith('int') and iv > hi:
+                        iv -= mod
+                value = iv
         return _NumpyIntScalar(value, dtype_name)
     if dtype_name in ('float16', 'float32', 'float64'):
         return _NumpyFloatScalar(value, dtype_name)
@@ -367,6 +399,22 @@ class _NumpyIntScalar(int):
     def round(self, ndigits=0):
         return _NumpyIntScalar(__import__("builtins").round(int(self), ndigits), self._numpy_dtype_name)
 
+    @property
+    def itemsize(self):
+        return _DTYPE_ITEMSIZE.get(self._numpy_dtype_name, 8)
+
+    def astype(self, dtype_arg, *args, **kwargs):
+        """Cast scalar to a different type."""
+        dt = dtype(dtype_arg)
+        dn = dt.name
+        if dn in ('float16', 'float32', 'float64'):
+            return _NumpyFloatScalar(float(self), dn)
+        if dn in ('complex64', 'complex128'):
+            return _NumpyComplexScalar(complex(self), dn)
+        if dn in ('int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64', 'bool'):
+            return _NumpyIntScalar(int(self), dn)
+        return int(self)
+
     def is_integer(self):
         return True
 
@@ -561,6 +609,22 @@ class _NumpyFloatScalar(float):
         _builtin_round = __import__("builtins").round
         return _NumpyFloatScalar(_builtin_round(float(self), ndigits), self._numpy_dtype_name)
 
+    @property
+    def itemsize(self):
+        return _DTYPE_ITEMSIZE.get(self._numpy_dtype_name, 8)
+
+    def astype(self, dtype_arg, *args, **kwargs):
+        """Cast scalar to a different type."""
+        dt = dtype(dtype_arg)
+        dn = dt.name
+        if dn in ('float16', 'float32', 'float64'):
+            return _NumpyFloatScalar(float(self), dn)
+        if dn in ('complex64', 'complex128'):
+            return _NumpyComplexScalar(complex(self), dn)
+        if dn in ('int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64', 'bool'):
+            return _NumpyIntScalar(int(self), dn)
+        return float(self)
+
     def as_integer_ratio(self):
         """Return (numerator, denominator) pair."""
         return float.as_integer_ratio(float(self))
@@ -693,6 +757,22 @@ class _NumpyComplexScalar(complex):
     def __array_namespace__(self, *, api_version=None):
         import numpy
         return numpy
+
+    @property
+    def itemsize(self):
+        return _DTYPE_ITEMSIZE.get(self._numpy_dtype_name, 16)
+
+    def astype(self, dtype_arg, *args, **kwargs):
+        """Cast scalar to a different type."""
+        dt = dtype(dtype_arg)
+        dn = dt.name
+        if dn in ('float16', 'float32', 'float64'):
+            return _NumpyFloatScalar(float(self.real), dn)
+        if dn in ('complex64', 'complex128'):
+            return _NumpyComplexScalar(complex(self), dn)
+        if dn in ('int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64', 'bool'):
+            return _NumpyIntScalar(int(self.real), dn)
+        return complex(self)
 
     @property
     def device(self):
@@ -867,6 +947,20 @@ class _ScalarTypeMeta(type):
             return cls._scalar_name == other
         if isinstance(other, dtype):
             return cls._scalar_name == other.name
+        # Handle comparison with concrete scalar type classes
+        # e.g., type(np.int64(1)) == np.int64  →  _NumpyIntScalar == int64
+        if isinstance(other, type):
+            _name_map = {
+                '_NumpyIntScalar': {'int8', 'int16', 'int32', 'int64',
+                                    'uint8', 'uint16', 'uint32', 'uint64',
+                                    'bool', 'intp'},
+                '_NumpyFloatScalar': {'float16', 'float32', 'float64'},
+                '_NumpyComplexScalar': {'complex64', 'complex128'},
+                '_NumpyVoidScalar': {'void'},
+            }
+            other_name = getattr(other, '__name__', '')
+            if other_name in _name_map:
+                return cls._scalar_name in _name_map[other_name]
         return type.__eq__(cls, other)
 
     def __hash__(cls):
@@ -1293,6 +1387,37 @@ class dtype:
                 self.fields = tp.fields
                 self._structured = tp._structured
                 self.descr = tp.descr
+        elif isinstance(tp, tuple):
+            # Subarray dtype: (base_dtype, shape)
+            base_dt = dtype(tp[0])
+            sub_shape = tp[1]
+            if isinstance(sub_shape, int):
+                sub_shape = (sub_shape,)
+            elif not isinstance(sub_shape, tuple):
+                sub_shape = tuple(sub_shape)
+            sub_size = 1
+            for s in sub_shape:
+                sub_size *= s
+            self.name = base_dt.name
+            self.kind = base_dt.kind
+            self.char = base_dt.char
+            self.itemsize = base_dt.itemsize * sub_size
+            self.subdtype = (base_dt, sub_shape)
+            self.base = base_dt
+            self.shape = sub_shape
+            self.names = None
+            self.fields = None
+            self.byteorder = base_dt.byteorder
+            self.str = base_dt.str
+            self.type = base_dt.type
+            self.metadata = metadata
+            self.alignment = base_dt.itemsize
+            self.isalignedstruct = False
+            self.isnative = True
+            self.hasobject = False
+            self.num = getattr(base_dt, 'num', 0)
+            self.descr = base_dt.descr if hasattr(base_dt, 'descr') else [('', self.str)]
+            return
         elif isinstance(tp, str):
             tp = _DTYPE_CHAR_MAP.get(tp, tp)
             # Handle arbitrary |Sn or Sn byte strings -> 'bytes'
@@ -2257,6 +2382,10 @@ class finfo:
 
     _finfo_cache = {}
 
+    def __class_getitem__(cls, item):
+        import types as _types
+        return _types.GenericAlias(cls, (item,))
+
     def __new__(cls, dtype=None):
         key = cls._resolve_key(dtype)
         if key in cls._finfo_cache:
@@ -2274,6 +2403,9 @@ class finfo:
     def _resolve_key(dtype):
         """Normalise *dtype* to one of 'float16', 'float32', 'float64'."""
         if dtype is None or dtype is float:
+            return 'float64'
+        # Handle plain float/int instances (not types)
+        if isinstance(dtype, float) and not isinstance(dtype, _NumpyFloatScalar):
             return 'float64'
         # Handle objects with .dtype attribute (e.g. ndarray, custom objects)
         if hasattr(dtype, 'dtype') and not isinstance(dtype, type):
@@ -2382,10 +2514,6 @@ class finfo:
             return NotImplemented
         return self.bits != other.bits
 
-    def __class_getitem__(cls, item):
-        return cls
-
-
 class _MachAr:
     """Legacy MachAr stub (deprecated in numpy 1.22+)."""
     def __init__(self, finfo_obj):
@@ -2398,7 +2526,21 @@ class _MachAr:
 
 class iinfo:
     """Machine limits for integer types."""
+    def __class_getitem__(cls, item):
+        import types as _types
+        return _types.GenericAlias(cls, (item,))
+
     def __init__(self, dtype=None):
+        # Handle scalar instances: extract dtype name from numpy scalars or Python int
+        if isinstance(dtype, _NumpyIntScalar):
+            dtype = dtype._numpy_dtype_name
+        elif dtype is int:
+            dtype = 'int64'
+        elif isinstance(dtype, int) and not isinstance(dtype, bool):
+            dtype = 'int64'
+        # Handle _ScalarTypeMeta classes (int8, int16, etc.)
+        elif isinstance(dtype, _ScalarTypeMeta):
+            dtype = dtype._scalar_name
         if dtype is None or str(dtype) in ('int64', 'i8', 'int', 'l', 'q'):
             self.bits = 64
             self.min = -9223372036854775808

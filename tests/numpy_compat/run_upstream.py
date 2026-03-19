@@ -466,6 +466,8 @@ def _run_parametrized(full_name, method):
     param_lists = getattr(method, '_parametrize_list', None)
     if param_lists and len(param_lists) > 1:
         values = _cross_product(param_lists, method)
+        # Combine all parameter names
+        names_str = ','.join(p[0] if isinstance(p[0], str) else ','.join(p[0]) for p in param_lists)
     else:
         names_str, values = method._parametrize
     is_xfail = getattr(method, "_xfail", False)
@@ -493,10 +495,19 @@ def _run_parametrized(full_name, method):
             _errors.append((full_name, "parametrize failed: {}".format(str(e)[:200])))
         return
 
+    # Determine if parametrize has a single parameter name
+    # If so, each value should be passed as a single argument (even if it's a tuple)
+    _single_param = False
+    if isinstance(names_str, str) and ',' not in names_str:
+        _single_param = True
+
     for i, vals in enumerate(values):
         param_name = "{}[{}]".format(full_name, i)
         try:
-            call_vals = vals if isinstance(vals, (tuple, list)) else (vals,)
+            if _single_param:
+                call_vals = (vals,)
+            else:
+                call_vals = vals if isinstance(vals, (tuple, list)) else (vals,)
             if _needs_request:
                 call_vals = tuple(call_vals) + (_MockRequest(_module_fixtures),)
             if len(call_vals) == 1:

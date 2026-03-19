@@ -252,6 +252,10 @@ class poly1d:
         return _poly1d_roots(self._coeffs)
 
     @property
+    def r(self):
+        return self.roots
+
+    @property
     def o(self):
         return self.order
 
@@ -295,6 +299,22 @@ class poly1d:
 
     def __neg__(self):
         return poly1d([-c for c in self._coeffs])
+
+    def __eq__(self, other):
+        if isinstance(other, poly1d):
+            if len(self._coeffs) != len(other._coeffs):
+                return False
+            return all(a == b for a, b in zip(self._coeffs, other._coeffs))
+        return NotImplemented
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self):
+        return id(self)
 
     def __len__(self):
         return self.order

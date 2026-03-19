@@ -17,11 +17,87 @@ __all__ = [
 ]
 
 from _numpy_native import ndarray
+import cmath as _cmath
+
+
+def _c99_complex_mul(a, b):
+    """C99-compliant complex multiplication handling inf/nan special cases."""
+    ac = a.real * b.real
+    bd = a.imag * b.imag
+    ad = a.real * b.imag
+    bc = a.imag * b.real
+    re = ac - bd
+    im = ad + bc
+    if _math.isnan(re) or _math.isnan(im):
+        a_inf = _math.isinf(a.real) or _math.isinf(a.imag)
+        b_inf = _math.isinf(b.real) or _math.isinf(b.imag)
+        if a_inf:
+            ar = 1.0 if _math.isinf(a.real) else 0.0
+            ai = 1.0 if _math.isinf(a.imag) else 0.0
+            if a.real < 0 and _math.isinf(a.real): ar = -1.0
+            if a.imag < 0 and _math.isinf(a.imag): ai = -1.0
+            br = 0.0 if _math.isnan(b.real) else b.real
+            bi = 0.0 if _math.isnan(b.imag) else b.imag
+            re = float('inf') * (ar * br - ai * bi)
+            im = float('inf') * (ar * bi + ai * br)
+        elif b_inf:
+            br = 1.0 if _math.isinf(b.real) else 0.0
+            bi = 1.0 if _math.isinf(b.imag) else 0.0
+            if b.real < 0 and _math.isinf(b.real): br = -1.0
+            if b.imag < 0 and _math.isinf(b.imag): bi = -1.0
+            ar = 0.0 if _math.isnan(a.real) else a.real
+            ai = 0.0 if _math.isnan(a.imag) else a.imag
+            re = float('inf') * (ar * br - ai * bi)
+            im = float('inf') * (ar * bi + ai * br)
+    return complex(re, im)
+
+
+def _complex_pow(base, exp):
+    """Complex power that handles special cases RustPython gets wrong."""
+    exp_real = exp
+    if isinstance(exp, complex):
+        if exp.imag == 0:
+            exp_real = exp.real
+        else:
+            exp_real = None
+    if exp_real is not None and isinstance(exp_real, (int, float)):
+        try:
+            if exp_real == int(exp_real) and abs(exp_real) <= 100:
+                n = int(exp_real)
+                if n == 0:
+                    return complex(1, 0)
+                base = complex(base) if not isinstance(base, complex) else base
+                if n < 0:
+                    base = complex(1, 0) / base
+                    n = -n
+                result = complex(1, 0)
+                b = base
+                while n > 0:
+                    if n % 2 == 1:
+                        result = _c99_complex_mul(result, b)
+                    b = _c99_complex_mul(b, b)
+                    n //= 2
+                return result
+        except (OverflowError, ValueError, ZeroDivisionError):
+            pass
+    try:
+        return base ** exp
+    except (OverflowError, ValueError):
+        return complex(float('nan'), float('nan'))
 
 
 class AxisError(ValueError, IndexError):
     """Exception for invalid axis."""
     def __init__(self, axis=None, ndim=None, msg_prefix=None):
+        # If axis is a string and ndim is not provided, treat as plain message
+        if isinstance(axis, str) and ndim is None:
+            msg = axis
+            if msg_prefix:
+                msg = "{}: {}".format(msg_prefix, msg)
+            super().__init__(msg)
+            self.axis = None
+            self.ndim = None
+            return
         if axis is not None and ndim is not None:
             msg = "axis {} is out of bounds for array of dimension {}".format(axis, ndim)
             if msg_prefix:
@@ -392,27 +468,27 @@ class _ObjectArray:
         return _ObjectArray(result, self._dtype)
     def __pow__(self, other):
         if isinstance(other, _ObjectArray):
-            return _ObjectArray([a ** b for a, b in zip(self._data, other._data)], self._dtype)
+            return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other._data)], self._dtype)
         if isinstance(other, ndarray):
             if other.ndim == 0:
                 scalar = other.item() if hasattr(other, 'item') else float(other)
-                return _ObjectArray([x ** scalar for x in self._data], self._dtype)
+                return _ObjectArray([_complex_pow(x, scalar) for x in self._data], self._dtype)
             other_list = other.flatten().tolist()
-            return _ObjectArray([a ** b for a, b in zip(self._data, other_list)], self._dtype)
+            return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other_list)], self._dtype)
         if hasattr(other, '__iter__') and not isinstance(other, str):
             other_list = list(other) if not isinstance(other, list) else other
-            return _ObjectArray([a ** b for a, b in zip(self._data, other_list)], self._dtype)
-        return _ObjectArray([x ** other for x in self._data], self._dtype)
+            return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other_list)], self._dtype)
+        return _ObjectArray([_complex_pow(x, other) for x in self._data], self._dtype)
     def __rpow__(self, other):
         if isinstance(other, _ObjectArray):
-            return _ObjectArray([b ** a for a, b in zip(self._data, other._data)], self._dtype)
+            return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other._data)], self._dtype)
         if isinstance(other, ndarray):
             if other.ndim == 0:
                 scalar = other.item() if hasattr(other, 'item') else float(other)
-                return _ObjectArray([scalar ** x for x in self._data], self._dtype)
+                return _ObjectArray([_complex_pow(scalar, x) for x in self._data], self._dtype)
             other_list = other.flatten().tolist()
-            return _ObjectArray([b ** a for a, b in zip(self._data, other_list)], self._dtype)
-        return _ObjectArray([other ** x for x in self._data], self._dtype)
+            return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other_list)], self._dtype)
+        return _ObjectArray([_complex_pow(other, x) for x in self._data], self._dtype)
     def __truediv__(self, other):
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a / b for a, b in zip(self._data, other._data)], self._dtype)

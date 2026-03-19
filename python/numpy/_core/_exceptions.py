@@ -27,12 +27,44 @@ class _ArrayMemoryError(MemoryError):
     def __init__(self, shape, dtype):
         self.shape = shape
         self.dtype = dtype
-        size = 1
-        for s in shape:
-            size *= s
         super().__init__(
-            f"Unable to allocate array with shape {shape} and dtype {dtype}"
+            f"Unable to allocate {self._size_to_string(self._total_size)} "
+            f"for an array with shape {shape} and data type {dtype}"
         )
+
+    def __reduce__(self):
+        return (type(self), (self.shape, self.dtype))
+
+    @property
+    def _total_size(self):
+        size = 1
+        for s in self.shape:
+            size *= s
+        itemsize = getattr(self.dtype, 'itemsize', 8)
+        return size * itemsize
+
+    @staticmethod
+    def _size_to_string(num_bytes):
+        """Convert a number of bytes to a human-readable string."""
+        if num_bytes < 1024:
+            return '{} bytes'.format(num_bytes)
+
+        units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB']
+        last_unit = 'EiB'
+        unit_val = 1024.0
+        for unit in units:
+            new_val = num_bytes / unit_val
+            # Check if displaying in this unit would round to >= 1024
+            # If so, move to the next larger unit
+            if new_val < 1024.0 - 0.5 or unit == last_unit:
+                if abs(new_val) < 10.0:
+                    return '{:.2f} {}'.format(new_val, unit)
+                elif abs(new_val) < 100.0:
+                    return '{:.1f} {}'.format(new_val, unit)
+                else:
+                    return '{:.0f}. {}'.format(new_val, unit)
+            unit_val *= 1024.0
+        return '{:.0f}. {}'.format(new_val, last_unit)
 
 
 from numpy._helpers import AxisError

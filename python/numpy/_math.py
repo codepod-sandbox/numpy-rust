@@ -922,10 +922,12 @@ def sinc(x):
 def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
     """Replace NaN with zero and infinity with large finite numbers."""
     _scalar_input = not isinstance(x, (ndarray, list, tuple))
-    # Also check for _ObjectArray
     from ._helpers import _ObjectArray
     if isinstance(x, _ObjectArray):
         _scalar_input = False
+    # 0-d arrays are treated like scalars
+    if isinstance(x, ndarray) and x.ndim == 0:
+        _scalar_input = True
 
     x_arr = asarray(x)
     orig_dtype = str(x_arr.dtype)
@@ -933,17 +935,14 @@ def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
     neginf_val = neginf if neginf is not None else -1.7976931348623157e+308
 
     if "int" in orig_dtype or "bool" in orig_dtype:
-        # Integer/bool types can't have NaN/inf, return as-is
         if _scalar_input:
             from ._core_types import int_
             return int_(int(x))
         return x_arr
 
     if "complex" in orig_dtype:
-        # Handle complex: process real and imaginary parts separately
         re = x_arr.real
         im = x_arr.imag
-        # re and im are ndarray (float64), safe to call _native.nan_to_num
         if isinstance(re, ndarray):
             re_fixed = _native.nan_to_num(re, float(nan), float(posinf_val), float(neginf_val))
         else:
@@ -953,7 +952,6 @@ def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
         else:
             im_fixed = asarray(im)
 
-        # Reconstruct complex array
         result_list = []
         re_flat = re_fixed.flatten().tolist()
         im_flat = im_fixed.flatten().tolist()
@@ -966,17 +964,25 @@ def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
         if _scalar_input:
             from ._core_types import complex128
             return complex128(result_list[0])
+        if not copy and isinstance(x, (ndarray, _ObjectArray)):
+            if isinstance(x, _ObjectArray):
+                x._data = result._data if isinstance(result, _ObjectArray) else result_list
+                return x
+            _copy_into(x, result)
+            return x
         return result
 
     if isinstance(x_arr, ndarray):
         result = _native.nan_to_num(x_arr, float(nan), float(posinf_val), float(neginf_val))
     else:
-        # Fallback for non-ndarray
         result = x_arr
 
     if _scalar_input:
         from ._core_types import float64
         return float64(float(result.flatten()[0]) if hasattr(result, 'flatten') else float(result))
+    if not copy and isinstance(x, ndarray):
+        _copy_into(x, result)
+        return x
     return result
 
 # --- Special functions -------------------------------------------------------
@@ -1403,8 +1409,13 @@ def imag(a):
 
 def conj(a):
     """Return the complex conjugate."""
+    if isinstance(a, _ObjectArray):
+        result = [v.conjugate() if isinstance(v, complex) else v for v in a._data]
+        return _ObjectArray(result, a._dtype)
     if isinstance(a, ndarray):
         return a.conj()
+    if isinstance(a, complex):
+        return a.conjugate()
     return a
 
 conjugate = conj

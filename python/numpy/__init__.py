@@ -280,6 +280,10 @@ class StructuredArray:
             result *= d
         return result
 
+    def setflags(self, write=None, align=None, uic=None):
+        """Set array flags (stub for compatibility)."""
+        pass
+
     def astype(self, dtype):
         """Return a copy with the given dtype (stub — returns self for same dtype)."""
         return self.copy()

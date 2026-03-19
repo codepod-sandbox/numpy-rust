@@ -356,9 +356,28 @@ class ufunc:
                 _copy_into(_out, result)
                 return _out
 
+        # If all inputs were scalars (0-d or Python scalars), return a scalar
+        _all_scalar = True
+        from ._helpers import _ObjectArray
+        for a in args:
+            if isinstance(a, _ObjectArray):
+                _all_scalar = False
+                break
+            if isinstance(a, (ndarray,)):
+                if a.ndim != 0:
+                    _all_scalar = False
+                    break
+            elif isinstance(a, (list, tuple)):
+                _all_scalar = False
+                break
+        if _all_scalar and isinstance(result, ndarray) and result.ndim == 0:
+            val = result.item() if hasattr(result, 'item') else float(result)
+            if isinstance(val, tuple) and len(val) == 2:
+                val = complex(val[0], val[1])
+            result = val
+
         if out is not None:
             out = out[0] if isinstance(out, tuple) else out
-            # Casting validation: "equiv" requires identical dtype
             if _casting == "equiv":
                 res_dt = getattr(result, 'dtype', None)
                 out_dt = getattr(out, 'dtype', None)

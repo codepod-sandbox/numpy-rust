@@ -1583,6 +1583,7 @@ def unpackbits(a, axis=None, count=None, bitorder='big'):
 # ---------------------------------------------------------------------------
 
 def binary_repr(num, width=None):
+    num = int(num)  # Convert numpy scalars to plain Python int to avoid overflow
     if num >= 0:
         s = bin(num)[2:]
         if width is not None:
