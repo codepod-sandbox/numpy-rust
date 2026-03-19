@@ -1125,8 +1125,9 @@ def deprecate(func=None, oldname=None, newname=None, message=None):
     return decorator
 
 def get_include():
-    """Return include directory (not applicable)."""
-    return ""
+    """Return the numpy include directory."""
+    import os
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 # ---------------------------------------------------------------------------
@@ -1331,6 +1332,14 @@ def kron(a, b):
 
 def matmul(x1, x2):
     """Matrix product of two arrays (same as the @ operator)."""
+    # Check for __array_ufunc__ dispatch on inputs
+    for arg in (x1, x2):
+        if not isinstance(arg, ndarray) and not isinstance(arg, (int, float, bool, complex)):
+            au = getattr(type(arg), '__array_ufunc__', NotImplemented)
+            if au is not NotImplemented and au is not None:
+                result = arg.__array_ufunc__(matmul, '__call__', x1, x2)
+                if result is not NotImplemented:
+                    return result
     from _numpy_native import dot
     x1 = asarray(x1)
     x2 = asarray(x2)

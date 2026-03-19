@@ -216,14 +216,28 @@ def atleast_1d(*arys):
 
 def atleast_2d(*arys):
     """Convert inputs to arrays with at least two dimensions."""
+    from numpy.ma import MaskedArray
     results = []
     for a in arys:
-        if not isinstance(a, ndarray):
-            a = array(a)
-        if a.ndim == 0:
-            a = a.reshape([1, 1])
-        elif a.ndim == 1:
-            a = a.reshape([1, len(a)])
+        if isinstance(a, MaskedArray):
+            # Preserve MaskedArray type
+            if a.ndim == 0:
+                import numpy as _np
+                d = a.data.reshape([1, 1]) if isinstance(a.data, ndarray) else _np.array(a.data).reshape([1, 1])
+                m = _np.ones([1, 1], dtype='bool') if isinstance(a.mask, bool) and a.mask else _np.zeros([1, 1], dtype='bool')
+                a = MaskedArray(d, mask=m, fill_value=a._fill_value)
+            elif a.ndim == 1:
+                import numpy as _np
+                d = a.data.reshape([1, a.data.size]) if isinstance(a.data, ndarray) else _np.array(a.data).reshape([1, len(a)])
+                m = a.mask.reshape([1, a.mask.size]) if isinstance(a.mask, ndarray) else _np.broadcast_to(_np.asarray(a.mask, dtype='bool'), [1, len(a)]).copy()
+                a = MaskedArray(d, mask=m, fill_value=a._fill_value)
+        else:
+            if not isinstance(a, ndarray):
+                a = array(a)
+            if a.ndim == 0:
+                a = a.reshape([1, 1])
+            elif a.ndim == 1:
+                a = a.reshape([1, len(a)])
         results.append(a)
     if len(results) == 1:
         return results[0]
@@ -578,6 +592,12 @@ def repeat(a, repeats, axis=None):
 
 
 def tile(a, reps):
+    from numpy.ma import MaskedArray
+    if isinstance(a, MaskedArray):
+        # Tile both data and mask
+        data_tiled = _native.tile(a.data if isinstance(a.data, ndarray) else asarray(a.data), reps)
+        mask_tiled = _native.tile(asarray(a.mask, dtype="bool") if not isinstance(a.mask, ndarray) else a.mask, reps)
+        return MaskedArray(data_tiled, mask=mask_tiled, fill_value=a._fill_value)
     if not isinstance(a, ndarray):
         a = asarray(a)
     return _native.tile(a, reps)
@@ -850,14 +870,20 @@ def size(a, axis=None):
 
 
 def take(a, indices, axis=None, out=None, mode="raise"):
-    if isinstance(a, ndarray):
-        return _native.take(a, indices, axis)
-    flat = array(a).flatten()
-    if isinstance(indices, ndarray):
-        idx = [int(float(indices.flatten()[i])) for i in range(indices.size)]
-    else:
-        idx = list(indices) if hasattr(indices, '__iter__') else [indices]
-    return array([float(flat[i]) for i in idx])
+    if not isinstance(a, ndarray):
+        a = asarray(a)
+    if not isinstance(indices, ndarray):
+        indices = asarray(indices).astype('int64')
+    # Handle empty arrays or empty indices
+    if a.size == 0 or indices.size == 0:
+        if axis is None:
+            return array([]).astype(a.dtype)
+        # Compute result shape: replace axis dim with len(indices)
+        shape = list(a.shape)
+        ax = axis if axis >= 0 else a.ndim + axis
+        shape[ax] = indices.size
+        return zeros(shape, dtype=a.dtype)
+    return _native.take(a, indices, axis)
 
 
 def flip(a, axis=None):
@@ -1396,19 +1422,52 @@ def apply_along_axis(func1d, axis, arr, *args, **kwargs):
             elem = arr
             for fi in full_idx:
                 elem = elem[fi]
-            slice_vals.append(float(elem))
-        slice_arr = array(slice_vals)
+            if isinstance(elem, (tuple, list)) and len(elem) == 2:
+                # Complex element (re, im) - store as [re, im] pair
+                slice_vals.append([float(elem[0]), float(elem[1])])
+            elif isinstance(elem, complex):
+                slice_vals.append([elem.real, elem.imag])
+            else:
+                slice_vals.append(float(elem))
+        # Check if we have complex values (stored as [re, im] pairs)
+        if slice_vals and isinstance(slice_vals[0], list):
+            slice_arr = array(slice_vals)  # (n, 2) ndarray
+        else:
+            slice_arr = array(slice_vals)
         result = func1d(slice_arr, *args, **kwargs)
         results.append(result)
     # Reshape results back to out_shape
     # If func1d returns scalar, result shape is out_shape
     first_res = results[0]
     if isinstance(first_res, ndarray):
-        # func returns array - more complex, but handle scalar reduction case
-        result_arr = asarray(results)
-        return result_arr.reshape(out_shape)
+        # func returns array
+        res_shape = first_res.shape
+        if res_shape == (shape[axis],):
+            # Result has same length as input slice - insert axis back
+            # Final shape: out_shape[:axis] + (shape[axis],) + out_shape[axis:]
+            # We need to reconstruct the full array
+            final_shape = list(out_shape[:axis]) + [shape[axis]] + list(out_shape[axis:])
+            # Build flat list
+            flat_vals = []
+            for r in results:
+                flat_vals.extend(r.flatten().tolist())
+            result_arr = array(flat_vals).reshape(final_shape)
+            # Need to move axis back: currently results are indexed by outer dims first
+            # then result values. We need to transpose to put axis in correct position.
+            return result_arr
+        else:
+            # Result has different shape - try basic reshape
+            try:
+                result_arr = asarray(results)
+                return result_arr.reshape(out_shape)
+            except ValueError:
+                # If reshape fails, return as stack
+                return stack(results).reshape(out_shape + res_shape)
     else:
-        return array([float(r) for r in results]).reshape(out_shape)
+        try:
+            return array([float(r) for r in results]).reshape(out_shape)
+        except (TypeError, ValueError):
+            return array(results).reshape(out_shape)
 
 
 class vectorize:

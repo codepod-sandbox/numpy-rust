@@ -353,6 +353,19 @@ def _fft_rfftn(a, s=None, axes=None, norm=None):
 
 def _fft_irfftn(a, s=None, axes=None, norm=None):
     """N-D inverse real FFT."""
+    a = asarray(a)
+    if axes is not None:
+        ax_list = list(axes) if hasattr(axes, '__iter__') else [axes]
+        is_complex = str(a.dtype).startswith('complex')
+        if is_complex:
+            # For complex input, delegate to ifftn which handles complex-to-complex
+            result = a
+            for ax in reversed(ax_list):
+                result = _fft_ifftn(result, s=s, axes=[ax])
+            return result
+        else:
+            # For real input, apply irfft along each axis
+            return _fft_irfft2(a, s=s, norm=norm)
     return _fft_irfft2(a, s=s, norm=norm)
 
 

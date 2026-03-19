@@ -204,7 +204,14 @@ class MaskedArray:
             self.mask = np.asarray(mask, dtype="bool")
             # broadcast mask to data shape if needed
             if self.mask.shape != self.data.shape:
-                self.mask = np.broadcast_to(self.mask, self.data.shape).copy()
+                if self.data.ndim == 0:
+                    # 0-d data: collapse mask to scalar bool
+                    if self.mask.size > 0:
+                        self.mask = np.asarray(bool(self.mask.flatten()[0]), dtype="bool").reshape(())
+                    else:
+                        self.mask = np.asarray(False, dtype="bool").reshape(())
+                else:
+                    self.mask = np.broadcast_to(self.mask, self.data.shape).copy()
             # Combine with input mask if keep_mask is True
             if _input_mask is not None and keep_mask:
                 _im = np.asarray(_input_mask, dtype="bool")
@@ -279,6 +286,13 @@ class MaskedArray:
     @property
     def _data(self):
         return self.data
+
+    @_data.setter
+    def _data(self, value):
+        import numpy as np
+        if isinstance(value, (int, float)):
+            value = np.asarray(value)
+        self.data = value
 
     @property
     def _mask(self):
@@ -411,7 +425,19 @@ class MaskedArray:
         diff = (filled - m) * not_mask
         v = np.sum(diff * diff, axis=axis, keepdims=keepdims)
         c = np.sum(not_mask, axis=axis, keepdims=keepdims)
-        return v / (c - ddof)
+        # Handle all-masked case
+        c_val = float(c) if hasattr(c, '__float__') else c
+        if isinstance(c_val, float) and c_val == 0:
+            result = 0.0
+        else:
+            result = v / (c - ddof)
+        if out is not None:
+            if isinstance(out, MaskedArray):
+                out._data = np.asarray(result) if isinstance(result, (int, float)) else result
+            elif isinstance(out, np.ndarray):
+                out.flat[0] = float(result) if isinstance(result, (int, float)) else result
+            return out
+        return result
 
     def std(self, axis=None, dtype=None, out=None, ddof=0, keepdims=False, mean=None):
         import numpy as np
@@ -760,7 +786,11 @@ class MaskedArray:
         return result
 
     def tobytes(self, fill_value=None, order='C'):
-        return self.filled(fill_value).tobytes()
+        filled = self.filled(fill_value)
+        if order == 'F' and filled.ndim >= 2:
+            # Fortran order: transpose then get C-order bytes
+            return filled.T.tobytes()
+        return filled.tobytes()
 
     def torecords(self):
         return self.toflex()

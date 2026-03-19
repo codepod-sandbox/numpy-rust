@@ -269,6 +269,19 @@ pub(crate) fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
     }
 }
 
+/// Convert a Scalar to a 0-d NdArray.
+fn scalar_to_0d_ndarray(s: Scalar) -> NdArray {
+    match s {
+        Scalar::Float64(v) => NdArray::from_scalar(v),
+        Scalar::Float32(v) => NdArray::from_scalar(v as f64),
+        Scalar::Int64(v) => NdArray::from_scalar(v as f64),
+        Scalar::Int32(v) => NdArray::from_scalar(v as f64),
+        Scalar::Bool(v) => NdArray::from_scalar(if v { 1.0 } else { 0.0 }),
+        Scalar::Complex64(_) | Scalar::Complex128(_) => NdArray::from_scalar(0.0),
+        Scalar::Str(_) => NdArray::from_scalar(0.0),
+    }
+}
+
 /// Convert a Python object to a Scalar matching the target array dtype.
 /// For narrow dtypes, maps to the storage type's Scalar variant.
 pub(crate) fn py_obj_to_scalar(
@@ -956,7 +969,15 @@ impl PyNdArray {
                 // Try into_ref_with_type first; if it fails (not a real ndarray subclass),
                 // try calling the type's _from_array classmethod as a fallback.
                 match result.into_ref_with_type(vm, py_type.clone()) {
-                    Ok(obj) => return Ok(obj.into()),
+                    Ok(obj) => {
+                        // Call __array_finalize__ if it exists on the subclass
+                        let obj_ref: PyObjectRef = obj.into();
+                        if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
+                            let self_obj = PyNdArray::from_core(data.clone()).into_pyobject(vm);
+                            let _ = finalize.call((self_obj,), vm);
+                        }
+                        return Ok(obj_ref);
+                    }
                     Err(_) => {
                         // Fallback: try _from_array classmethod (e.g. chararray)
                         let self_obj = PyNdArray::from_core(data.clone()).into_pyobject(vm);
@@ -1638,6 +1659,20 @@ impl PyNdArray {
         if let Some(tuple) = key.downcast_ref::<PyTuple>() {
             let items = tuple.as_slice();
 
+            // Filter out Ellipsis from tuple items (Ellipsis = all remaining dims)
+            let has_ellipsis = items.iter().any(|item| item.is(&vm.ctx.ellipsis));
+            let filtered_items: Vec<PyObjectRef>;
+            let items = if has_ellipsis {
+                filtered_items = items
+                    .iter()
+                    .filter(|item| !item.is(&vm.ctx.ellipsis))
+                    .cloned()
+                    .collect();
+                &filtered_items
+            } else {
+                items
+            };
+
             // Check if any element is an ndarray (fancy indexing) or boolean ndarray
             let has_ndarray = items
                 .iter()
@@ -1681,6 +1716,11 @@ impl PyNdArray {
                     })
                     .collect();
                 let s = data.get(&usize_indices).map_err(|e| numpy_err(e, vm))?;
+                // If Ellipsis was present, return 0-d array instead of scalar
+                if has_ellipsis {
+                    let result = scalar_to_0d_ndarray(s);
+                    return Ok(PyNdArray::from_core(result).to_py(vm));
+                }
                 return Ok(scalar_to_py(s, vm));
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
@@ -2657,6 +2697,47 @@ fn obj_to_ndarray_nep50(
     obj_to_ndarray(obj, vm)
 }
 
+/// Check numpy errstate for invalid operations (NaN results from subtraction etc).
+/// Handles 'raise' and 'call' modes.
+fn check_invalid_errstate(result_obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+    if let Ok(numpy_mod) = vm.import("numpy", 0) {
+        if let Ok(err_state) = numpy_mod.get_attr("_err_state", vm) {
+            if let Ok(dict) = err_state.downcast::<vm::builtins::PyDict>() {
+                if let Some(val) = dict.get_item_opt("invalid", vm)? {
+                    if let Ok(s) = val.try_into_value::<String>(vm) {
+                        if let Some(arr) = result_obj.downcast_ref::<PyNdArray>() {
+                            let data = arr.data.read().unwrap();
+                            let has_nan = data.has_nan();
+                            if has_nan {
+                                if s == "raise" {
+                                    return Err(vm.new_exception_msg(
+                                        vm.ctx.exceptions.floating_point_error.to_owned(),
+                                        "invalid value encountered in subtract".to_owned(),
+                                    ));
+                                } else if s == "call" {
+                                    // Call the error callback
+                                    if let Ok(geterrcall) = numpy_mod.get_attr("geterrcall", vm) {
+                                        if let Ok(callback) = geterrcall.call((), vm) {
+                                            if !vm.is_none(&callback) {
+                                                let msg = vm.ctx.new_str(
+                                                    "invalid value encountered".to_owned(),
+                                                );
+                                                let flag = vm.ctx.new_int(8);
+                                                let _ = callback.call((msg, flag), vm);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check numpy errstate for division warnings/errors.
 /// If any element is inf/nan due to division by zero, and errstate is 'raise', raise FloatingPointError.
 fn check_division_errstate(result_obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
@@ -2667,11 +2748,9 @@ fn check_division_errstate(result_obj: &PyObjectRef, vm: &VirtualMachine) -> PyR
                 if let Some(val) = dict.get_item_opt("divide", vm)? {
                     if let Ok(s) = val.try_into_value::<String>(vm) {
                         if s == "raise" {
-                            // Check if result contains inf
                             if let Some(arr) = result_obj.downcast_ref::<PyNdArray>() {
                                 let data = arr.data.read().unwrap();
-                                let has_inf = data.has_inf();
-                                if has_inf {
+                                if data.has_inf() || data.has_nan() {
                                     return Err(vm.new_exception_msg(
                                         vm.ctx.exceptions.floating_point_error.to_owned(),
                                         "divide by zero encountered in divide".to_owned(),
@@ -2894,8 +2973,16 @@ fn number_inplace_bin_op(
 
 impl PyNdArray {
     const AS_NUMBER: PyNumberMethods = PyNumberMethods {
-        add: Some(|a, b, vm| number_bin_op(a, b, |x, y| x + y, vm)),
-        subtract: Some(|a, b, vm| number_bin_op(a, b, |x, y| x - y, vm)),
+        add: Some(|a, b, vm| {
+            let result = number_bin_op(a, b, |x, y| x + y, vm)?;
+            check_invalid_errstate(&result, vm)?;
+            Ok(result)
+        }),
+        subtract: Some(|a, b, vm| {
+            let result = number_bin_op(a, b, |x, y| x - y, vm)?;
+            check_invalid_errstate(&result, vm)?;
+            Ok(result)
+        }),
         multiply: Some(|a, b, vm| number_bin_op(a, b, |x, y| x * y, vm)),
         true_divide: Some(|a, b, vm| {
             let result = number_bin_op(a, b, |x, y| x / y, vm)?;
@@ -2903,7 +2990,12 @@ impl PyNdArray {
             check_division_errstate(&result, vm)?;
             Ok(result)
         }),
-        floor_divide: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.floor_div(y), vm)),
+        floor_divide: Some(|a, b, vm| {
+            let result = number_bin_op(a, b, |x, y| x.floor_div(y), vm)?;
+            check_division_errstate(&result, vm)?;
+            check_invalid_errstate(&result, vm)?;
+            Ok(result)
+        }),
         remainder: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.remainder(y), vm)),
         power: Some(|a, b, _modulo, vm| {
             let a_arr = obj_to_ndarray(a, vm)?;
@@ -2914,6 +3006,13 @@ impl PyNdArray {
                 .map_err(|e| vm.new_value_error(e.to_string()))
         }),
         negative: Some(number_neg),
+        positive: Some(|num, vm| {
+            let a = num
+                .downcast_ref::<PyNdArray>()
+                .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
+            let data = a.data.read().unwrap();
+            Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm))
+        }),
         int: Some(number_int),
         float: Some(number_float),
         and: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.bitwise_and(y), vm)),

@@ -50,13 +50,29 @@ def as_series(alist, trim=True):
             has_numeric = True
     if has_numeric and has_string:
         raise ValueError("Coefficient arrays have no common type")
+    # Find common dtype by promoting all array dtypes
+    # Object dtype always wins over numeric types
+    has_object = any(str(a.dtype) == 'object' or a.dtype.char == 'O' for a in arrays)
+    if has_object:
+        common_dtype = np.dtype('O')
+    else:
+        common_dtype = arrays[0].dtype
+        for a in arrays[1:]:
+            try:
+                common_dtype = np.result_type(common_dtype, a.dtype)
+            except TypeError:
+                common_dtype = np.dtype('O')
     # Try to find common dtype
     result = []
     for a in arrays:
         a = a.flatten()
         if trim:
             a_list = trimseq(list(a.tolist()))
-            a = np.array(a_list) if a_list else np.array([0.0])
+            a = np.array(a_list, dtype=common_dtype) if a_list else np.array([0.0], dtype=common_dtype)
+        else:
+            # Cast to common dtype
+            if str(a.dtype) != str(common_dtype):
+                a = a.astype(common_dtype)
         result.append(a)
     return result
 
@@ -80,7 +96,11 @@ def mapdomain(x, old, new):
     old = list(np.asarray(old).flatten().tolist())
     new = list(np.asarray(new).flatten().tolist())
     off, scl = mapparms(old, new)
-    return x * scl + off
+    result = x * scl + off
+    # Preserve subclass type
+    if hasattr(x, 'view') and type(x) is not np.ndarray and isinstance(x, np.ndarray):
+        result = result.view(type(x))
+    return result
 
 
 def mapparms(old, new):

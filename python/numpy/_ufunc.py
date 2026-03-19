@@ -316,6 +316,48 @@ class ufunc:
         if isinstance(_effective_sig, (list, tuple)):
             _check_signature_types(self, _effective_sig)
 
+        # Check for __array_ufunc__ on inputs — NEP 13 protocol
+        # Collect all inputs and outputs that might implement __array_ufunc__
+        _all_args = list(args)
+        if out is not None:
+            _out_tuple = out if isinstance(out, tuple) else (out,)
+            _all_args.extend(list(_out_tuple))
+        else:
+            _out_tuple = ()
+
+        # Find the argument with highest __array_ufunc__ priority
+        # Skip ndarray and basic Python types
+        _au_candidates = []
+        for a in _all_args:
+            if isinstance(a, ndarray) or isinstance(a, (int, float, bool, complex)):
+                continue
+            au = getattr(type(a), '__array_ufunc__', NotImplemented)
+            if au is not NotImplemented:
+                if au is None:
+                    # Opts out of ufunc dispatch
+                    return NotImplemented
+                _au_candidates.append(a)
+
+        if _au_candidates:
+            # Sort by __array_ufunc_priority__ (higher priority first)
+            # Subclasses take priority
+            _au_candidates.sort(
+                key=lambda x: getattr(type(x), '__array_ufunc_priority__', 0),
+                reverse=True)
+            # Try each candidate
+            for candidate in _au_candidates:
+                # Rebuild kwargs with 'out' if needed
+                _au_kwargs = dict(kwargs)
+                if _out_tuple:
+                    _au_kwargs['out'] = _out_tuple
+                result = candidate.__array_ufunc__(self, '__call__', *args, **_au_kwargs)
+                if result is not NotImplemented:
+                    return result
+            # If all returned NotImplemented, raise TypeError
+            raise TypeError(
+                f"operand type(s) all returned NotImplemented from "
+                f"__array_ufunc__({type(self).__name__}, '__call__', ...)")
+
         # Check for MaskedArray inputs — delegate to numpy.ma and preserve type
         _has_masked = any(
             hasattr(a, 'filled') and hasattr(a, 'mask') and not isinstance(a, ndarray)
@@ -375,6 +417,49 @@ class ufunc:
             if isinstance(val, tuple) and len(val) == 2:
                 val = complex(val[0], val[1])
             result = val
+
+        # Check errstate for raise/callback on invalid/divide operations
+        import numpy as _np_mod
+        _err = _np_mod.geterr()
+        _invalid_mode = _err.get('invalid', 'warn')
+        _divide_mode = _err.get('divide', 'warn')
+        if _invalid_mode in ('raise', 'call') or _divide_mode in ('raise', 'call'):
+            import math as _m
+            _has_nan = False
+            _has_inf = False
+            if isinstance(result, ndarray):
+                try:
+                    flat = result.flatten()
+                    for _idx in range(flat.size):
+                        v = float(flat[_idx])
+                        if _m.isnan(v):
+                            _has_nan = True
+                        if _m.isinf(v):
+                            _has_inf = True
+                        if _has_nan and _has_inf:
+                            break
+                except (TypeError, ValueError):
+                    pass
+            elif isinstance(result, (int, float)):
+                try:
+                    if _m.isnan(float(result)):
+                        _has_nan = True
+                    elif _m.isinf(float(result)):
+                        _has_inf = True
+                except (TypeError, ValueError):
+                    pass
+            if _has_nan and _invalid_mode == 'raise':
+                raise FloatingPointError("invalid value encountered in " + self.__name__)
+            if _has_nan and _invalid_mode == 'call':
+                _errcall = _np_mod.geterrcall()
+                if _errcall is not None:
+                    _errcall("invalid value encountered in " + self.__name__, 8)
+            if _has_inf and _divide_mode == 'raise':
+                raise FloatingPointError("divide by zero encountered in " + self.__name__)
+            if _has_inf and _divide_mode == 'call':
+                _errcall = _np_mod.geterrcall()
+                if _errcall is not None:
+                    _errcall("divide by zero encountered in " + self.__name__, 1)
 
         if out is not None:
             out = out[0] if isinstance(out, tuple) else out
@@ -551,6 +636,12 @@ class ufunc:
         return result
 
     def at(self, a, indices, b=None):
+        # Check for __array_ufunc__ dispatch
+        au = getattr(type(a), '__array_ufunc__', NotImplemented)
+        if au is not NotImplemented and au is not None and not isinstance(a, ndarray):
+            result = a.__array_ufunc__(self, 'at', a, indices)
+            if result is not NotImplemented:
+                return result
         # Reject nout > 1
         if self.nout > 1:
             raise ValueError(

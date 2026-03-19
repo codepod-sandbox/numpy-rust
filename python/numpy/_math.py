@@ -826,6 +826,13 @@ def fix(x, out=None):
             for i in range(flat_r.size):
                 out_arr.flat[i] = flat_r[i]
             return out_arr
+        # Preserve subclass type via __array_wrap__ if available
+        if type(x) is not ndarray and isinstance(x, ndarray):
+            if hasattr(x, '__array_wrap__'):
+                result = x.__array_wrap__(result)
+            elif hasattr(x, '__array_finalize__'):
+                result = result.view(type(x))
+                result.__array_finalize__(x)
         return result
     if not isinstance(x, (int, float)):
         x = asarray(x)

@@ -50,6 +50,15 @@ def roots(p):
     # Remove leading zeros
     while len(coeffs) > 1 and coeffs[0] == 0:
         coeffs = coeffs[1:]
+    # Check for NaN in coefficients - matches NumPy's behavior of raising LinAlgError
+    import math as _math_mod
+    for c in coeffs:
+        try:
+            if _math_mod.isnan(float(c)):
+                from numpy import LinAlgError
+                raise LinAlgError("Array must not contain infs or NaNs")
+        except (TypeError, ValueError):
+            pass
     n = len(coeffs) - 1  # degree
     if n == 0:
         return array([])

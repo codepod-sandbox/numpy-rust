@@ -257,6 +257,18 @@ class _ObjectArray:
     def all(self): return all(self._data)
     def any(self): return any(self._data)
     def __len__(self): return len(self._data)
+    def sort(self, axis=-1, kind=None, order=None):
+        """Sort in-place. For complex arrays, sort by real part then imag part."""
+        def _sort_key(v):
+            if isinstance(v, (tuple, list)) and len(v) == 2:
+                return (v[0], v[1])
+            if isinstance(v, complex):
+                return (v.real, v.imag)
+            try:
+                return (float(v), 0.0)
+            except (TypeError, ValueError):
+                return (0.0, 0.0)
+        self._data.sort(key=_sort_key)
     def _get_structured_field_names(self):
         """Parse structured dtype string to ordered list of (name, dtype_str) tuples."""
         import re

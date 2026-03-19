@@ -335,6 +335,16 @@ impl NdArray {
         }
     }
 
+    pub fn has_nan(&self) -> bool {
+        match &self.data {
+            ArrayData::Float32(a) => a.iter().any(|x| x.is_nan()),
+            ArrayData::Float64(a) => a.iter().any(|x| x.is_nan()),
+            ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_nan() || x.im.is_nan()),
+            ArrayData::Complex128(a) => a.iter().any(|x| x.re.is_nan() || x.im.is_nan()),
+            _ => false,
+        }
+    }
+
     /// Deep copy of the array.
     pub fn copy(&self) -> NdArray {
         NdArray {
