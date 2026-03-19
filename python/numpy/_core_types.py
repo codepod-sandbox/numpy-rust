@@ -387,6 +387,19 @@ class _NumpyIntScalar(int):
     def size(self):
         return 1
 
+    def __str__(self):
+        if self._numpy_dtype_name == 'bool':
+            return 'True' if int(self) else 'False'
+        return int.__repr__(int(self))
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __format__(self, fmt):
+        if not fmt and self._numpy_dtype_name == 'bool':
+            return self.__str__()
+        return int.__format__(int(self), fmt)
+
     def __round__(self, ndigits=None):
         if ndigits is None:
             return int(self)
@@ -555,6 +568,26 @@ class _NumpyIntScalar(int):
         return _NumpyIntScalar(int.__invert__(self), self._numpy_dtype_name)
 
 
+def _float_to_str(val, max_digits):
+    """Format a float with limited significant digits, matching numpy output."""
+    import math as _m
+    if _m.isnan(val):
+        return 'nan'
+    if _m.isinf(val):
+        return '-inf' if val < 0 else 'inf'
+    if val == 0.0:
+        return '0.0'
+    # Use repr-style formatting then truncate to max_digits significant figures
+    s = repr(val)
+    # For very large/small numbers, use exponential notation with limited precision
+    # Try formatting with limited precision
+    formatted = '{:.{}g}'.format(val, max_digits)
+    # Ensure we always have a decimal point for float
+    if '.' not in formatted and 'e' not in formatted and 'E' not in formatted:
+        formatted += '.0'
+    return formatted
+
+
 def _truncate_float(value, dtype_name):
     """Truncate a float value to the precision of the target dtype."""
     import struct as _struct
@@ -582,6 +615,27 @@ class _NumpyFloatScalar(float):
     def __array_namespace__(self, *, api_version=None):
         import numpy
         return numpy
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        val = float(self)
+        dn = self._numpy_dtype_name
+        # Use appropriate precision for dtype
+        if dn == 'float16':
+            # float16 has ~3.3 significant digits
+            return _float_to_str(val, 5)
+        elif dn == 'float32':
+            # float32 has ~7.2 significant digits
+            return _float_to_str(val, 8)
+        # float64 uses Python's default str
+        return float.__repr__(val)
+
+    def __format__(self, fmt):
+        if not fmt:
+            return self.__str__()
+        return float.__format__(float(self), fmt)
 
     @property
     def dtype(self):
@@ -734,7 +788,17 @@ class _NumpyComplexScalar(complex):
     _numpy_dtype_name: str
 
     def __new__(cls, value=0j, dtype_name="complex128"):
-        obj = complex.__new__(cls, value)
+        cval = complex(value)
+        if dtype_name == 'complex64':
+            # Truncate each component to float32 precision
+            import struct as _struct
+            try:
+                real = _struct.unpack('f', _struct.pack('f', cval.real))[0]
+                imag = _struct.unpack('f', _struct.pack('f', cval.imag))[0]
+                cval = complex(real, imag)
+            except (OverflowError, ValueError):
+                pass
+        obj = complex.__new__(cls, cval)
         obj._numpy_dtype_name = dtype_name
         return obj
 
@@ -757,6 +821,20 @@ class _NumpyComplexScalar(complex):
     def __array_namespace__(self, *, api_version=None):
         import numpy
         return numpy
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        return complex.__repr__(complex(self))
+
+    def __repr__(self):
+        return complex.__repr__(complex(self))
+
+    def __format__(self, fmt):
+        if not fmt:
+            return self.__str__()
+        return complex.__format__(complex(self), fmt)
 
     @property
     def itemsize(self):

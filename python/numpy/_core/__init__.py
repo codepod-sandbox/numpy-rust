@@ -37,7 +37,7 @@ sctypes = {
 # Import submodules
 from numpy._core import numeric, multiarray, fromnumeric, umath, numerictypes
 from numpy._core import shape_base, function_base, arrayprint
-from numpy._core import _exceptions, overrides
+from numpy._core import _exceptions, overrides, _multiarray_umath
 
 # Register in sys.modules
 sys.modules['numpy._core.numeric'] = numeric
@@ -50,6 +50,7 @@ sys.modules['numpy._core.function_base'] = function_base
 sys.modules['numpy._core.arrayprint'] = arrayprint
 sys.modules['numpy._core._exceptions'] = _exceptions
 sys.modules['numpy._core.overrides'] = overrides
+sys.modules['numpy._core._multiarray_umath'] = _multiarray_umath
 
 
 def __getattr__(name):

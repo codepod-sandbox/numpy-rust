@@ -39,8 +39,17 @@ def as_series(alist, trim=True):
         if a.size == 0:
             raise ValueError("Coefficient array is not 1-d")
         arrays.append(a)
-    # Check for mixed types that can't be promoted
-    dtypes = [a.dtype for a in arrays]
+    # Check for mixed numeric/string types
+    has_numeric = False
+    has_string = False
+    for a in arrays:
+        dk = str(a.dtype)
+        if dk in ('str', 'bytes') or dk.startswith('U') or dk.startswith('S'):
+            has_string = True
+        else:
+            has_numeric = True
+    if has_numeric and has_string:
+        raise ValueError("Coefficient arrays have no common type")
     # Try to find common dtype
     result = []
     for a in arrays:

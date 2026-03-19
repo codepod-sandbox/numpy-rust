@@ -192,20 +192,26 @@ def polyder(p, m=1):
     return array(coeffs)
 
 
+def _to_scalar(v):
+    """Convert a value to a proper scalar (handle tuple complex from Rust)."""
+    if isinstance(v, tuple) and len(v) == 2:
+        return complex(v[0], v[1])
+    return v
+
 def polyint(p, m=1, k=0):
     """Return the integral of a polynomial."""
     if isinstance(p, poly1d):
         return p.integ(m, k)
     if isinstance(p, ndarray):
-        coeffs = [p[i] for i in range(p.size)]
+        coeffs = [_to_scalar(p[i]) for i in range(p.size)]
     else:
-        coeffs = [float(c) for c in p]
+        coeffs = [_to_scalar(c) for c in p]
     for _ in range(m):
         n = len(coeffs)
         new_coeffs = []
         for i in range(n):
             new_coeffs.append(coeffs[i] / (n - i))
-        new_coeffs.append(float(k))
+        new_coeffs.append(_to_scalar(k))
         coeffs = new_coeffs
     return array(coeffs)
 
@@ -367,15 +373,15 @@ def polydiv(u, v):
     if isinstance(u, poly1d):
         u = list(u._coeffs)
     elif isinstance(u, ndarray):
-        u = [float(u[i]) for i in range(u.size)]
+        u = [_to_scalar(u[i]) for i in range(u.size)]
     else:
-        u = [float(c) for c in u]
+        u = [_to_scalar(c) for c in u]
     if isinstance(v, poly1d):
         v = list(v._coeffs)
     elif isinstance(v, ndarray):
-        v = [float(v[i]) for i in range(v.size)]
+        v = [_to_scalar(v[i]) for i in range(v.size)]
     else:
-        v = [float(c) for c in v]
+        v = [_to_scalar(c) for c in v]
     n = len(u)
     nv = len(v)
     if nv > n:

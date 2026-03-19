@@ -1210,7 +1210,14 @@ def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
     return result
 
 
-in1d = isin
+def in1d(ar1, ar2, assume_unique=False, invert=False):
+    """Test whether each element of ar1 is in ar2. Deprecated: use isin instead."""
+    import warnings
+    warnings.warn(
+        "`in1d` is deprecated. Use `np.isin` instead.",
+        DeprecationWarning, stacklevel=2
+    )
+    return isin(ar1, ar2, assume_unique=assume_unique, invert=invert)
 
 
 def all(a, axis=None, out=None, keepdims=False, where=True):

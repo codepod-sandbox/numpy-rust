@@ -388,7 +388,7 @@ pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
 /// Parse a Python dtype string to DType.
 pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
     match s {
-        "bool" | "?" | "<class 'bool'>" => Ok(DType::Bool),
+        "bool" | "b1" | "?" | "<class 'bool'>" | "bool_" => Ok(DType::Bool),
         // Single-char numpy type codes (also handle byte-order prefixes)
         "b" | "|b" | "<b" | ">b" => Ok(DType::Int8),
         "h" | "|h" | "<h" | ">h" => Ok(DType::Int16),
@@ -414,7 +414,7 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "uint64" | "u8" | "uintp" => Ok(DType::UInt64),
         "float16" | "f2" => Ok(DType::Float16),
         "float32" | "f32" | "f4" => Ok(DType::Float32),
-        "float64" | "f64" | "float" | "<class 'float'>" => Ok(DType::Float64),
+        "float64" | "f64" | "f8" | "float" | "<class 'float'>" => Ok(DType::Float64),
         // Compatibility fallback: map temporal dtypes to float64 until native
         // datetime/timedelta storage exists in the Rust core.
         "timedelta64" | "datetime64" | "m8" | "M8" | "<m8" | ">m8" | "<M8" | ">M8" => {
@@ -422,10 +422,22 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         }
         "complex64" | "c64" | "c8" => Ok(DType::Complex64),
         "complex128" | "c128" | "c16" | "complex" | "<class 'complex'>" => Ok(DType::Complex128),
+        // longdouble/longcomplex: map to float64/complex128
+        "longdouble" | "longfloat" | "g" => Ok(DType::Float64),
+        "clongdouble" | "clongfloat" | "G" => Ok(DType::Complex128),
         "str" | "U" | "<class 'str'>" => Ok(DType::Str),
         // object dtype: map to Float64 as fallback (no true object array support)
         "object" | "O" | "<class 'object'>" => Ok(DType::Float64),
         _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
+        // Strip byte-order prefix (<, >, =, |) and retry
+        _ if s.len() >= 2
+            && (s.starts_with('<')
+                || s.starts_with('>')
+                || s.starts_with('=')
+                || s.starts_with('|')) =>
+        {
+            parse_dtype(&s[1..], vm)
+        }
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),
     }
 }
