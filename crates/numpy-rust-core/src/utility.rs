@@ -7,6 +7,78 @@ use crate::casting::cast_array_data;
 use crate::error::{NumpyError, Result};
 use crate::{DType, NdArray};
 
+/// Convert IEEE 754 half-precision (16-bit) bit pattern to f32.
+fn half_bits_to_f32(h: u16) -> f32 {
+    let sign = ((h >> 15) & 1) as u32;
+    let exp = ((h >> 10) & 0x1f) as u32;
+    let mant = (h & 0x3ff) as u32;
+
+    if exp == 0x1f {
+        // Inf or NaN
+        if mant == 0 {
+            f32::from_bits((sign << 31) | (0xff << 23))
+        } else {
+            // NaN: preserve some mantissa bits
+            f32::from_bits((sign << 31) | (0xff << 23) | (mant << 13))
+        }
+    } else if exp == 0 {
+        if mant == 0 {
+            // Signed zero
+            f32::from_bits(sign << 31)
+        } else {
+            // Subnormal: value = (-1)^sign * 2^-14 * (mant / 1024)
+            let mut m = mant;
+            let mut e: i32 = -14;
+            // Normalize
+            while m & 0x400 == 0 {
+                m <<= 1;
+                e -= 1;
+            }
+            m &= 0x3ff; // remove leading 1
+            let f32_exp = ((e + 127) as u32) & 0xff;
+            f32::from_bits((sign << 31) | (f32_exp << 23) | (m << 13))
+        }
+    } else {
+        // Normal: exp_f32 = exp_f16 - 15 + 127 = exp_f16 + 112
+        let f32_exp = exp + 112;
+        f32::from_bits((sign << 31) | (f32_exp << 23) | (mant << 13))
+    }
+}
+
+/// Convert f32 to IEEE 754 half-precision (16-bit) bit pattern.
+fn f32_to_half_bits(f: f32) -> u16 {
+    let bits = f.to_bits();
+    let sign = ((bits >> 31) & 1) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7fffff;
+
+    if exp == 0xff {
+        // Inf or NaN
+        if mant == 0 {
+            (sign << 15) | 0x7c00
+        } else {
+            // NaN
+            (sign << 15) | 0x7c00 | ((mant >> 13) as u16).max(1)
+        }
+    } else if exp > 142 {
+        // Overflow -> Inf
+        (sign << 15) | 0x7c00
+    } else if exp < 103 {
+        // Underflow -> zero
+        sign << 15
+    } else if exp < 113 {
+        // Subnormal
+        let shift = 113 - exp;
+        let m = (mant | 0x800000) >> (shift + 13);
+        (sign << 15) | (m as u16)
+    } else {
+        // Normal
+        let h_exp = ((exp - 112) as u16) & 0x1f;
+        let h_mant = (mant >> 13) as u16;
+        (sign << 15) | (h_exp << 10) | h_mant
+    }
+}
+
 /// Element-wise ternary: select from `x` where `cond` is true, else from `y`.
 /// Like `numpy.where(cond, x, y)`.
 pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
@@ -167,6 +239,45 @@ impl NdArray {
                             .unwrap()
                             .into_shared(),
                     )))
+                }
+                // UInt16/Int16 (stored as Int32) <-> Float16 (stored as Float32)
+                (ArrayData::Int32(a), DType::Float16)
+                    if src_dt == DType::UInt16 || src_dt == DType::Int16 =>
+                {
+                    let raw: Vec<f32> = a.iter().map(|&v| half_bits_to_f32(v as u16)).collect();
+                    Ok(NdArray {
+                        data: ArrayData::Float32(
+                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                                .unwrap()
+                                .into_shared(),
+                        ),
+                        declared_dtype: Some(DType::Float16),
+                    })
+                }
+                (ArrayData::Float32(a), DType::UInt16) if src_dt == DType::Float16 => {
+                    let raw: Vec<i32> = a.iter().map(|&f| f32_to_half_bits(f) as i32).collect();
+                    Ok(NdArray {
+                        data: ArrayData::Int32(
+                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                                .unwrap()
+                                .into_shared(),
+                        ),
+                        declared_dtype: Some(DType::UInt16),
+                    })
+                }
+                (ArrayData::Float32(a), DType::Int16) if src_dt == DType::Float16 => {
+                    let raw: Vec<i32> = a
+                        .iter()
+                        .map(|&f| f32_to_half_bits(f) as i16 as i32)
+                        .collect();
+                    Ok(NdArray {
+                        data: ArrayData::Int32(
+                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                                .unwrap()
+                                .into_shared(),
+                        ),
+                        declared_dtype: Some(DType::Int16),
+                    })
                 }
                 // Float32 (4 bytes) <-> Int32 (4 bytes)
                 (ArrayData::Float32(a), DType::Int32) => {

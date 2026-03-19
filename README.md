@@ -3,6 +3,7 @@
 A NumPy implementation in Rust for Python code running in sandboxed environments (RustPython/WASM).
 
 **12,133 tests passing (`2026-03-19`)**
+<!-- Peak count; varies ±1000 between runs due to parametrize expansion and timeouts -->
 
 ## How it works
 

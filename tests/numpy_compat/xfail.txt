@@ -6,5 +6,4 @@ TestFromiter.test_growth_and_complicated_dtypes[7]
 TestIsclose.test_non_finite_scalar
 TestResize.test_reshape_from_zero
 TestTypes.test_can_cast_and_promote_usertypes
-TestTypes.test_coercion
 TestTypes.test_invalid_void_promotion[0]
