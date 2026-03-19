@@ -33,20 +33,33 @@ def sliding_window_view(x, window_shape, axis=None, *, subok=False, writeable=Fa
         axis = tuple(a if a >= 0 else x.ndim + a for a in axis)
 
         # Apply sliding windows sequentially along each axis
+        # In numpy, sliding_window_view with axis replaces the axis dimension
+        # with (n_windows) and appends the window dimension at the end
         result = x
-        # Track how many new dims have been appended (each step adds one at end)
+        extra_dims = 0  # track appended window dims
         for w, ax in zip(window_shape, axis):
+            ndim_cur = result.ndim
             n = result.shape[ax]
             if w > n:
                 raise ValueError(
                     "window shape cannot be larger than input array shape")
             n_windows = n - w + 1
+            # Gather windows
             slices = []
             for i in range(n_windows):
-                sl = [slice(None)] * result.ndim
+                sl = [slice(None)] * ndim_cur
                 sl[ax] = slice(i, i + w)
                 slices.append(result[tuple(sl)])
-            result = np.stack(slices, axis=ax)
+            # Stack along the axis to get (..., n_windows, w, ...)
+            stacked = np.stack(slices, axis=ax)
+            # Move the window dim (ax+1) to the end
+            # stacked has the window at axis ax+1, we want it at the end
+            perm = list(range(stacked.ndim))
+            window_ax = ax + 1
+            perm.pop(window_ax)
+            perm.append(window_ax)
+            result = np.transpose(stacked, perm)
+            extra_dims += 1
         return result
     else:
         if len(window_shape) != x.ndim:

@@ -179,6 +179,13 @@ def expand_dims(a, axis):
         return result
     if isinstance(a, ndarray):
         return a.expand_dims(axis)
+    from ._helpers import _ObjectArray
+    if isinstance(a, _ObjectArray):
+        new_shape = list(a.shape)
+        if axis < 0:
+            axis = len(new_shape) + 1 + axis
+        new_shape.insert(axis, 1)
+        return a.reshape(tuple(new_shape))
     return a
 
 
@@ -242,7 +249,23 @@ def atleast_3d(*arys):
 
 
 def stack(arrays, axis=0, out=None):
-    return _native.stack_native(list(arrays), axis)
+    from ._helpers import _ObjectArray
+    arrays = [asarray(a) for a in arrays]
+    if not arrays:
+        raise ValueError("need at least one array to stack")
+    # Normalize negative axis
+    if axis < 0:
+        # After stacking, ndim will be input ndim + 1
+        ndim = arrays[0].ndim + 1
+        axis = axis + ndim
+        if axis < 0:
+            raise ValueError(f"axis {axis - ndim} is out of bounds for array of dimension {ndim}")
+    # If any array is _ObjectArray, use Python-level implementation
+    if any(isinstance(a, _ObjectArray) for a in arrays):
+        # Expand dims for each array, then concatenate
+        expanded = [expand_dims(a, axis=axis) for a in arrays]
+        return concatenate(expanded, axis=axis)
+    return _native.stack_native(arrays, axis)
 
 
 def vstack(tup, *, dtype=None, casting='same_kind'):
@@ -1408,23 +1431,28 @@ class vectorize:
         arr_args = [asarray(a) for a in args]
         if len(arr_args) == 0:
             return array([])
-        # Get the size from first arg
-        first = arr_args[0].flatten()
-        n = first.size
+        # Broadcast all args to common shape
+        broadcasted = broadcast_arrays(*arr_args)
+        shape = broadcasted[0].shape
+        n = broadcasted[0].size
+        if n == 0:
+            return array([]).reshape(shape)
         results = []
+        flat_args = [b.flatten() for b in broadcasted]
         for i in range(n):
-            elem_args = []
-            for a in arr_args:
-                flat = a.flatten()
-                if flat.size == 1:
-                    elem_args.append(flat[0])
-                else:
-                    elem_args.append(flat[i])
+            elem_args = [f[i] for f in flat_args]
             results.append(self.pyfunc(*elem_args, **kwargs))
+        # Check if result is tuple (multi-output)
+        if isinstance(results[0], tuple):
+            nout = len(results[0])
+            out = []
+            for k in range(nout):
+                vals = [r[k] for r in results]
+                out.append(array(vals).reshape(shape))
+            return tuple(out)
         result = array(results)
-        # Try to reshape to the shape of first arg
-        if arr_args[0].ndim > 1:
-            result = result.reshape(arr_args[0].shape)
+        if shape:
+            result = result.reshape(shape)
         return result
 
 

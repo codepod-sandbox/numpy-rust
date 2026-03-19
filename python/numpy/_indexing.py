@@ -427,6 +427,10 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
     total = 1
     for s in shape:
         total *= s
+        if total > 2**31:
+            raise ValueError(
+                "Too many bins: total number of bins exceeds maximum"
+            )
     counts = [0.0] * total
 
     w_list = None

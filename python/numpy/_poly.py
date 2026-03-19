@@ -206,11 +206,13 @@ def polyint(p, m=1, k=0):
         coeffs = [_to_scalar(p[i]) for i in range(p.size)]
     else:
         coeffs = [_to_scalar(c) for c in p]
+    _is_complex = any(isinstance(c, complex) for c in coeffs)
     for _ in range(m):
         n = len(coeffs)
         new_coeffs = []
         for i in range(n):
-            new_coeffs.append(coeffs[i] / (n - i))
+            divisor = complex(n - i) if _is_complex else float(n - i)
+            new_coeffs.append(coeffs[i] / divisor)
         new_coeffs.append(_to_scalar(k))
         coeffs = new_coeffs
     return array(coeffs)
@@ -239,6 +241,9 @@ class poly1d:
                 self._coeffs = [c_or_r[i] for i in range(c_or_r.size)]
             else:
                 self._coeffs = [float(c) for c in c_or_r]
+        # Strip leading zeros (but keep at least one coefficient)
+        while len(self._coeffs) > 1 and self._coeffs[0] == 0:
+            self._coeffs.pop(0)
         self._variable = variable or 'x'
 
     @property
@@ -301,6 +306,9 @@ class poly1d:
     def __rmul__(self, other):
         if isinstance(other, (int, float)):
             return poly1d([c * float(other) for c in self._coeffs])
+        if isinstance(other, ndarray):
+            oc = [_to_scalar(other[i]) for i in range(other.size)]
+            return poly1d(polymul(oc, self._coeffs))
         return self.__mul__(other)
 
     def __neg__(self):
@@ -384,15 +392,20 @@ def polydiv(u, v):
         v = [_to_scalar(c) for c in v]
     n = len(u)
     nv = len(v)
+    # Determine output type
+    _is_complex = any(isinstance(c, complex) for c in u) or any(isinstance(c, complex) for c in v)
+    _zero = complex(0) if _is_complex else 0.0
     if nv > n:
-        return array([0.0]), array(u)
-    q = [0.0] * (n - nv + 1)
+        return array([_zero]), array(u if u else [_zero])
+    q = [_zero] * (n - nv + 1)
     r = list(u)
     for i in range(n - nv + 1):
         q[i] = r[i] / v[0]
         for j in range(nv):
             r[i + j] -= q[i] * v[j]
     remainder = r[n - nv + 1:]
+    if not remainder:
+        remainder = [_zero]
     return array(q), array(remainder)
 
 

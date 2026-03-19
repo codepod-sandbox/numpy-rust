@@ -528,6 +528,10 @@ class _NumpyIntScalar(int):
     def itemsize(self):
         return _DTYPE_ITEMSIZE.get(self._numpy_dtype_name, 8)
 
+    @property
+    def nbytes(self):
+        return self.itemsize
+
     def astype(self, dtype_arg, *args, **kwargs):
         """Cast scalar to a different type."""
         dt = dtype(dtype_arg)
@@ -779,6 +783,10 @@ class _NumpyFloatScalar(float):
     def itemsize(self):
         return _DTYPE_ITEMSIZE.get(self._numpy_dtype_name, 8)
 
+    @property
+    def nbytes(self):
+        return self.itemsize
+
     def astype(self, dtype_arg, *args, **kwargs):
         """Cast scalar to a different type."""
         dt = dtype(dtype_arg)
@@ -951,6 +959,10 @@ class _NumpyComplexScalar(complex):
     @property
     def itemsize(self):
         return _DTYPE_ITEMSIZE.get(self._numpy_dtype_name, 16)
+
+    @property
+    def nbytes(self):
+        return self.itemsize
 
     def astype(self, dtype_arg, *args, **kwargs):
         """Cast scalar to a different type."""
@@ -1834,7 +1846,8 @@ class dtype:
             return self.name == other._scalar_name
         if isinstance(other, type):
             # Handle Python builtin types: bool, int, float
-            _type_map = {__import__("builtins").bool: "bool", __import__("builtins").int: "int64", __import__("builtins").float: "float64"}
+            import builtins as _bi
+            _type_map = {_bi.bool: "bool", _bi.int: "int64", _bi.float: "float64", _bi.complex: "complex128"}
             if other in _type_map:
                 return self.name == _type_map[other]
         return NotImplemented

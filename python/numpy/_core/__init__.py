@@ -53,6 +53,31 @@ sys.modules['numpy._core.overrides'] = overrides
 sys.modules['numpy._core._multiarray_umath'] = _multiarray_umath
 
 
+class flatiter:
+    """Flat iterator object to iterate over arrays."""
+    def __init__(self, arr=None):
+        self._arr = arr
+        self._idx = 0
+
+    @property
+    def index(self):
+        """Current flat index into the array."""
+        return self._idx
+
+    def __iter__(self):
+        if self._arr is not None:
+            flat = self._arr.flatten()
+            for i in range(flat.size):
+                yield flat[i]
+
+    def __next__(self):
+        if self._arr is None or self._idx >= self._arr.size:
+            raise StopIteration
+        val = self._arr.flat[self._idx]
+        self._idx += 1
+        return val
+
+
 def __getattr__(name):
     if hasattr(numpy, name):
         return getattr(numpy, name)

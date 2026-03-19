@@ -742,10 +742,11 @@ def test_str_len_unicode():
     assert int(b[1]) == 2
 
 def test_linspace_retstep_num1():
-    """linspace with num=1 should have step=0.0."""
+    """linspace with num=1 should have step=nan (division by zero: (stop-start)/(num-1))."""
+    import math
     arr, step = np.linspace(0, 10, 1, retstep=True)
     assert arr.shape == (1,)
-    assert step == 0.0, f"expected step=0.0, got {step}"
+    assert math.isnan(step), f"expected step=nan, got {step}"
 
 def test_module_std_ddof():
     """Module-level np.std should support ddof parameter."""

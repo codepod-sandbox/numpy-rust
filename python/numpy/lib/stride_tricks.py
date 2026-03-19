@@ -12,6 +12,8 @@ def broadcast_shapes(*shapes):
     """Broadcast shapes together, returning the resulting shape."""
     if not shapes:
         return ()
+    # Normalize: integers are treated as 1-d shapes
+    shapes = [s if hasattr(s, '__len__') else (s,) for s in shapes]
     ndim = max(len(s) for s in shapes)
     result = [1] * ndim
     for shape in shapes:

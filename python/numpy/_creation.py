@@ -618,7 +618,16 @@ def arange(*args, dtype=None, like=None, **kwargs):
 
 def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis=0):
     from ._helpers import _ObjectArray
+    # Validate num: must be integer type, non-negative
+    if isinstance(num, float):
+        if num != int(num):
+            raise TypeError(
+                "object of type 'float' cannot be safely interpreted as an integer"
+            )
+        num = int(num)
     num = int(num)
+    if num < 0:
+        raise ValueError("Number of samples, %s, must be non-negative." % num)
     # Extract scalars from 0-d arrays
     if isinstance(start, ndarray) and start.ndim == 0:
         start = start.flat[0]
@@ -649,6 +658,13 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
             if retstep:
                 return result, step
             return result
+        # Broadcast start and stop to common shape
+        try:
+            _bcast = start_arr + stop_arr * 0  # force broadcast
+            start_arr = start_arr + _bcast * 0
+            stop_arr = stop_arr + _bcast * 0
+        except Exception:
+            pass
         if endpoint:
             step = (stop_arr - start_arr) / (num - 1)
         else:
@@ -696,10 +712,18 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
             return result, float('nan')
         return result
     if endpoint:
+        if num == 1:
+            result = array([start])
+            step = float('nan')
+            if dtype is not None:
+                result = result.astype(str(dtype))
+            if retstep:
+                return result, step
+            return result
         result = _native.linspace(start, stop, num)
-        step = (stop - start) / (num - 1) if num > 1 else 0.0
+        step = (stop - start) / (num - 1)
     else:
-        step = (stop - start) / num if num > 0 else 0.0
+        step = (stop - start) / num
         result = array([start + i * step for i in range(num)])
     if dtype is not None:
         result = result.astype(str(dtype))
@@ -718,18 +742,16 @@ def logspace(start, stop, num=50, endpoint=True, base=10.0, dtype=None, axis=0):
     y = linspace(start, stop, num=num, endpoint=endpoint, axis=axis if (_start_is_array or _stop_is_array) else 0)
     if _base_is_array:
         base_arr = _np.asarray(base, dtype='float64')
-        # Broadcast base with y: base has shape (k,), y has shape (num,)
-        # Result should have shape (k, num) with base varying along axis
+        # For each y value, compute base_arr ** y_i, then stack along the given axis
         y_flat = y.flatten().tolist()
         base_flat = base_arr.flatten().tolist()
-        # Build result: for each base value, compute base**y for all y values
-        cols = []
-        for b in base_flat:
-            cols.append([b ** yi for yi in y_flat])
-        # Stack: shape (k, num)
-        result = _np.array(cols)
-        # Apply axis: axis=0 means base varies along axis 0 (shape (k, num))
-        # axis=1 or -1 means base varies along axis 1 (shape (num, k))
+        # Build rows: for each y value, compute [base[0]**y, base[1]**y, ...]
+        rows = []
+        for yi in y_flat:
+            rows.append([b ** yi for b in base_flat])
+        # Shape (num, k) - num linspace points, k base values
+        result = _np.array(rows)
+        # axis controls placement: axis=0 means (num, k), axis=1/-1 means (k, num)
         if axis == 1 or axis == -1:
             result = result.T
     else:
@@ -755,33 +777,24 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
     _stop_is_array = isinstance(stop, (ndarray, _ObjectArray, list, tuple))
     if _start_is_array or _stop_is_array:
         import numpy as _np
-        start_arr = _np.asarray(start, dtype='float64')
-        stop_arr = _np.asarray(stop, dtype='float64')
-        # Check for zeros
+        # Element-wise geomspace for array inputs
+        start_arr = _np.asarray(start)
+        stop_arr = _np.asarray(stop)
+        # Broadcast to common shape
+        try:
+            _bcast = start_arr + stop_arr * 0
+            start_arr = start_arr + _bcast * 0
+            stop_arr = stop_arr + _bcast * 0
+        except Exception:
+            pass
         s_flat = start_arr.flatten().tolist()
         e_flat = stop_arr.flatten().tolist()
-        for v in s_flat + e_flat:
-            if v == 0:
-                raise ValueError("Geometric sequence cannot include zero")
-        # Check sign consistency
+        # Compute element-wise using scalar geomspace
+        cols = []
         for sv, ev in zip(s_flat, e_flat):
-            if (sv < 0) != (ev < 0):
-                raise ValueError(
-                    "Geometric sequence cannot have a sign change. "
-                    "Start and stop must have the same sign or be complex."
-                )
-        log_start = _np.log10(_np.abs(start_arr))
-        log_stop = _np.log10(_np.abs(stop_arr))
-        result = logspace(log_start, log_stop, num=num, endpoint=endpoint)
-        # Restore signs
-        # Check if all negative
-        signs = []
-        for sv in s_flat:
-            signs.append(-1.0 if sv < 0 else 1.0)
-        sign_arr = _np.array(signs).reshape(start_arr.shape)
-        # Broadcast sign across result
-        if result.ndim > sign_arr.ndim:
-            result = result * sign_arr
+            col = geomspace(sv, ev, num=num, endpoint=endpoint)
+            cols.append(col)
+        result = _np.stack(cols, axis=1 if axis == 0 else 0)
         if dtype is not None:
             result = result.astype(str(dtype))
         return result
@@ -814,12 +827,35 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
     if start_f == 0 or stop_f == 0:
         raise ValueError("Geometric sequence cannot include zero")
     both_negative = start_f < 0 and stop_f < 0
-    if start_f < 0 or stop_f < 0:
-        if not both_negative:
-            raise ValueError(
-                "Geometric sequence cannot have a sign change. "
-                "Start and stop must have the same sign or be complex."
-            )
+    sign_change = (start_f < 0) != (stop_f < 0)
+    if sign_change:
+        # Sign change: compute via complex domain, then take real part
+        # This produces NaN for interior points (matching numpy behavior)
+        import numpy as _np
+        start_c = complex(start_f)
+        stop_c = complex(stop_f)
+        if num == 0:
+            result = _np.array([], dtype='float64')
+        elif num == 1:
+            result = _np.array([start_f])
+        else:
+            ratio = (stop_c / start_c) ** (1.0 / (num - 1 if endpoint else num))
+            vals = []
+            for i in range(num):
+                c = start_c * (ratio ** i)
+                # If imaginary part is non-negligible, the value is NaN in real domain
+                if abs(c.imag) > abs(c.real) * 1e-15:
+                    vals.append(float('nan'))
+                else:
+                    vals.append(c.real)
+            if endpoint:
+                vals[-1] = stop_f
+            vals[0] = start_f
+            result = _np.array(vals)
+        if dtype is not None:
+            result = result.astype(str(dtype))
+        return result
+    if both_negative:
         # Both negative: compute for abs values, then negate
         log_start = _math.log10(-start_f)
         log_stop = _math.log10(-stop_f)
@@ -830,6 +866,14 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
         log_start = _math.log10(start_f)
         log_stop = _math.log10(stop_f)
         result = logspace(log_start, log_stop, num=num, endpoint=endpoint)
+    # Force exact start/stop boundaries
+    import numpy as _np
+    if num > 0:
+        flat = result.flatten().tolist()
+        flat[0] = start_f
+        if endpoint and num > 1:
+            flat[-1] = stop_f
+        result = _np.array(flat).reshape(result.shape)
     if dtype is not None:
         result = result.astype(str(dtype))
     return result

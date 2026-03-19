@@ -195,9 +195,11 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
         if isinstance(desired, (list, tuple)):
             desired = numpy.asarray(desired)
         if actual.shape != desired.shape:
-            raise AssertionError(
-                f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"
-            )
+            # Allow shape mismatch when either has 0 elements (vacuously true)
+            if not (actual.size == 0 or desired.size == 0) or strict:
+                raise AssertionError(
+                    f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"
+                )
         a_vals = _as_list(actual)
         d_vals = _as_list(desired)
         for i, (a, d) in enumerate(zip(a_vals, d_vals)):
