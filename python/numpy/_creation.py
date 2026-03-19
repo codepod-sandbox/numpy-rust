@@ -278,6 +278,9 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     return result
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
+    # Handle range objects: convert to list
+    if isinstance(data, range):
+        data = list(data)
     # Handle flatiter: convert to flattened array
     if type(data).__name__ == 'flatiter':
         if hasattr(data, '_arr'):
@@ -695,8 +698,16 @@ def arange(*args, dtype=None, like=None, **kwargs):
     elif len(float_args) == 2:
         float_args = [float_args[0], float_args[1], 1.0]
     if dtype is not None:
-        return _native.arange(float_args[0], float_args[1], float_args[2], dt)
-    result = _native.arange(float_args[0], float_args[1], float_args[2])
+        result = _native.arange(float_args[0], float_args[1], float_args[2], dt)
+    else:
+        result = _native.arange(float_args[0], float_args[1], float_args[2])
+    # Fix arange length for floating-point steps (match NumPy behavior)
+    # NumPy uses ceil((stop - start) / step) to determine length
+    if not _all_int and float_args[2] != 0:
+        import math
+        expected_len = max(0, int(math.ceil((float_args[1] - float_args[0]) / float_args[2])))
+        if len(result) > expected_len:
+            result = result[:expected_len]
     # If all inputs were integers and no explicit dtype, cast to int64
     if _all_int and dt is None:
         result = result.astype('int64')

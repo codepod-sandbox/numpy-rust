@@ -909,15 +909,6 @@ class _NumpyComplexScalar(complex):
 
     def __new__(cls, value=0j, dtype_name="complex128"):
         cval = complex(value)
-        if dtype_name == 'complex64':
-            # Truncate each component to float32 precision
-            import struct as _struct
-            try:
-                real = _struct.unpack('f', _struct.pack('f', cval.real))[0]
-                imag = _struct.unpack('f', _struct.pack('f', cval.imag))[0]
-                cval = complex(real, imag)
-            except (OverflowError, ValueError):
-                pass
         obj = complex.__new__(cls, cval)
         obj._numpy_dtype_name = dtype_name
         return obj

@@ -121,6 +121,18 @@ class ABCPolyBase:
     # ---- evaluation ----
 
     def __call__(self, x):
+        if isinstance(x, ABCPolyBase):
+            # Polynomial composition: p(q) returns a new polynomial
+            # Map x through self's domain/window mapping first
+            x_mapped = pu.mapdomain(x, self._domain, self._window)
+            # Evaluate self at x_mapped using Horner-like composition
+            c = list(self._coef.flatten().tolist()) if hasattr(self._coef, 'flatten') else list(self._coef)
+            if len(c) == 0:
+                return x.__class__([0], domain=x._domain, window=x._window, symbol=x._symbol)
+            result = x.__class__([c[-1]], domain=x._domain, window=x._window, symbol=x._symbol)
+            for i in range(len(c) - 2, -1, -1):
+                result = result * x_mapped + c[i]
+            return result
         x_mapped = self._map_x(x)
         return self.__class__._val_func(x_mapped, self._coef)
 
@@ -134,6 +146,8 @@ class ABCPolyBase:
             raise TypeError("Domains differ")
         if not np.array_equal(self._window, other._window):
             raise TypeError("Windows differ")
+        if self._symbol != other._symbol:
+            raise ValueError("Symbols differ")
 
     def _coerce_other(self, other):
         """Try to coerce other to coefficient array."""
@@ -266,7 +280,8 @@ class ABCPolyBase:
     def __eq__(self, other):
         if not isinstance(other, self.__class__):
             return NotImplemented
-        return (np.array_equal(self._domain, other._domain) and
+        return (self._symbol == other._symbol and
+                np.array_equal(self._domain, other._domain) and
                 np.array_equal(self._window, other._window) and
                 np.array_equal(self._coef, other._coef))
 
@@ -310,6 +325,8 @@ class ABCPolyBase:
         return self.__class__(c, domain=self._domain, window=self._window, symbol=self._symbol)
 
     def integ(self, m=1, k=[], lbnd=None):
+        if lbnd is None:
+            lbnd = 0
         c = self.__class__._int_func(self._coef, m, k=k, lbnd=lbnd)
         return self.__class__(c, domain=self._domain, window=self._window, symbol=self._symbol)
 
@@ -366,7 +383,9 @@ class ABCPolyBase:
         n = max(deg + 1, 10)
         x = np.linspace(domain[0], domain[1], n * 3)
         y = self(x)
-        return kind.fit(x, y, deg, domain=domain, window=window)
+        result = kind.fit(x, y, deg, domain=domain, window=window)
+        result._symbol = self._symbol
+        return result
 
     @classmethod
     def cast(cls, series, domain=None, window=None):
@@ -1667,6 +1686,8 @@ def _legtrim(c, tol=0):
     return _trimcoef(c, tol)
 
 def _legline(off, scl):
+    if scl == 0:
+        return np.array([off])
     return np.array([off, scl])
 
 def _legadd(c1, c2):
@@ -1799,11 +1820,13 @@ def _legder(c, m=1, scl=1, axis=0):
     return np.array(c)
 
 def _legint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
-    if isinstance(m, float):
+    if isinstance(m, float) or (hasattr(m, 'is_integer') and not isinstance(m, int)):
         raise TypeError("m must be an integer, not float")
     m = int(m)
     if m < 0:
         raise ValueError("m must be non-negative")
+    if isinstance(axis, float) or (hasattr(axis, 'is_integer') and not isinstance(axis, int)):
+        raise TypeError("axis must be an integer")
     c = np.asarray(c)
     if isinstance(k, (int, float)): k = [k]
     if isinstance(lbnd, (list, tuple, np.ndarray)):
@@ -2571,9 +2594,12 @@ def _hermeder(c, m=1, scl=1, axis=0):
     return np.array(c)
 
 def _hermeint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
-    if isinstance(m, float): raise TypeError("m must be an integer, not float")
+    if isinstance(m, float) or (hasattr(m, 'is_integer') and not isinstance(m, int)):
+        raise TypeError("m must be an integer, not float")
     m = int(m)
     if m < 0: raise ValueError("m must be non-negative")
+    if isinstance(axis, float) or (hasattr(axis, 'is_integer') and not isinstance(axis, int)):
+        raise TypeError("axis must be an integer")
     c = np.asarray(c)
     if isinstance(k, (int, float)): k = [k]
     if isinstance(lbnd, (list, tuple, np.ndarray)): raise ValueError("lbnd must be a scalar")
@@ -2904,9 +2930,12 @@ def _lagder(c, m=1, scl=1, axis=0):
     return np.array(c)
 
 def _lagint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
-    if isinstance(m, float): raise TypeError("m must be an integer, not float")
+    if isinstance(m, float) or (hasattr(m, 'is_integer') and not isinstance(m, int)):
+        raise TypeError("m must be an integer, not float")
     m = int(m)
     if m < 0: raise ValueError("m must be non-negative")
+    if isinstance(axis, float) or (hasattr(axis, 'is_integer') and not isinstance(axis, int)):
+        raise TypeError("axis must be an integer")
     c = np.asarray(c)
     if isinstance(k, (int, float)): k = [k]
     if isinstance(lbnd, (list, tuple, np.ndarray)): raise ValueError("lbnd must be a scalar")
