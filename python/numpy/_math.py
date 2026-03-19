@@ -528,6 +528,10 @@ absolute = abs
 def sqrt(x):
     if _is_masked_array(x):
         return _ma_unary('sqrt', x)
+    if isinstance(x, _ObjectArray):
+        import cmath
+        result = [cmath.sqrt(v) for v in x._data]
+        return _ObjectArray(result, x._dtype)
     if isinstance(x, ndarray):
         return x.sqrt()
     if isinstance(x, complex):
@@ -538,6 +542,15 @@ def sqrt(x):
 def exp(x):
     if _is_masked_array(x):
         return _ma_unary('exp', x)
+    if isinstance(x, _ObjectArray):
+        import cmath
+        def _cexp(v):
+            try:
+                return cmath.exp(v)
+            except (ValueError, OverflowError):
+                return complex(float('nan'), float('nan'))
+        result = [_cexp(v) for v in x._data]
+        return _ObjectArray(result, x._dtype)
     if isinstance(x, ndarray):
         return x.exp()
     if isinstance(x, complex):
@@ -562,6 +575,15 @@ def exp2(x):
 def log(x):
     if _is_masked_array(x):
         return _ma_unary('log', x)
+    if isinstance(x, _ObjectArray):
+        import cmath
+        def _clog(v):
+            try:
+                return cmath.log(v)
+            except (ValueError, OverflowError):
+                return complex(float('-inf'), _math.pi if v.real < 0 or (v.real == 0 and _math.copysign(1.0, v.real) < 0) else 0.0)
+        result = [_clog(v) for v in x._data]
+        return _ObjectArray(result, x._dtype)
     if isinstance(x, ndarray):
         return x.log()
     if isinstance(x, complex):
@@ -808,7 +830,7 @@ def fix(x, out=None):
     if not isinstance(x, (int, float)):
         x = asarray(x)
         return fix(x, out=out)
-    result = float(_math.trunc(x))
+    result = float64(float(_math.trunc(x)))
     if out is not None:
         out_arr = out
         if isinstance(out_arr, tuple):
@@ -848,7 +870,12 @@ def logaddexp2(x1, x2):
 # --- Power / square / cbrt / reciprocal -------------------------------------
 
 def power(x1, x2):
-    return asarray(x1) ** asarray(x2)
+    a1 = asarray(x1)
+    a2 = asarray(x2)
+    # Handle _ObjectArray (complex, object dtypes)
+    if isinstance(a1, _ObjectArray) or isinstance(a2, _ObjectArray):
+        return a1 ** a2
+    return a1 ** a2
 
 def float_power(x1, x2):
     return power(asarray(x1).astype('float64'), asarray(x2).astype('float64'))
@@ -1003,6 +1030,20 @@ def allclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
 def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
     """Return boolean array where two arrays are element-wise equal within tolerance."""
     import numpy as _np
+    import warnings as _warnings
+    # Warn if atol or rtol is not finite
+    def _is_not_valid_tol(t):
+        try:
+            ft = float(t)
+            return _math.isnan(ft) or _math.isinf(ft) or ft < 0
+        except (TypeError, ValueError):
+            return False
+    if _is_not_valid_tol(atol) or _is_not_valid_tol(rtol):
+        _warnings.warn(
+            f"One of rtol or atol is not valid, atol: {atol}, rtol: {rtol}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     # Handle MaskedArray inputs — delegate to data, preserve mask
     from numpy.ma import MaskedArray as _MA
     _a_ma = isinstance(a, _MA)

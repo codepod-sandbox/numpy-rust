@@ -837,13 +837,18 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
     if dtype is not None:
         if M is not None:
-            return _native.eye(N, M, k, str(dtype))
-        return _native.eye(N, N, k, str(dtype))
-    if M is not None:
-        return _native.eye(N, M, k)
-    if k != 0:
-        return _native.eye(N, N, k)
-    return _native.eye(N)
+            result = _native.eye(N, M, k, str(dtype))
+        else:
+            result = _native.eye(N, N, k, str(dtype))
+    elif M is not None:
+        result = _native.eye(N, M, k)
+    elif k != 0:
+        result = _native.eye(N, N, k)
+    else:
+        result = _native.eye(N)
+    if order == 'F' and hasattr(result, '_mark_fortran'):
+        result._mark_fortran()
+    return result
 
 def where(condition, x=None, y=None):
     if x is None and y is None:
@@ -854,6 +859,25 @@ def where(condition, x=None, y=None):
     # Ensure condition is boolean dtype (native where_ requires bool)
     if str(condition.dtype) != "bool":
         condition = condition.astype("bool")
+    from ._helpers import _ObjectArray
+    # Handle _ObjectArray inputs — element-wise selection
+    if isinstance(x, _ObjectArray) or isinstance(y, _ObjectArray):
+        cond_flat = condition.flatten().tolist()
+        x_arr = asarray(x) if not isinstance(x, _ObjectArray) else x
+        y_arr = asarray(y) if not isinstance(y, _ObjectArray) else y
+        x_flat = x_arr._data if isinstance(x_arr, _ObjectArray) else x_arr.flatten().tolist()
+        y_flat = y_arr._data if isinstance(y_arr, _ObjectArray) else y_arr.flatten().tolist()
+        # Broadcast scalar-like
+        if len(x_flat) == 1 and len(cond_flat) > 1:
+            x_flat = x_flat * len(cond_flat)
+        if len(y_flat) == 1 and len(cond_flat) > 1:
+            y_flat = y_flat * len(cond_flat)
+        result_data = [xv if c else yv for c, xv, yv in zip(cond_flat, x_flat, y_flat)]
+        dt = x_arr._dtype if isinstance(x_arr, _ObjectArray) else (y_arr._dtype if isinstance(y_arr, _ObjectArray) else 'object')
+        result = _ObjectArray(result_data, dt)
+        if len(condition.shape) > 1:
+            result._shape = tuple(condition.shape)
+        return result
     if not isinstance(x, ndarray):
         x = full(condition.shape, float(x))
     if not isinstance(y, ndarray):

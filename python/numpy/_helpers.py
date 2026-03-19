@@ -380,9 +380,39 @@ class _ObjectArray:
         return self.var(axis, ddof, keepdims) ** 0.5
     def __abs__(self):
         _babs = __import__("builtins").abs
-        return _ObjectArray([_babs(x) for x in self._data], self._dtype)
+        result = [_babs(x) for x in self._data]
+        # abs of complex returns float, so return a real ndarray
+        if self._dtype in ('complex64', 'complex128'):
+            from ._creation import array as _array
+            import numpy as _np
+            arr = _array(result, dtype='float64')
+            if len(self._shape) > 1:
+                arr = arr.reshape(self._shape)
+            return arr
+        return _ObjectArray(result, self._dtype)
     def __pow__(self, other):
+        if isinstance(other, _ObjectArray):
+            return _ObjectArray([a ** b for a, b in zip(self._data, other._data)], self._dtype)
+        if isinstance(other, ndarray):
+            if other.ndim == 0:
+                scalar = other.item() if hasattr(other, 'item') else float(other)
+                return _ObjectArray([x ** scalar for x in self._data], self._dtype)
+            other_list = other.flatten().tolist()
+            return _ObjectArray([a ** b for a, b in zip(self._data, other_list)], self._dtype)
+        if hasattr(other, '__iter__') and not isinstance(other, str):
+            other_list = list(other) if not isinstance(other, list) else other
+            return _ObjectArray([a ** b for a, b in zip(self._data, other_list)], self._dtype)
         return _ObjectArray([x ** other for x in self._data], self._dtype)
+    def __rpow__(self, other):
+        if isinstance(other, _ObjectArray):
+            return _ObjectArray([b ** a for a, b in zip(self._data, other._data)], self._dtype)
+        if isinstance(other, ndarray):
+            if other.ndim == 0:
+                scalar = other.item() if hasattr(other, 'item') else float(other)
+                return _ObjectArray([scalar ** x for x in self._data], self._dtype)
+            other_list = other.flatten().tolist()
+            return _ObjectArray([b ** a for a, b in zip(self._data, other_list)], self._dtype)
+        return _ObjectArray([other ** x for x in self._data], self._dtype)
     def __truediv__(self, other):
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a / b for a, b in zip(self._data, other._data)], self._dtype)

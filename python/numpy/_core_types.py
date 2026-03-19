@@ -782,6 +782,18 @@ class _ScalarTypeMeta(type):
 
     def __call__(cls, value=0, *args, **kwargs):
         scalar_name = cls._scalar_name
+        # Reject unexpected keyword arguments for non-str/bytes types
+        if kwargs and scalar_name not in ('str', 'bytes'):
+            if scalar_name == 'void':
+                # void accepts dtype keyword
+                unexpected = set(kwargs) - {'dtype'}
+            elif scalar_name in ('datetime64',):
+                unexpected = set(kwargs)
+            else:
+                unexpected = set(kwargs)
+            if unexpected:
+                raise TypeError(
+                    f"{scalar_name}() takes no keyword arguments")
         # If given a list/tuple/ndarray, create an array with this dtype
         if isinstance(value, (list, tuple)):
             import numpy as _np

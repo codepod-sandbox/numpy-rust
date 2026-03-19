@@ -260,6 +260,17 @@ def _almost_equal_scalar(a, d, decimal):
     if isinstance(a, complex) and isinstance(d, complex):
         if _complex_nan_equal(a, d):
             return True
+    # Handle equal infinities before computing diff
+    try:
+        af = float(a) if not isinstance(a, complex) else a
+        df = float(d) if not isinstance(d, complex) else d
+        if not isinstance(a, complex) and not isinstance(d, complex):
+            if math.isinf(af) and math.isinf(df) and af == df:
+                return True
+            if math.isnan(af) and math.isnan(df):
+                return True
+    except (TypeError, ValueError, OverflowError):
+        pass
     diff = abs(a - d)
     # NaN diff means at least one NaN component; check if they match
     if isinstance(diff, float) and math.isnan(diff):

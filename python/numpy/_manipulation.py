@@ -2277,6 +2277,17 @@ def vander(x, N=None, increasing=False):
         N = n
     if N == 0:
         return empty((n, 0), dtype=x.dtype)
+    from ._helpers import _ObjectArray
+    if isinstance(x, _ObjectArray):
+        # Build result as list of rows for _ObjectArray (complex etc.)
+        rows = []
+        for i in range(n):
+            row = []
+            for j in range(N):
+                exp = j if increasing else (N - 1 - j)
+                row.append(x[i] ** exp)
+            rows.append(row)
+        return array(rows)
     if increasing:
         cols = []
         for j in range(N):
