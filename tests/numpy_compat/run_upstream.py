@@ -865,11 +865,11 @@ if __name__ == "__main__":
             print()
 
         if _failures and not _summary_only:
-            shown = _failures[:30]
+            shown = _failures[:300]
             print("--- FAILURES ({}) ---".format(len(_failures)))
             for fname, fmsg in shown:
                 print("  FAIL {}: {}".format(fname, fmsg[:150]))
-            if len(_failures) > 30:
+            if len(_failures) > 300:
                 print("  ... and {} more".format(len(_failures) - 30))
             print()
 

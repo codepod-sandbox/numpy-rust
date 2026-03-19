@@ -38,19 +38,28 @@ macro_rules! impl_binary_op {
             type Output = Result<NdArray>;
 
             fn $method(self, rhs: &NdArray) -> Result<NdArray> {
-                // Cast Bool operands to Int32 before binary ops (matching NumPy)
+                // Compute the logical result dtype. For arithmetic, Bool is treated
+                // as the other operand's type (Bool+Bool -> Int8).
+                let logical_dtype = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
+                    DType::Int8  // bool + bool -> int8 for arithmetic
+                } else {
+                    self.dtype().promote(rhs.dtype())
+                };
+
+                // For actual computation, cast Bool operands to the storage type
                 let (lhs_ref, rhs_ref);
                 let (lhs_tmp, rhs_tmp);
+                let storage = logical_dtype.storage_dtype();
                 if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
-                    lhs_tmp = if self.dtype() == DType::Bool { self.astype(DType::Int32) } else { self.clone() };
-                    rhs_tmp = if rhs.dtype() == DType::Bool { rhs.astype(DType::Int32) } else { rhs.clone() };
+                    lhs_tmp = if self.dtype() == DType::Bool { self.astype(storage) } else { self.clone() };
+                    rhs_tmp = if rhs.dtype() == DType::Bool { rhs.astype(storage) } else { rhs.clone() };
                     lhs_ref = &lhs_tmp;
                     rhs_ref = &rhs_tmp;
                 } else {
                     lhs_ref = self;
                     rhs_ref = rhs;
                 }
-                let (a, b, logical_dtype) = prepare_binary(lhs_ref, rhs_ref)?;
+                let (a, b, _) = prepare_binary(lhs_ref, rhs_ref)?;
                 let data = match (a, b) {
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
                     (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
@@ -128,15 +137,23 @@ impl NdArray {
                 "floor division not supported for complex arrays".into(),
             ));
         }
-        // Cast Bool operands to Int32 before floor division (matching NumPy)
+        // Cast Bool operands for floor division (matching NumPy promotion)
         if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
+            let target = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
+                DType::Int8
+            } else if self.dtype() == DType::Bool {
+                rhs.dtype()
+            } else {
+                self.dtype()
+            };
+            let storage = target.storage_dtype();
             let lhs_up = if self.dtype() == DType::Bool {
-                self.astype(DType::Int32)
+                self.astype(storage).with_declared_dtype(target)
             } else {
                 self.clone()
             };
             let rhs_up = if rhs.dtype() == DType::Bool {
-                rhs.astype(DType::Int32)
+                rhs.astype(storage).with_declared_dtype(target)
             } else {
                 rhs.clone()
             };
@@ -204,15 +221,23 @@ impl NdArray {
                 "remainder not supported for complex arrays".into(),
             ));
         }
-        // Cast Bool operands to Int32 before remainder (matching NumPy)
+        // Cast Bool operands for remainder (matching NumPy promotion)
         if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
+            let target = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
+                DType::Int8
+            } else if self.dtype() == DType::Bool {
+                rhs.dtype()
+            } else {
+                self.dtype()
+            };
+            let storage = target.storage_dtype();
             let lhs_up = if self.dtype() == DType::Bool {
-                self.astype(DType::Int32)
+                self.astype(storage).with_declared_dtype(target)
             } else {
                 self.clone()
             };
             let rhs_up = if rhs.dtype() == DType::Bool {
-                rhs.astype(DType::Int32)
+                rhs.astype(storage).with_declared_dtype(target)
             } else {
                 rhs.clone()
             };

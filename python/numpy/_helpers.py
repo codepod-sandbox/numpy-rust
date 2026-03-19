@@ -304,12 +304,20 @@ class _ObjectArray:
             _ball = __import__("builtins").all
             if _ball(isinstance(k, int) for k in key):
                 idx = self._flat_index(key)
-                return self._data[idx]
+                return self._wrap_element(self._data[idx])
             raise TypeError("tuple indices with slices are not supported for object arrays")
         result = self._data[key]
         if isinstance(key, slice):
             return _ObjectArray(result, self._dtype)
-        return result
+        return self._wrap_element(result)
+    def _wrap_element(self, val):
+        """Wrap scalar element in numpy scalar type when appropriate."""
+        dt = str(self._dtype) if not isinstance(self._dtype, str) else self._dtype
+        if isinstance(val, complex) and 'complex' in dt:
+            from numpy._core_types import _NumpyComplexScalar
+            dn = 'complex64' if '64' in dt else 'complex128'
+            return _NumpyComplexScalar(val, dn)
+        return val
     def __setitem__(self, key, value):
         if isinstance(key, tuple):
             _ball = __import__("builtins").all

@@ -186,8 +186,10 @@ def _scalar_promote(dn1, dn2):
         # same type -> same type
     }
     key = (dn1, dn2)
-    # Fast path: same dtype
+    # Fast path: same dtype (except bool+bool which promotes to int8 for arithmetic)
     if dn1 == dn2:
+        if dn1 == 'bool':
+            return 'int8'
         return dn1
 
     # Integer promotion tables (manual for speed)
@@ -200,6 +202,9 @@ def _scalar_promote(dn1, dn2):
 
     # Both integers
     if dn1 in _INT_RANK and dn2 in _INT_RANK:
+        # NumPy: bool + bool -> int8 (not bool) for arithmetic
+        if dn1 == 'bool' and dn2 == 'bool':
+            return 'int8'
         if dn1 == 'bool':
             return dn2
         if dn2 == 'bool':
@@ -240,7 +245,12 @@ def _scalar_promote(dn1, dn2):
                 return 32 if d == 'complex64' else 64
             if d in _FLOAT_RANK:
                 return {'float16': 16, 'float32': 32, 'float64': 64}[d]
-            return 64  # integers -> 64
+            # Integers: map to the float precision needed
+            _int_to_float = {'bool': 16, 'int8': 16, 'uint8': 16,
+                             'int16': 16, 'uint16': 16,
+                             'int32': 64, 'uint32': 64,
+                             'int64': 64, 'uint64': 64}
+            return _int_to_float.get(d, 64)
         rb = _real_bits(dn1)
         rc = _real_bits(dn2)
         m = rb if rb > rc else rc
@@ -265,11 +275,73 @@ def _scalar_promote(dn1, dn2):
 
 
 import operator as _operator
+import cmath as _cmath
+import math as _math
+
+
+def _complex_pow(a, b):
+    """Complex power that matches numpy semantics for inf/nan.
+
+    Uses C99 cpow semantics: z^w = exp(w * log(z)).
+    This handles inf/nan cases that Python's complex.__pow__ gets wrong.
+    Also uses repeated multiplication for small integer exponents to avoid
+    precision loss from log/exp in RustPython.
+    """
+    if isinstance(a, complex) and isinstance(b, complex):
+        ar, ai = a.real, a.imag
+        br, bi = b.real, b.imag
+        # If base or exponent contains nan, result is nan+nanj
+        if _math.isnan(ar) or _math.isnan(ai) or _math.isnan(br) or _math.isnan(bi):
+            return complex(float('nan'), float('nan'))
+        # If base contains inf, use log/exp form (C99 cpow)
+        if _math.isinf(ar) or _math.isinf(ai) or _math.isinf(br) or _math.isinf(bi):
+            try:
+                la = _cmath.log(a)
+                return _cmath.exp(b * la)
+            except (OverflowError, ValueError):
+                return complex(float('nan'), float('nan'))
+        # For small non-negative integer exponents, use repeated multiplication
+        # to avoid precision loss from RustPython's log/exp-based complex pow.
+        if bi == 0.0 and br == int(br) and 0 <= int(br) <= 100:
+            n = int(br)
+            if n == 0:
+                return complex(1, 0)
+            result = complex(1, 0)
+            base = a
+            while n > 0:
+                if n % 2 == 1:
+                    result = complex(result.real * base.real - result.imag * base.imag,
+                                     result.real * base.imag + result.imag * base.real)
+                base = complex(base.real * base.real - base.imag * base.imag,
+                               2 * base.real * base.imag)
+                n //= 2
+            return result
+        # For negative integer exponents, compute positive then invert
+        if bi == 0.0 and br == int(br) and -100 <= int(br) < 0:
+            pos = _complex_pow(a, complex(-br, 0))
+            return complex(1, 0) / pos
+        try:
+            return _operator.pow(a, b)
+        except (OverflowError, ValueError):
+            try:
+                la = _cmath.log(a)
+                return _cmath.exp(b * la)
+            except (OverflowError, ValueError):
+                return complex(float('nan'), float('nan'))
+    return _operator.pow(a, b)
+
+
+def _safe_pow(a, b):
+    """Power that uses complex pow for complex operands, else operator.pow."""
+    if isinstance(a, complex) or isinstance(b, complex):
+        return _complex_pow(complex(a), complex(b))
+    return _operator.pow(a, b)
+
 
 _BINOP_MAP = {
     '__add__': _operator.add, '__sub__': _operator.sub, '__mul__': _operator.mul,
     '__truediv__': _operator.truediv, '__floordiv__': _operator.floordiv,
-    '__mod__': _operator.mod, '__pow__': _operator.pow,
+    '__mod__': _operator.mod, '__pow__': _safe_pow,
     '__lshift__': _operator.lshift, '__rshift__': _operator.rshift,
     '__and__': _operator.and_, '__or__': _operator.or_, '__xor__': _operator.xor,
 }

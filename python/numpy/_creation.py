@@ -835,17 +835,34 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
     return result
 
 def eye(N, M=None, k=0, dtype=None, order="C", like=None):
-    if dtype is not None:
-        if M is not None:
-            result = _native.eye(N, M, k, str(dtype))
+    if M is None:
+        M = N
+    dt_str = str(dtype) if dtype is not None else None
+    # Handle string/bytes dtypes that Rust doesn't support
+    if dt_str is not None and (dt_str.startswith('S') or dt_str.startswith('|S') or
+                                dt_str.startswith('U') or dt_str.startswith('<U') or
+                                dt_str.startswith('>U') or dt_str == 'bytes' or dt_str == 'str'):
+        from ._helpers import _ObjectArray
+        # Determine the "one" and "zero" values for the dtype
+        if 'S' in dt_str or dt_str == 'bytes':
+            one, zero = b'1', b''
         else:
-            result = _native.eye(N, N, k, str(dtype))
-    elif M is not None:
+            one, zero = '1', ''
+        data = []
+        for i in range(N):
+            for j in range(M):
+                data.append(one if j - i == k else zero)
+        return _ObjectArray(data, dt_str, shape=(N, M))
+    try:
+        if dt_str is not None:
+            result = _native.eye(N, M, k, dt_str)
+        else:
+            result = _native.eye(N, M, k)
+    except (TypeError, ValueError):
+        # Fallback for unsupported dtypes
         result = _native.eye(N, M, k)
-    elif k != 0:
-        result = _native.eye(N, N, k)
-    else:
-        result = _native.eye(N)
+        if dt_str is not None:
+            result = result.astype(dt_str)
     if order == 'F' and hasattr(result, '_mark_fortran'):
         result._mark_fortran()
     return result

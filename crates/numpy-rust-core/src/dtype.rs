@@ -46,10 +46,20 @@ impl DType {
             }
             let real_type = if a.is_complex() { b } else { a };
             let complex_type = if a.is_complex() { a } else { b };
-            return match (complex_type, real_type) {
-                (DType::Complex64, DType::Float64 | DType::Int64) => DType::Complex128,
-                (DType::Complex128, _) => DType::Complex128,
-                (DType::Complex64, _) => DType::Complex64,
+            return match complex_type {
+                DType::Complex128 => DType::Complex128,
+                DType::Complex64 => {
+                    // Complex64 has float32 components.
+                    // If the real type would need float64 precision, promote to complex128.
+                    match real_type {
+                        DType::Float64
+                        | DType::Int64
+                        | DType::UInt64
+                        | DType::Int32
+                        | DType::UInt32 => DType::Complex128,
+                        _ => DType::Complex64,
+                    }
+                }
                 _ => DType::Complex128,
             };
         }
@@ -89,14 +99,29 @@ impl DType {
             };
         }
 
-        // Special case: mixing i64 with f32 promotes to f64 to avoid precision loss
-        if (hi == DType::Float32 && lo == DType::Int64)
-            || (hi == DType::Int64 && lo == DType::Float32)
-        {
-            return DType::Float64;
+        // Integer + float: widen float if int precision exceeds float precision
+        if (hi.is_float() && lo.is_integer()) || (hi.is_integer() && lo.is_float()) {
+            let (float_dt, int_dt) = if hi.is_float() { (hi, lo) } else { (lo, hi) };
+            let int_bits = int_dt.bit_width();
+            return match float_dt {
+                DType::Float16 => {
+                    if int_bits <= 8 {
+                        DType::Float16
+                    } else {
+                        DType::Float32
+                    }
+                }
+                DType::Float32 => {
+                    if int_bits >= 32 {
+                        DType::Float64
+                    } else {
+                        DType::Float32
+                    }
+                }
+                _ => DType::Float64,
+            };
         }
 
-        // Integer + float -> float (pick the float type, or widen if needed)
         // Float + float -> wider float
         hi
     }
@@ -251,8 +276,12 @@ mod tests {
 
     #[test]
     fn test_promote_int_to_float() {
-        assert_eq!(DType::Int32.promote(DType::Float32), DType::Float32);
+        // Int32 can't be exactly represented in Float32; promote to Float64
+        assert_eq!(DType::Int32.promote(DType::Float32), DType::Float64);
         assert_eq!(DType::Int64.promote(DType::Float64), DType::Float64);
+        // Narrow ints fit in Float32
+        assert_eq!(DType::Int8.promote(DType::Float32), DType::Float32);
+        assert_eq!(DType::Int16.promote(DType::Float32), DType::Float32);
     }
 
     #[test]
@@ -271,11 +300,13 @@ mod tests {
         let pairs = [
             (DType::Int32, DType::Float64),
             (DType::Bool, DType::Int64),
-            (DType::Float32, DType::Int32),
+            (DType::Float32, DType::Int32), // both promote to Float64
             (DType::Int64, DType::Float32),
             (DType::Float32, DType::Complex64),
             (DType::Float64, DType::Complex128),
-            (DType::Int32, DType::Complex64),
+            (DType::Int32, DType::Complex64), // both promote to Complex128
+            (DType::Int8, DType::Float32),
+            (DType::UInt8, DType::Int16),
         ];
         for (a, b) in pairs {
             assert_eq!(
@@ -294,8 +325,8 @@ mod tests {
         assert_eq!(DType::Float64.promote(DType::Complex64), DType::Complex128);
         // Int64 + Complex64 -> Complex128
         assert_eq!(DType::Int64.promote(DType::Complex64), DType::Complex128);
-        // Int32 + Complex64 -> Complex64
-        assert_eq!(DType::Int32.promote(DType::Complex64), DType::Complex64);
+        // Int32 + Complex64 -> Complex128 (int32 needs float64 precision)
+        assert_eq!(DType::Int32.promote(DType::Complex64), DType::Complex128);
         // Complex64 + Complex128 -> Complex128
         assert_eq!(
             DType::Complex64.promote(DType::Complex128),
