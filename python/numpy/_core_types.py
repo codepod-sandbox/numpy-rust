@@ -684,20 +684,61 @@ class _NumpyIntScalar(int):
         return _NumpyIntScalar(int.__invert__(self), self._numpy_dtype_name)
 
 
-def _float_to_str(val, max_digits):
-    """Format a float with limited significant digits, matching numpy output."""
+def _float_to_str(val, max_digits, dtype_name='float64'):
+    """Format a float with limited significant digits, matching numpy output.
+    Uses Dragon4-like shortest-unique representation for float16/float32."""
     import math as _m
+    import struct as _struct
     if _m.isnan(val):
         return 'nan'
     if _m.isinf(val):
         return '-inf' if val < 0 else 'inf'
     if val == 0.0:
+        if _m.copysign(1.0, val) < 0:
+            return '-0.0'
         return '0.0'
-    # Use repr-style formatting then truncate to max_digits significant figures
-    s = repr(val)
-    # For very large/small numbers, use exponential notation with limited precision
-    # Try formatting with limited precision
-    formatted = '{:.{}g}'.format(val, max_digits)
+
+    if dtype_name == 'float16':
+        # Find shortest representation that round-trips through float16
+        pack_fmt, unpack_fmt = 'e', 'e'
+        try:
+            b1 = _struct.pack(pack_fmt, val)
+        except (OverflowError, _struct.error):
+            return repr(val)
+        for ndig in range(1, 12):
+            s = f'{val:.{ndig}g}'
+            sv = float(s)
+            try:
+                b2 = _struct.pack(pack_fmt, sv)
+                if b1 == b2:
+                    # Ensure decimal point
+                    if '.' not in s and 'e' not in s and 'E' not in s:
+                        s += '.0'
+                    return s
+            except (OverflowError, _struct.error):
+                continue
+        formatted = f'{val:.{max_digits}g}'
+    elif dtype_name == 'float32':
+        # Find shortest representation that round-trips through float32
+        try:
+            b1 = _struct.pack('f', val)
+        except (OverflowError, _struct.error):
+            return repr(val)
+        for ndig in range(1, 20):
+            s = f'{val:.{ndig}g}'
+            sv = float(s)
+            try:
+                b2 = _struct.pack('f', sv)
+                if b1 == b2:
+                    if '.' not in s and 'e' not in s and 'E' not in s:
+                        s += '.0'
+                    return s
+            except (OverflowError, _struct.error):
+                continue
+        formatted = f'{val:.{max_digits}g}'
+    else:
+        formatted = f'{val:.{max_digits}g}'
+
     # Ensure we always have a decimal point for float
     if '.' not in formatted and 'e' not in formatted and 'E' not in formatted:
         formatted += '.0'
@@ -733,18 +774,18 @@ class _NumpyFloatScalar(float):
         return numpy
 
     def __repr__(self):
-        return self.__str__()
+        dn = self._numpy_dtype_name
+        s = self.__str__()
+        return f'np.{dn}({s})'
 
     def __str__(self):
         val = float(self)
         dn = self._numpy_dtype_name
         # Use appropriate precision for dtype
         if dn == 'float16':
-            # float16 has ~3.3 significant digits
-            return _float_to_str(val, 5)
+            return _float_to_str(val, 5, dtype_name='float16')
         elif dn == 'float32':
-            # float32 has ~7.2 significant digits
-            return _float_to_str(val, 8)
+            return _float_to_str(val, 8, dtype_name='float32')
         # float64 uses Python's default str
         return float.__repr__(val)
 
@@ -1159,6 +1200,11 @@ class _ScalarTypeMeta(type):
     def __str__(cls):
         return cls._scalar_name
 
+    def fromhex(cls, string):
+        """Create a scalar from a hexadecimal string (like float.fromhex)."""
+        fval = float.fromhex(string)
+        return cls(fval)
+
     def __eq__(cls, other):
         if isinstance(other, _ScalarTypeMeta):
             return cls._scalar_name == other._scalar_name
@@ -1322,6 +1368,27 @@ class generic(metaclass=_ScalarTypeMeta, scalar_name="generic"):
     def trace(self, offset=0, axis1=0, axis2=1, dtype=None, out=None): return self
     def transpose(self, *axes): return self
     def var(self, axis=None, dtype=None, out=None, ddof=0, keepdims=False): return type(self)(0)
+
+    # Additional ndarray-compatible stubs
+    def astype(self, dtype, order='K', casting='unsafe', subok=True, copy=True):
+        import numpy; return numpy.array(self).astype(dtype)
+    def byteswap(self, inplace=False): return self
+    def choose(self, choices, out=None, mode='raise'):
+        import numpy; return numpy.array(self).choose(choices, out=out, mode=mode)
+    def dump(self, file): pass
+    def dumps(self): return b''
+    def fill(self, value): pass
+    def getfield(self, dtype, offset=0):
+        import numpy; return numpy.array(self).getfield(dtype, offset)
+    def resize(self, new_shape, refcheck=True):
+        import numpy; return numpy.array(self).resize(new_shape, refcheck=refcheck)
+    def setfield(self, val, dtype, offset=0): pass
+    def setflags(self, write=None, align=None, uic=None): pass
+    def sort(self, axis=-1, kind=None, order=None): pass
+    def to_device(self, device, /, stream=None): return self
+    def tofile(self, fid, sep='', format='%s'): pass
+    def view(self, dtype=None, type=None):
+        import numpy; return numpy.array(self).view(dtype)
 
 class number(generic, metaclass=_ScalarTypeMeta, scalar_name="number"):
     """Base class for all numeric scalar types."""
@@ -2686,11 +2753,12 @@ class finfo:
             self.bits = 32
             self.eps = float32(1.1920929e-07)
             self.epsneg = float32(5.960464477539063e-08)
-            self.max = 3.4028235e+38
-            self.min = -3.4028235e+38
-            self.tiny = 1.1754944e-38
-            self.smallest_normal = 1.1754944e-38
-            self.smallest_subnormal = 1e-45
+            import struct as _s
+            self.max = _s.unpack('f', b'\xff\xff\x7f\x7f')[0]  # exact float32 max
+            self.min = -self.max
+            self.tiny = _s.unpack('f', b'\x00\x00\x80\x00')[0]  # exact float32 tiny
+            self.smallest_normal = self.tiny
+            self.smallest_subnormal = _s.unpack('f', b'\x01\x00\x00\x00')[0]
             self.precision = 6
             self.resolution = float32(10) ** (-self.precision)
             self.dtype = float32

@@ -158,159 +158,248 @@ def _format_positional_raw(v, precision, unique, fractional, min_digits, dtype_n
 
     if unique and precision is None and min_digits is None:
         # Unique mode, no precision constraint - find shortest representation
-        # that round-trips
-        if dtype_name == 'float16':
-            for ndig in range(0, 12):
-                s = f'{v:.{ndig}f}'
-                sv = float(s)
-                try:
-                    b1 = struct.pack('e', v)
-                    b2 = struct.pack('e', sv)
-                    if b1 == b2:
-                        if '.' not in s:
-                            s += '.'
-                        return s
-                except (OverflowError, struct.error):
-                    pass
-            return f'{v:.5f}'
-        elif dtype_name == 'float32':
-            for ndig in range(0, 20):
-                s = f'{v:.{ndig}f}'
-                sv = float(s)
-                try:
-                    b1 = struct.pack('f', v)
-                    b2 = struct.pack('f', sv)
-                    if b1 == b2:
-                        if '.' not in s:
-                            s += '.'
-                        return s
-                except (OverflowError, struct.error):
-                    pass
-            return f'{v:.9f}'
-        else:
-            # float64 - use Python repr, convert to positional
-            return _repr_to_positional(v)
+        return _unique_positional(v, dtype_name)
 
     if unique:
-        # Unique mode with precision constraint
-        if dtype_name == 'float16':
-            base = _unique_positional(v, 'float16')
-        elif dtype_name == 'float32':
-            base = _unique_positional(v, 'float32')
-        else:
-            base = _repr_to_positional(v)
+        # Unique mode: find shortest representation that round-trips
+        # precision can REDUCE digits (show min(unique, precision))
+        # min_digits can ADD digits (show max(unique, min_digits))
+        #
+        # For fractional=True: precision/min_digits count fractional digits
+        # For fractional=False: precision/min_digits count significant digits
 
-        if precision is not None:
-            if fractional:
+        # Get unique significant digit count for this dtype
+        ndig_unique, _ = _get_float_precision_digits_for_pos(v, dtype_name)
+
+        if fractional:
+            # fractional mode: precision/min_digits count digits after decimal point
+            if precision is not None and min_digits is not None:
+                # Both specified: use max(min_digits, min(unique_frac, precision))
+                # But precision limits, min_digits extends
+                # Result: clamp to [min_digits, precision] around unique
+                base = _format_unique_fractional(v, dtype_name, precision, min_digits)
+            elif precision is not None:
                 # Precision limits fractional digits
-                # Round the base value to that many fractional digits
-                rounded = f'{v:.{precision}f}'
-                # But use the uniquely-rounded value
-                # First get the unique digits
+                base = _unique_positional(v, dtype_name)
                 parts = base.split('.')
-                int_part = parts[0]
-                frac_part = parts[1] if len(parts) > 1 else ''
-                if len(frac_part) > precision:
-                    # Need to round
-                    rounded_val = round(v, precision)
-                    base = f'{rounded_val:.{precision}f}'
-                    # But strip trailing zeros to match unique
-                    parts2 = base.split('.')
-                    frac2 = parts2[1] if len(parts2) > 1 else ''
-                    # Keep unique precision
-                    base = parts2[0] + '.' + frac2
+                frac = parts[1] if len(parts) > 1 else ''
+                if len(frac) > precision:
+                    rounded = round(v, precision)
+                    base = f'{rounded:.{precision}f}'
+                    if '.' not in base:
+                        base += '.'
+                    # Strip trailing zeros for unique
+                    base = base.rstrip('0')
+                    if base.endswith('.'):
+                        pass  # keep dot
+            elif min_digits is not None:
+                # min_digits extends: show exact integer digits + at least min_digits fractional
+                full = f'{v:.{max(min_digits, 0)}f}'
+                if '.' not in full:
+                    full += '.'
+                base = full
             else:
-                # precision counts total significant digits
-                if precision == 0:
-                    raise ValueError(
-                        "unique mode with fractional=False requires precision > 0")
-                # Round to given significant digits
-                if v != 0:
-                    import math as _m
-                    mag = _m.floor(_m.log10(abs(v))) + 1
-                    nfrac = max(0, precision - int(mag))
-                    base = f'{v:.{nfrac}f}'
-                else:
-                    base = '0.'
+                base = _unique_positional(v, dtype_name)
+        else:
+            # non-fractional mode: precision/min_digits count significant digits
+            if precision is not None and precision == 0:
+                raise ValueError(
+                    "unique mode with fractional=False requires precision > 0")
 
-        if min_digits is not None:
-            # Extend with zeros if needed
-            parts = base.split('.')
-            int_part = parts[0]
-            frac_part = parts[1] if len(parts) > 1 else ''
-            if not fractional or fractional:
-                # min_digits applies to fractional part for fractional=True
-                # and significant digits for fractional=False
-                if fractional:
-                    while len(frac_part) < min_digits:
-                        frac_part += '0'
-                else:
-                    # Count sig digits
-                    sig = int_part.lstrip('-').lstrip('0') + frac_part
-                    total_sig = len(sig.rstrip('0')) if sig else 0
-                    if not sig:
-                        total_sig = 0
-                    # Need to extend to min_digits significant digits
-                    needed = min_digits - total_sig
-                    if needed > 0:
-                        # Extend fractional part or integer significant digits
-                        while len(int_part.lstrip('-').lstrip('0') + frac_part) < min_digits:
-                            frac_part += '0'
-            base = int_part + '.' + frac_part
+            # Determine target significant digits
+            if precision is not None and min_digits is not None:
+                target = max(min_digits, min(ndig_unique, precision))
+            elif precision is not None:
+                target = min(ndig_unique, precision)
+            elif min_digits is not None:
+                target = max(ndig_unique, min_digits)
+            else:
+                target = ndig_unique
+
+            base = _round_to_sig_digits_positional(v, target)
 
         return base
 
     else:
         # Non-unique mode: format with exact precision
         if fractional:
-            return f'{v:.{precision}f}'
+            result = f'{v:.{precision}f}'
         else:
             # Precision counts significant digits
             if v == 0:
                 return '0.' + '0' * max(0, precision - 1)
-            import math as _m
-            mag = _m.floor(_m.log10(abs(v))) + 1
-            nfrac = max(0, precision - int(mag))
-            return f'{v:.{nfrac}f}'
+            result = _round_to_sig_digits_positional(v, precision)
+        # Ensure decimal point is always present
+        if '.' not in result:
+            result += '.'
+        return result
+
+
+def _get_float_precision_digits_for_pos(v, dtype_name):
+    """Get unique significant digit count for positional formatting."""
+    import struct, math
+    if not math.isfinite(v) or v == 0:
+        return 1, v
+    if dtype_name == 'float16':
+        pack_fmt = 'e'
+    elif dtype_name == 'float32':
+        pack_fmt = 'f'
+    else:
+        # float64: use repr
+        s = repr(v).lstrip('-')
+        if 'e' in s:
+            mantissa = s.split('e')[0]
+        else:
+            mantissa = s
+        mantissa = mantissa.replace('.', '').lstrip('0')
+        return len(mantissa) if mantissa else 1, v
+
+    try:
+        b1 = struct.pack(pack_fmt, v)
+    except (OverflowError, struct.error):
+        return 17, v  # fallback to max
+
+    for ndig in range(1, 20):
+        s = f'{v:.{ndig}g}'
+        sv = float(s)
+        try:
+            b2 = struct.pack(pack_fmt, sv)
+            if b1 == b2:
+                return ndig, v
+        except (OverflowError, struct.error):
+            continue
+    return 17, v
+
+
+def _format_unique_fractional(v, dtype_name, precision, min_digits):
+    """Format with both precision (limit) and min_digits (extend) for fractional mode.
+    When min_digits is specified, use full exact integer digits."""
+    # Use full exact representation for integer part (since min_digits extends)
+    target_frac = max(min_digits, 0)
+    full = f'{v:.{target_frac}f}'
+    if '.' not in full:
+        full += '.'
+    parts = full.split('.')
+    int_part = parts[0]
+    frac = parts[1] if len(parts) > 1 else ''
+
+    # precision limits fractional digits (but min_digits guarantees a minimum)
+    # precision can only REDUCE, min_digits can only EXTEND
+    # But when both specified: show max(min_digits, clamp_to_precision) fractional digits
+    # In practice: just show min_digits fractional digits (precision doesn't reduce below min_digits)
+
+    # Ensure min_digits fractional digits
+    while len(frac) < min_digits:
+        frac += '0'
+
+    if frac:
+        return int_part + '.' + frac
+    return int_part + '.'
+
+
+def _round_to_sig_digits_positional(v, precision):
+    """Round v to precision significant digits and format as positional string."""
+    import math
+    if v == 0:
+        return '0.'
+    neg = v < 0
+    av = abs(v)
+    mag = math.floor(math.log10(av)) + 1  # number of integer digits
+    nfrac = max(0, precision - mag)
+
+    if nfrac > 0:
+        # Has fractional digits
+        result = f'{av:.{nfrac}f}'
+    else:
+        # All integer digits; round and zero-pad
+        # Use the g format to get the right significant digits, then reconstruct
+        s = f'{av:.{precision}g}'
+        # Parse the result
+        if 'e' in s or 'E' in s:
+            # Scientific notation - convert to positional with zero padding
+            parts = s.lower().split('e')
+            mantissa = parts[0]
+            exp = int(parts[1])
+            m_parts = mantissa.split('.')
+            int_d = m_parts[0]
+            frac_d = m_parts[1] if len(m_parts) > 1 else ''
+            all_d = int_d + frac_d
+            dpos = 1 + exp  # digits before decimal
+            if dpos >= len(all_d):
+                result = all_d + '0' * (dpos - len(all_d)) + '.'
+            else:
+                result = all_d[:dpos] + '.' + all_d[dpos:]
+        else:
+            if '.' not in s:
+                s += '.'
+            result = s
+
+    if '.' not in result:
+        result += '.'
+    if neg:
+        result = '-' + result
+    return result
 
 
 def _unique_positional(v, dtype_name):
     """Get unique positional representation for a given float type."""
-    import struct
-    if dtype_name == 'float16':
-        for ndig in range(0, 12):
-            s = f'{v:.{ndig}f}'
-            sv = float(s)
-            try:
-                b1 = struct.pack('e', v)
-                b2 = struct.pack('e', sv)
-                if b1 == b2:
-                    if '.' not in s:
-                        s += '.'
-                    return s
-            except (OverflowError, struct.error):
-                pass
-        return f'{v:.5f}'
-    elif dtype_name == 'float32':
-        for ndig in range(0, 20):
-            s = f'{v:.{ndig}f}'
-            sv = float(s)
-            try:
-                b1 = struct.pack('f', v)
-                b2 = struct.pack('f', sv)
-                if b1 == b2:
-                    if '.' not in s:
-                        s += '.'
-                    return s
-            except (OverflowError, struct.error):
-                pass
-        return f'{v:.9f}'
-    else:
+    import struct, math
+    if dtype_name == 'float64':
         return _repr_to_positional(v)
+
+    # For float16/float32, find shortest significant digits
+    pack_fmt = 'e' if dtype_name == 'float16' else 'f'
+    try:
+        b1 = struct.pack(pack_fmt, v)
+    except (OverflowError, struct.error):
+        return _repr_to_positional(v)
+
+    # Find minimum significant digits using g format
+    for ndig in range(1, 20):
+        s = f'{v:.{ndig}g}'
+        sv = float(s)
+        try:
+            b2 = struct.pack(pack_fmt, sv)
+            if b1 == b2:
+                # Convert the g-format result to positional notation
+                # Parse the value and format as positional
+                if 'e' in s or 'E' in s:
+                    # Scientific notation - convert to positional
+                    parts = s.lower().split('e')
+                    mantissa = parts[0]
+                    exp = int(parts[1])
+                    neg = mantissa.startswith('-')
+                    if neg:
+                        mantissa = mantissa[1:]
+                    m_parts = mantissa.split('.')
+                    int_d = m_parts[0]
+                    frac_d = m_parts[1] if len(m_parts) > 1 else ''
+                    all_d = int_d + frac_d
+                    dpos = 1 + exp  # digits before decimal
+                    if dpos <= 0:
+                        result = '0.' + '0' * (-dpos) + all_d
+                    elif dpos >= len(all_d):
+                        result = all_d + '0' * (dpos - len(all_d)) + '.'
+                    else:
+                        result = all_d[:dpos] + '.' + all_d[dpos:]
+                    if neg:
+                        result = '-' + result
+                else:
+                    # Already positional
+                    if '.' not in s:
+                        s += '.'
+                    result = s
+                return result
+        except (OverflowError, struct.error):
+            continue
+    # Fallback
+    max_frac = 5 if dtype_name == 'float16' else 9
+    return f'{v:.{max_frac}f}'
 
 
 def _repr_to_positional(v):
-    """Convert a float64 to positional notation using repr for unique digits."""
+    """Convert a float64 to positional notation using repr for unique digits.
+    Strips trailing zeros from fractional part (Dragon4-style)."""
     import math
     if v == 0.0:
         if math.copysign(1.0, v) < 0:
@@ -345,6 +434,14 @@ def _repr_to_positional(v):
             result = s2 + '.'
         else:
             result = s2
+
+    # Strip trailing zeros from fractional part (Dragon4 style)
+    if '.' in result:
+        result = result.rstrip('0')
+        if result.endswith('.'):
+            pass  # keep the trailing dot
+        elif '.' not in result:
+            result += '.'
 
     if neg:
         result = '-' + result
@@ -395,6 +492,83 @@ def format_float_positional(x, precision=None, unique=True, fractional=True,
         result = _apply_padding(result, pad_left, pad_right)
 
     return result
+
+
+def _unique_scientific(v, dtype_name):
+    """Get unique scientific representation for a given float type."""
+    import struct, math
+
+    if v == 0.0:
+        sign = '-' if math.copysign(1.0, v) < 0 else ''
+        return f'{sign}0.e+00'
+
+    if dtype_name == 'float64':
+        # Use Python repr which gives unique shortest for float64
+        s = repr(v)
+        neg = s.startswith('-')
+        s2 = s.lstrip('-')
+        if 'e' in s2:
+            # Already scientific - normalize
+            mant, exp_s = s2.split('e')
+            exp = int(exp_s)
+        else:
+            # Positional - convert to scientific
+            if '.' in s2:
+                int_d, frac_d = s2.split('.')
+            else:
+                int_d, frac_d = s2, ''
+            all_d = int_d + frac_d
+            # Find first non-zero
+            first_nz = 0
+            for i, c in enumerate(all_d):
+                if c != '0':
+                    first_nz = i
+                    break
+            if int_d == '0':
+                # 0.00xyz... → x.yz...e-N
+                exp = -(len(frac_d) - len(frac_d.lstrip('0'))) - 1 + len(int_d) - 1
+                # Actually, easier to compute from the value
+                exp = math.floor(math.log10(abs(v)))
+                all_d = all_d.lstrip('0')
+            else:
+                exp = len(int_d) - 1
+                all_d = all_d  # already correct
+
+            # Strip trailing zeros from unique digits
+            all_d = all_d.rstrip('0') if len(all_d) > 1 else all_d
+            if len(all_d) == 0:
+                all_d = '0'
+
+            mant = all_d[0] + ('.' + all_d[1:] if len(all_d) > 1 else '.')
+
+        exp_sign = '+' if exp >= 0 else '-'
+        exp_str = f'{abs(exp):02d}'
+        result = f'{mant}e{exp_sign}{exp_str}'
+        if neg:
+            result = '-' + result
+        return result
+
+    # For float16/float32: find shortest significant digits
+    pack_fmt = 'e' if dtype_name == 'float16' else 'f'
+    try:
+        b1 = struct.pack(pack_fmt, v)
+    except (OverflowError, struct.error):
+        return _unique_scientific(v, 'float64')
+
+    for ndig in range(1, 20):
+        s = f'{v:.{ndig}g}'
+        sv = float(s)
+        try:
+            b2 = struct.pack(pack_fmt, sv)
+            if b1 == b2:
+                # Convert to scientific notation
+                frac_digits = max(0, ndig - 1)
+                return f'{v:.{frac_digits}e}'
+        except (OverflowError, struct.error):
+            continue
+
+    # Fallback
+    return f'{v:.6e}'
 
 
 def _apply_trim(s, trim):
@@ -499,21 +673,24 @@ def format_float_scientific(x, precision=None, unique=True, trim='k',
     elif math.isinf(v):
         result = 'inf' if v > 0 else '-inf'
     else:
-        if unique and precision is None:
-            # Get unique significant digits count for this dtype
-            ndig, _ = _get_float_precision_digits(x)
-            # Format with that many digits in scientific notation
-            frac_digits = max(0, ndig - 1)
-            result = f'{v:.{frac_digits}e}'
-        elif unique and precision is not None:
-            # Unique with precision limit
-            ndig, _ = _get_float_precision_digits(x)
-            frac_digits = max(0, ndig - 1)
-            if precision < frac_digits:
-                # Round to fewer digits
-                result = f'{v:.{precision}e}'
-            else:
-                result = f'{v:.{frac_digits}e}'
+        if unique:
+            # Get unique scientific representation
+            result = _unique_scientific(v, dtype_name)
+
+            if precision is not None:
+                # precision can reduce digits from unique
+                neg = result.startswith('-')
+                core = result[1:] if neg else result
+                if 'e' in core:
+                    mant, exp_part = core.split('e', 1)
+                    if '.' in mant:
+                        m_int, m_frac = mant.split('.', 1)
+                    else:
+                        m_int, m_frac = mant, ''
+                    if len(m_frac) > precision:
+                        # Re-format with limited precision
+                        result = f'{v:.{precision}e}'
+                    # else: keep unique result (precision doesn't add digits)
         else:
             # Non-unique: use exact precision
             if precision is None:
@@ -533,25 +710,27 @@ def format_float_scientific(x, precision=None, unique=True, trim='k',
         if min_digits is not None and result not in ('nan', 'inf', '-inf'):
             # Ensure minimum number of fractional digits in mantissa
             neg = result.startswith('-')
-            if neg:
-                core = result[1:]
-            else:
-                core = result
+            core = result[1:] if neg else result
             if 'e' in core:
                 mantissa, exp_part = core.split('e', 1)
                 if '.' in mantissa:
                     m_int, m_frac = mantissa.split('.', 1)
                 else:
-                    m_int = mantissa
-                    m_frac = ''
-                while len(m_frac) < min_digits:
-                    m_frac += '0'
-                mantissa = m_int + '.' + m_frac
-                core = mantissa + 'e' + exp_part
-            if neg:
-                result = '-' + core
-            else:
-                result = core
+                    m_int, m_frac = mantissa, ''
+                if len(m_frac) < min_digits:
+                    # Need more digits - compute from the actual value
+                    extended = f'{v:.{min_digits}e}'
+                    ext_neg = extended.startswith('-')
+                    ext_core = extended[1:] if ext_neg else extended
+                    if 'e' in ext_core:
+                        ext_mant, ext_exp = ext_core.split('e', 1)
+                        # Use extended mantissa digits but keep original exponent
+                        result = ext_mant + 'e' + exp_part
+                        if neg:
+                            result = '-' + result
+                    else:
+                        pass  # shouldn't happen
+                # else: unique has enough digits, keep as is
 
     # Apply trimming
     if result not in ('nan', 'inf', '-inf'):

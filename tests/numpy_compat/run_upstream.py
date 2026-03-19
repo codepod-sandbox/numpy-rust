@@ -719,7 +719,7 @@ def _run_test_file(test_path, label=None):
                 _errored += 1
                 continue
             try:
-                method_names = sorted(m for m in dir(obj) if m.startswith("test_"))
+                method_names = sorted(m for m in dir(obj) if m.startswith("test_") and callable(getattr(obj, m, None)))
             except Exception:
                 _errored += 1
                 continue
