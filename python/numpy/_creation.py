@@ -63,6 +63,8 @@ def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
     elif axis >= ndim:
         raise AxisError(axis, ndim)
     result = _native_concatenate(arrs, axis)
+    if dtype is not None:
+        result = result.astype(str(dtype))
     if out is not None:
         out_arr = asarray(out) if not isinstance(out, ndarray) else out
         if out_arr.shape != result.shape:

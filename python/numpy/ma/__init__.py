@@ -194,6 +194,11 @@ class MaskedArray:
         else:
             self._fill_value = _default_fill_value_for(self.data)
         self._hardmask = hard_mask
+        # Handle ndmin: promote dimensionality
+        if ndmin > 0:
+            while self.data.ndim < ndmin:
+                self.data = np.expand_dims(self.data, 0)
+                self.mask = np.expand_dims(self.mask, 0) if isinstance(self.mask, np.ndarray) else self.mask
 
     # -- properties --
 
@@ -659,6 +664,12 @@ class MaskedArray:
         return MaskedArray(self.data.copy(), mask=self.mask.copy(),
                            fill_value=self._fill_value)
 
+    def __deepcopy__(self, memo):
+        return self.copy()
+
+    def __reduce__(self):
+        return (MaskedArray, (self.data, self.mask, None, self._fill_value))
+
     def astype(self, dtype, order='K', casting='unsafe', subok=True, copy=True):
         import numpy as np
         dt = np.dtype(dtype)
@@ -830,8 +841,11 @@ class MaskedArray:
     def to_device(self, device, /, *, stream=None):
         return self
 
-    def view(self, dtype=None, type=None):
-        return self.copy()
+    def view(self, dtype=None, type=None, fill_value=None):
+        result = self.copy()
+        if fill_value is not None:
+            result._fill_value = fill_value
+        return result
 
     # -- repr --
 

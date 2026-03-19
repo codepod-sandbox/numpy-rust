@@ -245,24 +245,24 @@ def stack(arrays, axis=0, out=None):
     return _native.stack_native(list(arrays), axis)
 
 
-def vstack(tup):
+def vstack(tup, *, dtype=None, casting='same_kind'):
     if not isinstance(tup, (list, tuple)):
         raise TypeError("arrays to stack must be passed as a list or tuple, not " + type(tup).__name__)
     arrs = [atleast_2d(asarray(a)) for a in tup]
     if len(arrs) == 0:
         raise ValueError("need at least one array to concatenate")
-    return concatenate(arrs, 0)
+    return concatenate(arrs, 0, dtype=dtype, casting=casting)
 
 
-def hstack(tup):
+def hstack(tup, *, dtype=None, casting='same_kind'):
     if not isinstance(tup, (list, tuple)):
         raise TypeError("arrays to stack must be passed as a list or tuple, not " + type(tup).__name__)
     arrs = [atleast_1d(asarray(a)) for a in tup]
     if len(arrs) == 0:
         raise ValueError("need at least one array to concatenate")
     if arrs[0].ndim > 1:
-        return concatenate(arrs, 1)
-    return concatenate(arrs, 0)
+        return concatenate(arrs, 1, dtype=dtype, casting=casting)
+    return concatenate(arrs, 0, dtype=dtype, casting=casting)
 
 
 def column_stack(tup):
@@ -867,7 +867,7 @@ def rot90(a, k=1, axes=(0, 1)):
     return a
 
 
-def unique(a, return_index=False, return_inverse=False, return_counts=False, axis=None):
+def unique(a, return_index=False, return_inverse=False, return_counts=False, axis=None, *, equal_nan=True):
     """Return sorted unique elements of an array.
 
     Parameters
