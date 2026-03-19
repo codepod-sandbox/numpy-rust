@@ -62,7 +62,12 @@ def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
             raise AxisError(orig_axis, ndim)
     elif axis >= ndim:
         raise AxisError(axis, ndim)
-    result = _native_concatenate(arrs, axis)
+    from ._helpers import _ObjectArray
+    if any(isinstance(a, _ObjectArray) for a in arrs):
+        # Python-level concatenation for _ObjectArray
+        result = _concat_object_arrays(arrs, axis)
+    else:
+        result = _native_concatenate(arrs, axis)
     if dtype is not None:
         result = result.astype(str(dtype))
     if out is not None:
@@ -74,6 +79,77 @@ def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
         out_arr[:] = result
         return out_arr
     return result
+
+def _concat_object_arrays(arrs, axis):
+    """Concatenate arrays along axis, handling _ObjectArray."""
+    from ._helpers import _ObjectArray
+    # Convert all to _ObjectArray with common dtype
+    dtypes = [str(a.dtype) for a in arrs]
+    # Use the first complex dtype if any, else first dtype
+    common_dt = dtypes[0]
+    for d in dtypes:
+        if 'complex' in d:
+            common_dt = d
+            break
+    converted = []
+    for a in arrs:
+        if isinstance(a, ndarray):
+            converted.append(_ObjectArray(a.tolist(), common_dt, shape=a.shape))
+        elif isinstance(a, _ObjectArray):
+            converted.append(a)
+        else:
+            converted.append(_ObjectArray([a], common_dt))
+    # Gather values along the concat axis
+    shapes = [c.shape for c in converted]
+    # Verify shapes match except along axis
+    ref_shape = list(shapes[0])
+    for i, s in enumerate(shapes[1:], 1):
+        for d in range(len(ref_shape)):
+            if d != axis and ref_shape[d] != s[d]:
+                raise ValueError(
+                    "all the input array dimensions except for the concatenation axis "
+                    "must match exactly")
+    new_shape = list(ref_shape)
+    new_shape[axis] = sum(s[axis] for s in shapes)
+    # For 1-d case, simple concatenation
+    if len(new_shape) == 1:
+        all_vals = []
+        for c in converted:
+            all_vals.extend(c.tolist())
+        return _ObjectArray(all_vals, common_dt, shape=tuple(new_shape))
+    # For n-d, use nested list manipulation
+    all_data = []
+    for c in converted:
+        all_data.append(c.tolist())
+    if axis == 0:
+        combined = []
+        for d in all_data:
+            if isinstance(d, list):
+                combined.extend(d)
+            else:
+                combined.append(d)
+        return _ObjectArray(combined, common_dt, shape=tuple(new_shape))
+    # General axis - flatten, rearrange, and reshape
+    # Simple approach: iterate along axis and collect
+    import itertools
+    ndim = len(new_shape)
+    result_data = []
+    # Build result by iterating all positions
+    for pos in itertools.product(*(range(s) for s in new_shape)):
+        # Find which source array this position belongs to
+        ax_idx = pos[axis]
+        offset = 0
+        for src_i, c in enumerate(converted):
+            if ax_idx < offset + shapes[src_i][axis]:
+                src_pos = list(pos)
+                src_pos[axis] = ax_idx - offset
+                val = c
+                for p in src_pos:
+                    val = val[p]
+                result_data.append(val)
+                break
+            offset += shapes[src_i][axis]
+    return _ObjectArray(result_data, common_dt, shape=tuple(new_shape))
 
 def _make_complex_array(values, shape):
     """Create a complex128 ndarray from a list of Python complex/float values.
@@ -789,6 +865,16 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
             pass
         s_flat = start_arr.flatten().tolist()
         e_flat = stop_arr.flatten().tolist()
+        # Convert numpy scalars to Python builtins
+        def _to_py(v):
+            if isinstance(v, complex):
+                return complex(v)
+            try:
+                return complex(v)
+            except (TypeError, ValueError):
+                return float(v)
+        s_flat = [_to_py(v) for v in s_flat]
+        e_flat = [_to_py(v) for v in e_flat]
         # Compute element-wise using scalar geomspace
         cols = []
         for sv, ev in zip(s_flat, e_flat):
@@ -800,7 +886,7 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
         return result
     # Handle negative values by working in complex domain if needed
     # Also use complex path if dtype is complex (even for real start/stop with sign change)
-    _use_complex = isinstance(start, complex) or isinstance(stop, complex)
+    _use_complex = isinstance(start, complex) or isinstance(stop, complex) or hasattr(start, 'imag') and start.imag != 0 or hasattr(stop, 'imag') and stop.imag != 0
     if not _use_complex and dtype is not None:
         _dt_str = str(dtype)
         if 'complex' in _dt_str or dtype is complex:
