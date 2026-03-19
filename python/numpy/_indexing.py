@@ -905,15 +905,31 @@ ogrid = _OGrid()
 
 def ix_(*args):
     """Construct an open mesh from multiple sequences for cross-indexing."""
+    import numpy as np
     ndim = len(args)
     result = []
     for i, arg in enumerate(args):
-        arr = asarray(arg)
+        # Check if input is integer-like before converting (exclude booleans)
+        _is_int_input = isinstance(arg, range) or (
+            isinstance(arg, (list, tuple)) and len(arg) > 0 and
+            all(isinstance(x, int) and not isinstance(x, bool) for x in arg)
+        )
+        if isinstance(arg, ndarray):
+            arr = arg
+        elif isinstance(arg, range):
+            arr = array(list(arg)).astype('int64')
+        elif _is_int_input:
+            arr = array(arg).astype('int64')
+        else:
+            arr = asarray(arg)
         if arr.ndim != 1:
             raise ValueError("Cross index must be 1 dimensional")
         # Boolean arrays: convert to integer index via nonzero/where
         if str(arr.dtype) == 'bool':
-            arr = array([j for j in _builtin_range(arr.size) if arr[j]])
+            arr = array([j for j in _builtin_range(arr.size) if arr[j]]).astype('int64')
+        # Empty untyped inputs should use indexing type (intp = int64)
+        if arr.size == 0 and str(arr.dtype) == 'float64':
+            arr = arr.astype('int64')
         shape = [1] * ndim
         shape[i] = arr.size
         result.append(arr.reshape(shape))

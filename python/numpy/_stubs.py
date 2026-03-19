@@ -1074,15 +1074,16 @@ ctypeslib = _CtypeslibModule()
 
 def format_float_positional(x, precision=None, unique=True, fractional=True, trim='k', sign=False, pad_left=None, pad_right=None, min_digits=None):
     """Format a float in positional notation."""
-    if precision is not None:
-        return f"{x:.{precision}f}"
-    return str(x)
+    from numpy._core.arrayprint import format_float_positional as _ffp
+    return _ffp(x, precision=precision, unique=unique, fractional=fractional,
+                trim=trim, sign=sign, pad_left=pad_left, pad_right=pad_right,
+                min_digits=min_digits)
 
 def format_float_scientific(x, precision=None, unique=True, trim='k', sign=False, pad_left=None, exp_digits=None, min_digits=None):
     """Format a float in scientific notation."""
-    if precision is not None:
-        return f"{x:.{precision}e}"
-    return f"{x:e}"
+    from numpy._core.arrayprint import format_float_scientific as _ffs
+    return _ffs(x, precision=precision, unique=unique, trim=trim, sign=sign,
+                pad_left=pad_left, exp_digits=exp_digits, min_digits=min_digits)
 
 
 # ---------------------------------------------------------------------------
