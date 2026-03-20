@@ -330,14 +330,21 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
         return _create_structured_array(data_seq, parsed)
     if dtype is not None and _is_structured_dtype(dtype):
         from ._core_types import dtype as _dtype_cls
-        parsed = dtype if isinstance(dtype, _dtype_cls) else _dtype_cls(dtype)
-        if isinstance(data, ndarray):
-            data_seq = list(data)
-        else:
-            data_seq = data if isinstance(data, (list, tuple)) else [data]
-        # If elements are scalars (not tuples), convert each scalar to a tuple
-        # by replicating across all fields with appropriate casting
-        if data_seq and not isinstance(data_seq[0], (tuple, list)):
+        try:
+            parsed = dtype if isinstance(dtype, _dtype_cls) else _dtype_cls(dtype)
+        except Exception:
+            parsed = None
+        # Only route to StructuredArray when data is list-of-tuples (actual records)
+        _is_records = (parsed is not None and hasattr(parsed, 'names') and parsed.names
+                       and isinstance(data, (list, tuple)) and len(data) > 0
+                       and isinstance(data[0], (tuple, list)))
+        if _is_records:
+            data_seq = data
+        elif parsed is not None and hasattr(parsed, 'names') and parsed.names and isinstance(data, ndarray):
+            # ndarray with structured dtype — try to convert
+            data_seq = [tuple(float(data[i]) for _ in parsed.names) for i in range(data.size)]
+            _is_records = True
+        if _is_records and data_seq and not isinstance(data_seq[0], (tuple, list)):
             converted = []
             for val in data_seq:
                 vals = []
