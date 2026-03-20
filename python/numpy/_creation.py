@@ -182,11 +182,13 @@ def _make_complex_array(values, shape):
 
 
 def _is_structured_dtype(dt):
-    """Return True if dt is a StructuredDtype or a dtype wrapping one."""
+    """Return True if dt is a StructuredDtype or a dtype wrapping one, or a comma string."""
     from ._core_types import StructuredDtype, dtype as _dtype_cls
     if isinstance(dt, StructuredDtype):
         return True
     if isinstance(dt, _dtype_cls) and (hasattr(dt, '_structured') and dt._structured is not None):
+        return True
+    if isinstance(dt, str) and ',' in dt:
         return True
     return False
 
@@ -329,7 +331,31 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
     if dtype is not None and _is_structured_dtype(dtype):
         from ._core_types import dtype as _dtype_cls
         parsed = dtype if isinstance(dtype, _dtype_cls) else _dtype_cls(dtype)
-        data_seq = data if isinstance(data, (list, tuple)) else [data]
+        if isinstance(data, ndarray):
+            data_seq = list(data)
+        else:
+            data_seq = data if isinstance(data, (list, tuple)) else [data]
+        # If elements are scalars (not tuples), convert each scalar to a tuple
+        # by replicating across all fields with appropriate casting
+        if data_seq and not isinstance(data_seq[0], (tuple, list)):
+            converted = []
+            for val in data_seq:
+                vals = []
+                for name in parsed.names:
+                    field_dt, _ = parsed.fields[name]
+                    fd = str(field_dt)
+                    if fd in ('float64', 'float32', 'float16') or fd.startswith('f'):
+                        vals.append(float(val))
+                    elif fd in ('int8', 'int16', 'int32', 'int64') or fd.startswith('i'):
+                        vals.append(int(val))
+                    elif fd in ('uint8', 'uint16', 'uint32', 'uint64') or fd.startswith('u'):
+                        vals.append(int(val))
+                    elif fd.startswith('complex') or fd.startswith('c'):
+                        vals.append(complex(val))
+                    else:
+                        vals.append(val)
+                converted.append(tuple(vals))
+            data_seq = converted
         return _create_structured_array(data_seq, parsed)
     if dtype is not None:
         dtype = _normalize_dtype(dtype)

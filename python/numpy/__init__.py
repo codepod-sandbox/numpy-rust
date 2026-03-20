@@ -112,15 +112,24 @@ class void:
         if data is None:
             # np.void() creates an empty void scalar
             object.__setattr__(self, '_data', {})
+            object.__setattr__(self, '_bytes', b'')
             object.__setattr__(self, 'dtype', None)
             return
         if isinstance(data, int) and dtype is None:
             # np.void(n) creates a placeholder void of n bytes
             object.__setattr__(self, '_data', {})
+            object.__setattr__(self, '_bytes', b'\x00' * data)
+            object.__setattr__(self, 'dtype', None)
+            return
+        if isinstance(data, (bytes, bytearray)) and dtype is None:
+            # np.void(b'\x01\x02') creates a void scalar from raw bytes
+            object.__setattr__(self, '_data', {})
+            object.__setattr__(self, '_bytes', bytes(data))
             object.__setattr__(self, 'dtype', None)
             return
         # Use object.__setattr__ throughout to avoid any __setattr__ override issues
         object.__setattr__(self, '_data', data)   # dict {fieldname: scalar_value}
+        object.__setattr__(self, '_bytes', b'')
         object.__setattr__(self, 'dtype', dtype)
 
     def __bool__(self):
@@ -140,6 +149,9 @@ class void:
         data = object.__getattribute__(self, '_data')
         dt = object.__getattribute__(self, 'dtype')
         if dt is None or not data:
+            raw = object.__getattribute__(self, '_bytes')
+            if raw:
+                return 'void({})'.format(repr(raw))
             return 'void()'
         vals = tuple(data[n] for n in dt.names)
         return repr(vals)
@@ -667,6 +679,39 @@ def isdtype(dtype_arg, kind):
 
 # --- Ensure DTypePromotionError is importable from numpy ---------------------
 from numpy.exceptions import DTypePromotionError
+
+# --- Helper for structured astype (called from Rust ndarray.astype) ----------
+def _astype_structured(arr, dtype_arg):
+    """Convert an ndarray to a StructuredArray with the given structured dtype.
+
+    Called from Rust when astype receives a comma-separated dtype string or list dtype.
+    """
+    from numpy._core_types import dtype as _dtype_cls
+    parsed = _dtype_cls(dtype_arg)
+    if hasattr(parsed, '_structured') and parsed._structured is not None:
+        n = len(arr)
+        data = []
+        names = parsed.names
+        for i in range(n):
+            row = arr[i]
+            vals = []
+            for name in names:
+                field_dt, _ = parsed.fields[name]
+                fd = str(field_dt)
+                if fd in ('float64', 'float32', 'float16') or fd.startswith('f'):
+                    vals.append(float(row))
+                elif fd in ('int8', 'int16', 'int32', 'int64') or fd.startswith('i'):
+                    vals.append(int(row))
+                elif fd in ('uint8', 'uint16', 'uint32', 'uint64') or fd.startswith('u'):
+                    vals.append(int(row))
+                elif fd.startswith('complex') or fd.startswith('c'):
+                    vals.append(complex(row))
+                else:
+                    vals.append(row)
+            data.append(tuple(vals))
+        return array(data, dtype=dtype_arg)
+    # Fallback: just return as-is
+    return arr
 
 # --- Module-level __getattr__ for np.bool etc. (NumPy 2.x style) -----------
 def __getattr__(name):

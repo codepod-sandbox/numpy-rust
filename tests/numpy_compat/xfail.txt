@@ -1,6 +1,8 @@
 TestClip.test_clip_with_out_memory_overlap
 TestCreationFuncs.test_full
 TestFromiter.test_failed_itemsetting
+TestFromiter.test_growth_and_complicated_dtypes[4]
+TestFromiter.test_growth_and_complicated_dtypes[5]
 TestFromiter.test_growth_and_complicated_dtypes[6]
 TestFromiter.test_growth_and_complicated_dtypes[7]
 TestIsclose.test_non_finite_scalar

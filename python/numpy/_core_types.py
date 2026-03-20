@@ -1537,7 +1537,7 @@ class StructuredDtype:
         self.char = 'V'
         self.name = 'void'
         self.str = '|V{}'.format(self.itemsize)
-        self.descr = [(name, str(dt_obj)) for name, dt_obj in self._fields]
+        self.descr = [(name, str(self.fields[name][0])) for name in self._names]
 
     def __repr__(self):
         parts = ', '.join("('{}', '{}')".format(n, d) for n, d in self._fields)
@@ -1591,6 +1591,20 @@ class _DTypeClassMeta(type):
         return hash(cls._dtype_class_name)
 
 
+def _parse_comma_dtype(s):
+    """Parse a comma-separated dtype string like 'i4,f8' into a StructuredDtype.
+
+    Auto-generates field names f0, f1, f2, ...
+    Each comma-separated part is parsed as a dtype string.
+    """
+    parts = s.split(',')
+    fields = []
+    for i, part in enumerate(parts):
+        part = part.strip()
+        fields.append(('f{}'.format(i), part))
+    return StructuredDtype(fields)
+
+
 # ---------------------------------------------------------------------------
 # dtype class
 # ---------------------------------------------------------------------------
@@ -1606,6 +1620,9 @@ class dtype:
             if isinstance(tp, type) and hasattr(tp, '_dtype_class_name'):
                 name = tp._dtype_class_name
             elif isinstance(tp, str):
+                # Comma-separated dtype strings like 'i4,f8' -> structured dtype
+                if ',' in tp:
+                    return object.__new__(cls)
                 name = _DTYPE_CHAR_MAP.get(tp, tp)
                 # Handle arbitrary |Sn/Sn -> 'bytes', |Vn/Vn -> 'void', <Un/Un -> 'str'
                 if isinstance(name, str):
@@ -1706,6 +1723,17 @@ class dtype:
             self.num = getattr(base_dt, 'num', 0)
             self.descr = base_dt.descr if hasattr(base_dt, 'descr') else [('', self.str)]
             return
+        elif isinstance(tp, str) and ',' in tp:
+            # Comma-separated dtype string like 'i4,f8' -> structured dtype
+            sd = _parse_comma_dtype(tp)
+            self.name = sd.name
+            self.kind = sd.kind
+            self.itemsize = sd.itemsize
+            self.char = sd.char
+            self.names = sd.names
+            self.fields = sd.fields
+            self._structured = sd
+            self.descr = sd.descr
         elif isinstance(tp, str):
             tp = _DTYPE_CHAR_MAP.get(tp, tp)
             # Handle arbitrary |Sn or Sn byte strings -> 'bytes'
@@ -1866,6 +1894,8 @@ class dtype:
         return f"dtype('{self.name}')"
 
     def __str__(self):
+        if hasattr(self, '_structured') and self._structured is not None:
+            return str(self._structured)
         return self.name
 
     @staticmethod
@@ -2022,6 +2052,11 @@ def _normalize_dtype(dt):
     """Normalize dtype string/type to a canonical name our Rust backend understands."""
     if dt is None:
         return None
+    # Structured dtype (comma-separated string or dtype with _structured)
+    if isinstance(dt, str) and ',' in dt:
+        return 'void'
+    if isinstance(dt, dtype) and hasattr(dt, '_structured') and dt._structured is not None:
+        return 'void'
     if dt is object:
         return 'object'
     if isinstance(dt, type) and hasattr(dt, '_dtype_class_name'):

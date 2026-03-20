@@ -450,6 +450,9 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         // object dtype: map to Float64 as fallback (no true object array support)
         "object" | "O" | "<class 'object'>" => Ok(DType::Float64),
         _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
+        // Void dtype: map to UInt8 as fallback (raw bytes)
+        "void" | "V" | "V0" => Ok(DType::UInt8),
+        _ if s.starts_with('V') && s[1..].chars().all(|c| c.is_ascii_digit()) => Ok(DType::UInt8),
         // Strip byte-order prefix (<, >, =, |) and retry
         _ if s.len() >= 2
             && (s.starts_with('<')
@@ -883,10 +886,12 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn astype(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn astype(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        // Accept dtype as first positional arg or as 'dtype' keyword arg
         let dtype_obj = args
             .args
             .first()
+            .or_else(|| args.kwargs.get("dtype"))
             .ok_or_else(|| vm.new_type_error("astype() requires a dtype argument".to_owned()))?;
         // Accept either a string or any object convertible via str()
         let dtype_str: PyRef<PyStr> = match dtype_obj.clone().try_into_value::<PyRef<PyStr>>(vm) {
@@ -896,6 +901,18 @@ impl PyNdArray {
                 dtype_obj.str(vm)?
             }
         };
+
+        // Detect structured dtype strings (comma-separated like 'i4,f8')
+        // and delegate to Python's numpy._astype_structured(self, dtype_arg)
+        if dtype_str.as_str().contains(',') || dtype_obj.downcast_ref::<PyList>().is_some() {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let helper = numpy_mod.get_attr("_astype_structured", vm)?;
+            let self_obj: PyObjectRef =
+                PyNdArray::from_core(self.data.read().unwrap().clone()).into_pyobject(vm);
+            let result = helper.call((self_obj, dtype_obj.clone()), vm)?;
+            return Ok(result);
+        }
+
         let dt = parse_dtype(dtype_str.as_str(), vm)?;
 
         // Extract optional 'casting' keyword argument
@@ -933,7 +950,7 @@ impl PyNdArray {
                 )));
             }
         }
-        Ok(PyNdArray::from_core(inner.astype(dt)))
+        Ok(PyNdArray::from_core(inner.astype(dt)).into_pyobject(vm))
     }
 
     /// Returns a view of the array sharing the same underlying buffer.
