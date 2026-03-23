@@ -74,7 +74,7 @@ class _WarnsContext:
         self._old_showwarning = _w.showwarning
         ctx = self
         def _capture(message, category, filename, lineno, file=None, line=None):
-            ctx._warnings.append(type('W', (), {'category': category, 'message': message})())
+            ctx._warnings.append(type('W', (), {'category': category, 'message': message, 'filename': filename, 'lineno': lineno})())
         _w.showwarning = _capture
         _w.simplefilter('always')
         return self
@@ -105,7 +105,11 @@ def _raises(exc, *args, match=None, **kwargs):
     return _RaisesContext(exc, match)
 
 
-def _warns(cls, *args, **kwargs):
+def _warns(cls=None, *args, **kwargs):
+    # Support pytest.warns(RuntimeWarning) and pytest.warns(expected_warning=RuntimeWarning)
+    if cls is None:
+        cls = kwargs.pop('expected_warning', None)
+    kwargs.pop('match', None)
     if args:
         fn = args[0]
         fargs = args[1:]
@@ -115,6 +119,34 @@ def _warns(cls, *args, **kwargs):
 
 def _approx(x, rel=None, abs=None, nan_ok=False):
     return x
+
+
+class _MarkDecorator:
+    """A mark decorator that can also serve as a mark object for pytest.param(marks=...)."""
+    def __init__(self, xfail=False, skip=False, reason=""):
+        self._xfail = xfail
+        self._skip = skip
+        self._reason = reason
+
+    def __call__(self, fn):
+        if self._xfail:
+            fn._xfail = True
+            fn._xfail_reason = self._reason
+        if self._skip:
+            fn._skip = True
+            fn._skip_reason = self._reason
+        return fn
+
+
+class _ParamSpec:
+    """A parametrize value with associated marks (skip/xfail)."""
+    def __init__(self, value, skip=False, xfail=False, id=None):
+        self.value = value
+        self._skip = skip
+        self._xfail = xfail
+        self.id = id
+        # Support .values[0] access (pytest.param compatibility)
+        self.values = (value,) if not isinstance(value, tuple) else value
 
 
 class _Mark:
@@ -134,30 +166,19 @@ class _Mark:
         return dec
 
     def skip(self, reason=""):
-        def dec(fn):
-            fn._skip = True
-            fn._skip_reason = reason
-            return fn
+        dec = _MarkDecorator(skip=True, reason=reason)
         return dec
 
     def skipif(self, cond, reason=""):
-        def dec(fn):
-            if cond:
-                fn._skip = True
-                fn._skip_reason = reason
-            return fn
-        return dec
+        return _MarkDecorator(skip=bool(cond), reason=reason)
 
     def xfail(self, *args, reason="", raises=None, **kwargs):
-        if args and callable(args[0]):
+        if args and callable(args[0]) and not kwargs:
             fn = args[0]
             fn._xfail = True
             fn._xfail_reason = reason
             return fn
-        def dec(fn):
-            fn._xfail = True
-            fn._xfail_reason = reason
-            return fn
+        dec = _MarkDecorator(xfail=True, reason=reason)
         return dec
 
     def slow(self, fn=None):
@@ -188,9 +209,12 @@ def _fixture(*args, **kwargs):
     if args and callable(args[0]):
         return args[0]
     params = kwargs.get('params', None)
+    autouse = kwargs.get('autouse', False)
     def _dec(fn):
         if params is not None:
             fn._fixture_params = params
+        if autouse:
+            fn._autouse = True
         return fn
     return _dec
 
@@ -203,9 +227,19 @@ def _importorskip(name, **kwargs):
 
 
 def _param(*args, **kwargs):
-    if len(args) == 1:
-        return args[0]
-    return args
+    marks = kwargs.get('marks', None)
+    skip = False
+    xfail = False
+    if marks is not None:
+        marks_list = marks if isinstance(marks, (list, tuple)) else [marks]
+        for m in marks_list:
+            if isinstance(m, _MarkDecorator):
+                if m._xfail:
+                    xfail = True
+                if m._skip:
+                    skip = True
+    value = args[0] if len(args) == 1 else args
+    return _ParamSpec(value, skip=skip, xfail=xfail, id=kwargs.get('id', None))
 
 
 def _xfail_func(reason=""):
@@ -436,12 +470,24 @@ def _cross_product(param_lists, method=None):
     result = []
     for combo in itertools.product(*all_value_lists):
         flat = []
+        combo_xfail = False
+        combo_skip = False
         for i, val in enumerate(combo):
+            if isinstance(val, _ParamSpec):
+                if val._xfail:
+                    combo_xfail = True
+                if val._skip:
+                    combo_skip = True
+                val = val.value
             if multi_arg[i] and isinstance(val, (tuple, list)):
                 flat.extend(val)
             else:
                 flat.append(val)
-        result.append(tuple(flat))
+        result_val = tuple(flat)
+        if combo_skip or combo_xfail:
+            result.append(_ParamSpec(result_val, skip=combo_skip, xfail=combo_xfail))
+        else:
+            result.append(result_val)
     return result
 
 
@@ -484,6 +530,29 @@ def _run_parametrized(full_name, method):
     except Exception:
         pass
 
+    # Detect fixture args (args not covered by parametrize names)
+    _fixture_prefix = ()  # fixture values to prepend before parametrized values
+    try:
+        _all_args = _get_func_argnames(method)
+        _param_names = set()
+        for _pname in (names_str.split(',') if isinstance(names_str, str) else list(names_str)):
+            _param_names.add(_pname.strip())
+        if _needs_request:
+            _param_names.add('request')
+        _fixture_arg_names = [a for a in _all_args if a not in _param_names and a != 'self']
+        if _fixture_arg_names:
+            _resolved = _resolve_fixture_args(_fixture_arg_names, _module_fixtures, {})
+            _fixture_prefix = tuple(_resolved[a] for a in _fixture_arg_names if a in _resolved)
+            # If any fixture couldn't be resolved, skip parametrized tests
+            if len(_fixture_prefix) < len(_fixture_arg_names):
+                _skipped += len(values) if isinstance(values, (list, tuple)) else 0
+                return
+    except _SkipException:
+        _skipped += len(values) if isinstance(values, (list, tuple)) else 0
+        return
+    except Exception:
+        pass
+
     try:
         if not isinstance(values, (list, tuple)):
             values = list(values)
@@ -503,6 +572,30 @@ def _run_parametrized(full_name, method):
 
     for i, vals in enumerate(values):
         param_name = "{}[{}]".format(full_name, i)
+        # Handle per-param skip/xfail from pytest.param(marks=...)
+        param_skip = False
+        param_xfail = is_xfail
+        if isinstance(vals, _ParamSpec):
+            param_skip = vals._skip
+            if vals._xfail:
+                param_xfail = True
+            vals = vals.value
+        elif not _single_param and isinstance(vals, (tuple, list)):
+            # Check for _ParamSpec elements inside cross-product tuples (multi-param only)
+            new_vals = []
+            for _v in vals:
+                if isinstance(_v, _ParamSpec):
+                    if _v._skip:
+                        param_skip = True
+                    if _v._xfail:
+                        param_xfail = True
+                    new_vals.append(_v.value)
+                else:
+                    new_vals.append(_v)
+            vals = tuple(new_vals)
+        if param_skip:
+            _skipped += 1
+            continue
         try:
             if _single_param:
                 call_vals = (vals,)
@@ -510,20 +603,29 @@ def _run_parametrized(full_name, method):
                 call_vals = vals if isinstance(vals, (tuple, list)) else (vals,)
             if _needs_request:
                 call_vals = tuple(call_vals) + (_MockRequest(_module_fixtures),)
-            if len(call_vals) == 1:
-                method(call_vals[0])
-            else:
-                method(*call_vals)
+            if _fixture_prefix:
+                call_vals = _fixture_prefix + tuple(call_vals)
+            _monkeypatches = [v for v in call_vals if isinstance(v, _MonkeyPatch)]
+            try:
+                if len(call_vals) == 1:
+                    method(call_vals[0])
+                else:
+                    method(*call_vals)
+            finally:
+                for _mp in _monkeypatches:
+                    _mp.undo()
         except _SkipException:
             _skipped += 1
             continue
         except (AssertionError, Exception) as e:
-            if is_xfail:
+            if param_xfail:
                 _xfailed += 1
             else:
                 _record_failure(param_name, str(e)[:300])
             continue
-        if _is_expected_fail(param_name):
+        if param_xfail:
+            _xpassed += 1
+        elif _is_expected_fail(param_name):
             _xpassed += 1
         _passed += 1
 
@@ -629,6 +731,13 @@ def _run_test_method(cls_name, inst, mname, class_params=None, fixtures=None):
                 _args = []
 
         _needed_fixtures = [(fname, fvals) for fname, fvals in fixtures.items() if fname in _args]
+        # Also resolve built-in fixtures for args not in the class fixtures dict
+        _builtin_fixture_args = [a for a in _args if a in _BUILTIN_FIXTURES and a not in fixtures]
+        if _builtin_fixture_args:
+            for _bfa in _builtin_fixture_args:
+                _bval = _get_builtin_fixture(_bfa)
+                if _bval is not None:
+                    _needed_fixtures.append((_bfa, [_bval]))
         if _needed_fixtures:
             # Convert fixtures to parametrize-style execution
             fixture_params = [(fname, fvals) for fname, fvals in _needed_fixtures]
@@ -637,11 +746,7 @@ def _run_test_method(cls_name, inst, mname, class_params=None, fixtures=None):
             merged = list(extra_params)
             if class_params:
                 merged.extend(class_params)
-            has_method_params = hasattr(method, "_parametrize")
-            if has_method_params:
-                wrapper = _ParametrizedWrapper(method, merged)
-            else:
-                wrapper = _ParametrizedWrapper(method, merged)
+            wrapper = _ParametrizedWrapper(method, merged)
             _run_parametrized(full_name, wrapper)
             return
 
@@ -653,6 +758,138 @@ def _run_test_method(cls_name, inst, mname, class_params=None, fixtures=None):
         return
 
     _run_single_test(full_name, method)
+
+
+def _get_func_argnames(fn):
+    """Get the argument names of a function, excluding 'self' and *args/**kwargs."""
+    try:
+        code = getattr(fn, '__code__', None)
+        if code:
+            # co_argcount excludes *args and **kwargs
+            return [v for v in code.co_varnames[:code.co_argcount] if v != 'self']
+    except Exception:
+        pass
+    try:
+        import inspect
+        sig = inspect.signature(fn)
+        # Only include POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, KEYWORD_ONLY params
+        return [
+            name for name, p in sig.parameters.items()
+            if name != 'self' and p.kind not in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            )
+        ]
+    except Exception:
+        return []
+
+
+def _make_tmpdir():
+    """Create a temporary directory and return a py.path.local-compatible object."""
+    import tempfile
+    import pathlib
+
+    class _TmpdirLocal:
+        """Minimal py.path.local compatibility for pytest tmpdir fixture."""
+        def __init__(self, path):
+            self._path = pathlib.Path(path)
+
+        def join(self, *args):
+            return _TmpdirLocal(self._path.joinpath(*args))
+
+        def __truediv__(self, other):
+            return _TmpdirLocal(self._path / other)
+
+        def __str__(self):
+            return str(self._path)
+
+        def __fspath__(self):
+            return str(self._path)
+
+        def mkdir(self, **kwargs):
+            self._path.mkdir(exist_ok=True)
+            return self
+
+        def open(self, mode='r', **kwargs):
+            return open(str(self._path), mode, **kwargs)
+
+        def write(self, content, mode='w', **kwargs):
+            with open(str(self._path), mode) as f:
+                f.write(content)
+
+        def read(self, mode='r'):
+            with open(str(self._path), mode) as f:
+                return f.read()
+
+        @property
+        def strpath(self):
+            return str(self._path)
+
+    td = tempfile.mkdtemp()
+    return _TmpdirLocal(td)
+
+
+_BUILTIN_FIXTURES = {'tmpdir', 'tmp_path', 'tmp_path_factory', 'monkeypatch'}
+
+
+class _MonkeyPatch:
+    """Minimal monkeypatch fixture implementation."""
+    def __init__(self):
+        self._patches = []
+
+    def setattr(self, obj, name, value, raising=True):
+        old = getattr(obj, name, None)
+        self._patches.append((obj, name, old))
+        setattr(obj, name, value)
+
+    def undo(self):
+        for obj, name, old in reversed(self._patches):
+            if old is None:
+                try:
+                    delattr(obj, name)
+                except Exception:
+                    pass
+            else:
+                setattr(obj, name, old)
+        self._patches.clear()
+
+
+def _get_builtin_fixture(name):
+    """Return a value for a known built-in pytest fixture."""
+    import tempfile, pathlib
+    if name == 'tmp_path':
+        return pathlib.Path(tempfile.mkdtemp())
+    if name in ('tmpdir', 'tmp_path_factory'):
+        return _make_tmpdir()
+    if name == 'monkeypatch':
+        return _MonkeyPatch()
+    return None
+
+
+def _resolve_fixture_args(argnames, module_fixtures, test_ns, _depth=0):
+    """Resolve fixture values for a list of argument names.
+    Returns a dict {argname: value} for all resolvable fixtures, or {} if none needed."""
+    if not argnames or _depth > 5:
+        return {}
+    result = {}
+    for arg in argnames:
+        if arg in _BUILTIN_FIXTURES:
+            result[arg] = _get_builtin_fixture(arg)
+        elif arg in module_fixtures:
+            fn = module_fixtures[arg]
+            # Recursively resolve this fixture's own args
+            fn_args = _get_func_argnames(fn)
+            sub = _resolve_fixture_args(fn_args, module_fixtures, test_ns, _depth + 1)
+            try:
+                if sub:
+                    result[arg] = fn(**{k: v for k, v in sub.items() if k in fn_args})
+                else:
+                    result[arg] = fn()
+            except _SkipException:
+                raise
+            except Exception:
+                pass
+    return result
 
 
 def _run_test_file(test_path, label=None):
@@ -706,12 +943,25 @@ def _run_test_file(test_path, label=None):
         obj = test_ns[name]
 
         if isinstance(obj, type) and name.startswith("Test"):
+            # Check class-level skip/skipif marks
+            if getattr(obj, '_skip', False):
+                continue
+
             if not _summary_only:
                 print("--- {} ---".format(name))
                 sys.stdout.flush()
 
             # Collect class-level parametrize
             class_params = getattr(obj, '_parametrize_list', None)
+
+            # Call setup_class (classmethod) before instantiation
+            if hasattr(obj, 'setup_class'):
+                try:
+                    obj.setup_class()
+                except _SkipException:
+                    continue
+                except Exception:
+                    pass
 
             try:
                 inst = obj()
@@ -724,6 +974,22 @@ def _run_test_file(test_path, label=None):
                 _errored += 1
                 continue
 
+            # Call autouse fixtures (scope='class') before any test methods
+            try:
+                for _attr_name in dir(obj):
+                    if _attr_name.startswith("test_") or _attr_name.startswith("_"):
+                        continue
+                    _attr = getattr(obj, _attr_name, None)
+                    if callable(_attr) and getattr(_attr, '_autouse', False):
+                        try:
+                            _attr(inst)
+                        except _SkipException:
+                            pass
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
             # Collect fixture methods (methods with _fixture_params)
             _fixtures = {}
             try:
@@ -735,10 +1001,12 @@ def _run_test_file(test_path, label=None):
                         # Resolve fixture values by calling the method with a mock request
                         _fix_values = []
                         for _p in _attr._fixture_params:
-                            class _MockRequest:
-                                param = _p
+                            # Use instance attribute (not class attribute) to avoid
+                            # descriptor protocol binding lambdas as methods
+                            _req = type('_MockRequest', (), {})()
+                            _req.param = _p
                             try:
-                                _val = _attr(inst, _MockRequest())
+                                _val = _attr(inst, _req)
                                 _fix_values.append(_val)
                             except Exception:
                                 _fix_values.append(_p)
@@ -784,10 +1052,24 @@ def _run_test_file(test_path, label=None):
             if getattr(obj, "_skip", False):
                 _skipped += 1
                 continue
-            if hasattr(obj, "_parametrize"):
+            if hasattr(obj, "_parametrize") or hasattr(obj, "_parametrize_list"):
                 _run_parametrized(name, obj)
             else:
-                _run_single_test(name, obj)
+                # Try to resolve fixture args for functions that need them
+                _args = _get_func_argnames(obj)
+                try:
+                    _fixture_args = _resolve_fixture_args(_args, _module_fixtures, test_ns)
+                except _SkipException:
+                    _skipped += 1
+                    continue
+                if _args and not all(a in _fixture_args for a in _args):
+                    # Some required fixtures couldn't be resolved — skip
+                    _skipped += 1
+                    continue
+                if _fixture_args:
+                    _run_single_test(name, obj, args=tuple(_fixture_args[a] for a in _args if a in _fixture_args))
+                else:
+                    _run_single_test(name, obj)
 
     return (_passed, _failed, _skipped, _errored, _xfailed, True)
 

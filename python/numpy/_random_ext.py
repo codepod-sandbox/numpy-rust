@@ -783,6 +783,8 @@ class _Generator:
             size = out.shape
         if size is None:
             return float(random.rand((1,))[0])
+        if hasattr(size, '__iter__') and not isinstance(size, (tuple, list)):
+            size = tuple(int(x) for x in size)
         if isinstance(size, int):
             size = (size,)
         r = random.rand(size)

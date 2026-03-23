@@ -179,6 +179,10 @@ class StructuredArray:
         dt = object.__getattribute__(self, 'dtype')
         shape = self.shape
 
+        # Empty tuple: return self (no-op indexing like arr[()])
+        if isinstance(key, tuple) and len(key) == 0:
+            return self
+
         # Tuple key: (i, j) for 2D element access
         if isinstance(key, tuple) and len(shape) > 1:
             if len(key) != len(shape):
@@ -585,6 +589,13 @@ class _NoValue:
     """Sentinel class for missing keyword arguments."""
     def __repr__(self):
         return "<no value>"
+
+
+class _CopyMode:
+    """Enum for copy= argument in np.array()."""
+    ALWAYS = True
+    IF_NEEDED = None
+    NEVER = False
 
 cumulative_sum = cumsum
 cumulative_prod = cumprod

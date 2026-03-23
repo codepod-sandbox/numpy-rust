@@ -31,7 +31,7 @@ __all__ = [
     'finfo', 'iinfo', '_MachAr',
     # Type casting + dtype normalization
     'can_cast', 'result_type', 'promote_types', 'find_common_type',
-    'common_type', 'mintypecode', '_normalize_dtype', '_normalize_dtype_with_size',
+    'common_type', 'mintypecode', 'min_scalar_type', '_normalize_dtype', '_normalize_dtype_with_size',
     '_string_dtype_info', '_DTYPE_CHAR_MAP',
     # Constants and aliases
     'True_', 'False_', 'int_', 'typecodes', 'sctypes', 'sctypeDict',
@@ -3060,3 +3060,35 @@ sctypeDict = {
     'f2': float16, 'f4': float32, 'f8': float64,
     'c8': complex64, 'c16': complex128,
 }
+
+
+def min_scalar_type(a):
+    """Return the data type with the smallest size and smallest scalar kind
+    to which the given scalar 'a' can be safely cast."""
+    if isinstance(a, bool):
+        return dtype(bool_)
+    if isinstance(a, int):
+        # Find smallest int type that holds the value
+        if 0 <= a <= 255:
+            return dtype(uint8)
+        if -128 <= a <= 127:
+            return dtype(int8)
+        if 0 <= a <= 65535:
+            return dtype(uint16)
+        if -32768 <= a <= 32767:
+            return dtype(int16)
+        if 0 <= a <= 2**32 - 1:
+            return dtype(uint32)
+        if -(2**31) <= a <= 2**31 - 1:
+            return dtype(int32)
+        if 0 <= a <= 2**64 - 1:
+            return dtype(uint64)
+        return dtype(int64)
+    if isinstance(a, float):
+        return dtype(float64)
+    if isinstance(a, complex):
+        return dtype(complex128)
+    # For arrays, return array dtype
+    if hasattr(a, 'dtype'):
+        return a.dtype
+    return dtype(float64)

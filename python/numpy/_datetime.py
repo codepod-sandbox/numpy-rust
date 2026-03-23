@@ -23,6 +23,8 @@ __all__ = [
     'busday_count',
     'is_busday',
     'busday_offset',
+    'datetime_as_string',
+    'busdaycalendar',
 ]
 
 # --- datetime64/timedelta64 helper functions ---------------------------------
@@ -529,3 +531,36 @@ def busday_offset(dates, offsets, roll='raise', weekmask='1111100', holidays=Non
     if _is_dt64(dates):
         return dates + timedelta64(int(offsets), 'D')
     return dates
+
+
+def datetime_as_string(arr, unit=None, timezone='naive', casting='same_kind'):
+    """Convert datetime64 array to string representation."""
+    from ._helpers import _ObjectArray
+    if _is_dt64(arr) or (isinstance(arr, _ObjectArray) and arr.size > 0 and _is_dt64(arr._data[0])):
+        if hasattr(arr, 'tolist'):
+            items = arr.tolist() if hasattr(arr, 'tolist') else [arr]
+        else:
+            items = [arr]
+        result = [str(x) for x in items]
+        if len(result) == 1 and not hasattr(arr, 'shape'):
+            return result[0]
+        return _ObjectArray(result, 'str')
+    # For ndarray of datetime64
+    if hasattr(arr, 'flatten'):
+        flat = arr.flatten()
+        results = []
+        for i in range(flat.size if hasattr(flat, 'size') else len(flat)):
+            try:
+                val = flat[i]
+                results.append(str(val))
+            except Exception:
+                results.append('NaT')
+        return _ObjectArray(results, 'str')
+    return str(arr)
+
+
+class busdaycalendar:
+    """Business day calendar (stub)."""
+    def __init__(self, weekmask='1111100', holidays=None):
+        self.weekmask = weekmask
+        self.holidays = holidays or []

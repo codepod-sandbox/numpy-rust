@@ -1,0 +1,1 @@
+/opt/homebrew/lib/python3.14/site-packages/numpy/_core/tests/data/generate_umath_validation_data.cpp

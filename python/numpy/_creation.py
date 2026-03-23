@@ -237,6 +237,24 @@ def _create_structured_array(data, sdt):
                     elif isinstance(_cv, tuple) and len(_cv) == 2:
                         _narr[_ci] = (float(_cv[0]), float(_cv[1]))
                 col_arr = _narr
+            else:
+                # Non-numeric field (bytes, str, etc.) — fall back to object array
+                # Build void scalars as the records and return an _ObjectArray
+                from numpy import dtype as _dtype_cls
+                records = []
+                for row in data:
+                    if isinstance(row, void):
+                        records.append(row)
+                    else:
+                        # Convert tuple to void scalar with field access
+                        d = {}
+                        for j2, nm2 in enumerate(names):
+                            d[nm2] = row[j2]
+                        from numpy import void as _void
+                        v = _void(d, sdt)
+                        records.append(v)
+                result = _ObjectArray(records, dt=sdt)
+                return result
         fields.append((name, col_arr))
     dtype_json = json.dumps([[nm, str(sdt.fields[nm][0])] for nm in names])
     native_fields = [(name, col._native if hasattr(col, '_native') else col)
@@ -335,35 +353,42 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
         except Exception:
             parsed = None
         # Only route to StructuredArray when data is list-of-tuples (actual records)
-        _is_records = (parsed is not None and hasattr(parsed, 'names') and parsed.names
-                       and isinstance(data, (list, tuple)) and len(data) > 0
-                       and isinstance(data[0], (tuple, list)))
-        if _is_records:
-            data_seq = data
-        elif parsed is not None and hasattr(parsed, 'names') and parsed.names and isinstance(data, ndarray):
-            # ndarray with structured dtype — try to convert
-            data_seq = [tuple(float(data[i]) for _ in parsed.names) for i in range(data.size)]
-            _is_records = True
-        if _is_records and data_seq and not isinstance(data_seq[0], (tuple, list)):
-            converted = []
-            for val in data_seq:
-                vals = []
-                for name in parsed.names:
-                    field_dt, _ = parsed.fields[name]
-                    fd = str(field_dt)
-                    if fd in ('float64', 'float32', 'float16') or fd.startswith('f'):
-                        vals.append(float(val))
-                    elif fd in ('int8', 'int16', 'int32', 'int64') or fd.startswith('i'):
-                        vals.append(int(val))
-                    elif fd in ('uint8', 'uint16', 'uint32', 'uint64') or fd.startswith('u'):
-                        vals.append(int(val))
-                    elif fd.startswith('complex') or fd.startswith('c'):
-                        vals.append(complex(val))
-                    else:
-                        vals.append(val)
-                converted.append(tuple(vals))
-            data_seq = converted
-        return _create_structured_array(data_seq, parsed)
+        _is_records = False
+        data_seq = None
+        if parsed is not None and hasattr(parsed, 'names') and parsed.names:
+            nfields = len(parsed.names)
+            if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (tuple, list)):
+                _is_records = True
+                data_seq = data
+            elif isinstance(data, ndarray):
+                # ndarray with structured dtype — try to convert
+                data_seq = [tuple(float(data[i]) for _ in parsed.names) for i in range(data.size)]
+                _is_records = True
+            elif isinstance(data, (list, tuple)) and len(data) == nfields and not isinstance(data[0], (list, tuple)):
+                # Single record as flat tuple/list: (1, 2) with dtype='i4,i4' → [(1, 2)]
+                data_seq = [tuple(data)]
+                _is_records = True
+        if _is_records and data_seq is not None:
+            if data_seq and not isinstance(data_seq[0], (tuple, list)):
+                converted = []
+                for val in data_seq:
+                    vals = []
+                    for name in parsed.names:
+                        field_dt, _ = parsed.fields[name]
+                        fd = str(field_dt)
+                        if fd in ('float64', 'float32', 'float16') or fd.startswith('f'):
+                            vals.append(float(val))
+                        elif fd in ('int8', 'int16', 'int32', 'int64') or fd.startswith('i'):
+                            vals.append(int(val))
+                        elif fd in ('uint8', 'uint16', 'uint32', 'uint64') or fd.startswith('u'):
+                            vals.append(int(val))
+                        elif fd.startswith('complex') or fd.startswith('c'):
+                            vals.append(complex(val))
+                        else:
+                            vals.append(val)
+                    converted.append(tuple(vals))
+                data_seq = converted
+            return _create_structured_array(data_seq, parsed)
     if dtype is not None:
         dtype = _normalize_dtype(dtype)
     elif hasattr(data, "_numpy_dtype_name"):
@@ -608,6 +633,13 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
 
             flat = _flatten_nested(data)
             if flat is not None:
+                # Detect source dtype from nested arrays for int preservation
+                _src_dtype = None
+                if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], ndarray):
+                    _src_dtype = str(data[0].dtype)
+                # Convert int elements to float since _native.array expects floats
+                if flat and isinstance(flat[0], int):
+                    flat = [float(x) for x in flat]
                 result = _native.array(flat)
                 result = result.reshape(shape)
                 if dtype is not None:
@@ -616,6 +648,8 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                         result = result.astype(dt)
                 elif _all_bools_nested(data):
                     result = result.astype("bool")
+                elif _src_dtype and (_src_dtype.startswith("int") or _src_dtype.startswith("uint")):
+                    result = result.astype(_src_dtype)
                 return result
     # Try the native array constructor
     try:
@@ -1379,9 +1413,9 @@ def array_equal(a1, a2, equal_nan=False):
                 if not array_equal(col1, col2, equal_nan=equal_nan):
                     return False
             return True
-        if not isinstance(a1, ndarray):
+        if not isinstance(a1, (ndarray, _ObjectArray)):
             a1 = array(a1)
-        if not isinstance(a2, ndarray):
+        if not isinstance(a2, (ndarray, _ObjectArray)):
             a2 = array(a2)
         if a1.shape != a2.shape:
             return False

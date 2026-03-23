@@ -568,9 +568,14 @@ def nanargmin(a, axis=None, out=None, keepdims=False):
         raise ValueError("attempt to get argmin of an empty sequence")
     result = _native.nanargmin(a, axis)
     if not isinstance(result, ndarray):
-        result = _scalar_result(result, a, 'int64')
-    if keepdims and axis is not None:
-        result = _apply_keepdims(result, a, axis)
+        result = _scalar_result(result, a, 'intp')
+    if keepdims:
+        if axis is None:
+            shape = tuple(1 for _ in a.shape)
+            v = int(result)
+            result = array([v], dtype='intp').reshape(shape)
+        else:
+            result = _apply_keepdims(result, a, axis)
     return result
 
 
@@ -581,9 +586,14 @@ def nanargmax(a, axis=None, out=None, keepdims=False):
         raise ValueError("attempt to get argmax of an empty sequence")
     result = _native.nanargmax(a, axis)
     if not isinstance(result, ndarray):
-        result = _scalar_result(result, a, 'int64')
-    if keepdims and axis is not None:
-        result = _apply_keepdims(result, a, axis)
+        result = _scalar_result(result, a, 'intp')
+    if keepdims:
+        if axis is None:
+            shape = tuple(1 for _ in a.shape)
+            v = int(result)
+            result = array([v], dtype='intp').reshape(shape)
+        else:
+            result = _apply_keepdims(result, a, axis)
     return result
 
 

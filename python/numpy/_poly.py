@@ -6,6 +6,7 @@ from ._helpers import _ObjectArray, _builtin_min, _builtin_max
 from ._creation import array, asarray
 
 __all__ = [
+    'poly',
     'poly1d',
     'roots',
     'polyfit',
@@ -21,11 +22,56 @@ __all__ = [
 ]
 
 
+def poly(seq_of_zeros):
+    """Return polynomial coefficients given sequence of roots, or characteristic polynomial of matrix."""
+    import numpy as _np
+    if not isinstance(seq_of_zeros, ndarray):
+        seq_of_zeros = array(seq_of_zeros)
+    if seq_of_zeros.ndim == 2:
+        # Matrix case: characteristic polynomial via eigenvalues
+        if seq_of_zeros.shape[0] == 0:
+            return array([1.0])
+        seq_of_zeros = _np.linalg.eigvals(seq_of_zeros)
+    # Build polynomial from roots: prod(x - r for r in roots)
+    roots_raw = seq_of_zeros.flatten().tolist()
+
+    def _to_complex(v):
+        if isinstance(v, complex):
+            return v
+        if isinstance(v, tuple) and len(v) == 2:
+            return complex(v[0], v[1])
+        try:
+            return complex(float(v))
+        except (TypeError, ValueError):
+            return complex(v)
+
+    roots = [_to_complex(r) for r in roots_raw]
+    coeffs = [1.0 + 0j]
+    for root in roots:
+        new_coeffs = [0.0 + 0j] * (len(coeffs) + 1)
+        for i, c in enumerate(coeffs):
+            new_coeffs[i] += c
+            new_coeffs[i + 1] -= c * root
+        coeffs = new_coeffs
+    # If all imaginary parts are negligible, return real
+    max_imag = max(abs(c.imag) for c in coeffs) if coeffs else 0.0
+    max_real = max(abs(c.real) for c in coeffs) if coeffs else 1.0
+    if max_imag < 1e-10 * max_real or max_imag == 0:
+        return array([c.real for c in coeffs])
+    return array(coeffs)
+
+
 def polyfit(x, y, deg, rcond=None, full=False, w=None, cov=False):
     if not isinstance(x, ndarray):
         x = array(x)
     if not isinstance(y, ndarray):
         y = array(y)
+    if cov is not False:
+        N = x.size
+        if N <= int(deg) + 1:
+            raise ValueError(
+                "the number of data points must exceed order + 1 for the variance estimate"
+            )
     return _native.polyfit(x, y, int(deg))
 
 
@@ -230,12 +276,16 @@ def polyint(p, m=1, k=0):
 class poly1d:
     """A one-dimensional polynomial class."""
     def __init__(self, c_or_r, r=False, variable=None):
+        self._dtype = None
+        self._arr = None
         if isinstance(c_or_r, poly1d):
             self._coeffs = list(c_or_r._coeffs)
+            self._dtype = c_or_r._dtype
         elif r:
             # c_or_r are roots, convert to coefficients
             self._coeffs = [1.0]
             if isinstance(c_or_r, ndarray):
+                self._dtype = c_or_r.dtype
                 roots_list = [c_or_r[i] for i in range(c_or_r.size)]
             else:
                 roots_list = list(c_or_r)
@@ -247,21 +297,68 @@ class poly1d:
                 self._coeffs = new_coeffs
         else:
             if isinstance(c_or_r, ndarray):
-                self._coeffs = [c_or_r[i] for i in range(c_or_r.size)]
+                self._dtype = c_or_r.dtype
+                self._coeffs = [_to_scalar(c_or_r[i]) for i in range(c_or_r.size)]
+            elif isinstance(c_or_r, _ObjectArray):
+                self._dtype = c_or_r.dtype
+                self._coeffs = list(c_or_r._data)
             else:
-                self._coeffs = [float(c) for c in c_or_r]
+                self._coeffs = []
+                for c in c_or_r:
+                    try:
+                        self._coeffs.append(complex(c) if isinstance(c, complex) else float(c))
+                    except TypeError:
+                        self._coeffs.append(c)
         # Strip leading zeros (but keep at least one coefficient)
         while len(self._coeffs) > 1 and self._coeffs[0] == 0:
             self._coeffs.pop(0)
         self._variable = variable or 'x'
 
+    def __array__(self, dtype=None):
+        dt = dtype or self._dtype
+        if dt is not None:
+            return array(self._coeffs, dtype=dt)
+        return array(self._coeffs)
+
+    def _make_arr(self):
+        """Build and cache a numpy array from _coeffs (the persistent coeffs array)."""
+        if self._dtype is not None:
+            self._arr = array(self._coeffs, dtype=self._dtype)
+        else:
+            self._arr = array(self._coeffs)
+        return self._arr
+
     @property
     def coeffs(self):
-        return array(self._coeffs)
+        # Return the persistent array; rebuild if _coeffs list changed
+        if not hasattr(self, '_arr') or self._arr is None:
+            self._make_arr()
+        # Check if list changed vs cached array
+        if len(self._coeffs) != len(self._arr):
+            self._make_arr()
+        return self._arr
+
+    @coeffs.setter
+    def coeffs(self, value):
+        if isinstance(value, ndarray):
+            if value.ndim == 0:
+                raise AttributeError("Cannot set coeffs to a 0-d array")
+            self._dtype = value.dtype
+            self._arr = value
+            self._coeffs = [_to_scalar(value[i]) for i in range(value.size)]
+        elif isinstance(value, (list, tuple)):
+            self._coeffs = list(value)
+            self._arr = None  # invalidate cache
+        else:
+            raise AttributeError("Cannot set coeffs to scalar")
 
     @property
     def c(self):
         return self.coeffs
+
+    @c.setter
+    def c(self, value):
+        self.coeffs = value
 
     @property
     def order(self):
@@ -344,9 +441,27 @@ class poly1d:
 
     def __getitem__(self, idx):
         # poly1d[i] returns coefficient of x^i (reverse indexing)
-        if idx > self.order:
-            return 0.0
-        return self._coeffs[self.order - idx]
+        if idx < 0 or idx > self.order:
+            val = 0.0
+        else:
+            val = self._coeffs[self.order - idx]
+        if self._dtype is not None:
+            return array(val, dtype=self._dtype)
+        return val
+
+    def __setitem__(self, idx, val):
+        # poly1d[i] = val sets coefficient of x^i
+        idx = int(idx)
+        if idx < 0:
+            return  # out of range, no-op for negative index
+        # Expand _coeffs if needed
+        while self.order < idx:
+            self._coeffs.insert(0, 0.0)
+        self._coeffs[self.order - idx] = val
+        self._arr = None  # invalidate cached array
+
+    def size(self):
+        return len(self._coeffs)
 
     def deriv(self, m=1):
         """Return the derivative of this polynomial."""
@@ -365,20 +480,141 @@ class poly1d:
     def integ(self, m=1, k=0):
         """Return the integral of this polynomial."""
         coeffs = list(self._coeffs)
-        for _ in range(m):
+        if isinstance(k, (list, tuple)):
+            k_vals = list(k)
+        else:
+            k_vals = [k] * m
+        while len(k_vals) < m:
+            k_vals.append(0)
+        for step in range(m):
             n = len(coeffs)
             new_coeffs = []
             for i in range(n):
                 new_coeffs.append(coeffs[i] / (n - i))
-            new_coeffs.append(float(k))
+            try:
+                new_coeffs.append(float(k_vals[step]))
+            except TypeError:
+                new_coeffs.append(k_vals[step])
             coeffs = new_coeffs
         return poly1d(coeffs)
 
+    def __truediv__(self, other):
+        q, r = polydiv(self, other)
+        return q, r
+
+    def __rtruediv__(self, other):
+        q, r = polydiv(other, self)
+        return q, r
+
+    def __pow__(self, exp):
+        if not isinstance(exp, int) or exp < 0:
+            raise ValueError("Polynomial can only be raised to non-negative integer powers")
+        result = poly1d([1.0])
+        for _ in range(exp):
+            result = result * self
+        return result
+
     def __repr__(self):
-        return "poly1d(" + repr(self._coeffs) + ")"
+        coeffs = self.coeffs
+        parts = []
+        for i in range(len(self._coeffs)):
+            v = coeffs[i]
+            # Format floats like numpy: 1.0 → '1.', 1.5 → '1.5'
+            try:
+                fv = float(v)
+                if fv == int(fv) and not isinstance(v, complex):
+                    parts.append(repr(int(fv)) + '.')
+                else:
+                    s = repr(fv)
+                    parts.append(s)
+            except Exception:
+                parts.append(repr(v))
+        return "poly1d([" + ', '.join(parts) + "])"
 
     def __str__(self):
-        return "poly1d(" + repr(self._coeffs) + ")"
+        """Format polynomial as multi-line string with exponent notation."""
+        var = self._variable
+
+        def _fmt_real(f, sig):
+            if f == int(f):
+                return str(int(f))
+            return f'{f:.{sig}g}'
+
+        def _fmt_num(c):
+            """Format a number for display, returns (str, is_negative)."""
+            try:
+                if isinstance(c, complex):
+                    re, im = c.real, c.imag
+                    re_s = _fmt_real(re, 4)
+                    im_s = _fmt_real(abs(im), 4)
+                    if re == 0:
+                        return f'{im_s}j', im < 0
+                    sign = '+' if im >= 0 else '-'
+                    return f'({re_s} {sign} {im_s}j)', False
+                fv = float(c)
+                return _fmt_real(abs(fv), 4), fv < 0
+            except Exception:
+                return str(c), False
+
+        # Skip leading zero coefficients for display
+        coeffs = list(self._coeffs)
+        while len(coeffs) > 1 and coeffs[0] == 0:
+            coeffs = coeffs[1:]
+        n = len(coeffs) - 1
+
+        if n == 0:
+            s, neg = _fmt_num(coeffs[0])
+            body = ('-' + s) if neg else s
+            return ' ' * len(body) + '\n' + body
+
+        body_parts = []
+        exp_positions = []  # (global_position, power)
+        pos = 0
+
+        for i, c in enumerate(coeffs):
+            power = n - i
+            coeff_str, is_neg = _fmt_num(c)
+            if not isinstance(c, complex):
+                try:
+                    abs_c = abs(float(c))
+                    coeff_str = _fmt_real(abs_c, 4)
+                except Exception:
+                    pass
+
+            if power == 0:
+                term = coeff_str
+            else:
+                term = f'{coeff_str} {var}'
+
+            if i == 0:
+                prefix = '-' if is_neg else ''
+            else:
+                prefix = ' - ' if is_neg else ' + '
+
+            full_term = prefix + term
+
+            if power >= 2:
+                var_idx = full_term.rindex(var)
+                exp_positions.append((pos + var_idx + len(var), power))
+
+            body_parts.append(full_term)
+            pos += len(full_term)
+
+        term_line = ''.join(body_parts)
+
+        if not exp_positions:
+            return term_line
+
+        # Build header line from global exponent positions
+        header_len = max(p + len(str(pw)) for p, pw in exp_positions)
+        exp_chars = [' '] * header_len
+        for p, pw in exp_positions:
+            s = str(pw)
+            for j, ch in enumerate(s):
+                if p + j < len(exp_chars):
+                    exp_chars[p + j] = ch
+        exp_line = ''.join(exp_chars).rstrip()
+        return exp_line + '\n' + term_line
 
 
 # Alias so poly1d.roots can call without name clash with the module-level roots()
@@ -386,36 +622,42 @@ _poly1d_roots = roots
 
 
 def polydiv(u, v):
-    """Polynomial division: returns (quotient, remainder)."""
-    if isinstance(u, poly1d):
-        u = list(u._coeffs)
+    """Polynomial division: returns (quotient, remainder) as poly1d if inputs are poly1d."""
+    _u_is_poly = isinstance(u, poly1d)
+    _v_is_poly = isinstance(v, poly1d)
+    if _u_is_poly:
+        u_list = list(u._coeffs)
     elif isinstance(u, ndarray):
-        u = [_to_scalar(u[i]) for i in range(u.size)]
+        u_list = [_to_scalar(u[i]) for i in range(u.size)]
     else:
-        u = [_to_scalar(c) for c in u]
-    if isinstance(v, poly1d):
-        v = list(v._coeffs)
+        u_list = [_to_scalar(c) for c in u]
+    if _v_is_poly:
+        v_list = list(v._coeffs)
     elif isinstance(v, ndarray):
-        v = [_to_scalar(v[i]) for i in range(v.size)]
+        v_list = [_to_scalar(v[i]) for i in range(v.size)]
     else:
-        v = [_to_scalar(c) for c in v]
-    n = len(u)
-    nv = len(v)
+        v_list = [_to_scalar(c) for c in v]
+    n = len(u_list)
+    nv = len(v_list)
     # Determine output type
-    _is_complex = any(isinstance(c, complex) for c in u) or any(isinstance(c, complex) for c in v)
+    _is_complex = any(isinstance(c, complex) for c in u_list) or any(isinstance(c, complex) for c in v_list)
     _zero = complex(0) if _is_complex else 0.0
     if nv > n:
-        return array([_zero]), array(u if u else [_zero])
-    q = [_zero] * (n - nv + 1)
-    r = list(u)
-    for i in range(n - nv + 1):
-        q[i] = r[i] / v[0]
-        for j in range(nv):
-            r[i + j] -= q[i] * v[j]
-    remainder = r[n - nv + 1:]
-    if not remainder:
-        remainder = [_zero]
-    return array(q), array(remainder)
+        q_out = [_zero]
+        r_out = u_list if u_list else [_zero]
+    else:
+        q_out = [_zero] * (n - nv + 1)
+        r_list = list(u_list)
+        for i in range(n - nv + 1):
+            q_out[i] = r_list[i] / v_list[0]
+            for j in range(nv):
+                r_list[i + j] -= q_out[i] * v_list[j]
+        r_out = r_list[n - nv + 1:]
+        if not r_out:
+            r_out = [_zero]
+    if _u_is_poly or _v_is_poly:
+        return poly1d(q_out), poly1d(r_out)
+    return array(q_out), array(r_out)
 
 
 def convolve(a, v, mode='full'):

@@ -521,13 +521,12 @@ def unravel_index(indices, shape, order='C'):
     if isinstance(indices, float):
         raise TypeError("Expected type 'int' but 'float' found.")
     # Handle 0-d shape
-    shape = tuple(shape) if not isinstance(shape, tuple) else shape
+    shape = tuple(int(s) for s in shape)
     if len(shape) == 0:
         if isinstance(indices, int):
             if indices == 0:
                 return ()
             raise ValueError("index {} is out of bounds for array with size 1".format(indices))
-        # Check if it's a sequence with a single element that's out of bounds
         _idx_seq = list(indices) if not isinstance(indices, ndarray) else indices.tolist()
         if not isinstance(_idx_seq, list):
             _idx_seq = [_idx_seq]
@@ -535,26 +534,31 @@ def unravel_index(indices, shape, order='C'):
             if int(_v) != 0:
                 raise ValueError(
                     "index {} is out of bounds for array with size 1".format(int(_v)))
-        # Array/sequence with 0-d shape
         raise ValueError("multiple indices for 0d array")
     # Validate: reject empty sequences
     if isinstance(indices, (list, tuple)) and len(indices) == 0:
         raise TypeError(
             "indices must be integral: the provided empty sequence was"
             " inferred as float. Wrap it with np.intp for clarity.")
+    _scalar_input = isinstance(indices, int)
     _was_ndarray = isinstance(indices, ndarray)
     if not _was_ndarray:
         if isinstance(indices, int):
-            indices = array([indices])
+            indices = array([indices], dtype='int64')
         else:
-            indices = array(indices)
-    # Reject empty float-typed arrays (ambiguous - could be int or float)
-    if _was_ndarray and indices.size == 0:
+            indices = array(indices, dtype='int64')
+    else:
+        # Ensure int dtype
+        dt = str(indices.dtype)
+        if dt.startswith('float'):
+            if indices.size == 0:
+                raise TypeError("only int indices permitted")
+        elif dt not in ('int64',):
+            indices = indices.astype('int64')
+    if indices.size == 0:
         _dt = str(indices.dtype)
         if _dt.startswith('float'):
             raise TypeError("only int indices permitted")
-    if indices.size == 0:
-        # Return empty arrays per dimension
         return tuple([array([], dtype='int64') for _ in shape])
     # Validate bounds
     total_size = 1
@@ -567,7 +571,35 @@ def unravel_index(indices, shape, order='C'):
             raise ValueError(
                 "index {} is out of bounds for array with size {}".format(
                     idx_val, total_size))
-    return _native.unravel_index(indices, shape)
+    # Compute unravel in Python to support order='F'
+    flat = [int(x) for x in idx_list]
+    ndim = len(shape)
+    if order == 'F':
+        # F-order: first axis changes fastest
+        # idx[k] = (n // prod(shape[:k])) % shape[k]
+        result_cols = []
+        for k in range(ndim):
+            stride = 1
+            for j in range(k):
+                stride *= shape[j]
+            result_cols.append(array([(v // stride) % shape[k] for v in flat], dtype='int64'))
+    else:
+        # C-order: last axis changes fastest
+        result_cols = []
+        stride = 1
+        for k in range(ndim - 1, -1, -1):
+            stride_k = stride
+            result_cols.insert(0, array([(v // stride_k) % shape[k] for v in flat], dtype='int64'))
+            stride *= shape[k]
+    # Restore original shape if indices was multi-dimensional
+    orig_shape = indices.shape
+    if len(orig_shape) > 1:
+        result_cols = [r.reshape(list(orig_shape)) for r in result_cols]
+    result = tuple(result_cols)
+    # When scalar input, return tuple of int scalars (not arrays)
+    if _scalar_input:
+        return tuple(int(r.tolist()[0]) if hasattr(r, 'tolist') else int(r) for r in result)
+    return result
 
 
 def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
@@ -575,39 +607,110 @@ def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
     for a in multi_index:
         if isinstance(a, float):
             raise TypeError("Expected type 'int' but 'float' found.")
-    arrays = tuple(array([a]) if isinstance(a, (int, float)) else (a if isinstance(a, ndarray) else array(a)) for a in multi_index)
-    # Validate dimensions - check for 0 in dims with non-empty indices
+    # Determine if input came from a 2D array (each row = one axis)
+    _was_2d_array = isinstance(multi_index, ndarray) and multi_index.ndim == 2
+    if _was_2d_array:
+        arrays = tuple(multi_index[i] for i in range(multi_index.shape[0]))
+    else:
+        _all_scalar = all(isinstance(a, int) for a in multi_index)
+        arrays = tuple(
+            array([a], dtype='int64') if isinstance(a, int)
+            else (a if isinstance(a, ndarray) else array(a, dtype='int64'))
+            for a in multi_index
+        )
+        if not _was_2d_array:
+            # Check for empty list/tuple elements (non-ndarray)
+            for a in multi_index:
+                if isinstance(a, (list, tuple)) and len(a) == 0:
+                    raise TypeError(
+                        "indices must be integral: the provided empty sequence was"
+                        " inferred as float. Wrap it with np.intp for clarity.")
     dims = tuple(int(d) for d in dims)
-    for d in dims:
+    if len(arrays) != len(dims):
+        raise ValueError("parameter multi_index must be a sequence of length {}".format(len(dims)))
+    # Validate dimensions - check for 0 in dims with non-empty indices
+    for d, arr in zip(dims, arrays):
         if d == 0:
-            # Check if any indices are non-empty
-            for arr in arrays:
-                if arr.size > 0:
+            if hasattr(arr, 'size') and arr.size > 0:
+                raise ValueError("invalid entry in coordinates array")
+    # Apply modes to indices
+    processed = []
+    for arr, d in zip(arrays, dims):
+        vals = [int(v) for v in (arr.flatten().tolist() if hasattr(arr, 'flatten') else [int(arr)])]
+        new_vals = []
+        for v in vals:
+            if mode == 'raise':
+                if v < 0 or v >= d:
                     raise ValueError(
-                        "invalid entry in coordinates array")
-    # Validate bounds in 'raise' mode
-    if mode == 'raise':
-        for i, (arr, d) in enumerate(zip(arrays, dims)):
-            vals = arr.flatten().tolist()
+                        "index {} is out of bounds for axis with size {}".format(v, d))
+                new_vals.append(v)
+            elif mode == 'wrap':
+                new_vals.append(v % d if d > 0 else 0)
+            elif mode == 'clip':
+                new_vals.append(max(0, min(v, d - 1)))
+            elif isinstance(mode, (list, tuple)):
+                # Per-axis mode handled below
+                new_vals.append(v)
+            else:
+                new_vals.append(v)
+        processed.append(new_vals)
+    # Handle tuple of per-axis modes
+    if isinstance(mode, (list, tuple)):
+        if len(mode) != len(dims):
+            raise ValueError("mode must have same length as multi_index")
+        for axis_idx, (vals, d, m) in enumerate(zip(processed, dims, mode)):
+            new_vals = []
             for v in vals:
-                v_int = int(v)
-                if v_int < 0 or v_int >= d:
-                    raise ValueError(
-                        "index {} is out of bounds for array "
-                        "with size {}".format(v_int, d))
-    # Check for overflow: total product of dims
-    total = 1
-    for d in dims:
-        new_total = total * d
-        if d != 0 and new_total // d != total:
-            raise ValueError(
-                "invalid dims: product of dims would overflow")
-        total = new_total
-    import sys
-    if total > sys.maxsize:
-        raise ValueError(
-            "invalid dims: product of dims too large")
-    return _native.ravel_multi_index(arrays, dims)
+                if m == 'raise':
+                    if v < 0 or v >= d:
+                        raise ValueError(
+                            "index {} is out of bounds for axis with size {}".format(v, d))
+                    new_vals.append(v)
+                elif m == 'wrap':
+                    new_vals.append(v % d if d > 0 else 0)
+                elif m == 'clip':
+                    new_vals.append(max(0, min(v, d - 1)))
+                else:
+                    new_vals.append(v)
+            processed[axis_idx] = new_vals
+    # Compute flat index
+    n = len(processed[0]) if processed else 0
+    if n == 0:
+        # Check if original arrays were ndarrays of int (not empty float seqs)
+        for arr in arrays:
+            if hasattr(arr, 'size') and arr.size == 0:
+                _dt = str(arr.dtype) if hasattr(arr, 'dtype') else ''
+                if _dt.startswith('float'):
+                    raise TypeError("only int indices permitted")
+        return array([], dtype='int64')
+    if order == 'F':
+        # F-order: result = idx[0] + d[0]*idx[1] + d[0]*d[1]*idx[2] + ...
+        result_vals = [0] * n
+        stride = 1
+        for k, (vals, d) in enumerate(zip(processed, dims)):
+            for i in range(n):
+                result_vals[i] += stride * vals[i]
+            stride *= d
+    else:
+        # C-order: result = idx[-1] + d[-1]*idx[-2] + ...
+        result_vals = [0] * n
+        stride = 1
+        for k in range(len(dims) - 1, -1, -1):
+            vals = processed[k]
+            d = dims[k]
+            for i in range(n):
+                result_vals[i] += stride * vals[i]
+            stride *= d
+    result = array(result_vals, dtype='int64')
+    # When all scalar inputs, return int scalar
+    if not _was_2d_array and 'all_scalar' in dir() and _all_scalar:
+        return int(result_vals[0])
+    # Also check if we had all scalar inputs (non-2d case)
+    if not _was_2d_array:
+        all_scalar_inputs = all(isinstance(a, int) for a in multi_index)
+        if all_scalar_inputs:
+            return int(result_vals[0])
+    return result
 
 
 def diag(v, k=0):

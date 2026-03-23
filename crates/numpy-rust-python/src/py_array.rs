@@ -678,6 +678,26 @@ impl PyNdArray {
                     };
                     axes.push(ax);
                 }
+            } else if let Some(arr) = first.downcast_ref::<PyNdArray>() {
+                // ndarray of ints as axes
+                let arr_flat = arr.inner().flatten();
+                for i in 0..arr_flat.size() {
+                    let s = arr_flat.get(&[i]).map_err(|e| numpy_err(e, vm))?;
+                    let idx: i64 = match s {
+                        Scalar::Int32(v) => v as i64,
+                        Scalar::Int64(v) => v,
+                        Scalar::Float32(v) => v as i64,
+                        Scalar::Float64(v) => v as i64,
+                        _ => return Err(vm.new_type_error("expected integer axis".to_owned())),
+                    };
+                    let ndim = inner.ndim();
+                    let ax = if idx < 0 {
+                        (ndim as i64 + idx) as usize
+                    } else {
+                        idx as usize
+                    };
+                    axes.push(ax);
+                }
             } else {
                 let _idx: i64 = first.clone().try_into_value(vm)?;
                 // Single int arg for 1-d: just return copy
@@ -3311,6 +3331,7 @@ impl PyNdArray {
         inplace_rshift: Some(|a, b, vm| number_inplace_bin_op(a, b, |x, y| x.right_shift(y), vm)),
         absolute: Some(number_absolute),
         boolean: Some(number_boolean),
+        index: Some(number_int),
         ..PyNumberMethods::NOT_IMPLEMENTED
     };
 }
@@ -3773,11 +3794,52 @@ fn multi_dim_fancy_setitem(
     Ok(())
 }
 
+/// Extract an integer value from a Python object for use as a slice bound.
+/// Handles PyInt and 0-d ndarray (via nb_index).
+fn slice_bound_to_i64(obj: &vm::PyObjectRef, vm: &VirtualMachine) -> PyResult<i64> {
+    // Try direct int first (most common)
+    if let Ok(v) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(v);
+    }
+    // Try nb_index (handles 0-d ndarray with numeric dtype)
+    if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
+        let data = arr.data.read().unwrap();
+        if data.size() == 1 {
+            let s = data
+                .get(&vec![0usize; data.ndim()])
+                .map_err(|e| numpy_err(e, vm))?;
+            let v: i64 = match s {
+                Scalar::Bool(b) => {
+                    if b {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                Scalar::Int32(i) => i as i64,
+                Scalar::Int64(i) => i,
+                Scalar::Float32(f) => f as i64,
+                Scalar::Float64(f) => f as i64,
+                Scalar::Complex64(c) => c.re as i64,
+                Scalar::Complex128(c) => c.re as i64,
+                Scalar::Str(_) => {
+                    return Err(vm.new_type_error("string cannot be used as slice index".to_owned()))
+                }
+            };
+            return Ok(v);
+        }
+    }
+    Err(vm.new_type_error(format!(
+        "'{}' object cannot be interpreted as an integer",
+        obj.class().name()
+    )))
+}
+
 /// Convert a RustPython `PySlice` to a core `SliceArg`.
 pub(crate) fn py_slice_to_slice_arg(slice: &PySlice, vm: &VirtualMachine) -> PyResult<SliceArg> {
     let start = match &slice.start {
         Some(obj) if !vm.is_none(obj) => {
-            let v: i64 = obj.clone().try_into_value(vm)?;
+            let v = slice_bound_to_i64(obj, vm)?;
             Some(v as isize)
         }
         _ => None,
@@ -3785,12 +3847,12 @@ pub(crate) fn py_slice_to_slice_arg(slice: &PySlice, vm: &VirtualMachine) -> PyR
     let stop = if vm.is_none(&slice.stop) {
         None
     } else {
-        let v: i64 = slice.stop.clone().try_into_value(vm)?;
+        let v = slice_bound_to_i64(&slice.stop, vm)?;
         Some(v as isize)
     };
     let step = match &slice.step {
         Some(obj) if !vm.is_none(obj) => {
-            let v: i64 = obj.clone().try_into_value(vm)?;
+            let v = slice_bound_to_i64(obj, vm)?;
             v as isize
         }
         _ => 1,
@@ -4400,6 +4462,10 @@ impl PyFlagsObj {
     #[pygetset]
     fn writeable(&self) -> bool {
         self.get_flag("WRITEABLE")
+    }
+    #[pygetset(setter)]
+    fn set_writeable(&self, _val: bool, _vm: &VirtualMachine) {
+        // Setting writeable is a no-op (all arrays are mutable in our implementation)
     }
     #[pygetset]
     fn aligned(&self) -> bool {

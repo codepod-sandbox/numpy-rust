@@ -42,6 +42,28 @@ def run_scalar_intp_from_sequence(*args, **kwargs):
     raise NotImplementedError("C extension test helper not available")
 
 
+def npy_cabs(z):
+    """Stub for C-level npy_cabs: absolute value of complex scalar."""
+    import numpy as _np
+    return abs(complex(z))
+
+
+def npy_carg(z):
+    """Stub for C-level npy_carg: argument (phase) of complex scalar."""
+    import cmath
+    return cmath.phase(complex(z))
+
+
+def npy_import_entry_point(*args, **kwargs):
+    """Stub for C-level import entry point test."""
+    raise NotImplementedError("C extension test helper not available")
+
+
+def test_neighborhood_iterator(*args, **kwargs):
+    """Stub for C-level neighborhood iterator test."""
+    raise NotImplementedError("C extension test helper not available")
+
+
 def __getattr__(name):
     if hasattr(numpy, name):
         return getattr(numpy, name)

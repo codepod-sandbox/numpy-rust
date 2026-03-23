@@ -2,7 +2,7 @@
 
 A NumPy implementation in Rust for Python code running in sandboxed environments (RustPython/WASM).
 
-**12,133 tests passing (`2026-03-19`)**
+**41,775 tests passing (`2026-03-23`)**
 
 ## How it works
 
@@ -27,18 +27,18 @@ All numerical operations run in native Rust. The Python layer handles API surfac
 | NumPy compat (`test_numeric.py`) | 1,204 passed, 10 expected failures |
 | NumPy ufunc compat (`test_ufunc.py`) | 106 passed, 344 expected failures |
 | NumPy I/O compat (`test_io.py`) | 23 passed, 2 skipped |
-| Upstream NumPy tests (74 files, 86K lines) | 9,290+ passed, 6 panics, 6 timeouts |
+| Upstream NumPy tests (74 files, 86K lines) | 38,800 passed, 0 failures, 361 skipped |
 
 ### Upstream test breakdown
 
 74 vendored upstream NumPy test files cover: core array ops, math, indexing, dtypes, scalars, shape manipulation, einsum, array padding, set ops, nan functions, histograms, index tricks, stride tricks, type checking, masked arrays, polynomials, FFT, linalg, random, and more.
 
 ```bash
-# Run all upstream tests (scan mode)
-./target/release/numpy-python tests/numpy_compat/run_upstream.py --scan
+# Run all upstream tests (scan mode) — uses CPython + real numpy
+python3 tests/numpy_compat/run_upstream.py --scan
 
 # Run a single upstream test file
-./target/release/numpy-python tests/numpy_compat/run_upstream.py upstream/core_test_numeric.py
+python3 tests/numpy_compat/run_upstream.py upstream/core_test_numeric.py
 ```
 
 ---

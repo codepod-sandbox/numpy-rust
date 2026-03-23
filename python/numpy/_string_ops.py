@@ -895,6 +895,27 @@ class _char_mod:
         return _char_mod.array(obj, itemsize=itemsize, copy=False, unicode=unicode, order=order)
 
     @staticmethod
+    def compare_chararrays(a1, a2, cmp, rstrip):
+        """Compare two string arrays element-wise using the given comparison operator."""
+        import numpy as _np
+        ops = {'<': lambda x, y: x < y, '<=': lambda x, y: x <= y,
+               '==': lambda x, y: x == y, '>=': lambda x, y: x >= y,
+               '>': lambda x, y: x > y, '!=': lambda x, y: x != y}
+        op = ops.get(cmp)
+        if op is None:
+            raise ValueError(f"Invalid comparison: {cmp!r}")
+        def _norm(s):
+            if rstrip:
+                if isinstance(s, bytes):
+                    return s.rstrip()
+                return s.rstrip()
+            return s
+        a1_items = _to_items(a1)
+        a2_items = _to_items(a2)
+        result = [op(_norm(x), _norm(y)) for x, y in zip(a1_items, a2_items)]
+        return _np.array(result, dtype=bool)
+
+    @staticmethod
     def equal(a, b):
         """Element-wise comparison for equality, stripping trailing whitespace."""
         import numpy as _np
