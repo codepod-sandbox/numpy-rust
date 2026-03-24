@@ -143,6 +143,23 @@ _sys.modules["numpy.linalg"] = linalg
 _sys.modules["numpy.fft"] = fft
 _sys.modules["numpy.random"] = random
 
+# Import testing submodule
+from numpy import testing as testing
+_sys.modules["numpy.testing"] = testing
+
+# Import ma submodule
+from numpy import ma as ma
+_sys.modules["numpy.ma"] = ma
+
+# --- Math ufuncs missing from Rust core ---
+def square(x):
+    """Element-wise square."""
+    if hasattr(x, '__iter__') or hasattr(x, 'shape'):
+        import numpy as _np
+        arr = _np.asarray(x, dtype=float)
+        return arr * arr
+    return float(x) * float(x)
+
 # --- Dtype aliases ----------------------------------------------------------
 # NumPy tests reference these as np.float64(value), np.int32(value), etc.
 # They must be callable (constructing scalars) AND usable as dtype identifiers.

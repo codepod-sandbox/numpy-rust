@@ -100,10 +100,22 @@ def assert_array_almost_equal(actual, desired, decimal=6, err_msg="", verbose=Tr
     assert_almost_equal(actual, desired, decimal=decimal, err_msg=err_msg, verbose=verbose)
 
 
+def _to_float_list(x):
+    """Convert any array-like or scalar to a flat list of floats."""
+    if isinstance(x, numpy.ndarray):
+        return _as_list(x)
+    if hasattr(x, 'tolist'):
+        raw = x.tolist()
+        return [float(v) for v in raw] if isinstance(raw, list) else [float(raw)]
+    if hasattr(x, '__iter__') and not isinstance(x, str):
+        return [float(v) for v in x]
+    return [float(x)]
+
+
 def assert_allclose(actual, desired, rtol=1e-7, atol=0, equal_nan=True,
                     err_msg="", verbose=True):
-    a_vals = _as_list(actual) if isinstance(actual, numpy.ndarray) else [float(actual)]
-    d_vals = _as_list(desired) if isinstance(desired, numpy.ndarray) else [float(desired)]
+    a_vals = _to_float_list(actual)
+    d_vals = _to_float_list(desired)
     for i, (a, d) in enumerate(zip(a_vals, d_vals)):
         # Handle NaN
         if equal_nan and math.isnan(a) and math.isnan(d):
