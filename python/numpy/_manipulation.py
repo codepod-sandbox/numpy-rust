@@ -299,13 +299,17 @@ def stack(arrays, axis=0, out=None):
     arrays = [asarray(a) for a in arrays]
     if not arrays:
         raise ValueError("need at least one array to stack")
+    # After stacking, ndim will be input ndim + 1
+    ndim = arrays[0].ndim + 1
+    orig_axis = axis
     # Normalize negative axis
     if axis < 0:
-        # After stacking, ndim will be input ndim + 1
-        ndim = arrays[0].ndim + 1
         axis = axis + ndim
         if axis < 0:
-            raise ValueError(f"axis {axis - ndim} is out of bounds for array of dimension {ndim}")
+            raise AxisError(orig_axis, ndim)
+    # Validate positive axis is in bounds (valid range: 0 <= axis <= ndim-1 = input.ndim)
+    if axis >= ndim:
+        raise AxisError(orig_axis, ndim)
     # If any array is _ObjectArray, use Python-level implementation
     if any(isinstance(a, _ObjectArray) for a in arrays):
         # Expand dims for each array, then concatenate
