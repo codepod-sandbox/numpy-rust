@@ -1485,6 +1485,15 @@ def broadcast_to(arr, shape):
                 f"operands could not be broadcast together with remapped shapes "
                 f"[original->remapped]: {arr.shape}->... and requested shape {shape}"
             )
+    # Guard against unreasonably large output (raise MemoryError like NumPy)
+    _MAX_ELEMENTS = 2 ** 50  # ~1 quadrillion elements
+    _total = 1
+    for s in shape:
+        _total *= s
+        if _total > _MAX_ELEMENTS:
+            raise MemoryError(
+                "array is too large; required memory exceeds available resources"
+            )
     return tile(arr, reps)
 
 
