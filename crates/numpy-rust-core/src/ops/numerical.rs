@@ -37,18 +37,25 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
 
     let mut result = Vec::with_capacity(x_arr.len());
     for &xi in x_arr.iter() {
-        if xi <= xp_slice[0] {
+        // Binary search: partition_point returns first index where xp[i] >= xi
+        // (i.e., first index not satisfying v < xi)
+        let idx = xp_slice.partition_point(|&v| v < xi);
+        if idx == 0 {
+            // xi <= xp_slice[0] (or xp_slice[0] is NaN) → left boundary
             result.push(fp_slice[0]);
-        } else if xi >= *xp_slice.last().unwrap() {
+        } else if idx == xp_slice.len() {
+            // xi >= xp_slice[last] → right boundary
             result.push(*fp_slice.last().unwrap());
         } else {
-            // Binary search for interval
-            let idx = xp_slice.partition_point(|&v| v < xi);
             let lo = idx - 1;
             let hi = idx;
+            // Check for NaN in the bracket that would make interpolation undefined
+            if xp_slice[lo].is_nan() || xp_slice[hi].is_nan() {
+                result.push(f64::NAN);
+                continue;
+            }
             let denom = xp_slice[hi] - xp_slice[lo];
             if denom == 0.0 {
-                // Duplicate x-coordinates: return the value at that point
                 result.push(fp_slice[lo]);
             } else {
                 let t = (xi - xp_slice[lo]) / denom;
