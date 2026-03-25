@@ -108,8 +108,15 @@ impl NdArray {
                     if *step == 0 {
                         return Err(NumpyError::ValueError("slice step cannot be zero".into()));
                     }
-                    let s = start.map(|v| v).unwrap_or(0);
-                    let e = stop.map(|v| v).unwrap_or(shape[i] as isize);
+                    let n = shape[i] as isize;
+                    // Clamp start and stop to valid range following Python slice semantics
+                    let clamp = |v: isize, default: isize| -> isize {
+                        let v = if v < 0 { (v + n).max(0) } else { v.min(n) };
+                        let _ = default; // only used for None case
+                        v
+                    };
+                    let s = start.map(|v| clamp(v, 0)).unwrap_or(0);
+                    let e = stop.map(|v| clamp(v, n)).unwrap_or(n);
                     slice_elems.push(SliceInfoElem::Slice {
                         start: s,
                         end: Some(e),
