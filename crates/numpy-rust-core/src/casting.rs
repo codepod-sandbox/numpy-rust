@@ -4,6 +4,27 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
 
+/// Truncate values in an ArrayData to fit the bit-width of a narrow dtype.
+/// For example, Int32 storage with UInt8 dtype: 400 → 400 as u8 as i32 = 144.
+/// This must be called after any operation that produces a narrow-typed result.
+pub fn narrow_truncate(data: ArrayData, dtype: DType) -> ArrayData {
+    match data {
+        ArrayData::Int32(arr) => ArrayData::Int32(match dtype {
+            DType::Int8 => arr.mapv(|x| x as i8 as i32).into_shared(),
+            DType::UInt8 => arr.mapv(|x| x as u8 as i32).into_shared(),
+            DType::Int16 => arr.mapv(|x| x as i16 as i32).into_shared(),
+            DType::UInt16 => arr.mapv(|x| x as u16 as i32).into_shared(),
+            _ => arr,
+        }),
+        ArrayData::Int64(arr) => ArrayData::Int64(match dtype {
+            DType::UInt32 => arr.mapv(|x| x as u32 as i64).into_shared(),
+            DType::UInt64 => arr.mapv(|x| x as u64 as i64).into_shared(),
+            _ => arr,
+        }),
+        other => other,
+    }
+}
+
 /// Cast an ArrayData to a different dtype.
 /// If already the target dtype, returns a clone.
 /// For narrow dtypes, casts to the storage type instead.

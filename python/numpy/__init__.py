@@ -183,29 +183,48 @@ class StructuredArray:
         if isinstance(key, tuple) and len(key) == 0:
             return self
 
-        # Tuple key: (i, j) for 2D element access
+        # Tuple key: (i, j, ...) for multi-D element access
         if isinstance(key, tuple) and len(shape) > 1:
-            if len(key) != len(shape):
+            if len(key) > len(shape):
                 raise IndexError(
                     "too many indices for array: array is {}-dimensional, "
                     "but {} were indexed".format(len(shape), len(key))
                 )
-            flat = 0
-            stride = 1
-            for k in _builtin_range(len(shape) - 1, -1, -1):
-                flat += key[k] * stride
-                stride *= shape[k]
-            result = native[flat]
-            if isinstance(result, list):
-                return void({n: v for n, v in zip(dt.names, result)}, dt)
-            return result
+            if len(key) == len(shape):
+                # Full indexing: return scalar
+                flat = 0
+                stride = 1
+                for k in _builtin_range(len(shape) - 1, -1, -1):
+                    idx = key[k]
+                    if idx < 0:
+                        idx += shape[k]
+                    flat += idx * stride
+                    stride *= shape[k]
+                result = native[flat]
+                if isinstance(result, list):
+                    return void({n: v for n, v in zip(dt.names, result)}, dt)
+                return result
+            else:
+                # Partial indexing: apply keys one at a time
+                result = self
+                for k in key:
+                    result = result[k]
+                return result
 
-        # Integer key on multi-D: return a row (1D StructuredArray)
+        # Integer key on multi-D: return a sub-array with shape shape[1:]
         if isinstance(key, int) and len(shape) > 1:
-            cols = shape[1]  # number of elements per row
+            sub_shape = shape[1:]
+            cols = 1
+            for s in sub_shape:
+                cols *= s
+            if key < 0:
+                key += shape[0]
             row_native = native[key * cols : (key + 1) * cols]
             if hasattr(row_native, 'field_names'):
-                return StructuredArray(row_native)
+                sub = StructuredArray(row_native)
+                if len(sub_shape) > 1:
+                    return sub.reshape(list(sub_shape))
+                return sub
             # fallback: shouldn't happen
             return row_native
 
@@ -325,7 +344,22 @@ class StructuredArray:
     def tolist(self):
         """Return the array as a nested Python list of tuples."""
         dt = object.__getattribute__(self, 'dtype')
-        return [tuple(row[n] for n in dt.names) for row in self]
+        shape = self.shape
+        if len(shape) == 0:
+            # 0-d: return single tuple
+            return tuple(self[()][n] for n in dt.names)
+        if len(shape) == 1:
+            # 1D: list of scalar tuples
+            result = []
+            for i in _builtin_range(shape[0]):
+                row = self._native_arr[i]
+                if isinstance(row, list):
+                    result.append(tuple(row))
+                else:
+                    result.append(tuple(row[n] for n in dt.names))
+            return result
+        # N-D (N > 1): recurse
+        return [self[i].tolist() for i in _builtin_range(shape[0])]
 
     def __repr__(self):
         dt = object.__getattribute__(self, 'dtype')
@@ -616,6 +650,9 @@ def astype(x, dtype, copy=None, casting=None):
                 f"Cannot cast array data from {src_dt} to {tgt_dt_obj} "
                 f"according to the rule '{casting}'"
             )
+    # copy=False: return unchanged if dtype already matches
+    if copy is False and arr.dtype == dtype:
+        return arr
     return arr.astype(dtype)
 
 # --- np.from_dlpack stub ----------------------------------------------------
@@ -699,30 +736,43 @@ def _astype_structured(arr, dtype_arg):
     """
     from numpy._core_types import dtype as _dtype_cls
     parsed = _dtype_cls(dtype_arg)
-    if hasattr(parsed, '_structured') and parsed._structured is not None:
-        n = len(arr)
-        data = []
-        names = parsed.names
-        for i in range(n):
-            row = arr[i]
-            vals = []
-            for name in names:
-                field_dt, _ = parsed.fields[name]
-                fd = str(field_dt)
-                if fd in ('float64', 'float32', 'float16') or fd.startswith('f'):
-                    vals.append(float(row))
-                elif fd in ('int8', 'int16', 'int32', 'int64') or fd.startswith('i'):
-                    vals.append(int(row))
-                elif fd in ('uint8', 'uint16', 'uint32', 'uint64') or fd.startswith('u'):
-                    vals.append(int(row))
-                elif fd.startswith('complex') or fd.startswith('c'):
-                    vals.append(complex(row))
-                else:
-                    vals.append(row)
-            data.append(tuple(vals))
-        return array(data, dtype=dtype_arg)
-    # Fallback: just return as-is
-    return arr
+    if not (hasattr(parsed, '_structured') and parsed._structured is not None):
+        return arr
+
+    names = parsed.names
+
+    def _convert_scalar(val, fd):
+        """Convert a scalar value to the given field dtype."""
+        if fd in ('float64', 'float32', 'float16') or fd.startswith('f'):
+            return float(val)
+        elif fd in ('int8', 'int16', 'int32', 'int64') or fd.startswith('i'):
+            return int(val)
+        elif fd in ('uint8', 'uint16', 'uint32', 'uint64') or fd.startswith('u'):
+            return int(val)
+        elif fd.startswith('complex') or fd.startswith('c'):
+            return complex(val)
+        else:
+            return val
+
+    def _scalar_to_tuple(scalar):
+        """Convert a scalar value to a structured tuple (one entry per field)."""
+        vals = []
+        for name in names:
+            field_dt, _ = parsed.fields[name]
+            fd = str(field_dt)
+            vals.append(_convert_scalar(scalar, fd))
+        return tuple(vals)
+
+    def _build_nested(a):
+        """Recursively build nested list for multi-dimensional arrays."""
+        if a.ndim == 0:
+            return _scalar_to_tuple(a.tolist())
+        if a.ndim == 1:
+            return [_scalar_to_tuple(v) for v in a.tolist()]
+        return [_build_nested(a[i]) for i in range(a.shape[0])]
+
+    data = _build_nested(arr)
+    return array(data, dtype=dtype_arg)
 
 # --- Module-level __getattr__ for np.bool etc. (NumPy 2.x style) -----------
 def __getattr__(name):

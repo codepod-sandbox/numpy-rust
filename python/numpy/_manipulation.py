@@ -86,6 +86,23 @@ def _transpose_with_axes(a, axes):
 
     Returns an ndarray with axes reordered according to *axes*.
     """
+    if type(a).__name__ == 'StructuredArray' and hasattr(a, 'shape'):
+        ndim_a = len(a.shape)
+        if axes is None:
+            axes = list(range(ndim_a - 1, -1, -1))
+        axes = list(axes)
+        if axes == list(range(ndim_a)):
+            return a
+        # Use _swapaxes_structured iteratively for general permutation
+        result = a
+        # Decompose permutation into sequence of swaps (selection sort)
+        perm = axes[:]
+        for i in range(ndim_a):
+            if perm[i] != i:
+                j = perm.index(i)
+                result = _swapaxes_structured(result, i, j)
+                perm[i], perm[j] = perm[j], perm[i]
+        return result
     if not isinstance(a, ndarray):
         a = asarray(a)
     shape = a.shape
@@ -112,7 +129,7 @@ def _transpose_with_axes(a, axes):
     for i in range(ndim_a - 1, -1, -1):
         src_strides[i] = s
         s *= shape[i]
-    result = [0.0] * size
+    result = [None] * size
     # Iterate over every multi-index of the *output*
     out_idx = [0] * ndim_a
     for flat_i in range(size):
@@ -120,14 +137,29 @@ def _transpose_with_axes(a, axes):
         src_flat = 0
         for d in range(ndim_a):
             src_flat += out_idx[d] * src_strides[axes[d]]
-        result[flat_i] = float(flat_data[src_flat])
+        result[flat_i] = flat_data[src_flat]
         # Increment out_idx (rightmost first)
         for d in range(ndim_a - 1, -1, -1):
             out_idx[d] += 1
             if out_idx[d] < new_shape[d]:
                 break
             out_idx[d] = 0
-    return array(result).reshape(list(new_shape))
+    # Complex scalars may be (re, im) tuples or _NumpyComplexScalar
+    # Build proper ndarray via real+imag to avoid _ObjectArray
+    if hasattr(a, 'dtype') and 'complex' in str(a.dtype):
+        def _re(v):
+            if isinstance(v, tuple): return v[0]
+            if isinstance(v, complex): return v.real
+            return float(v)
+        def _im(v):
+            if isinstance(v, tuple): return v[1]
+            if isinstance(v, complex): return v.imag
+            return 0.0
+        reals = array([_re(v) for v in result], dtype='float64')
+        imags = array([_im(v) for v in result], dtype='float64')
+        out = reals + imags * array(1j)
+        return out.astype(a.dtype).reshape(list(new_shape))
+    return array(result, dtype=a.dtype).reshape(list(new_shape))
 
 
 def transpose(a, axes=None):
@@ -810,8 +842,44 @@ def rollaxis(a, axis, start=0):
     return moveaxis(a, axis, start)
 
 
+def _swapaxes_structured(a, axis1, axis2):
+    """Swap two axes of an N-D StructuredArray."""
+    import itertools
+    from ._creation import _create_structured_array
+    shape = list(a.shape)
+    ndim = len(shape)
+    # New shape after swap
+    new_shape = shape[:]
+    new_shape[axis1], new_shape[axis2] = new_shape[axis2], new_shape[axis1]
+    field_names = a.dtype.names if hasattr(a.dtype, 'names') else None
+    flat_records = []
+    for out_idx in itertools.product(*[range(s) for s in new_shape]):
+        # Map output index to source index
+        src_idx = list(out_idx)
+        src_idx[axis1], src_idx[axis2] = out_idx[axis2], out_idx[axis1]
+        val = a[tuple(src_idx)]
+        if field_names and type(val).__name__ == 'void':
+            flat_records.append(tuple(val[n] for n in field_names))
+        elif isinstance(val, tuple):
+            flat_records.append(val)
+        else:
+            v = val.tolist() if hasattr(val, 'tolist') else val
+            flat_records.append(v if isinstance(v, tuple) else (v,))
+    sa_flat = _create_structured_array(flat_records, a.dtype)
+    return sa_flat.reshape(new_shape)
+
+
 def swapaxes(a, axis1, axis2):
     """Interchange two axes of an array."""
+    if type(a).__name__ == 'StructuredArray' and hasattr(a, 'shape'):
+        ndim_a = len(a.shape)
+        if axis1 < 0:
+            axis1 += ndim_a
+        if axis2 < 0:
+            axis2 += ndim_a
+        if axis1 == axis2:
+            return a
+        return _swapaxes_structured(a, axis1, axis2)
     a = asarray(a) if not isinstance(a, ndarray) else a
     ndim_a = a.ndim
     if axis1 < 0:
@@ -826,8 +894,15 @@ def swapaxes(a, axis1, axis2):
 
 
 def sort(a, axis=-1, kind=None, order=None):
-    if not isinstance(a, ndarray):
+    from ._helpers import _ObjectArray
+    if not isinstance(a, (ndarray, _ObjectArray)):
         a = asarray(a)
+    if isinstance(a, _ObjectArray):
+        # _ObjectArray.sort() is in-place and returns None — make a copy first
+        import copy
+        a_copy = copy.copy(a)
+        a_copy.sort(axis, kind=kind, order=order)
+        return a_copy
     original_dtype = str(a.dtype)
     if axis is not None and axis < 0:
         axis = a.ndim + axis
@@ -869,7 +944,57 @@ def size(a, axis=None):
     return a.shape[axis]
 
 
+def _take_structured(a, indices, axis):
+    """Pure-Python take for StructuredArray."""
+    from ._creation import _create_structured_array
+    import itertools
+    idx_list = indices.tolist() if hasattr(indices, 'tolist') else list(indices)
+    shape = list(a.shape)
+    if axis is None:
+        # Flatten then index: result is 1D
+        flat_tuples = []
+        for i in range(a.size):
+            coords = []
+            rem = i
+            for s in reversed(a.shape):
+                coords.insert(0, rem % s)
+                rem //= s
+            val = a[tuple(coords)]
+            flat_tuples.append(val if isinstance(val, tuple) else tuple(val.tolist()))
+        picked = [flat_tuples[j] for j in idx_list]
+        return _create_structured_array(picked, a.dtype)
+    # axis-based take
+    ax = axis if axis >= 0 else len(shape) + axis
+    leading = shape[:ax]
+    trailing = shape[ax+1:]
+    new_shape = leading + [len(idx_list)] + trailing
+    # Build result by iterating all combinations of leading and trailing indices
+    _field_names = a.dtype.names if hasattr(a.dtype, 'names') else None
+    flat_records = []
+    for lead_idx in itertools.product(*[range(s) for s in leading]):
+        for k in idx_list:
+            for trail_idx in itertools.product(*[range(s) for s in trailing]):
+                coords = lead_idx + (k,) + trail_idx
+                val = a[coords] if len(coords) > 1 else a[coords[0]]
+                # Convert void or structured scalar to plain tuple
+                if _field_names and type(val).__name__ == 'void':
+                    flat_records.append(tuple(val[n] for n in _field_names))
+                elif isinstance(val, tuple):
+                    flat_records.append(val)
+                elif hasattr(val, 'tolist'):
+                    v = val.tolist()
+                    flat_records.append(v if isinstance(v, tuple) else tuple(v) if isinstance(v, list) else (v,))
+                else:
+                    flat_records.append((val,))
+    sa_flat = _create_structured_array(flat_records, a.dtype)
+    return sa_flat.reshape(new_shape)
+
+
 def take(a, indices, axis=None, out=None, mode="raise"):
+    if type(a).__name__ == 'StructuredArray' and hasattr(a, 'shape'):
+        if not hasattr(indices, 'tolist'):
+            indices = asarray(indices).astype('int64')
+        return _take_structured(a, indices, axis)
     if not isinstance(a, ndarray):
         a = asarray(a)
     if not isinstance(indices, ndarray):
@@ -884,12 +1009,20 @@ def take(a, indices, axis=None, out=None, mode="raise"):
         raise IndexError("cannot take from a 0-length dimension")
     if indices.size == 0:
         if axis is None:
-            return array([]).astype(a.dtype)
+            return zeros(indices.shape, dtype=a.dtype)
         shape = list(a.shape)
         ax = axis if axis >= 0 else a.ndim + axis
         shape[ax] = 0
         return zeros(shape, dtype=a.dtype)
-    return _native.take(a, indices, axis)
+    # Normalize negative axis before passing to Rust (Rust uses unsigned int)
+    native_axis = axis
+    if native_axis is not None and native_axis < 0:
+        native_axis = a.ndim + native_axis
+    result = _native.take(a, indices, native_axis)
+    # When axis=None, NumPy returns a result with the same shape as indices
+    if axis is None and indices.ndim > 1 and result.ndim != indices.ndim:
+        result = result.reshape(indices.shape)
+    return result
 
 
 def flip(a, axis=None):
@@ -945,7 +1078,7 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
     unique_counts : ndarray (optional)
     """
     from ._helpers import _ObjectArray
-    if not isinstance(a, ndarray):
+    if not isinstance(a, ndarray) and type(a).__name__ not in ('StructuredArray',):
         a = asarray(a)
 
     def _get_slice(arr, ax, i):
@@ -955,23 +1088,98 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
         return tmp[i]
 
     def _slice_key(sl):
+        def _to_sortable(v):
+            # Complex scalars from Rust backend are (re, im) tuples
+            if isinstance(v, tuple) and len(v) == 2:
+                return v  # already (re, im), sortable as tuple
+            # Python complex objects
+            if isinstance(v, complex):
+                return (v.real, v.imag)
+            # _NumpyComplexScalar: has .real and .imag
+            if hasattr(v, 'real') and hasattr(v, 'imag') and not isinstance(v, (int, float)):
+                try:
+                    return (float(v.real), float(v.imag))
+                except Exception:
+                    pass
+            return v
         if isinstance(sl, ndarray):
-            return tuple(sl.flatten().tolist())
+            flat = sl.flatten().tolist()
+            return tuple(_to_sortable(v) for v in flat)
         if isinstance(sl, _ObjectArray):
-            return tuple(sl._data)
+            return tuple(_to_sortable(v) for v in sl._data)
+        if type(sl).__name__ == 'StructuredArray' and hasattr(sl, 'tolist'):
+            def _deep_flatten(x):
+                if isinstance(x, (list, tuple)):
+                    result = []
+                    for v in x:
+                        result.extend(_deep_flatten(v))
+                    return result
+                return [x]
+            return tuple(_deep_flatten(sl.tolist()))
         return (sl,)
 
+    def _is_nan_val(v):
+        try:
+            return v != v
+        except TypeError:
+            return False
+
+    # Singleton to replace NaN in dict keys so equal_nan dedup works
+    class _NanKey:
+        def __eq__(self, other): return type(other) is type(self)
+        def __hash__(self): return hash('__NAN_KEY__')
+        def __lt__(self, other): return False
+        def __le__(self, other): return type(other) is type(self)
+        def __gt__(self, other): return True
+        def __ge__(self, other): return True
+
+    _NAN_KEY = _NanKey()
+
+    def _normalize_key(key):
+        """Replace NaN floats with _NAN_KEY for equal_nan-aware dict lookup."""
+        if not equal_nan:
+            return key
+        result = []
+        for v in key:
+            try:
+                if v != v:
+                    result.append(_NAN_KEY)
+                    continue
+            except TypeError:
+                pass
+            result.append(v)
+        return tuple(result)
+
     if axis is not None:
-        # For axis=0: find unique rows (or slices along axis 0)
+        # Validate axis is an integer
+        try:
+            import operator as _op
+            axis = _op.index(axis)
+        except TypeError:
+            raise TypeError("integer argument expected, got {}".format(type(axis).__name__))
+        # Validate axis bounds
+        _ndim = a.ndim
+        if axis < -_ndim or axis >= _ndim:
+            raise AxisError("axis {} is out of bounds for array of dimension {}".format(axis, _ndim))
         if axis < 0:
-            axis = a.ndim + axis
+            axis += _ndim
+        # Reject object dtype (cannot be used with axis unique)
+        _dtype_str = str(a.dtype) if hasattr(a, 'dtype') else ''
+        if _dtype_str == 'object':
+            raise TypeError("cannot use axis argument on arrays with object dtype")
+        # Reject structured dtype with object fields
+        if hasattr(a, 'dtype') and hasattr(a.dtype, 'names') and a.dtype.names:
+            for _fn in a.dtype.names:
+                if 'object' in str(a.dtype.fields[_fn][0]):
+                    raise TypeError("cannot use axis argument on structured arrays with object fields")
+        # For axis=0: find unique rows (or slices along axis 0)
         n_slices = a.shape[axis]
         # Extract each slice as a tuple for hashing
         seen = {}
         unique_indices_list = []
         for i in range(n_slices):
             sl = _get_slice(a, axis, i)
-            key = _slice_key(sl)
+            key = _normalize_key(_slice_key(sl))
             if key not in seen:
                 seen[key] = i
                 unique_indices_list.append(i)
@@ -982,17 +1190,75 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
             tmp = swapaxes(a, 0, axis)
             rows = [tmp[i] for i in unique_indices_list]
         # Sort by the first element of each row for consistent ordering
+        # When equal_nan=True, NaN values sort after all regular values
+        def _axis_sort_key(p):
+            key = _slice_key(p[1])
+            if not equal_nan:
+                return key
+            result = []
+            for v in key:
+                try:
+                    if v != v:  # NaN
+                        result.append((1, 0.0))
+                    else:
+                        result.append((0, v))
+                except TypeError:
+                    result.append((0, str(v)))
+            return result
         pairs = list(zip(unique_indices_list, rows))
-        pairs.sort(key=lambda p: _slice_key(p[1]))
+        try:
+            pairs.sort(key=_axis_sort_key)
+        except TypeError:
+            pairs.sort(key=lambda p: _slice_key(p[1]))
         unique_indices_list = [p[0] for p in pairs]
         rows = [p[1] for p in pairs]
         # For 1D arrays, rows are scalars — use array() directly
-        if len(rows) > 0 and not isinstance(rows[0], (ndarray, _ObjectArray)):
+        if len(rows) > 0 and type(rows[0]).__name__ == 'StructuredArray':
+            # Stack StructuredArray rows: flatten all scalars then reshape
+            from ._creation import _create_structured_array
+            from ._core_types import dtype as _dtype_cls
+            _sdt = a.dtype if hasattr(a.dtype, 'names') else _dtype_cls(str(a.dtype))
+            flat_tuples = []
+            row_shape = rows[0].shape  # shape of each row (may be ND)
+            for r in rows:
+                # Flatten ND row to list of scalar tuples
+                def _flatten_sa(sa):
+                    if sa.ndim == 0:
+                        v = sa.tolist()
+                        return [v if isinstance(v, tuple) else (v,)]
+                    if sa.ndim == 1:
+                        lst = sa.tolist()
+                        return [x if isinstance(x, tuple) else (x,) for x in lst]
+                    result_inner = []
+                    for i in range(sa.shape[0]):
+                        result_inner.extend(_flatten_sa(sa[i]))
+                    return result_inner
+                flat_tuples.extend(_flatten_sa(r))
+            total_shape = (len(rows),) + row_shape
+            sa_flat = _create_structured_array(flat_tuples, _sdt)
+            import functools, operator
+            total_size = functools.reduce(operator.mul, total_shape, 1)
+            result = sa_flat.reshape(list(total_shape))
+            if axis != 0:
+                result = moveaxis(result, 0, axis)
+        elif len(rows) > 0 and not isinstance(rows[0], (ndarray, _ObjectArray)):
             result = array(rows, dtype=a.dtype)
+        elif len(rows) == 0:
+            # No unique rows — return empty with correct shape and dtype
+            result_shape = list(a.shape)
+            result_shape[axis] = 0
+            import numpy as _np_mod
+            result = _np_mod.empty(result_shape, dtype=a.dtype)
         else:
             result = stack(rows, axis=0)
             if axis != 0:
-                result = swapaxes(result, 0, axis)
+                result = moveaxis(result, 0, axis)
+            # Preserve original dtype (stack may not preserve narrow dtypes like int8)
+            if str(result.dtype) != str(a.dtype):
+                try:
+                    result = result.astype(a.dtype)
+                except Exception:
+                    pass
         extras = return_index or return_inverse or return_counts
         if not extras:
             return result
@@ -1004,12 +1270,12 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
             key_to_pos = {}
             for pos, idx in enumerate(unique_indices_list):
                 sl = _get_slice(a, axis, idx)
-                key = _slice_key(sl)
+                key = _normalize_key(_slice_key(sl))
                 key_to_pos[key] = pos
             inv = []
             for i in range(n_slices):
                 sl = _get_slice(a, axis, i)
-                key = _slice_key(sl)
+                key = _normalize_key(_slice_key(sl))
                 inv.append(key_to_pos[key])
             ret = ret + (array(inv, dtype='int64'),)
         if return_counts:
@@ -1017,14 +1283,14 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
             count_map = {}
             for i in range(n_slices):
                 sl = _get_slice(a, axis, i)
-                key = _slice_key(sl)
+                key = _normalize_key(_slice_key(sl))
                 if key not in count_map:
                     count_map[key] = 0
                 count_map[key] += 1
             counts_list = []
             for idx in unique_indices_list:
                 sl = _get_slice(a, axis, idx)
-                key = _slice_key(sl)
+                key = _normalize_key(_slice_key(sl))
                 counts_list.append(count_map[key])
             ret = ret + (array(counts_list, dtype='int64'),)
         return ret
@@ -1058,28 +1324,87 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
             return (str(v),)
 
     # Build sorted unique with tracking info
+    # When equal_nan=True, NaN values must sort together (at end) so the dedup
+    # loop can detect consecutive NaN values and treat them as equal.
+    def _flat_sort_key(t):
+        v = t[1]
+        if equal_nan:
+            try:
+                if _is_nan_val(v):
+                    if isinstance(v, complex):
+                        # For complex NaN, sort by real part (using inf if real is NaN),
+                        # then by inf for imag (so NaN-imag sorts after non-NaN-imag).
+                        # This matches NumPy's sort order: 0+nanj < 1+nanj < nan+0j.
+                        import math
+                        real_key = float('inf') if math.isnan(v.real) else v.real
+                        imag_key = float('inf') if math.isnan(v.imag) else v.imag
+                        return (1, real_key, imag_key)
+                    # Non-complex NaN (float): group at the end
+                    return (1, float('inf'))
+            except (TypeError, ValueError):
+                pass
+        if isinstance(v, complex):
+            return (0, v.real, v.imag)
+        if isinstance(v, tuple):
+            return (0,) + v
+        try:
+            return (0, v)
+        except TypeError:
+            return (0, str(v))
     try:
-        indexed = sorted(enumerate(vals), key=lambda t: t[1])
+        indexed = sorted(enumerate(vals), key=_flat_sort_key)
     except TypeError:
         indexed = sorted(enumerate(vals), key=_sort_key)
     unique_vals = []
     first_indices = []
     counts = []
+    _in_nan_group = False  # True when deduplicating via NaN equality
     _sentinel = object()
     prev = _sentinel
     for orig_idx, v in indexed:
-        if prev is _sentinel or v != prev:
+        if prev is _sentinel:
+            _same = False
+            _nan_eq = False
+        else:
+            try:
+                _same = bool(v == prev)
+                _nan_eq = False
+            except (TypeError, ValueError):
+                _same = False
+                _nan_eq = False
+            if not _same and equal_nan:
+                try:
+                    _nan_eq = _is_nan_val(v) and _is_nan_val(prev)
+                    if _nan_eq:
+                        _same = True
+                except (TypeError, ValueError):
+                    pass
+        if not _same:
             unique_vals.append(v)
             first_indices.append(orig_idx)
             counts.append(1)
+            _in_nan_group = bool(_nan_eq)
             prev = v
         else:
             counts[-1] += 1
-            # Keep the smallest original index
-            if orig_idx < first_indices[-1]:
+            if _nan_eq:
+                _in_nan_group = True
+            # For NaN groups: keep index from first-in-sorted-order (initial append).
+            # For non-NaN groups: keep smallest original index (= first occurrence).
+            if not _in_nan_group and orig_idx < first_indices[-1]:
                 first_indices[-1] = orig_idx
 
-    result_unique = array(unique_vals, dtype=a.dtype)
+    # For complex ndarray inputs, build result as regular ndarray (not _ObjectArray)
+    if not isinstance(a, _ObjectArray) and 'complex' in str(a.dtype) and unique_vals:
+        n = len(unique_vals)
+        result_unique = _native.zeros((n,), str(a.dtype))
+        for _i, _v in enumerate(unique_vals):
+            if isinstance(_v, complex):
+                result_unique[_i] = (_v.real, _v.imag)
+            else:
+                result_unique[_i] = (float(_v), 0.0)
+    else:
+        result_unique = array(unique_vals, dtype=a.dtype)
     extras = return_index or return_inverse or return_counts
     if not extras:
         return result_unique
@@ -1088,11 +1413,34 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
         ret = ret + (array(first_indices, dtype='int64'),)
     if return_inverse:
         # For each element in the original flat array, find its position in unique_vals
+        # NaN needs special handling since nan != nan in dict lookups
         val_to_pos = {}
+        nan_pos = None
         for i, v in enumerate(unique_vals):
-            val_to_pos[v] = i
-        inverse = [val_to_pos[v] for v in vals]
-        ret = ret + (array(inverse, dtype='int64'),)
+            if _is_nan_val(v):
+                nan_pos = i
+            else:
+                try:
+                    val_to_pos[v] = i
+                except TypeError:
+                    val_to_pos[str(v)] = i
+        inverse = []
+        for v in vals:
+            if _is_nan_val(v) and nan_pos is not None:
+                inverse.append(nan_pos)
+            else:
+                try:
+                    inverse.append(val_to_pos[v])
+                except (KeyError, TypeError):
+                    inverse.append(val_to_pos.get(str(v), 0))
+        inv_arr = array(inverse, dtype='int64')
+        # NumPy 2.x: reshape inverse to original input shape when axis=None
+        if a.ndim > 1:
+            try:
+                inv_arr = inv_arr.reshape(a.shape)
+            except Exception:
+                pass
+        ret = ret + (inv_arr,)
     if return_counts:
         ret = ret + (array(counts, dtype='int64'),)
     return ret
@@ -1216,65 +1564,80 @@ def insert(arr, obj, values, axis=None):
     if axis is None:
         arr = arr.flatten()
         axis = 0
-    n = arr.shape[axis]
-    idx = obj if isinstance(obj, int) else int(obj)
-    if idx < 0:
-        idx = n + idx
-    if arr.ndim == 1:
-        result = []
-        if isinstance(values, (int, float)):
-            values = [values]
-        elif isinstance(values, ndarray):
-            values = [float(values[i]) for i in range(len(values))]
-        for i in range(n):
-            if i == idx:
-                for v in values:
-                    result.append(float(v))
-            result.append(float(arr[i]))
-        if idx >= n:
-            for v in values:
-                result.append(float(v))
-        return array(result)
-    # Multi-dimensional: transpose target axis to front, insert along axis 0, transpose back
+
     ndims = arr.ndim
     if axis < 0:
         axis = ndims + axis
-    # Build permutation to move target axis to position 0
+    n = arr.shape[axis]
+
+    # Normalize obj to a sorted list of (original_index, normalized_index) pairs
+    if isinstance(obj, (list, tuple)) or (isinstance(obj, ndarray) and obj.ndim > 0):
+        obj_list = [int(x) for x in (obj if not isinstance(obj, ndarray) else obj.flatten().tolist())]
+        # Normalize negative indices
+        obj_list = [i if i >= 0 else n + i for i in obj_list]
+        multi = True
+    else:
+        single_idx = obj if isinstance(obj, int) else int(obj)
+        if single_idx < 0:
+            single_idx = n + single_idx
+        obj_list = [single_idx]
+        multi = False
+
+    # Normalize values to a list matching obj_list length
+    val_arr = asarray(values) if not isinstance(values, ndarray) else values
+    if val_arr.ndim == 0:
+        val_list = [val_arr[()] for _ in obj_list]
+    else:
+        val_flat = val_arr.flatten()
+        if val_flat.size == 1:
+            val_list = [val_flat[0] for _ in obj_list]
+        else:
+            val_list = [val_flat[i] for i in range(len(obj_list))]
+
+    # Build sorted insertion pairs: (original_index, value)
+    inserts = sorted(zip(obj_list, val_list), key=lambda x: x[0])
+
+    # Move target axis to front
     perm = [axis] + [i for i in range(ndims) if i != axis]
     inv_perm = [0] * ndims
     for i, p in enumerate(perm):
         inv_perm[p] = i
-    t = transpose(arr, perm)
-    # t now has target axis as axis 0; shape is (n, ...)
-    values = asarray(values)
-    # Build slices for before, inserted, and after
-    before_slices = []
-    for i in range(idx):
-        before_slices.append(t[i])
-    after_slices = []
-    for i in range(idx, t.shape[0]):
-        after_slices.append(t[i])
-    # Reshape values to match the sub-array shape if needed
-    sub_shape = t.shape[1:] if ndims > 1 else ()
-    if values.ndim == 0 or (values.ndim == 1 and len(sub_shape) == 1 and values.shape[0] == sub_shape[0]):
-        # values is a single row to insert
-        vals_row = values.reshape(list(sub_shape)) if sub_shape else values
-        inserted = [vals_row]
-    else:
-        inserted = [values[i] for i in range(values.shape[0])]
-    all_rows = before_slices + inserted + after_slices
-    # Stack rows manually: build flat list
+    t = transpose(arr, perm)  # shape: (n, ...)
+    sub_shape = t.shape[1:]
     row_size = 1
     for s in sub_shape:
-        row_size = row_size * s
+        row_size *= s
+
+    # Build output rows by interleaving original slices with inserts
+    def _make_val_row(v):
+        """Create a sub-array row filled with scalar value v."""
+        if sub_shape:
+            flat_row = [float(v)] * row_size
+            return array(flat_row).reshape(list(sub_shape))
+        return asarray(float(v))
+
+    all_rows = []
+    ins_pos = 0
+    for orig_i in range(n):
+        while ins_pos < len(inserts) and inserts[ins_pos][0] == orig_i:
+            all_rows.append(_make_val_row(inserts[ins_pos][1]))
+            ins_pos += 1
+        all_rows.append(t[orig_i])
+    while ins_pos < len(inserts):
+        all_rows.append(_make_val_row(inserts[ins_pos][1]))
+        ins_pos += 1
+
+    # Stack rows
     flat = []
     for row in all_rows:
         r = asarray(row).flatten()
-        for j in range(row_size):
-            flat.append(float(r[j]))
-    new_shape = list(t.shape)
-    new_shape[0] = len(all_rows)
-    result = array(flat).reshape(new_shape)
+        for j in range(row_size if row_size > 0 else 1):
+            flat.append(float(r[j]) if r.ndim > 0 else float(r[()]))
+    new_shape = [len(all_rows)] + list(sub_shape)
+    if flat:
+        result = array(flat).reshape(new_shape)
+    else:
+        result = array(flat).reshape(new_shape)
     return transpose(result, inv_perm)
 
 
@@ -1486,17 +1849,25 @@ class vectorize:
     def __init__(self, pyfunc, otypes=None, doc=None, excluded=None, cache=False, signature=None):
         self.pyfunc = pyfunc
         self.otypes = otypes
+        self.excluded = excluded if excluded is not None else set()
         if doc is not None:
             self.__doc__ = doc
         elif pyfunc.__doc__:
             self.__doc__ = pyfunc.__doc__
 
     def __call__(self, *args, **kwargs):
-        # Convert all args to arrays
-        arr_args = [asarray(a) for a in args]
+        # Separate excluded args (passed as-is) from vectorized args
+        excluded = self.excluded
+        vec_indices = [i for i in range(len(args)) if i not in excluded]
+        exc_indices = [i for i in range(len(args)) if i in excluded]
+        vec_args_orig = [args[i] for i in vec_indices]
+        exc_args_orig = {i: args[i] for i in exc_indices}
+
+        # Convert vectorized args to arrays
+        arr_args = [asarray(a) for a in vec_args_orig]
         if len(arr_args) == 0:
             return array([])
-        # Broadcast all args to common shape
+        # Broadcast only vectorized args to common shape
         broadcasted = broadcast_arrays(*arr_args)
         shape = broadcasted[0].shape
         n = broadcasted[0].size
@@ -1505,8 +1876,11 @@ class vectorize:
         results = []
         flat_args = [b.flatten() for b in broadcasted]
         for i in range(n):
-            elem_args = [f[i] for f in flat_args]
-            results.append(self.pyfunc(*elem_args, **kwargs))
+            # Reconstruct full argument list: vectorized elements + excluded originals
+            call_args = list(args)
+            for vi, b in enumerate(flat_args):
+                call_args[vec_indices[vi]] = b[i]
+            results.append(self.pyfunc(*call_args, **kwargs))
         # Check if result is tuple (multi-output)
         if isinstance(results[0], tuple):
             nout = len(results[0])
@@ -1516,7 +1890,7 @@ class vectorize:
                 out.append(array(vals).reshape(shape))
             return tuple(out)
         result = array(results)
-        if shape:
+        if shape != result.shape:
             result = result.reshape(shape)
         return result
 

@@ -315,9 +315,27 @@ class _ObjectArray:
         if isinstance(key, tuple):
             _ball = __import__("builtins").all
             if _ball(isinstance(k, int) for k in key):
-                idx = self._flat_index(key)
-                return self._wrap_element(self._data[idx])
+                if len(key) == len(self._shape):
+                    # Full indexing: return scalar
+                    idx = self._flat_index(key)
+                    return self._wrap_element(self._data[idx])
+                else:
+                    # Partial indexing: apply keys one at a time
+                    result = self
+                    for k in key:
+                        result = result[k]
+                    return result
             raise TypeError("tuple indices with slices are not supported for object arrays")
+        if isinstance(key, int) and len(self._shape) > 1:
+            # Integer key on N-D array: return sub-array with shape shape[1:]
+            if key < 0:
+                key += self._shape[0]
+            sub_shape = self._shape[1:]
+            sub_size = 1
+            for s in sub_shape:
+                sub_size *= s
+            sub_data = self._data[key * sub_size : (key + 1) * sub_size]
+            return _ObjectArray(sub_data, self._dtype, shape=sub_shape, itemsize=self._itemsize)
         result = self._data[key]
         if isinstance(key, slice):
             return _ObjectArray(result, self._dtype)
@@ -331,6 +349,16 @@ class _ObjectArray:
             return _NumpyComplexScalar(val, dn)
         return val
     def __setitem__(self, key, value):
+        if key is ...:
+            # Ellipsis: set all elements to value
+            n = len(self._data)
+            if isinstance(value, (list, tuple)):
+                self._data[:] = list(value)
+            elif isinstance(value, _ObjectArray):
+                self._data[:] = value._data[:]
+            else:
+                self._data[:] = [value] * n
+            return
         if isinstance(key, tuple):
             _ball = __import__("builtins").all
             if _ball(isinstance(k, int) for k in key):

@@ -32,6 +32,12 @@ impl NdArray {
         self
     }
 
+    /// Preserve declared_dtype from another NdArray (used in shape-only operations).
+    pub fn with_preserved_dtype(mut self, source: &NdArray) -> Self {
+        self.declared_dtype = source.declared_dtype;
+        self
+    }
+
     /// Create an array filled with zeros.
     pub fn zeros(shape: &[usize], dtype: DType) -> Self {
         let storage = dtype.storage_dtype();
@@ -115,6 +121,10 @@ impl NdArray {
         self.declared_dtype.unwrap_or_else(|| self.data.dtype())
     }
 
+    pub fn declared_dtype(&self) -> Option<DType> {
+        self.declared_dtype
+    }
+
     pub fn size(&self) -> usize {
         self.data.size()
     }
@@ -126,8 +136,14 @@ impl NdArray {
     /// Cast this array to a different dtype, following NumPy's astype semantics.
     pub fn astype(&self, dtype: DType) -> Self {
         let storage = dtype.storage_dtype();
+        let data = crate::casting::cast_array_data(&self.data, storage);
+        let data = if dtype.is_narrow() {
+            crate::casting::narrow_truncate(data, dtype)
+        } else {
+            data
+        };
         Self {
-            data: crate::casting::cast_array_data(&self.data, storage),
+            data,
             declared_dtype: if dtype.is_narrow() { Some(dtype) } else { None },
         }
     }

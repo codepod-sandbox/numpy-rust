@@ -73,6 +73,11 @@ macro_rules! impl_binary_op {
                         ));
                     }
                 };
+                let data = if logical_dtype.is_narrow() {
+                    crate::casting::narrow_truncate(data, logical_dtype)
+                } else {
+                    data
+                };
                 let mut result = NdArray::from_data(data);
                 if logical_dtype.is_narrow() {
                     result.declared_dtype = Some(logical_dtype);

@@ -47,7 +47,7 @@ impl NdArray {
             ArrayData::Complex128(a) => ArrayData::Complex128(reshape_or_copy!(a, sh)),
             ArrayData::Str(a) => ArrayData::Str(reshape_or_copy!(a, sh)),
         };
-        Ok(NdArray::from_data(data))
+        Ok(NdArray::from_data(data).with_preserved_dtype(self))
     }
 
     /// Transpose the array (reverse axes).
@@ -62,7 +62,7 @@ impl NdArray {
             ArrayData::Complex128(a) => ArrayData::Complex128(a.t().to_owned().into_shared()),
             ArrayData::Str(a) => ArrayData::Str(a.t().to_owned().into_shared()),
         };
-        NdArray::from_data(data)
+        NdArray::from_data(data).with_preserved_dtype(self)
     }
 
     /// Transpose the array with a given permutation of axes.
@@ -102,7 +102,7 @@ impl NdArray {
             ArrayData::Complex128(a) => ArrayData::Complex128(do_perm!(a)),
             ArrayData::Str(a) => ArrayData::Str(do_perm!(a)),
         };
-        Ok(NdArray::from_data(data))
+        Ok(NdArray::from_data(data).with_preserved_dtype(self))
     }
 
     /// Swap two axes of the array.
@@ -138,7 +138,7 @@ impl NdArray {
             ArrayData::Complex128(a) => ArrayData::Complex128(do_swap!(a)),
             ArrayData::Str(a) => ArrayData::Str(do_swap!(a)),
         };
-        Ok(NdArray::from_data(data))
+        Ok(NdArray::from_data(data).with_preserved_dtype(self))
     }
 
     /// Return a 1-D copy of the array.
@@ -199,7 +199,7 @@ impl NdArray {
                     ArrayData::Complex128(a) => ArrayData::Complex128(do_flip!(a)),
                     ArrayData::Str(a) => ArrayData::Str(do_flip!(a)),
                 };
-                Ok(NdArray::from_data(data))
+                Ok(NdArray::from_data(data).with_preserved_dtype(self))
             }
         }
     }

@@ -253,10 +253,26 @@ pub(crate) fn numpy_err(
 
 /// Convert a Scalar to a Python object.
 pub(crate) fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
+    scalar_to_py_typed(s, None, vm)
+}
+
+/// Like scalar_to_py but interprets Int64 values as u64 when declared_dtype is UInt64.
+pub(crate) fn scalar_to_py_typed(
+    s: Scalar,
+    declared_dtype: Option<DType>,
+    vm: &VirtualMachine,
+) -> PyObjectRef {
     match s {
         Scalar::Bool(v) => vm.ctx.new_bool(v).into(),
         Scalar::Int32(v) => vm.ctx.new_int(v).into(),
-        Scalar::Int64(v) => vm.ctx.new_int(v).into(),
+        Scalar::Int64(v) => {
+            // UInt64 is stored as Int64; reinterpret negative values as large positive u64
+            if declared_dtype == Some(DType::UInt64) {
+                vm.ctx.new_int(v as u64).into()
+            } else {
+                vm.ctx.new_int(v).into()
+            }
+        }
         Scalar::Float32(v) => vm.ctx.new_float(v as f64).into(),
         Scalar::Float64(v) => vm.ctx.new_float(v).into(),
         Scalar::Complex64(v) => {
@@ -399,8 +415,9 @@ fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
 /// Convert an NdArray result to PyObjectRef, returning a scalar for 0-D arrays.
 pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
     if arr.ndim() == 0 {
+        let declared = arr.declared_dtype();
         let s = arr.get(&[]).unwrap();
-        scalar_to_py(s, vm)
+        scalar_to_py_typed(s, declared, vm)
     } else {
         PyNdArray::from_core(arr).into_pyobject(vm)
     }
@@ -1716,7 +1733,7 @@ impl PyNdArray {
 
             if data.ndim() == 1 {
                 let s = data.get(&[resolved]).map_err(|e| numpy_err(e, vm))?;
-                return Ok(scalar_to_py(s, vm));
+                return Ok(scalar_to_py_typed(s, data.declared_dtype(), vm));
             } else {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
@@ -1838,6 +1855,12 @@ impl PyNdArray {
                 indices.push(i as isize);
             }
             if indices.len() == data.ndim() {
+                // Empty tuple () on a 0-d array → return the 0-d array itself
+                // (preserves .dtype, matches NumPy semantics for scalar preservation)
+                if indices.is_empty() {
+                    let result = data.clone();
+                    return Ok(PyNdArray::from_core(result).to_py(vm));
+                }
                 let shape = data.shape();
                 let usize_indices: Vec<usize> = indices
                     .iter()
@@ -1856,7 +1879,7 @@ impl PyNdArray {
                     let result = scalar_to_0d_ndarray(s);
                     return Ok(PyNdArray::from_core(result).to_py(vm));
                 }
-                return Ok(scalar_to_py(s, vm));
+                return Ok(scalar_to_py_typed(s, data.declared_dtype(), vm));
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
@@ -1921,7 +1944,21 @@ impl PyNdArray {
             .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
         // NEP50: plain Python scalars (int, float) adopt the array's dtype (weak typing).
         let zelf_dtype = zelf.data.read().unwrap().dtype();
-        let other = match obj_to_ndarray_nep50(other, zelf_dtype, vm) {
+        // For comparisons, Python int scalars must NOT be truncated to the array dtype.
+        // Use Int64 for Bool/unsigned integer targets so values are compared numerically.
+        // e.g., array(True) < 2 → 1 < 2 = True (not True < True = False)
+        // e.g., uint8_array >= -1 → 0 >= -1 = True (not 0 >= 255 = False)
+        let nep50_target = if zelf_dtype == DType::Bool
+            || zelf_dtype == DType::UInt8
+            || zelf_dtype == DType::UInt16
+            || zelf_dtype == DType::UInt32
+            || zelf_dtype == DType::UInt64
+        {
+            DType::Int64
+        } else {
+            zelf_dtype
+        };
+        let other = match obj_to_ndarray_nep50(other, nep50_target, vm) {
             Ok(arr) => arr,
             Err(_) => {
                 return Ok(vm::function::Either::B(
@@ -1929,6 +1966,23 @@ impl PyNdArray {
                 ))
             }
         };
+        // Ordering comparisons (lt/le/gt/ge) with complex arrays are not supported.
+        let is_ordering_op = matches!(
+            op,
+            vm::types::PyComparisonOp::Lt
+                | vm::types::PyComparisonOp::Le
+                | vm::types::PyComparisonOp::Gt
+                | vm::types::PyComparisonOp::Ge
+        );
+        if is_ordering_op {
+            let other_dtype = other.dtype();
+            let zelf_dtype_check = zelf.data.read().unwrap().dtype();
+            if zelf_dtype_check.is_complex() || other_dtype.is_complex() {
+                return Err(vm.new_type_error(
+                    "type error: '<', '<=', '>', '>=' not supported for complex arrays".to_owned(),
+                ));
+            }
+        }
         let data = zelf.data.read().unwrap();
         let result = match op {
             vm::types::PyComparisonOp::Eq => data.eq(&other),
@@ -2023,7 +2077,7 @@ impl PyNdArray {
             let s = data
                 .get(&vec![0; data.ndim()])
                 .map_err(|e| numpy_err(e, vm))?;
-            return Ok(scalar_to_py(s, vm));
+            return Ok(scalar_to_py_typed(s, data.declared_dtype(), vm));
         }
         let mut indices: Vec<usize> = Vec::new();
         if args.args.len() == 1 {
@@ -2087,7 +2141,7 @@ impl PyNdArray {
             }
         }
         let s = data.get(&indices).map_err(|e| numpy_err(e, vm))?;
-        Ok(scalar_to_py(s, vm))
+        Ok(scalar_to_py_typed(s, data.declared_dtype(), vm))
     }
 
     /// as_integer_ratio() for 0-d float arrays.
@@ -3256,12 +3310,44 @@ impl PyNdArray {
             Ok(result)
         }),
         floor_divide: Some(|a, b, vm| {
+            // floordiv is not supported for complex arrays; raise TypeError like NumPy.
+            if let Ok(a_arr) = obj_to_ndarray(a, vm) {
+                if a_arr.dtype().is_complex() {
+                    return Err(vm.new_type_error(
+                        "ufunc 'floor_divide' not supported for complex types".to_owned(),
+                    ));
+                }
+            }
+            if let Ok(b_arr) = obj_to_ndarray(b, vm) {
+                if b_arr.dtype().is_complex() {
+                    return Err(vm.new_type_error(
+                        "ufunc 'floor_divide' not supported for complex types".to_owned(),
+                    ));
+                }
+            }
             let result = number_bin_op(a, b, |x, y| x.floor_div(y), vm)?;
             check_division_errstate(&result, vm)?;
             check_invalid_errstate(&result, vm)?;
             Ok(result)
         }),
-        remainder: Some(|a, b, vm| number_bin_op(a, b, |x, y| x.remainder(y), vm)),
+        remainder: Some(|a, b, vm| {
+            // remainder is not supported for complex arrays; raise TypeError like NumPy.
+            if let Ok(a_arr) = obj_to_ndarray(a, vm) {
+                if a_arr.dtype().is_complex() {
+                    return Err(vm.new_type_error(
+                        "ufunc 'remainder' not supported for complex types".to_owned(),
+                    ));
+                }
+            }
+            if let Ok(b_arr) = obj_to_ndarray(b, vm) {
+                if b_arr.dtype().is_complex() {
+                    return Err(vm.new_type_error(
+                        "ufunc 'remainder' not supported for complex types".to_owned(),
+                    ));
+                }
+            }
+            number_bin_op(a, b, |x, y| x.remainder(y), vm)
+        }),
         power: Some(|a, b, _modulo, vm| {
             let a_arr = obj_to_ndarray(a, vm)?;
             let b_arr = obj_to_ndarray(b, vm)?;
@@ -3564,18 +3650,36 @@ fn multi_dim_fancy_getitem(
     }
 
     let n = array_len.unwrap_or(0);
-    if n == 0 {
+    if n == 0 && !kinds.iter().any(|k| matches!(k, IdxKind::Array(_))) {
         // No array indices — fallback to slice/integer logic
         let args: Vec<SliceArg> = kinds
             .into_iter()
             .map(|k| match k {
                 IdxKind::Scalar(i) => SliceArg::Index(i as isize),
                 IdxKind::Slice(s) => s,
-                _ => unreachable!(),
+                IdxKind::Array(_) => unreachable!(),
             })
             .collect();
         let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
         return Ok(ndarray_or_scalar(result, vm));
+    } else if n == 0 {
+        // Empty array index: return empty array with appropriate shape
+        let mut out_shape = Vec::new();
+        // Number of consumed axes = number of Array/Scalar kinds
+        let _consumed_axes = kinds
+            .iter()
+            .filter(|k| !matches!(k, IdxKind::Slice(_)))
+            .count();
+        // Remaining axes from slices
+        for k in &kinds {
+            if let IdxKind::Slice(_) = k {
+                // These axes are preserved
+                out_shape.push(0usize); // placeholder
+            }
+        }
+        // Just return an empty array with 0 elements
+        let empty = NdArray::zeros(&[0], data.dtype());
+        return Ok(PyNdArray::from_core(empty).to_py(vm));
     }
 
     // Check if we have only array + scalar indices (no slices) — "point indexing"
@@ -4082,6 +4186,13 @@ fn setitem_impl(
                 .map(|item| py_obj_to_slice_arg(item, vm))
                 .collect::<PyResult<Vec<_>>>()?;
             let value_arr = obj_to_ndarray(&value, vm)?;
+            // Cast value to target dtype if needed
+            let target_dt = zelf.data.read().unwrap().dtype();
+            let value_arr = if value_arr.dtype() != target_dt {
+                value_arr.astype(target_dt)
+            } else {
+                value_arr
+            };
             zelf.data
                 .write()
                 .unwrap()

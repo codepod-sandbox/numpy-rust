@@ -72,6 +72,11 @@ impl NdArray {
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
+        let result = if logical_dtype.is_narrow() {
+            crate::casting::narrow_truncate(result, logical_dtype)
+        } else {
+            result
+        };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
             r.declared_dtype = Some(logical_dtype);
@@ -103,6 +108,11 @@ impl NdArray {
                     .into_shared(),
             ),
             _ => unreachable!("promotion ensures matching types"),
+        };
+        let result = if logical_dtype.is_narrow() {
+            crate::casting::narrow_truncate(result, logical_dtype)
+        } else {
+            result
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
@@ -136,6 +146,11 @@ impl NdArray {
             ),
             _ => unreachable!("promotion ensures matching types"),
         };
+        let result = if logical_dtype.is_narrow() {
+            crate::casting::narrow_truncate(result, logical_dtype)
+        } else {
+            result
+        };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
             r.declared_dtype = Some(logical_dtype);
@@ -149,29 +164,33 @@ impl NdArray {
         let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                // Cast bools to i64 first for shift operations
                 let a = a.mapv(|x| x as i64);
                 let b = b.mapv(|x| x as i64);
                 ArrayData::Int64(
                     ndarray::Zip::from(&a)
                         .and(&b)
-                        .map_collect(|&x, &y| x << (y & 63))
+                        .map_collect(|&x, &y| if !(0..64).contains(&y) { 0 } else { x << y })
                         .into_shared(),
                 )
             }
             (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x << (y & 31))
+                    .map_collect(|&x, &y| if !(0..32).contains(&y) { 0 } else { x << y })
                     .into_shared(),
             ),
             (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x << (y & 63))
+                    .map_collect(|&x, &y| if !(0..64).contains(&y) { 0 } else { x << y })
                     .into_shared(),
             ),
             _ => unreachable!("promotion ensures matching types"),
+        };
+        let result = if logical_dtype.is_narrow() {
+            crate::casting::narrow_truncate(result, logical_dtype)
+        } else {
+            result
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
@@ -186,29 +205,51 @@ impl NdArray {
         let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
         let result = match (a, b) {
             (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                // Cast bools to i64 first for shift operations
                 let a = a.mapv(|x| x as i64);
                 let b = b.mapv(|x| x as i64);
                 ArrayData::Int64(
                     ndarray::Zip::from(&a)
                         .and(&b)
-                        .map_collect(|&x, &y| x >> (y & 63))
+                        .map_collect(|&x, &y| {
+                            if !(0..64).contains(&y) {
+                                x >> 63
+                            } else {
+                                x >> y
+                            }
+                        })
                         .into_shared(),
                 )
             }
             (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x >> (y & 31))
+                    .map_collect(|&x, &y| {
+                        if !(0..32).contains(&y) {
+                            x >> 31
+                        } else {
+                            x >> y
+                        }
+                    })
                     .into_shared(),
             ),
             (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
                 ndarray::Zip::from(&a)
                     .and(&b)
-                    .map_collect(|&x, &y| x >> (y & 63))
+                    .map_collect(|&x, &y| {
+                        if !(0..64).contains(&y) {
+                            x >> 63
+                        } else {
+                            x >> y
+                        }
+                    })
                     .into_shared(),
             ),
             _ => unreachable!("promotion ensures matching types"),
+        };
+        let result = if logical_dtype.is_narrow() {
+            crate::casting::narrow_truncate(result, logical_dtype)
+        } else {
+            result
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {

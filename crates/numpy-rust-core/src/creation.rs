@@ -161,6 +161,11 @@ pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
         DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string()).into_shared()),
         _ => unreachable!("storage_dtype maps to canonical types"),
     };
+    let data = if dtype.is_narrow() {
+        crate::casting::narrow_truncate(data, dtype)
+    } else {
+        data
+    };
     NdArray::from_data(data).with_declared_dtype(dtype)
 }
 

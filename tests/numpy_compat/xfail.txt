@@ -1,4 +1,5 @@
 TestClip.test_clip_with_out_memory_overlap
+TestClip.test_simple_complex
 TestCreationFuncs.test_full
 TestFromiter.test_failed_itemsetting
 TestFromiter.test_growth_and_complicated_dtypes[4]
@@ -9,3 +10,4 @@ TestIsclose.test_non_finite_scalar
 TestResize.test_reshape_from_zero
 TestTypes.test_can_cast_and_promote_usertypes
 TestTypes.test_invalid_void_promotion[0]
+TestUnique.test_unique_axis

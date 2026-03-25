@@ -1,0 +1,76 @@
+# Tests that require features not supported in numpy-rust
+
+# datetime64/timedelta64 astype not supported
+TestUnique.test_unique_axis
+
+# object dtype support requires proper astype(object) returning object array
+TestUnique.test_unique_axis_errors
+
+# unique_values, unique_inverse, unique_all API functions not implemented
+TestUnique.test_unique_array_api_functions
+TestUnique.test_unique_inverse_shape
+
+# 'sorted' kwarg not supported
+TestUnique.test_unique_byte_string_hash_based
+TestUnique.test_unique_unicode_string_hash_based
+TestUnique.test_unsupported_hash_based[0]
+TestUnique.test_unsupported_hash_based[1]
+TestUnique.test_unsupported_hash_based[2]
+
+# StringDType not implemented
+TestUnique.test_unique_vstring_errors
+TestUnique.test_unique_vstring_hash_based_equal_nan
+TestUnique.test_unique_vstring_hash_based_not_equal_nan
+
+# matrix class support
+TestUnique.test_unique_with_matrix[0]
+TestUnique.test_unique_with_matrix[1]
+TestUnique.test_unique_with_matrix[2]
+TestUnique.test_unique_with_matrix[3]
+TestUnique.test_unique_with_matrix[4]
+TestUnique.test_unique_with_matrix[5]
+TestUnique.test_unique_with_matrix[6]
+TestUnique.test_unique_with_matrix[7]
+TestUnique.test_unique_with_matrix[8]
+TestUnique.test_unique_with_matrix[9]
+TestUnique.test_unique_with_matrix[10]
+TestUnique.test_unique_with_matrix[11]
+
+# MaskedArray support
+TestUnique.test_unique_masked
+
+# ndarray subclass support
+TestUnique.test_unique_subclass
+
+# ediff1d type checking not implemented
+TestSetOps.test_ediff1d_forbidden_type_casts[0]
+TestSetOps.test_ediff1d_forbidden_type_casts[1]
+TestSetOps.test_ediff1d_forbidden_type_casts[2]
+
+# __array__ protocol not supported in intersect1d
+TestSetOps.test_intersect1d_array_like
+
+# structured dtype with object field not supported
+TestSetOps.test_isin_both_arrays_have_structured_dtype
+
+# timedelta astype not supported
+TestSetOps.test_isin_timedelta[0]
+TestSetOps.test_isin_timedelta[1]
+TestSetOps.test_isin_table_timedelta_fails
+
+# kind='table' with integer overflow RuntimeError not implemented
+TestSetOps.test_isin_mixed_dtype[5]
+
+# uint64 large value overflow in creation/comparison
+TestSetOps.test_isin_mixed_huge_vals[0]
+TestSetOps.test_isin_mixed_huge_vals[1]
+TestSetOps.test_isin_mixed_huge_vals[2]
+TestSetOps.test_isin_mixed_huge_vals[3]
+TestSetOps.test_isin_mixed_huge_vals[4]
+TestSetOps.test_isin_mixed_huge_vals[5]
+
+# scalar element with object array: shape mismatch () vs (1,)
+TestSetOps.test_isin_second_array_is_object
+
+# object array with tuples: isin not supported
+TestSetOps.test_isin_with_arrays_containing_tuples

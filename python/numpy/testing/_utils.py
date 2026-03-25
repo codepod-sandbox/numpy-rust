@@ -50,10 +50,11 @@ def assert_(val, msg=""):
 
 
 def _is_array_like(obj):
-    return isinstance(obj, numpy.ndarray) or isinstance(obj, numpy._ObjectArray)
+    return (isinstance(obj, numpy.ndarray) or isinstance(obj, numpy._ObjectArray)
+            or isinstance(obj, numpy.StructuredArray))
 
 def _val_equal(a, b):
-    """Compare two values, treating NaN as equal to NaN."""
+    """Compare two values, treating NaN/NaT as equal to NaN/NaT."""
     try:
         if isinstance(a, float) and isinstance(b, float):
             if math.isnan(a) and math.isnan(b):
@@ -65,6 +66,21 @@ def _val_equal(a, b):
             return re_eq and im_eq
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             return a == b
+        # datetime64/timedelta64 NaT: treat NaT == NaT
+        _ta = type(a).__name__
+        _tb = type(b).__name__
+        if _ta in ('datetime64', 'timedelta64') and _tb in ('datetime64', 'timedelta64'):
+            # NaT != NaT in standard comparison; treat as equal
+            try:
+                return bool(a == b) or (a != a and b != b)
+            except Exception:
+                pass
+        # void scalar comparison: compare field values positionally
+        if isinstance(a, numpy.void) and isinstance(b, numpy.void):
+            return tuple(a) == tuple(b)
+        # tuple comparison for structured array elements
+        if isinstance(a, tuple) and isinstance(b, tuple):
+            return a == b
     except (TypeError, ValueError):
         pass
     return a == b
@@ -74,6 +90,15 @@ def _as_list(arr):
     # Handle MaskedArray by converting to its data array
     if hasattr(arr, 'data') and hasattr(arr, 'mask') and hasattr(arr, 'filled'):
         return _as_list(arr.data)
+    # Handle StructuredArray: return list of tuples (one per element)
+    if isinstance(arr, numpy.StructuredArray):
+        if arr.ndim > 1:
+            # Flatten row-by-row so element-wise comparison works
+            result = []
+            for i in range(arr.shape[0]):
+                result.extend(list(arr[i].tolist()))
+            return result
+        return list(arr.tolist())
     if isinstance(arr, numpy._ObjectArray):
         result = []
         for v in arr._data:
@@ -116,8 +141,8 @@ def _as_list(arr):
 
 
 def _is_array_like(x):
-    """Return True if x is numpy array, _ObjectArray, MaskedArray, or a list/tuple of numbers."""
-    if isinstance(x, (numpy.ndarray, numpy._ObjectArray)):
+    """Return True if x is numpy array, _ObjectArray, StructuredArray, MaskedArray, or a list/tuple of numbers."""
+    if isinstance(x, (numpy.ndarray, numpy._ObjectArray, numpy.StructuredArray)):
         return True
     # Check for MaskedArray (from numpy.ma)
     if hasattr(x, 'data') and hasattr(x, 'mask') and hasattr(x, 'filled'):

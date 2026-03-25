@@ -298,6 +298,9 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     return result
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
+    # Handle chararray: unwrap to underlying ndarray (unless subok=True)
+    if type(data).__name__ == 'chararray' and hasattr(data, '_arr') and not subok:
+        return _array_core(data._arr, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
     # Handle range objects: convert to list
     if isinstance(data, range):
         data = list(data)
@@ -333,17 +336,44 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
         from ._core_types import dtype as _dtype_cls
         parsed = _dtype_cls(dtype)
         if isinstance(data, (list, tuple)) and len(data) > 0:
-            # Detect 2D: data[0] is a list/tuple of record tuples (not a record tuple itself)
-            # A record tuple has scalar elements; a 2D row has tuple elements
-            first = data[0]
-            if (isinstance(first, (list, tuple)) and len(first) > 0 and
-                    isinstance(first[0], (list, tuple))):
-                # 2D data: data[0][0] is a record tuple
-                flat_rows = [row for outer in data for row in outer]
-                outer_len = len(data)
-                inner_len = len(data[0])
-                result = _create_structured_array(flat_rows, parsed)
-                return result.reshape((outer_len, inner_len))
+            nfields = len(parsed.names) if hasattr(parsed, 'names') else 1
+            def _is_record(t):
+                """True if t is a leaf record: tuple/list of scalars matching field count."""
+                if not isinstance(t, (list, tuple)):
+                    return False
+                if len(t) != nfields:
+                    return False
+                return all(not isinstance(v, (list, tuple)) for v in t)
+            def _get_shape(d):
+                """Get shape of nested structure of record tuples."""
+                if _is_record(d):
+                    return ()  # leaf record
+                if not isinstance(d, (list, tuple)):
+                    return ()
+                if len(d) == 0:
+                    return (0,)
+                inner = _get_shape(d[0])
+                return (len(d),) + inner
+            def _flatten_to_records(d):
+                if _is_record(d):
+                    return [d]
+                if isinstance(d, (list, tuple)):
+                    result = []
+                    for item in d:
+                        result.extend(_flatten_to_records(item))
+                    return result
+                # scalar — wrap in tuple of all same value
+                return [tuple([d] * nfields)]
+            shape = _get_shape(data)
+            if len(shape) == 0 or len(shape) == 1:
+                # 0D or 1D: just create directly
+                data_seq = data if isinstance(data, (list, tuple)) else [data]
+                return _create_structured_array(data_seq, parsed)
+            else:
+                # Multi-dim: flatten to records, create, reshape
+                flat_records = _flatten_to_records(data)
+                sa_flat = _create_structured_array(flat_records, parsed)
+                return sa_flat.reshape(shape)
         data_seq = data if isinstance(data, (list, tuple)) else [data]
         return _create_structured_array(data_seq, parsed)
     if dtype is not None and _is_structured_dtype(dtype):
@@ -514,6 +544,14 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                 result = result.astype(dt)
         return result
+    # Handle empty list/tuple before non-empty checks
+    if isinstance(data, (list, tuple)) and len(data) == 0:
+        result = _native.array([])  # empty float64 array
+        if dtype is not None:
+            dt = str(dtype)
+            if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                result = result.astype(dt)
+        return result
     if isinstance(data, str):
         # Single string -> string array
         return _native.array([data])
@@ -545,6 +583,9 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             dt = str(dtype)
             if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                 result = result.astype(dt)
+        elif not __import__("builtins").any(isinstance(x, float) for x in data):
+            # All elements are int (not float) and no dtype specified: default to int64
+            result = result.astype("int64")
         return result
     # Nested lists/tuples: infer shape, flatten, reshape
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (list, tuple, ndarray, _ObjectArray)):
@@ -1293,6 +1334,8 @@ def ones_like(a, dtype=None, order="K", subok=True, shape=None):
     return arr
 
 def empty_like(a, dtype=None, order="K", subok=True, shape=None):
+    if not hasattr(a, 'shape'):
+        a = asarray(a)
     s = tuple(shape) if shape is not None else a.shape
     if isinstance(dtype, str) and dtype.startswith('S') and len(dtype) > 1 and dtype[1:].lstrip('-').isdigit() and int(dtype[1:]) < 0:
         raise TypeError("Cannot convert to dtype: {}".format(dtype))

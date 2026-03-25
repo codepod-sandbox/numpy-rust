@@ -398,21 +398,16 @@ class ufunc:
                 _copy_into(_out, result)
                 return _out
 
-        # If all inputs were scalars (0-d or Python scalars), return a scalar
-        _all_scalar = True
+        # If all inputs were Python scalars (not ndarrays), return a Python scalar.
+        # If any input is a 0-d ndarray, keep the result as a 0-d ndarray so that
+        # callers can use ndarray methods like .all() and .any() on the result.
+        _all_python_scalar = True
         from ._helpers import _ObjectArray
         for a in args:
-            if isinstance(a, _ObjectArray):
-                _all_scalar = False
+            if isinstance(a, (_ObjectArray, ndarray, list, tuple)):
+                _all_python_scalar = False
                 break
-            if isinstance(a, (ndarray,)):
-                if a.ndim != 0:
-                    _all_scalar = False
-                    break
-            elif isinstance(a, (list, tuple)):
-                _all_scalar = False
-                break
-        if _all_scalar and isinstance(result, ndarray) and result.ndim == 0:
+        if _all_python_scalar and isinstance(result, ndarray) and result.ndim == 0:
             val = result.item() if hasattr(result, 'item') else float(result)
             if isinstance(val, tuple) and len(val) == 2:
                 val = complex(val[0], val[1])

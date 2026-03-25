@@ -338,6 +338,8 @@ def _safe_pow(a, b):
     return _operator.pow(a, b)
 
 
+_SENTINEL = object()  # unique sentinel for getattr defaults
+
 _BINOP_MAP = {
     '__add__': _operator.add, '__sub__': _operator.sub, '__mul__': _operator.mul,
     '__truediv__': _operator.truediv, '__floordiv__': _operator.floordiv,
@@ -352,7 +354,11 @@ def _coerce_for_op(val, res_dn):
     if res_dn in ('complex64', 'complex128'):
         return complex(val)
     if res_dn in ('float16', 'float32', 'float64'):
+        if isinstance(val, complex):
+            return float(val.real)
         return float(val)
+    if isinstance(val, complex):
+        return int(val.real)
     return int(val)
 
 
@@ -363,6 +369,9 @@ def _scalar_binop_result(self_val, self_dn, other, op_name):
         # Both are numpy scalars: strong-typed promotion
         res_dn = _scalar_promote(self_dn, other_dn)
     elif isinstance(other, (ndarray, _ObjectArray)):
+        return NotImplemented
+    elif getattr(other, '__array_ufunc__', _SENTINEL) is None:
+        # __array_ufunc__ = None means defer to other's reflected op
         return NotImplemented
     elif isinstance(other, bool):
         # NEP 50: Python bool is weak, promote with bool
@@ -385,11 +394,13 @@ def _scalar_binop_result(self_val, self_dn, other, op_name):
             # int/bool + python float -> float64
             res_dn = 'float64'
     elif isinstance(other, complex):
-        # NEP 50: Python complex is weak
-        if self_dn in ('complex64', 'complex128'):
-            res_dn = self_dn
-        elif self_dn in ('float16', 'float32'):
-            res_dn = 'complex64'
+        # NEP 50: Python complex with zero imaginary is treated as float64 (matches array behavior).
+        # Python complex with nonzero imaginary promotes to complex128.
+        if other.imag == 0:
+            if self_dn in ('complex64', 'complex128'):
+                res_dn = 'complex128'
+            else:
+                res_dn = 'float64'
         else:
             res_dn = 'complex128'
     else:
@@ -408,6 +419,13 @@ def _scalar_binop_result(self_val, self_dn, other, op_name):
     b = _coerce_for_op(other, res_dn)
     try:
         val = op_func(a, b)
+    except ZeroDivisionError:
+        if op_name in ('__floordiv__', '__mod__') and res_dn in (
+                'bool', 'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64'):
+            import warnings
+            warnings.warn("divide by zero encountered in floor_divide", RuntimeWarning, stacklevel=4)
+            return _wrap_scalar_result(0, res_dn)
+        raise
     except TypeError:
         return NotImplemented
     if val is NotImplemented:
@@ -422,6 +440,8 @@ def _scalar_rbinop_result(self_val, self_dn, other, op_name):
         # Both numpy scalars: strong-typed promotion
         res_dn = _scalar_promote(other_dn, self_dn)
     elif isinstance(other, (ndarray, _ObjectArray)):
+        return NotImplemented
+    elif getattr(other, '__array_ufunc__', _SENTINEL) is None:
         return NotImplemented
     elif isinstance(other, bool):
         res_dn = _scalar_promote('bool', self_dn)
@@ -442,11 +462,12 @@ def _scalar_rbinop_result(self_val, self_dn, other, op_name):
         else:
             res_dn = 'float64'
     elif isinstance(other, complex):
-        # NEP 50: Python complex is weak
-        if self_dn in ('complex64', 'complex128'):
-            res_dn = self_dn
-        elif self_dn in ('float16', 'float32'):
-            res_dn = 'complex64'
+        # NEP 50: Python complex with zero imaginary is treated as float64 (matches array behavior).
+        if other.imag == 0:
+            if self_dn in ('complex64', 'complex128'):
+                res_dn = 'complex128'
+            else:
+                res_dn = 'float64'
         else:
             res_dn = 'complex128'
     else:
@@ -464,11 +485,57 @@ def _scalar_rbinop_result(self_val, self_dn, other, op_name):
     b = _coerce_for_op(self_val, res_dn)
     try:
         val = op_func(a, b)
+    except ZeroDivisionError:
+        if op_name in ('__floordiv__', '__mod__') and res_dn in (
+                'bool', 'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64'):
+            import warnings
+            warnings.warn("divide by zero encountered in floor_divide", RuntimeWarning, stacklevel=4)
+            return _wrap_scalar_result(0, res_dn)
+        raise
     except TypeError:
         return NotImplemented
     if val is NotImplemented:
         return NotImplemented
     return _wrap_scalar_result(val, res_dn)
+
+
+def _scalar_cmp_result(self_val, self_dn, other, op_name):
+    """Perform a comparison operation and return a numpy bool scalar (with .dtype = bool)."""
+    import operator as _op_mod
+    _CMP_MAP = {
+        '__lt__': _op_mod.lt, '__le__': _op_mod.le,
+        '__gt__': _op_mod.gt, '__ge__': _op_mod.ge,
+        '__eq__': _op_mod.eq, '__ne__': _op_mod.ne,
+    }
+    op_func = _CMP_MAP.get(op_name)
+    if op_func is None:
+        return NotImplemented
+    other_dn = _get_numpy_dtype_name(other)
+    if other_dn is not None:
+        other_val = _coerce_for_op(other, other_dn)
+    elif isinstance(other, (ndarray, _ObjectArray)):
+        return NotImplemented
+    elif isinstance(other, bool):
+        other_val = other
+    elif isinstance(other, int):
+        other_val = other
+    elif isinstance(other, float):
+        other_val = other
+    elif isinstance(other, complex):
+        if op_name in ('__lt__', '__le__', '__gt__', '__ge__'):
+            # Match array behavior: if imag==0, treat as real; else not supported
+            if other.imag != 0:
+                return NotImplemented
+            other_val = other.real
+        else:
+            other_val = other
+    else:
+        return NotImplemented
+    try:
+        result = op_func(self_val, other_val)
+    except TypeError:
+        return NotImplemented
+    return _NumpyIntScalar(1 if result else 0, 'bool')
 
 
 class _NumpyIntScalar(int):
@@ -682,6 +749,15 @@ class _NumpyIntScalar(int):
 
     def __invert__(self):
         return _NumpyIntScalar(int.__invert__(self), self._numpy_dtype_name)
+
+    # Comparison operators — return numpy bool scalar (with .dtype) instead of Python bool
+    def __lt__(self, other): return _scalar_cmp_result(int(self), self._numpy_dtype_name, other, '__lt__')
+    def __le__(self, other): return _scalar_cmp_result(int(self), self._numpy_dtype_name, other, '__le__')
+    def __gt__(self, other): return _scalar_cmp_result(int(self), self._numpy_dtype_name, other, '__gt__')
+    def __ge__(self, other): return _scalar_cmp_result(int(self), self._numpy_dtype_name, other, '__ge__')
+    def __eq__(self, other): return _scalar_cmp_result(int(self), self._numpy_dtype_name, other, '__eq__')
+    def __ne__(self, other): return _scalar_cmp_result(int(self), self._numpy_dtype_name, other, '__ne__')
+    __hash__ = int.__hash__
 
 
 def _float_to_str(val, max_digits, dtype_name='float64'):
@@ -944,6 +1020,15 @@ class _NumpyFloatScalar(float):
     def __abs__(self):
         return _NumpyFloatScalar(float.__abs__(self), self._numpy_dtype_name)
 
+    # Comparison operators — return numpy bool scalar (with .dtype) instead of Python bool
+    def __lt__(self, other): return _scalar_cmp_result(float(self), self._numpy_dtype_name, other, '__lt__')
+    def __le__(self, other): return _scalar_cmp_result(float(self), self._numpy_dtype_name, other, '__le__')
+    def __gt__(self, other): return _scalar_cmp_result(float(self), self._numpy_dtype_name, other, '__gt__')
+    def __ge__(self, other): return _scalar_cmp_result(float(self), self._numpy_dtype_name, other, '__ge__')
+    def __eq__(self, other): return _scalar_cmp_result(float(self), self._numpy_dtype_name, other, '__eq__')
+    def __ne__(self, other): return _scalar_cmp_result(float(self), self._numpy_dtype_name, other, '__ne__')
+    __hash__ = float.__hash__
+
 
 class _NumpyComplexScalar(complex):
     _numpy_dtype_name: str
@@ -1061,6 +1146,17 @@ class _NumpyComplexScalar(complex):
         res_dn = 'float32' if self._numpy_dtype_name == 'complex64' else 'float64'
         return _NumpyFloatScalar(complex.__abs__(self), res_dn)
 
+    # Comparison operators: eq/ne return numpy bool scalar; lt/le/gt/ge raise TypeError
+    def __eq__(self, other):
+        return _scalar_cmp_result(complex(self), self._numpy_dtype_name, other, '__eq__')
+    def __ne__(self, other):
+        return _scalar_cmp_result(complex(self), self._numpy_dtype_name, other, '__ne__')
+    def __lt__(self, other): raise TypeError(f"'<' not supported between instances of '{type(self).__name__}' and '{type(other).__name__}'")
+    def __le__(self, other): raise TypeError(f"'<=' not supported between instances of '{type(self).__name__}' and '{type(other).__name__}'")
+    def __gt__(self, other): raise TypeError(f"'>' not supported between instances of '{type(self).__name__}' and '{type(other).__name__}'")
+    def __ge__(self, other): raise TypeError(f"'>=' not supported between instances of '{type(self).__name__}' and '{type(other).__name__}'")
+    __hash__ = complex.__hash__
+
     def to_device(self, device):
         if device == "cpu":
             return self
@@ -1158,7 +1254,7 @@ class _ScalarTypeMeta(type):
                 value = complex(real_part, imag_part)
             except (ValueError, TypeError):
                 raise
-        # Unsigned integer overflow check
+        # Unsigned integer wrapping (negative values wrap around)
         if scalar_name in ('uint8', 'uint16', 'uint32', 'uint64'):
             try:
                 iv = int(value)
@@ -1166,8 +1262,8 @@ class _ScalarTypeMeta(type):
                 pass
             else:
                 if iv < 0:
-                    raise OverflowError(
-                        "can't convert negative value to " + scalar_name)
+                    bits = {'uint8': 8, 'uint16': 16, 'uint32': 32, 'uint64': 64}[scalar_name]
+                    value = iv & ((1 << bits) - 1)
         # For str/bytes, pass through extra args (e.g. encoding)
         if scalar_name in ('str', 'bytes'):
             try:
