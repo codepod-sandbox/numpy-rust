@@ -1583,21 +1583,7 @@ def insert(arr, obj, values, axis=None):
         obj_list = [single_idx]
         multi = False
 
-    # Normalize values to a list matching obj_list length
-    val_arr = asarray(values) if not isinstance(values, ndarray) else values
-    if val_arr.ndim == 0:
-        val_list = [val_arr[()] for _ in obj_list]
-    else:
-        val_flat = val_arr.flatten()
-        if val_flat.size == 1:
-            val_list = [val_flat[0] for _ in obj_list]
-        else:
-            val_list = [val_flat[i] for i in range(len(obj_list))]
-
-    # Build sorted insertion pairs: (original_index, value)
-    inserts = sorted(zip(obj_list, val_list), key=lambda x: x[0])
-
-    # Move target axis to front
+    # Move target axis to front (needed to compute sub_shape before building val_list)
     perm = [axis] + [i for i in range(ndims) if i != axis]
     inv_perm = [0] * ndims
     for i, p in enumerate(perm):
@@ -1608,13 +1594,36 @@ def insert(arr, obj, values, axis=None):
     for s in sub_shape:
         row_size *= s
 
-    # Build output rows by interleaving original slices with inserts
+    # Normalize values: for single-index insertion, values may be an array matching sub_shape
+    val_arr = asarray(values) if not isinstance(values, ndarray) else values
+
     def _make_val_row(v):
-        """Create a sub-array row filled with scalar value v."""
-        if sub_shape:
-            flat_row = [float(v)] * row_size
-            return array(flat_row).reshape(list(sub_shape))
-        return asarray(float(v))
+        """Create a sub-array row from value v (scalar or array)."""
+        if not sub_shape:
+            return asarray(float(v) if not hasattr(v, 'shape') else v.flat[0])
+        v_arr = asarray(v)
+        if v_arr.ndim == 0:
+            flat_row = [float(v_arr[()])] * row_size
+        elif v_arr.size == row_size:
+            flat_row = [float(x) for x in v_arr.flatten().tolist()]
+        else:
+            flat_row = [float(v_arr.flat[0])] * row_size
+        return array(flat_row).reshape(list(sub_shape))
+
+    if val_arr.ndim == 0:
+        val_list = [val_arr[()] for _ in obj_list]
+    elif not multi and val_arr.size == row_size:
+        # Single insertion index + values array matching sub_shape: use as the row
+        val_list = [val_arr]
+    else:
+        val_flat = val_arr.flatten()
+        if val_flat.size == 1:
+            val_list = [val_flat[0] for _ in obj_list]
+        else:
+            val_list = [val_flat[i] for i in range(len(obj_list))]
+
+    # Build sorted insertion pairs: (original_index, value)
+    inserts = sorted(zip(obj_list, val_list), key=lambda x: x[0])
 
     all_rows = []
     ins_pos = 0
