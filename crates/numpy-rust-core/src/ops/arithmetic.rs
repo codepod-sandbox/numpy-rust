@@ -185,6 +185,9 @@ impl NdArray {
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
                     if r == 0 {
                         *o = 0;
+                    } else if *o == i64::MIN && r == -1 {
+                        // Overflow case: i64::MIN / -1 wraps; NumPy returns i64::MIN
+                        *o = i64::MIN;
                     } else {
                         let d = *o / r;
                         let rem = *o % r;
@@ -198,6 +201,8 @@ impl NdArray {
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
                     if r == 0 {
                         *o = 0;
+                    } else if *o == i32::MIN && r == -1 {
+                        *o = i32::MIN;
                     } else {
                         let d = *o / r;
                         let rem = *o % r;
@@ -269,6 +274,8 @@ impl NdArray {
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
                     if r == 0 {
                         *o = 0;
+                    } else if *o == i64::MIN && r == -1 {
+                        *o = 0; // i64::MIN % -1 = 0 mathematically
                     } else {
                         let rem = *o % r;
                         *o = if rem != 0 && (rem ^ r) < 0 {
@@ -283,7 +290,8 @@ impl NdArray {
             (ArrayData::Int32(a), ArrayData::Int32(b)) => {
                 let mut out = a.clone();
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    if r == 0 {
+                    // r==0: return 0; i32::MIN%-1 would overflow (= 0 mathematically)
+                    if r == 0 || (*o == i32::MIN && r == -1) {
                         *o = 0;
                     } else {
                         let rem = *o % r;
