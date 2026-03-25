@@ -775,6 +775,22 @@ def _astype_structured(arr, dtype_arg):
     return array(data, dtype=dtype_arg)
 
 # --- Module-level __getattr__ for np.bool etc. (NumPy 2.x style) -----------
+# Patch operator.concat to raise TypeError for ndarray (not a sequence type)
+try:
+    import operator as _operator
+    _orig_op_concat = _operator.concat
+    def _np_op_concat(a, b):
+        if isinstance(a, ndarray) or isinstance(b, ndarray):
+            raise TypeError(
+                "'numpy.ndarray' object cannot be interpreted as a sequence")
+        return _orig_op_concat(a, b)
+    _operator.concat = _np_op_concat
+    _operator.iconcat = _np_op_concat
+    del _operator, _orig_op_concat, _np_op_concat
+except Exception:
+    pass
+
+
 def __getattr__(name):
     # NumPy 2.x: np.bool → np.bool_, np.int → np.int_, etc.
     _type_aliases = {

@@ -1,0 +1,10 @@
+# Xfails for core_test_shape_base.py
+
+# F-contiguous block: requires slicing-based block implementation
+TestBlock.test_block_memory_order[0]
+TestBlock.test_block_memory_order[1]
+TestBlock.test_block_memory_order[2]
+
+# S4 fixed-width bytes dtype not fully supported
+TestConcatenate.test_out_and_dtype[29]
+TestConcatenate.test_out_and_dtype[59]

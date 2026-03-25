@@ -19,7 +19,7 @@ __all__ = [
     # At-least
     'atleast_1d', 'atleast_2d', 'atleast_3d',
     # Stacking
-    'stack', 'hstack', 'vstack', 'dstack', 'column_stack', 'row_stack',
+    'stack', 'unstack', 'hstack', 'vstack', 'dstack', 'column_stack', 'row_stack',
     # Splitting
     'split', 'array_split', 'hsplit', 'vsplit', 'dsplit',
     # Repetition / manipulation
@@ -294,11 +294,26 @@ def atleast_3d(*arys):
     return results
 
 
-def stack(arrays, axis=0, out=None):
+def stack(arrays, axis=0, out=None, *, dtype=None, casting='same_kind'):
     from ._helpers import _ObjectArray
+    from ._core_types import can_cast
+    if hasattr(arrays, '__next__'):
+        raise TypeError("arrays to stack must be passed as a list or tuple, "
+                        "not a generator")
+    # Cannot specify both out and dtype
+    if out is not None and dtype is not None:
+        raise TypeError("stack() does not support 'out' and 'dtype' together")
     arrays = [asarray(a) for a in arrays]
     if not arrays:
         raise ValueError("need at least one array to stack")
+    # Validate all arrays have the same shape
+    ref_shape = arrays[0].shape
+    for i, a in enumerate(arrays[1:], 1):
+        if a.shape != ref_shape:
+            raise ValueError(
+                "all input arrays must have the same shape, but the array at "
+                "index 0 has shape {} and the array at index {} has shape {}".format(
+                    ref_shape, i, a.shape))
     # After stacking, ndim will be input ndim + 1
     ndim = arrays[0].ndim + 1
     orig_axis = axis
@@ -310,12 +325,32 @@ def stack(arrays, axis=0, out=None):
     # Validate positive axis is in bounds (valid range: 0 <= axis <= ndim-1 = input.ndim)
     if axis >= ndim:
         raise AxisError(orig_axis, ndim)
+    # Validate casting against target dtype
+    target_dtype = None
+    if out is not None:
+        out_arr = asarray(out) if not isinstance(out, ndarray) else out
+        target_dtype = str(out_arr.dtype)
+    elif dtype is not None:
+        target_dtype = str(dtype)
+    if target_dtype is not None:
+        for a in arrays:
+            if not can_cast(a, target_dtype, casting=casting):
+                raise TypeError(
+                    "Cannot cast array data from dtype('{}') to dtype('{}') "
+                    "according to the rule '{}'".format(a.dtype, target_dtype, casting))
     # If any array is _ObjectArray, use Python-level implementation
     if any(isinstance(a, _ObjectArray) for a in arrays):
         # Expand dims for each array, then concatenate
         expanded = [expand_dims(a, axis=axis) for a in arrays]
-        return concatenate(expanded, axis=axis)
-    return _native.stack_native(arrays, axis)
+        result = concatenate(expanded, axis=axis)
+    else:
+        result = _native.stack_native(arrays, axis)
+    if target_dtype is not None:
+        result = result.astype(target_dtype)
+    if out is not None:
+        out_arr[:] = result
+        return out_arr
+    return result
 
 
 def vstack(tup, *, dtype=None, casting='same_kind'):
@@ -354,6 +389,22 @@ def dstack(tup):
 
 
 row_stack = vstack
+
+
+def unstack(x, /, *, axis=0):
+    """Split an array into a tuple of arrays along an axis."""
+    x = asarray(x)
+    if x.ndim == 0:
+        raise ValueError("unstack requires array to have at least 1 dimension")
+    ndim = x.ndim
+    orig_axis = axis
+    if axis < 0:
+        axis = axis + ndim
+    if axis < 0 or axis >= ndim:
+        raise ValueError("axis {} is out of bounds for array of dimension {}".format(
+            orig_axis, ndim))
+    n = x.shape[axis]
+    return tuple(x[(slice(None),) * axis + (i,)] for i in range(n))
 
 
 def split(a, indices_or_sections, axis=0):
@@ -402,9 +453,9 @@ def block(arrays):
     to result_ndim dimensions and concatenate bottom-up.
     """
     if isinstance(arrays, ndarray):
-        return arrays
+        return arrays.copy()
     if isinstance(arrays, tuple):
-        raise TypeError("tuple is not allowed, use lists instead")
+        raise TypeError("only lists are allowed, not tuple")
     if not isinstance(arrays, list):
         return asarray(arrays)
     if len(arrays) == 0:

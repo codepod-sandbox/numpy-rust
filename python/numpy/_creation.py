@@ -42,17 +42,34 @@ __all__ = [
 
 def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
     """Wrapper around native concatenate that handles tuples and auto-converts to arrays."""
+    from ._core_types import can_cast
     _valid_castings = ('no', 'equiv', 'safe', 'same_kind', 'unsafe')
     if casting not in _valid_castings:
         raise ValueError("casting must be one of {}".format(_valid_castings))
+    # Cannot specify both out and dtype
+    if out is not None and dtype is not None:
+        raise TypeError("concatenate() does not support 'out' and 'dtype' together")
     arrs = [asarray(a) if not isinstance(a, ndarray) else a for a in arrays]
     # When axis is None, flatten all inputs and concatenate along axis 0
     if axis is None:
         arrs = [a.flatten() for a in arrs]
         axis = 0
     else:
-        # Promote 0-d arrays to 1-d (numpy treats scalars as 1-element 1-d arrays)
-        arrs = [a.reshape([1]) if a.ndim == 0 else a for a in arrs]
+        # 0-d arrays are not allowed with explicit axis
+        for a in arrs:
+            if a.ndim == 0:
+                raise ValueError(
+                    "zero-dimensional arrays cannot be concatenated")
+        # All arrays must have the same number of dimensions
+        if len(arrs) > 1:
+            ndim0 = arrs[0].ndim
+            for i, a in enumerate(arrs[1:], 1):
+                if a.ndim != ndim0:
+                    raise ValueError(
+                        "all the input arrays must have same number of dimensions, "
+                        "but the array at index 0 has {} dimension(s) and the array "
+                        "at index {} has {} dimension(s)".format(ndim0, i, a.ndim))
+
     # Normalize negative axis and validate
     ndim = arrs[0].ndim if len(arrs) > 0 else 1
     if axis < 0:
@@ -62,16 +79,62 @@ def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
             raise AxisError(orig_axis, ndim)
     elif axis >= ndim:
         raise AxisError(axis, ndim)
+    # Validate casting against target dtype (from out or dtype parameter)
+    target_dtype = None
+    if out is not None:
+        out_arr = asarray(out) if not isinstance(out, ndarray) else out
+        target_dtype = str(out_arr.dtype)
+    elif dtype is not None:
+        target_dtype = str(dtype)
+    # Validate casting against target dtype
+    # For unicode string target: allow numeric→string (implicit unsafe) but reject object dtype
+    # For bytes/S* target: respect casting parameter normally
+    def _is_str_dtype(dt):
+        s = str(dt)
+        return (s.startswith('U') or s.startswith('<U') or
+                s.startswith('>U') or s in ('str', 'unicode'))
+    def _is_object_dtype(a):
+        return str(a.dtype) == 'object'
+    if target_dtype is not None:
+        _tgt_is_str = _is_str_dtype(target_dtype)
+        _tgt_str = str(target_dtype)
+        # Subarray dtypes like '(2,)i' are not supported as concatenate target
+        if _tgt_str.startswith('('):
+            raise TypeError(
+                "output dtype is not allowed to be a subarray dtype")
+        for a in arrs:
+            if _tgt_is_str:
+                # Only raise for object/None-containing arrays
+                if _is_object_dtype(a):
+                    raise TypeError(
+                        "Cannot cast array data from dtype('{}') to dtype('{}') "
+                        "according to the rule '{}'".format(a.dtype, target_dtype, casting))
+            elif not can_cast(a, target_dtype, casting=casting):
+                raise TypeError(
+                    "Cannot cast array data from dtype('{}') to dtype('{}') "
+                    "according to the rule '{}'".format(a.dtype, target_dtype, casting))
+    # Validate shapes match except along concat axis
+    if len(arrs) > 1 and arrs[0].ndim > 0:
+        ref = arrs[0]
+        for i, a in enumerate(arrs[1:], 1):
+            for dim in range(ref.ndim):
+                if dim == axis:
+                    continue
+                if ref.shape[dim] != a.shape[dim]:
+                    raise ValueError(
+                        "all the input array dimensions except for the concatenation "
+                        "axis must match exactly, but along dimension {}, the array at "
+                        "index 0 has size {} and the array at index {} has size {}".format(
+                            dim, ref.shape[dim], i, a.shape[dim]))
     from ._helpers import _ObjectArray
     if any(isinstance(a, _ObjectArray) for a in arrs):
         # Python-level concatenation for _ObjectArray
         result = _concat_object_arrays(arrs, axis)
     else:
         result = _native_concatenate(arrs, axis)
-    if dtype is not None:
-        result = result.astype(str(dtype))
+    if target_dtype is not None:
+        result = result.astype(target_dtype)
     if out is not None:
-        out_arr = asarray(out) if not isinstance(out, ndarray) else out
         if out_arr.shape != result.shape:
             raise ValueError(
                 "Output array shape {} does not match "
@@ -672,18 +735,27 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                             result = result.astype(dt)
                     return result
 
+            # Check if original data is pure integers (before _flatten_nested converts to float)
+            def _is_all_ints_nested(d):
+                if isinstance(d, (list, tuple)):
+                    return all(_is_all_ints_nested(x) for x in d)
+                return isinstance(d, int) and not isinstance(d, bool)
+            _orig_all_ints = _is_all_ints_nested(data)
             flat = _flatten_nested(data)
             if flat is not None:
                 # Detect source dtype from nested arrays for int preservation
                 _src_dtype = None
                 if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], ndarray):
                     _src_dtype = str(data[0].dtype)
-                # Convert int elements to float since _native.array expects floats
-                if flat and isinstance(flat[0], int):
+                # Rust native array requires floats; convert ints before passing
+                if flat and isinstance(flat[0], int) and not isinstance(flat[0], bool):
                     flat = [float(x) for x in flat]
                 result = _native.array(flat)
                 result = result.reshape(shape)
-                if dtype is not None:
+                if _orig_all_ints and dtype is None:
+                    # Restore int64 dtype for pure-integer arrays
+                    result = result.astype("int64")
+                elif dtype is not None:
                     dt = str(dtype)
                     if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                         result = result.astype(dt)

@@ -4,6 +4,28 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
 
+/// Convert a float to a string matching Python's str(float) behavior.
+/// Python always includes a decimal point: str(0.0) == "0.0", str(1.0) == "1.0".
+fn float_to_str(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 {
+            "inf".to_string()
+        } else {
+            "-inf".to_string()
+        };
+    }
+    let s = format!("{}", x);
+    // If the string contains no '.' or 'e'/'E', add ".0" to match Python behavior
+    if !s.contains('.') && !s.contains('e') && !s.contains('E') {
+        format!("{}.0", s)
+    } else {
+        s
+    }
+}
+
 /// Truncate values in an ArrayData to fit the bit-width of a narrow dtype.
 /// For example, Int32 storage with UInt8 dtype: 400 → 400 as u8 as i32 = 144.
 /// This must be called after any operation that produces a narrow-typed result.
@@ -166,8 +188,8 @@ fn cast_to_str(data: &ArrayData) -> ArrayD<String> {
         ArrayData::Bool(a) => a.mapv(|x| x.to_string()).into_shared(),
         ArrayData::Int32(a) => a.mapv(|x| x.to_string()).into_shared(),
         ArrayData::Int64(a) => a.mapv(|x| x.to_string()).into_shared(),
-        ArrayData::Float32(a) => a.mapv(|x| x.to_string()).into_shared(),
-        ArrayData::Float64(a) => a.mapv(|x| x.to_string()).into_shared(),
+        ArrayData::Float32(a) => a.mapv(|x| float_to_str(x as f64)).into_shared(),
+        ArrayData::Float64(a) => a.mapv(float_to_str).into_shared(),
         ArrayData::Complex64(a) => a
             .mapv(|x| {
                 if x.im >= 0.0 {

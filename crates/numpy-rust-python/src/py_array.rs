@@ -463,10 +463,10 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         // longdouble/longcomplex: map to float64/complex128
         "longdouble" | "longfloat" | "g" => Ok(DType::Float64),
         "clongdouble" | "clongfloat" | "G" => Ok(DType::Complex128),
-        "str" | "U" | "<class 'str'>" => Ok(DType::Str),
+        "str" | "U" | "<class 'str'>" | "bytes" | "<class 'bytes'>" | "bytes_" => Ok(DType::Str),
         // object dtype: map to Float64 as fallback (no true object array support)
         "object" | "O" | "<class 'object'>" => Ok(DType::Float64),
-        _ if s.starts_with('S') || s.starts_with('U') => Ok(DType::Str),
+        _ if s.starts_with('S') || s.starts_with('U') || s.starts_with("|S") => Ok(DType::Str),
         // Void dtype: map to UInt8 as fallback (raw bytes)
         "void" | "V" | "V0" => Ok(DType::UInt8),
         _ if s.starts_with('V') && s[1..].chars().all(|c| c.is_ascii_digit()) => Ok(DType::UInt8),
