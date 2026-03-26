@@ -2902,6 +2902,16 @@ def bincount(x, weights=None, minlength=0):
     import _numpy_native as _nat
     if not isinstance(x, ndarray):
         x = array(x)
+    if x.ndim != 1:
+        raise ValueError("object too deep for desired array")
+    if not isinstance(minlength, int):
+        try:
+            minlength = int(minlength)
+        except (TypeError, ValueError):
+            raise TypeError("'{}' object cannot be interpreted as an integer".format(
+                type(minlength).__name__))
+    if minlength < 0:
+        raise ValueError("minlength must not be negative")
     if weights is not None and not isinstance(weights, ndarray):
         weights = array(weights)
     return _nat.bincount(x, weights, minlength)

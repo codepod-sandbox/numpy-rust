@@ -230,19 +230,52 @@ def cumprod(a, axis=None, dtype=None, out=None):
 def diff(a, n=1, axis=-1, prepend=None, append=None):
     if not isinstance(a, ndarray):
         a = array(a)
+    # n=0: return a (or list) unchanged
+    if n == 0:
+        return a
+    if n < 0:
+        raise ValueError("order must be non-negative but got {}".format(n))
+    _is_bool = str(a.dtype) == 'bool'
+    if _is_bool:
+        a = a.astype('int64')
     if axis is not None and axis < 0:
-        axis = a.ndim + axis
+        _axis = a.ndim + axis
+    else:
+        _axis = axis if axis is not None else -1
     if prepend is not None:
         prepend = asarray(prepend)
         if prepend.ndim == 0:
-            prepend = array([float(prepend)])
-        a = concatenate([prepend, a])
+            # Expand scalar to match a's shape with size 1 along axis
+            shape = list(a.shape)
+            shape[_axis] = 1
+            prepend = full(shape, float(prepend))
+        elif prepend.ndim < a.ndim:
+            # Expand dims to match a's ndim (broadcast along axis)
+            shape = list(a.shape)
+            shape[_axis] = prepend.shape[0] if prepend.ndim > 0 else 1
+            try:
+                prepend = prepend.reshape(shape)
+            except Exception:
+                pass
+        a = concatenate([prepend, a], axis=_axis)
     if append is not None:
         append = asarray(append)
         if append.ndim == 0:
-            append = array([float(append)])
-        a = concatenate([a, append])
-    return _native.diff(a, n, axis)
+            shape = list(a.shape)
+            shape[_axis] = 1
+            append = full(shape, float(append))
+        elif append.ndim < a.ndim:
+            shape = list(a.shape)
+            shape[_axis] = append.shape[0] if append.ndim > 0 else 1
+            try:
+                append = append.reshape(shape)
+            except Exception:
+                pass
+        a = concatenate([a, append], axis=_axis)
+    result = _native.diff(a, n, _axis)
+    if _is_bool:
+        result = result.astype('bool')
+    return result
 
 
 def mean(a, axis=None, dtype=None, out=None, keepdims=False, where=True):
@@ -1035,40 +1068,212 @@ def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
     return result
 
 
-def cov(m, y=None, rowvar=True, bias=False, ddof=None, fweights=None, aweights=None):
+def cov(m, y=None, rowvar=True, bias=False, ddof=None, fweights=None, aweights=None, dtype=None):
     if not isinstance(m, ndarray):
         m = array(m)
     _ddof = ddof if ddof is not None else (0 if bias else 1)
+
+    # Handle empty array: return NaN
+    if m.size == 0:
+        import warnings as _w
+        _w.warn("Degrees of freedom <= 0 for slice", RuntimeWarning, stacklevel=2)
+        if m.ndim <= 1 or m.size == 0:
+            return float('nan')
+        # shape (p, 0) → return (p, p) NaN matrix
+        p = m.shape[0] if rowvar else m.shape[1]
+        result = full((p, p), float('nan'))
+        if dtype is not None:
+            result = result.astype(str(dtype))
+        return result
+
+    # Handle fweights/aweights in Python since Rust backend doesn't support them
+    if fweights is not None or aweights is not None:
+        result = _cov_weighted(m, y=y, rowvar=rowvar, bias=bias, ddof=_ddof,
+                               fweights=fweights, aweights=aweights)
+        if dtype is not None:
+            result = result.astype(str(dtype))
+        return result
+
     if y is not None:
         if not isinstance(y, ndarray):
             y = array(y)
-        return _native.cov(m, y, rowvar, _ddof)
-    return _native.cov(m, None, rowvar, _ddof)
+        result = _native.cov(m, y, rowvar, _ddof)
+    else:
+        result = _native.cov(m, None, rowvar, _ddof)
+    if dtype is not None:
+        result = result.astype(str(dtype))
+    return result
 
 
-def corrcoef(x, y=None, rowvar=True):
+def _cov_weighted(m, y=None, rowvar=True, bias=False, ddof=1, fweights=None, aweights=None):
+    """Weighted covariance following NumPy's algorithm."""
+    X = array(m)
+    if X.ndim == 1:
+        X = X.reshape(1, -1)
+    elif not rowvar:
+        X = X.T
+    if y is not None:
+        y = array(y)
+        if y.ndim == 1:
+            y = y.reshape(1, -1)
+        elif not rowvar:
+            y = y.T
+        X = concatenate([X, y], axis=0)
+
+    num_vars, num_obs = X.shape[0], X.shape[1]
+
+    # Build combined weight vector
+    w = None
+    w_type = 'f'  # 'f'=fweights, 'a'=aweights, 'fa'=both
+
+    if fweights is not None:
+        fw = array(fweights).flatten()
+        if str(fw.dtype) not in ('int32', 'int64'):
+            # Check if they're integer-valued
+            fw_list = fw.tolist()
+            for v in fw_list:
+                if v != int(v):
+                    raise TypeError("fweights must be integer")
+            fw = fw.astype('int64')
+        if fw.shape[0] != num_obs:
+            raise RuntimeError("incompatible numbers of samples and fweights")
+        fw_list = fw.tolist()
+        _fw_neg = False
+        for _fwv in fw_list:
+            if _fwv < 0:
+                _fw_neg = True
+                break
+        if _fw_neg:
+            raise ValueError("fweights cannot be negative")
+        w = fw.astype('float64')
+
+    if aweights is not None:
+        aw = array(aweights).flatten()
+        if aw.ndim != 1:
+            raise RuntimeError("cannot handle multidimensional aweights")
+        if aw.shape[0] != num_obs:
+            raise RuntimeError("incompatible numbers of samples and aweights")
+        aw_list = aw.tolist()
+        _aw_neg = False
+        for _awv in aw_list:
+            if _awv < 0:
+                _aw_neg = True
+                break
+        if _aw_neg:
+            raise ValueError("aweights cannot be negative")
+        aw = aw.astype('float64')
+        if w is None:
+            w = aw
+        else:
+            w = w * aw
+
+    # Compute weighted mean of each row using np-level functions
+    import numpy as _np_local
+    if w is None:
+        avg = _np_local.mean(X, axis=1)
+    else:
+        w_sum = float(_np_local.sum(w))
+        avg = _np_local.sum(X * w, axis=1) / w_sum
+
+    # Center: subtract row means
+    X_centered = X - avg.reshape((-1, 1))
+
+    # Compute effective weight and denominator
+    if w is None:
+        norm = float(num_obs - ddof)
+        X_T = X_centered.T
+    else:
+        w_sum = float(_np_local.sum(w))
+        if aweights is None:
+            norm = float(w_sum - ddof)
+        else:
+            aw_arr = array(aweights).flatten().astype('float64')
+            norm = float(w_sum - ddof * float(_np_local.sum(w * aw_arr)) / w_sum)
+        X_T = (X_centered * w).T
+
+    # C = X_centered @ X_T / norm  (use matmul)
+    c = _np_local.dot(X_centered, X_T) / norm
+    return c
+
+
+def corrcoef(x, y=None, rowvar=True, dtype=None):
     if not isinstance(x, ndarray):
         x = array(x)
+
+    # Handle empty
+    if x.size == 0:
+        import warnings as _w
+        _w.warn("Degrees of freedom <= 0 for slice", RuntimeWarning, stacklevel=2)
+        if x.ndim <= 1:
+            return float('nan')
+        p = x.shape[0] if rowvar else x.shape[1]
+        if p == 0:
+            return array([]).reshape(0, 0)
+        result = full((p, p), float('nan'))
+        if dtype is not None:
+            result = result.astype(str(dtype))
+        return result
+
     if y is not None:
         if not isinstance(y, ndarray):
             y = array(y)
-        return _native.corrcoef(x, y, rowvar)
-    return _native.corrcoef(x, None, rowvar)
+        result = _native.corrcoef(x, y, rowvar)
+    else:
+        result = _native.corrcoef(x, None, rowvar)
+    if dtype is not None:
+        result = result.astype(str(dtype))
+    return result
 
 
 def average(a, axis=None, weights=None, returned=False, keepdims=False):
     """Compute the weighted average along the specified axis."""
     a = asarray(a)
     if weights is None:
-        avg = mean(a, axis=axis)
+        avg = mean(a, axis=axis, keepdims=keepdims)
         if returned:
-            if axis is None:
-                return avg, float(a.size)
-            return avg, full(avg.shape, float(a.shape[axis]))
+            if keepdims:
+                if axis is None:
+                    wt_shape = tuple(1 for _ in range(a.ndim)) if a.ndim > 0 else ()
+                    return avg, full(wt_shape, float(a.size))
+                else:
+                    return avg, full(avg.shape, float(a.shape[axis]))
+            else:
+                if axis is None:
+                    return avg, float(a.size)
+                return avg, full(avg.shape, float(a.shape[axis]))
         return avg
     weights = asarray(weights)
-    wsum = sum(a * weights, axis=axis)
-    wt = sum(weights, axis=axis)
+    # Validate and broadcast weights against a
+    if weights.shape != a.shape:
+        if axis is None:
+            raise TypeError(
+                "Axis must be specified when shapes of a and weights differ.")
+        # Normalize axis (may be tuple or int)
+        _axis = axis
+        if isinstance(_axis, int):
+            ax = _axis if _axis >= 0 else _axis + a.ndim
+            # 1D weights matching the axis dim: reshape to broadcast
+            if weights.ndim == 1 and weights.shape[0] == a.shape[ax]:
+                new_shape = [1] * a.ndim
+                new_shape[ax] = weights.shape[0]
+                weights = weights.reshape(new_shape)
+            # weights.ndim matches the axes being reduced: broadcast to a.shape
+            try:
+                import numpy as _np_local
+                weights = _np_local.broadcast_to(weights, a.shape)
+            except Exception:
+                pass
+        elif isinstance(_axis, tuple):
+            # Multi-axis averaging: weights must be broadcastable to a.shape
+            try:
+                import numpy as _np_local
+                weights = _np_local.broadcast_to(weights, a.shape)
+            except Exception:
+                raise ValueError(
+                    "Shape of weights must be consistent with shape of a "
+                    "along specified axis")
+    wsum = sum(a * weights, axis=axis, keepdims=keepdims)
+    wt = sum(weights, axis=axis, keepdims=keepdims)
     avg = wsum / wt
     if returned:
         return avg, wt

@@ -21,6 +21,7 @@ pub mod _numpy_native {
     use crate::py_array::{
         obj_to_ndarray, parse_optional_axis, PyFlagsObj, PyFlatIter, PyNdArray, PyNdArrayIter,
     };
+    use numpy_rust_core::NdArray;
     use vm::class::PyClassImpl;
     use vm::{PyObjectRef, PyPayload, PyResult, VirtualMachine};
 
@@ -1368,24 +1369,22 @@ pub mod _numpy_native {
         m: vm::PyRef<PyNdArray>,
         y: PyObjectRef,
         rowvar: vm::function::OptionalArg<bool>,
-        ddof: vm::function::OptionalArg<usize>,
+        ddof: vm::function::OptionalArg<i64>,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         let rowvar = rowvar.unwrap_or(true);
         let ddof = ddof.unwrap_or(1);
-        if vm.is_none(&y) {
-            m.inner()
-                .cov(rowvar, ddof)
-                .map(PyNdArray::from_core)
-                .map_err(|e| vm.new_value_error(e.to_string()))
+        let m_clone = m.inner().clone();
+        let y_clone: Option<NdArray> = if vm.is_none(&y) {
+            None
         } else {
             let y_arr: vm::PyRef<PyNdArray> = y.try_into_value(vm)?;
-            let m_clone = m.inner().clone();
-            let y_clone = y_arr.inner().clone();
-            numpy_rust_core::ops::correlation::cov_xy(&m_clone, &y_clone, ddof)
-                .map(PyNdArray::from_core)
-                .map_err(|e| vm.new_value_error(e.to_string()))
-        }
+            let cloned = y_arr.inner().clone();
+            Some(cloned)
+        };
+        numpy_rust_core::ops::correlation::cov_xy(&m_clone, y_clone.as_ref(), rowvar, ddof)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     #[pyfunction]
@@ -1396,19 +1395,17 @@ pub mod _numpy_native {
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         let rowvar = rowvar.unwrap_or(true);
-        if vm.is_none(&y) {
-            x.inner()
-                .corrcoef(rowvar)
-                .map(PyNdArray::from_core)
-                .map_err(|e| vm.new_value_error(e.to_string()))
+        let x_clone = x.inner().clone();
+        let y_clone: Option<NdArray> = if vm.is_none(&y) {
+            None
         } else {
             let y_arr: vm::PyRef<PyNdArray> = y.try_into_value(vm)?;
-            let x_clone = x.inner().clone();
-            let y_clone = y_arr.inner().clone();
-            numpy_rust_core::ops::correlation::corrcoef_xy(&x_clone, &y_clone)
-                .map(PyNdArray::from_core)
-                .map_err(|e| vm.new_value_error(e.to_string()))
-        }
+            let cloned = y_arr.inner().clone();
+            Some(cloned)
+        };
+        numpy_rust_core::ops::correlation::corrcoef_xy(&x_clone, y_clone.as_ref(), rowvar)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     // --- String (char) operations ---

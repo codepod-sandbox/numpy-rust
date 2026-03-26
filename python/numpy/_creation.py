@@ -1454,7 +1454,13 @@ def ascontiguousarray(a, dtype=None):
         return a
     return asarray(a)
 
-def copy(a, order="K"):
+def copy(a, order="K", subok=False):
+    from numpy.ma import MaskedArray as _MA
+    if subok and isinstance(a, _MA):
+        return a.copy()
+    if isinstance(a, _MA):
+        # subok=False: return base ndarray
+        return array(a.data if hasattr(a, 'data') else a)
     if isinstance(a, ndarray):
         return a.copy()
     return array(a)
@@ -1632,14 +1638,20 @@ def asfortranarray(a):
     return array(a, copy=True)
 
 
-def asarray_chkfinite(a):
+def asarray_chkfinite(a, dtype=None, order=None):
     """Convert to array, checking for NaN and Inf."""
-    a = asarray(a)
+    if dtype is not None:
+        a = asarray(a, dtype=dtype)
+    else:
+        a = asarray(a)
     if isinstance(a, ndarray):
         vals = a.flatten().tolist()
         for v in vals:
-            if _math.isinf(v) or _math.isnan(v):
-                raise ValueError("array must not contain infs or NaNs")
+            try:
+                if _math.isinf(v) or _math.isnan(v):
+                    raise ValueError("array must not contain infs or NaNs")
+            except TypeError:
+                pass
     return a
 
 def frombuffer(buffer, dtype=None, count=-1, offset=0):

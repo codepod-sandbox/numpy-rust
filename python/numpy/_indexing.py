@@ -485,36 +485,31 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
 
 def digitize(x, bins, right=False):
     """Return the indices of the bins to which each value belongs."""
+    from numpy._reductions import searchsorted
     x = asarray(x)
     bins = asarray(bins)
-    bins_list = [float(bins[i]) for i in range(len(bins))]
-    result = []
-    ascending = len(bins_list) < 2 or bins_list[-1] >= bins_list[0]
-    for i in range(x.size):
-        val = float(x.flatten()[i])
-        if ascending:
-            # bins ascending: find first bin > val (or >= if right)
-            idx = 0
-            for j in range(len(bins_list)):
-                if right:
-                    if bins_list[j] < val:
-                        idx = j + 1
-                else:
-                    if bins_list[j] <= val:
-                        idx = j + 1
-            result.append(idx)
-        else:
-            # bins descending
-            idx = 0
-            for j in range(len(bins_list)):
-                if right:
-                    if bins_list[j] > val:
-                        idx = j + 1
-                else:
-                    if bins_list[j] >= val:
-                        idx = j + 1
-            result.append(idx)
-    return array(result)
+    n = len(bins)
+    if n == 0:
+        return zeros(x.shape, dtype='int64')
+    # Validate monotonicity
+    if n > 1:
+        bins_list = [float(bins[i]) for i in range(n)]
+        increasing = all(bins_list[i] <= bins_list[i+1] for i in range(n-1))
+        decreasing = all(bins_list[i] >= bins_list[i+1] for i in range(n-1))
+        if not increasing and not decreasing:
+            raise ValueError("bins must be monotonically increasing or decreasing")
+        ascending = increasing
+    else:
+        ascending = True
+    if ascending:
+        side = 'left' if right else 'right'
+        return searchsorted(bins, x, side=side)
+    else:
+        # Descending: flip bins, search, then flip result
+        bins_rev = bins[::-1]
+        side = 'left' if right else 'right'
+        result = searchsorted(bins_rev, x, side=side)
+        return n - result
 
 
 def unravel_index(indices, shape, order='C'):
