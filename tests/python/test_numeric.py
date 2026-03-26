@@ -2601,20 +2601,20 @@ def test_copyto_where():
 def test_place():
     a = np.array([1.0, 2.0, 3.0, 4.0])
     mask = np.array([True, False, True, False])
-    r = np.place(a, mask, np.array([10.0, 30.0]))
-    assert_close(r[0], 10.0)
-    assert_close(r[1], 2.0)
-    assert_close(r[2], 30.0)
-    assert_close(r[3], 4.0)
+    np.place(a, mask, np.array([10.0, 30.0]))
+    assert_close(a[0], 10.0)
+    assert_close(a[1], 2.0)
+    assert_close(a[2], 30.0)
+    assert_close(a[3], 4.0)
 
 def test_place_cycling():
     a = np.array([1.0, 2.0, 3.0, 4.0])
     mask = np.array([True, True, True, True])
-    r = np.place(a, mask, np.array([99.0]))
-    assert_close(r[0], 99.0)
-    assert_close(r[1], 99.0)
-    assert_close(r[2], 99.0)
-    assert_close(r[3], 99.0)
+    np.place(a, mask, np.array([99.0]))
+    assert_close(a[0], 99.0)
+    assert_close(a[1], 99.0)
+    assert_close(a[2], 99.0)
+    assert_close(a[3], 99.0)
 
 def test_trapz():
     y = np.array([1.0, 2.0, 3.0])
