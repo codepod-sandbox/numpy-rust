@@ -571,25 +571,43 @@ def copyto(dst, src, casting='same_kind', where=True):
 
 def place(arr, mask, vals):
     """Change elements of an array based on conditional and input values."""
-    arr = asarray(arr)
-    mask = asarray(mask)
+    if not isinstance(arr, ndarray):
+        raise TypeError(
+            "argument 1 must be numpy.ndarray, not {}".format(type(arr).__name__)
+        )
+    mask_arr = asarray(mask).flatten()
     vals_arr = asarray(vals).flatten()
-    flat_a = arr.flatten()
-    flat_m = mask.flatten()
-    n = flat_a.size
+    n = arr.size
     nv = vals_arr.size
-    result = []
+    # Count True positions to validate
+    count_true = 0
+    for i in _builtin_range(n):
+        if bool(mask_arr[i]):
+            count_true += 1
+    if count_true > 0 and nv == 0:
+        raise ValueError("Cannot insert from an empty array!")
+    flat_a = arr.flatten()
     vi = 0
-    for i in range(n):
-        if flat_m[i]:
-            result.append(float(vals_arr[vi % nv]))
+    for i in _builtin_range(n):
+        if bool(mask_arr[i]):
+            flat_a[i] = vals_arr[vi % nv]
             vi += 1
-        else:
-            result.append(float(flat_a[i]))
-    r = array(result)
-    if arr.ndim > 1:
-        r = r.reshape(arr.shape)
-    return r
+    # Write back in-place
+    if arr.ndim == 1:
+        for i in _builtin_range(n):
+            arr[i] = flat_a[i]
+    else:
+        _shape = arr.shape
+        _strides = [1] * arr.ndim
+        for _d in _builtin_range(arr.ndim - 2, -1, -1):
+            _strides[_d] = _strides[_d + 1] * _shape[_d + 1]
+        for i in _builtin_range(n):
+            _idx = []
+            _rem = i
+            for _d in _builtin_range(arr.ndim):
+                _idx.append(_rem // _strides[_d])
+                _rem %= _strides[_d]
+            arr[tuple(_idx)] = flat_a[i]
 
 
 class _BroadcastIter:
@@ -1112,9 +1130,32 @@ def take(a, indices, axis=None, out=None, mode="raise"):
 
 def flip(a, axis=None):
     """Reverse the order of elements along the given axis."""
-    if isinstance(a, ndarray):
-        return _native.flip(a, axis)
-    return array(list(reversed(a))) if axis is None else a
+    from ._helpers import AxisError as _AxisError
+    a = asarray(a)
+    if axis is None:
+        # Flip along all axes
+        axes = tuple(_builtin_range(a.ndim))
+    elif isinstance(axis, (tuple, list)):
+        axes = tuple(axis)
+    else:
+        axes = (int(axis),)
+    # Validate axes
+    for ax in axes:
+        if ax < -a.ndim or ax >= a.ndim:
+            raise _AxisError(
+                "axis {} is out of bounds for array of dimension {}".format(ax, a.ndim))
+    # Normalize negative axes
+    axes = tuple(ax % a.ndim if ax < 0 else ax for ax in axes)
+    # Check for duplicate normalized axes in AxisError context
+    for ax in axes:
+        if ax >= a.ndim:
+            raise _AxisError(
+                "axis {} is out of bounds for array of dimension {}".format(ax, a.ndim))
+    # Apply flips
+    result = a
+    for ax in axes:
+        result = _native.flip(result, ax)
+    return result
 
 
 def flipud(a):
@@ -1649,7 +1690,9 @@ def delete(arr, obj, axis=None):
 
     # Parse obj into a list of integer indices to delete
     if isinstance(obj, slice):
-        del_indices = list(_builtin_range(*obj.indices(n)))
+        # Use arange(n)[obj] to get actual indices (handles out-of-bounds slices correctly)
+        _idx_arr = arange(n)[obj]
+        del_indices = list(int(v) for v in _idx_arr.flatten().tolist())
     elif isinstance(obj, bool):
         raise ValueError(
             "in the future, boolean array-likes will be handled as a "

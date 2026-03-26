@@ -1816,15 +1816,53 @@ impl PyNdArray {
                 items
             };
 
-            // Check if any element is an ndarray (fancy indexing) or boolean ndarray
+            // Check if any element is an ndarray or list (fancy indexing) or boolean ndarray
             let has_ndarray = items
                 .iter()
                 .any(|item| item.downcast_ref::<PyNdArray>().is_some());
+            let has_list = items
+                .iter()
+                .any(|item| item.downcast_ref::<PyList>().is_some());
             let has_slice = items
                 .iter()
                 .any(|item| item.downcast_ref::<PySlice>().is_some());
 
-            if has_ndarray {
+            if has_ndarray || has_list {
+                if has_list {
+                    // Convert any PyList items to PyNdArray for fancy indexing
+                    let converted: Vec<PyObjectRef> = items
+                        .iter()
+                        .map(|item| {
+                            if let Some(list) = item.downcast_ref::<PyList>() {
+                                let list_items = list.borrow_vec();
+                                // Detect boolean list → create bool ndarray
+                                let is_bool_list = !list_items.is_empty()
+                                    && list_items
+                                        .iter()
+                                        .all(|x| x.class().is(vm.ctx.types.bool_type));
+                                if is_bool_list {
+                                    let bools: Vec<bool> = list_items
+                                        .iter()
+                                        .map(|x| x.clone().try_into_value::<bool>(vm))
+                                        .collect::<PyResult<Vec<_>>>()?;
+                                    let arr_data = NdArray::from_vec(bools);
+                                    Ok(PyNdArray::from_core(arr_data).to_py(vm))
+                                } else {
+                                    let mut indices = Vec::with_capacity(list_items.len());
+                                    for x in list_items.iter() {
+                                        let i: i64 = x.clone().try_into_value(vm)?;
+                                        indices.push(i);
+                                    }
+                                    let arr_data = NdArray::from_vec(indices);
+                                    Ok(PyNdArray::from_core(arr_data).to_py(vm))
+                                }
+                            } else {
+                                Ok(item.clone())
+                            }
+                        })
+                        .collect::<PyResult<Vec<_>>>()?;
+                    return multi_dim_fancy_getitem(&data, &converted, vm);
+                }
                 return multi_dim_fancy_getitem(&data, items, vm);
             }
 

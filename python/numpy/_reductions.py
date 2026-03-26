@@ -290,9 +290,12 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
         new_shape[_axis] = _result_len if _result_len > 0 else 0
         _out_dtype = 'bool' if _is_bool else str(a.dtype)
         return zeros(new_shape, dtype=_out_dtype)
+    _in_dtype = str(a.dtype)
     result = _native.diff(a, n, _axis)
     if _is_bool:
         result = result.astype('bool')
+    elif 'int' in _in_dtype or 'uint' in _in_dtype:
+        result = result.astype(_in_dtype)
     return result
 
 
@@ -1855,54 +1858,211 @@ def searchsorted(a, v, side="left", sorter=None):
     return result
 
 
+def _gradient_scalar_spacing(sp):
+    """Extract scalar spacing from scalar, 0-d array, or size-1 array."""
+    if isinstance(sp, ndarray):
+        if sp.ndim > 1:
+            raise ValueError("Spacing must be scalars or 1d, not {}d".format(sp.ndim))
+        if sp.size == 1:
+            return float(sp.flatten()[0])
+        return None  # non-scalar, needs array handling
+    return float(sp)
+
+
+def _gradient_1d_nonuniform(f_1d, x, edge_order):
+    """Compute 1-D gradient with non-uniform coordinate array x."""
+    n = len(f_1d)
+    import math as _math
+    out = [0.0] * n
+    # Interior: central differences
+    for i in _builtin_range(1, n - 1):
+        dx1 = x[i] - x[i - 1]
+        dx2 = x[i + 1] - x[i]
+        f0 = float(f_1d[i - 1])
+        f1 = float(f_1d[i])
+        f2 = float(f_1d[i + 1])
+        # Weighted central difference for non-uniform grid
+        out[i] = (f2 * dx1 ** 2 + (dx2 ** 2 - dx1 ** 2) * f1 - f0 * dx2 ** 2) / (dx1 * dx2 * (dx1 + dx2))
+    # Boundaries
+    if edge_order == 1:
+        out[0] = (float(f_1d[1]) - float(f_1d[0])) / (x[1] - x[0])
+        out[-1] = (float(f_1d[-1]) - float(f_1d[-2])) / (x[-1] - x[-2])
+    else:
+        # 2nd order one-sided
+        dx0 = x[1] - x[0]
+        dx1 = x[2] - x[0]
+        a = -(2.0 * dx0 + dx1 - x[1] + x[0]) / (dx0 * dx1)
+        b = (dx0 + dx1) / (dx0 * (dx1 - dx0))
+        c = -dx0 / (dx1 * (dx1 - dx0))
+        out[0] = a * float(f_1d[0]) + b * float(f_1d[1]) + c * float(f_1d[2])
+        dxm1 = x[-2] - x[-1]
+        dxm2 = x[-3] - x[-1]
+        a = -(2.0 * dxm1 + dxm2 - x[-2] + x[-1]) / (dxm1 * dxm2)
+        b = (dxm1 + dxm2) / (dxm1 * (dxm2 - dxm1))
+        c = -dxm1 / (dxm2 * (dxm2 - dxm1))
+        out[-1] = a * float(f_1d[-1]) + b * float(f_1d[-2]) + c * float(f_1d[-3])
+    return out
+
+
+def _gradient_1d_uniform(f_1d, dx, edge_order):
+    """Compute 1-D gradient with uniform spacing dx."""
+    n = len(f_1d)
+    out = [0.0] * n
+    # Interior: central differences
+    for i in _builtin_range(1, n - 1):
+        out[i] = (float(f_1d[i + 1]) - float(f_1d[i - 1])) / (2.0 * dx)
+    # Boundaries
+    if edge_order == 1:
+        out[0] = (float(f_1d[1]) - float(f_1d[0])) / dx
+        out[-1] = (float(f_1d[-1]) - float(f_1d[-2])) / dx
+    else:
+        # 2nd order one-sided: (-3f[0]+4f[1]-f[2])/(2dx)
+        out[0] = (-3.0 * float(f_1d[0]) + 4.0 * float(f_1d[1]) - float(f_1d[2])) / (2.0 * dx)
+        out[-1] = (float(f_1d[-3]) - 4.0 * float(f_1d[-2]) + 3.0 * float(f_1d[-1])) / (2.0 * dx)
+    return out
+
+
+def _gradient_along_axis(f, axis, spacing, edge_order):
+    """Compute gradient of f along the given axis with given spacing."""
+    shape = list(f.shape)
+    n = shape[axis]
+    min_size = edge_order + 1
+    if n < min_size:
+        raise ValueError(
+            "Shape of array too small to calculate a numerical gradient, "
+            "at least {} elements are required for edge_order={}".format(
+                min_size, edge_order
+            )
+        )
+    # Resolve spacing to scalar or coordinate list
+    use_array_spacing = False
+    x_list = None
+    dx = None
+    if isinstance(spacing, ndarray):
+        if spacing.ndim > 1:
+            raise ValueError(
+                "Spacing must be scalars or 1d, not {}d".format(spacing.ndim)
+            )
+        if spacing.size == 1:
+            dx = float(spacing.flatten()[0])
+        elif spacing.size == n:
+            x_list = spacing.flatten().tolist()
+            use_array_spacing = True
+        else:
+            raise ValueError(
+                "Spacing array has wrong size {}, expected 1 or {}".format(
+                    spacing.size, n
+                )
+            )
+    elif isinstance(spacing, (list, tuple)):
+        if len(spacing) == n:
+            x_list = [float(v) for v in spacing]
+            use_array_spacing = True
+        else:
+            raise ValueError(
+                "Spacing list has wrong size {}, expected {}".format(len(spacing), n)
+            )
+    else:
+        dx = float(spacing)
+    # Allocate output
+    out_flat = zeros(f.size).flatten()
+    # Iterate over all slices perpendicular to axis
+    # Use reshaping: move axis to last, iterate over all leading dims
+    from ._manipulation import moveaxis as _moveaxis
+    f_moved = _moveaxis(f, axis, f.ndim - 1)
+    # f_moved shape: shape without axis, then n
+    outer_shape = list(f_moved.shape[:-1])
+    outer_size = 1
+    for s in outer_shape:
+        outer_size *= s
+    f_flat = f_moved.reshape([outer_size, n]) if f_moved.ndim > 1 else f_moved.reshape([1, n])
+    result_rows = []
+    for row_idx in _builtin_range(outer_size):
+        row = f_flat[row_idx]
+        row_list = row.tolist()
+        if use_array_spacing:
+            grad_row = _gradient_1d_nonuniform(row_list, x_list, edge_order)
+        else:
+            grad_row = _gradient_1d_uniform(row_list, dx, edge_order)
+        result_rows.append(grad_row)
+    # Reassemble
+    out_data = []
+    for row in result_rows:
+        out_data.extend(row)
+    out_arr = array(out_data).reshape(f_moved.shape)
+    # Move axis back
+    return _moveaxis(out_arr, f_moved.ndim - 1, axis)
+
+
 def gradient(f, *varargs, axis=None, edge_order=1):
+    from ._helpers import AxisError as _AxisError
     if not isinstance(f, ndarray):
         f = array(f)
-    if f.ndim == 1:
-        # 1D case: single spacing
-        spacing = float(varargs[0]) if varargs else 1.0
-        return _native.gradient(f, spacing)
-    # nD case
-    if axis is not None:
-        # gradient along specific axis/axes
-        if isinstance(axis, int):
-            ax = axis
-            if ax < 0:
-                ax = f.ndim + ax
-            sp = float(varargs[0]) if varargs else 1.0
-            result = _native.gradient(f, sp)
-            if isinstance(result, (list, tuple)):
-                return result[ax]
-            return result
-        # multiple axes
-        results = []
-        for i, ax in enumerate(axis):
-            sp = float(varargs[i]) if i < len(varargs) else 1.0
-            grads = _native.gradient(f, sp)
-            if isinstance(grads, (list, tuple)):
-                a = ax
-                if a < 0:
-                    a = f.ndim + a
-                results.append(grads[a])
-            else:
-                results.append(grads)
-        return results
-    # All axes
-    if len(varargs) == 0:
-        return _native.gradient(f, 1.0)
-    elif len(varargs) == 1:
-        return _native.gradient(f, float(varargs[0]))
+    if f.ndim == 0:
+        raise ValueError("f must have at least 1 dimension")
+    if edge_order not in (1, 2):
+        raise ValueError("'edge_order' must be 1 or 2")
+    N = f.ndim
+    # Determine axes to compute gradient for
+    if axis is None:
+        axes = list(_builtin_range(N))
+        single_axis = False
+    elif isinstance(axis, int):
+        ax_norm = axis if axis >= 0 else axis + N
+        if ax_norm < 0 or ax_norm >= N:
+            raise _AxisError(axis, N)
+        axes = [ax_norm]
+        single_axis = True
     else:
-        # Different spacing per axis
-        results = []
-        for i in range(f.ndim):
-            sp = float(varargs[i]) if i < len(varargs) else 1.0
-            grads = _native.gradient(f, sp)
-            if isinstance(grads, (list, tuple)):
-                results.append(grads[i])
-            else:
-                results.append(grads)
-        return results
+        axes = []
+        for ax in axis:
+            ax_norm = ax if ax >= 0 else ax + N
+            if ax_norm < 0 or ax_norm >= N:
+                raise _AxisError(ax, N)
+            axes.append(ax_norm)
+        single_axis = False
+    len_axes = len(axes)
+    # Validate and resolve spacings
+    if len(varargs) == 0:
+        spacings = [1.0] * len_axes
+    elif len(varargs) == 1:
+        sp = varargs[0]
+        if isinstance(sp, ndarray) and sp.ndim > 1:
+            raise ValueError(
+                "Spacing must be scalars or 1d, not {}d".format(sp.ndim)
+            )
+        # Non-scalar array spacing is only valid for a single axis
+        is_array_sp = isinstance(sp, ndarray) and sp.size > 1
+        if is_array_sp and len_axes != 1:
+            raise TypeError(
+                "gradient() only takes 1 non-scalar spacing argument when "
+                "axis is not a single integer, but {} axes were specified".format(len_axes)
+            )
+        # One spacing for all axes
+        spacings = [sp] * len_axes
+    elif len(varargs) == len_axes:
+        spacings = list(varargs)
+    else:
+        raise TypeError(
+            "gradient() takes from 1 to {} positional arguments but {} "
+            "were given".format(N + 1, len(varargs) + 1)
+        )
+    # Validate spacings have correct sizes
+    for i, sp in enumerate(spacings):
+        if isinstance(sp, ndarray) and sp.ndim == 1 and sp.size != 1:
+            ax = axes[i]
+            if sp.size != f.shape[ax]:
+                raise ValueError(
+                    "Spacing array has wrong size {} for axis {} with size {}".format(
+                        sp.size, ax, f.shape[ax]
+                    )
+                )
+    results = []
+    for i, ax in enumerate(axes):
+        results.append(_gradient_along_axis(f, ax, spacings[i], edge_order))
+    if single_axis or (axis is None and N == 1):
+        return results[0]
+    return tuple(results)
 
 
 def trapz(y, x=None, dx=1.0, axis=-1):
