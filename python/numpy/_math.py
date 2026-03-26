@@ -918,13 +918,51 @@ def heaviside(x1, x2):
 
 def sinc(x):
     """Return the sinc function: sin(pi*x)/(pi*x)."""
-    import numpy as _np
+    import math as _m
     x = asarray(x)
-    px = x * _np.pi
-    # Avoid division by zero: where px==0, use 1 as denominator
-    result = sin(px) / where(px == zeros(px.shape), ones(px.shape), px)
-    result = where(x == zeros(x.shape), ones(x.shape), result)
-    return result
+    orig_dtype = str(x.dtype)
+    # Promote to float for computation
+    if 'complex' in orig_dtype:
+        x_f = x.astype('complex128') if orig_dtype == 'complex128' else x.astype('complex64')
+        _pi = _m.pi
+        px = x_f * _pi
+        # sinc = sin(pi*x)/(pi*x), = 1 at x=0
+        flat = px.flatten().tolist()
+        out = []
+        for v in flat:
+            if isinstance(v, tuple):
+                v = complex(v[0], v[1])
+            if v == 0:
+                out.append(complex(1.0, 0.0))
+            else:
+                import cmath as _cmath
+                out.append(_cmath.sin(v) / v)
+        result = array(out, dtype=x_f.dtype)
+        if len(x.shape) > 1:
+            result = result.reshape(list(x.shape))
+        return result
+    else:
+        # Use float64 for computation then cast back
+        x_f = x.astype('float64')
+        _pi = _m.pi
+        flat = x_f.flatten().tolist()
+        out = []
+        for v in flat:
+            if v == 0.0:
+                out.append(1.0)
+            else:
+                import math as _m2
+                pv = _pi * v
+                out.append(_m2.sin(pv) / pv)
+        result = array(out, dtype='float64')
+        if len(x.shape) > 1:
+            result = result.reshape(list(x.shape))
+        # Cast to original dtype (e.g. float32, float16)
+        if orig_dtype in ('float32', 'float16'):
+            result = result.astype(orig_dtype)
+        elif orig_dtype == 'float128' or 'longdouble' in orig_dtype:
+            result = result.astype(orig_dtype)
+        return result
 
 def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
     """Replace NaN with zero and infinity with large finite numbers."""
@@ -1443,14 +1481,21 @@ def angle(z, deg=False):
     return result
 
 def _unwrap_1d_list(data, discont, period):
-    """Unwrap a 1D list in-place style, returning a new list."""
+    """Unwrap a 1D list using cumulative sum of corrections (matching NumPy)."""
     if len(data) == 0:
         return []
-    result = [data[0]]
+    result = list(data)
+    cumcorr = 0.0
     for i in _builtin_range(1, len(data)):
-        d = data[i] - result[-1]
-        d = d - period * round(d / period)
-        result.append(result[-1] + d)
+        dd = data[i] - data[i - 1]
+        if abs(dd) >= discont:
+            # Normalize dd into (-discont, discont] range
+            ddmod = (dd + discont) % period - discont
+            # Avoid -discont when original dd was positive
+            if ddmod == -discont and dd > 0:
+                ddmod = discont
+            cumcorr += ddmod - dd
+        result[i] = data[i] + cumcorr
     return result
 
 def unwrap(p, discont=None, axis=-1, period=2*_math.pi):

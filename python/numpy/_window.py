@@ -7,10 +7,18 @@ __all__ = ['bartlett', 'blackman', 'hamming', 'hanning', 'kaiser']
 _pi = _math.pi
 
 
+def _window_int(M):
+    """Convert M to a Python int, handling ndarray/ObjectArray scalars."""
+    if hasattr(M, 'item'):
+        return int(M.item())
+    return int(M)
+
+
 def bartlett(M):
     """Return the Bartlett window."""
+    M = _window_int(M)
     if M < 1:
-        return array([])
+        return array([], dtype='float64')
     if M == 1:
         return array([1.0])
     n = arange(0, M)
@@ -27,8 +35,9 @@ def bartlett(M):
 
 def blackman(M):
     """Return the Blackman window."""
+    M = _window_int(M)
     if M < 1:
-        return array([])
+        return array([], dtype='float64')
     if M == 1:
         return array([1.0])
     vals = []
@@ -39,8 +48,9 @@ def blackman(M):
 
 def hamming(M):
     """Return the Hamming window."""
+    M = _window_int(M)
     if M < 1:
-        return array([])
+        return array([], dtype='float64')
     if M == 1:
         return array([1.0])
     vals = []
@@ -51,8 +61,9 @@ def hamming(M):
 
 def hanning(M):
     """Return the Hanning window."""
+    M = _window_int(M)
     if M < 1:
-        return array([])
+        return array([], dtype='float64')
     if M == 1:
         return array([1.0])
     vals = []
@@ -63,8 +74,9 @@ def hanning(M):
 
 def kaiser(M, beta):
     """Return the Kaiser window."""
+    M = _window_int(M)
     if M < 1:
-        return array([])
+        return array([], dtype='float64')
     if M == 1:
         return array([1.0])
     # I0 is modified Bessel function of first kind, order 0

@@ -76,7 +76,9 @@ impl NdArray {
         }
 
         // When ddof >= num_obs, result is ±Inf (NumPy emits a RuntimeWarning)
-        let norm = (num_obs as i64 - ddof) as f64;
+        let norm = num_obs as i64 - ddof;
+        let norm_f = norm as f64;
+        let degenerate = norm <= 0;
 
         // Center: subtract mean of each row (variable).
         let mut centered = mat.to_owned();
@@ -92,6 +94,7 @@ impl NdArray {
         }
 
         // Compute covariance: C = centered @ centered^T / (N - ddof)
+        // When norm <= 0 (ddof >= N), return ±Inf based on sign of cross-product sum
         let mut cov_mat = ArrayD::<f64>::zeros(IxDyn(&[num_vars, num_vars]));
         for i in 0..num_vars {
             for j in i..num_vars {
@@ -99,7 +102,17 @@ impl NdArray {
                 for k in 0..num_obs {
                     sum += centered[IxDyn(&[i, k])] * centered[IxDyn(&[j, k])];
                 }
-                let val = sum / norm;
+                let val = if degenerate {
+                    if sum == 0.0 {
+                        f64::NAN
+                    } else if sum > 0.0 {
+                        f64::INFINITY
+                    } else {
+                        f64::NEG_INFINITY
+                    }
+                } else {
+                    sum / norm_f
+                };
                 cov_mat[IxDyn(&[i, j])] = val;
                 cov_mat[IxDyn(&[j, i])] = val;
             }
@@ -152,7 +165,9 @@ impl NdArray {
             return Ok(NdArray::from_data(ArrayData::Complex128(nan_mat)));
         }
 
-        let norm = (num_obs as i64 - ddof) as f64;
+        let norm = num_obs as i64 - ddof;
+        let norm_f = norm as f64;
+        let degenerate = norm <= 0;
 
         // Center each row
         let mut centered = mat.to_owned();
@@ -168,6 +183,7 @@ impl NdArray {
         }
 
         // C[i,j] = sum_k(centered[i,k] * conj(centered[j,k])) / norm
+        // When norm <= 0, return ±Inf based on sign of sum components
         let mut cov_mat = ArrayD::<Complex<f64>>::zeros(IxDyn(&[num_vars, num_vars]));
         for i in 0..num_vars {
             for j in 0..num_vars {
@@ -175,7 +191,25 @@ impl NdArray {
                 for k in 0..num_obs {
                     sum += centered[IxDyn(&[i, k])] * centered[IxDyn(&[j, k])].conj();
                 }
-                cov_mat[IxDyn(&[i, j])] = sum / norm;
+                cov_mat[IxDyn(&[i, j])] = if degenerate {
+                    let re = if sum.re == 0.0 {
+                        f64::NAN
+                    } else if sum.re > 0.0 {
+                        f64::INFINITY
+                    } else {
+                        f64::NEG_INFINITY
+                    };
+                    let im = if sum.im == 0.0 {
+                        0.0
+                    } else if sum.im > 0.0 {
+                        f64::INFINITY
+                    } else {
+                        f64::NEG_INFINITY
+                    };
+                    Complex::new(re, im)
+                } else {
+                    sum / norm_f
+                };
             }
         }
 

@@ -228,20 +228,30 @@ def cumprod(a, axis=None, dtype=None, out=None):
 
 
 def diff(a, n=1, axis=-1, prepend=None, append=None):
-    if not isinstance(a, ndarray):
-        a = array(a)
-    # n=0: return a (or list) unchanged
+    from ._helpers import AxisError as _AxisError
+    # n=0: return a unchanged (identity)
     if n == 0:
         return a
     if n < 0:
         raise ValueError("order must be non-negative but got {}".format(n))
+    if not isinstance(a, ndarray):
+        a = array(a)
+    # Validate axis
+    if a.ndim == 0:
+        raise ValueError("diff requires an array of at least 1 dimension")
+    if axis < 0:
+        _axis = a.ndim + axis
+    else:
+        _axis = axis
+    if _axis < 0 or _axis >= a.ndim:
+        raise _AxisError(
+            "Axis {} is out of bounds for array of dimension {}".format(
+                axis, a.ndim
+            )
+        )
     _is_bool = str(a.dtype) == 'bool'
     if _is_bool:
         a = a.astype('int64')
-    if axis is not None and axis < 0:
-        _axis = a.ndim + axis
-    else:
-        _axis = axis if axis is not None else -1
     if prepend is not None:
         prepend = asarray(prepend)
         if prepend.ndim == 0:
@@ -272,6 +282,14 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
             except Exception:
                 pass
         a = concatenate([a, append], axis=_axis)
+    # If n >= axis size, result is empty along that axis
+    _axis_len = a.shape[_axis]
+    if n >= _axis_len:
+        new_shape = list(a.shape)
+        _result_len = _axis_len - n
+        new_shape[_axis] = _result_len if _result_len > 0 else 0
+        _out_dtype = 'bool' if _is_bool else str(a.dtype)
+        return zeros(new_shape, dtype=_out_dtype)
     result = _native.diff(a, n, _axis)
     if _is_bool:
         result = result.astype('bool')
@@ -1094,6 +1112,13 @@ def cov(m, y=None, rowvar=True, bias=False, ddof=None, fweights=None, aweights=N
             result = result.astype(str(dtype))
         return result
 
+    # Determine number of observations to check ddof validity
+    _m2 = m if rowvar else m.T
+    _num_obs = _m2.shape[1] if _m2.ndim >= 2 else _m2.shape[0]
+    if _ddof >= _num_obs:
+        import warnings as _w
+        _w.warn("Degrees of freedom <= 0 for slice", RuntimeWarning, stacklevel=2)
+
     if y is not None:
         if not isinstance(y, ndarray):
             y = array(y)
@@ -1179,9 +1204,14 @@ def _cov_weighted(m, y=None, rowvar=True, bias=False, ddof=1, fweights=None, awe
     X_centered = X - avg.reshape((-1, 1))
 
     # Compute effective weight and denominator
+    # Use conjugate transpose for complex Hermitian covariance
+    _is_complex = 'complex' in str(X.dtype)
     if w is None:
         norm = float(num_obs - ddof)
-        X_T = X_centered.T
+        if _is_complex:
+            X_T = X_centered.conj().T
+        else:
+            X_T = X_centered.T
     else:
         w_sum = float(_np_local.sum(w))
         if aweights is None:
@@ -1189,7 +1219,10 @@ def _cov_weighted(m, y=None, rowvar=True, bias=False, ddof=1, fweights=None, awe
         else:
             aw_arr = array(aweights).flatten().astype('float64')
             norm = float(w_sum - ddof * float(_np_local.sum(w * aw_arr)) / w_sum)
-        X_T = (X_centered * w).T
+        if _is_complex:
+            X_T = (X_centered * w).conj().T
+        else:
+            X_T = (X_centered * w).T
 
     # C = X_centered @ X_T / norm  (use matmul)
     c = _np_local.dot(X_centered, X_T) / norm

@@ -26,6 +26,7 @@ __all__ = [
     'repeat', 'tile', 'append', 'insert', 'delete',
     # Sorting
     'sort', 'argsort', 'lexsort', 'partition', 'argpartition', 'unique',
+    'sort_complex',
     # Flipping
     'flip', 'flipud', 'fliplr', 'rot90', 'roll', 'rollaxis',
     # Selection
@@ -968,6 +969,35 @@ def sort(a, axis=-1, kind=None, order=None):
     return result
 
 
+def sort_complex(a):
+    """Sort a complex array using the real part first, then the imaginary part."""
+    a = asarray(a)
+    dt = str(a.dtype)
+    # Map real/integer types to the appropriate complex output dtype
+    _type_map = {
+        'int64': 'complex128', 'int16': 'complex64', 'uint16': 'complex64',
+        'int8': 'complex64', 'uint8': 'complex64',
+        'float32': 'complex64', 'float64': 'complex128',
+        'complex64': 'complex64', 'complex128': 'complex128',
+    }
+    out_dtype = _type_map.get(dt, 'complex128')
+    c = a.astype(out_dtype)
+    n = len(c.flatten())
+    # Extract as Python complex numbers (elements may be tuples in RustPython)
+    vals = []
+    for i in _builtin_range(n):
+        v = c.flatten()[i]
+        if isinstance(v, tuple) and len(v) == 2:
+            vals.append(complex(v[0], v[1]))
+        else:
+            try:
+                vals.append(complex(v))
+            except (TypeError, ValueError):
+                vals.append(complex(float(v), 0.0))
+    vals.sort(key=lambda x: (x.real, x.imag))
+    return array(vals, dtype=out_dtype)
+
+
 def argsort(a, axis=-1, kind=None, order=None):
     if isinstance(a, (tuple, list)):
         if len(a) == 0:
@@ -1104,10 +1134,32 @@ def fliplr(a):
 
 
 def rot90(a, k=1, axes=(0, 1)):
-    """Rotate array 90 degrees in the plane of the first two axes."""
-    if isinstance(a, ndarray):
-        return _native.rot90(a, k)
-    return a
+    """Rotate an array by 90 degrees in the plane specified by axes."""
+    axes = tuple(axes)
+    if len(axes) != 2:
+        raise ValueError("len(axes) must be 2.")
+    a = asarray(a)
+    if (axes[0] >= a.ndim or axes[0] < -a.ndim
+            or axes[1] >= a.ndim or axes[1] < -a.ndim):
+        raise ValueError(
+            "Axes={} out of range for array of ndim={}.".format(axes, a.ndim))
+    # Normalize negative axes
+    ax0 = axes[0] % a.ndim
+    ax1 = axes[1] % a.ndim
+    if ax0 == ax1:
+        raise ValueError("Axes must be different.")
+    k = k % 4
+    if k == 0:
+        return a[:]
+    if k == 2:
+        return flip(flip(a, ax0), ax1)
+    # Build transposed axes list: swap ax0 and ax1
+    axes_list = list(_builtin_range(a.ndim))
+    axes_list[ax0], axes_list[ax1] = axes_list[ax1], axes_list[ax0]
+    if k == 1:
+        return transpose(flip(a, ax1), axes_list)
+    else:  # k == 3
+        return flip(transpose(a, axes_list), ax1)
 
 
 def unique(a, return_index=False, return_inverse=False, return_counts=False, axis=None, *, equal_nan=True):
@@ -1567,59 +1619,142 @@ def extract(condition, arr):
 
 def delete(arr, obj, axis=None):
     """Return a new array with sub-arrays along an axis deleted."""
+    # Track original type for subclass preservation
+    wrap = None
+    if not isinstance(arr, ndarray):
+        if hasattr(type(arr), '__mro__') and hasattr(type(arr), 'view'):
+            wrap = type(arr)
+
     arr = asarray(arr)
+
+    # Validate axis type
+    if axis is not None and not isinstance(axis, int):
+        try:
+            axis = int(axis)
+        except (TypeError, ValueError):
+            raise TypeError(
+                "axis must be an integer, not {}".format(type(axis).__name__)
+            )
+
     if axis is None:
         arr = arr.flatten()
         axis = 0
+    elif arr.ndim == 0:
+        raise AxisError(
+            "Axis {} is out of bounds for array of dimension 0".format(axis)
+        )
+
     n = arr.shape[axis]
-    # Normalize obj to a list of indices
-    if isinstance(obj, int):
-        indices_to_del = [obj if obj >= 0 else n + obj]
-    elif isinstance(obj, (list, tuple)):
-        indices_to_del = [i if i >= 0 else n + i for i in obj]
+    _obj_dtype = str(obj.dtype) if isinstance(obj, ndarray) else ''
+
+    # Parse obj into a list of integer indices to delete
+    if isinstance(obj, slice):
+        del_indices = list(_builtin_range(*obj.indices(n)))
+    elif isinstance(obj, bool):
+        raise ValueError(
+            "in the future, boolean array-likes will be handled as a "
+            "boolean array index"
+        )
     elif isinstance(obj, ndarray):
-        indices_to_del = [int(obj[i]) for i in range(len(obj))]
-        indices_to_del = [i if i >= 0 else n + i for i in indices_to_del]
+        if 'float' in _obj_dtype or 'complex' in _obj_dtype:
+            raise IndexError(
+                "arrays used as indices must be of integer (or boolean) type"
+            )
+        if _obj_dtype == 'object' or 'timedelta' in _obj_dtype or 'datetime' in _obj_dtype:
+            raise IndexError(
+                "only integers, slices (`:`), ellipsis (`...`), "
+                "numpy.newaxis (`None`) and integer or boolean arrays are "
+                "valid indices"
+            )
+        flat_list = obj.flatten().tolist()
+        if _obj_dtype == 'bool':
+            if len(flat_list) != n:
+                raise ValueError(
+                    "boolean index did not match indexed array along "
+                    "dimension {}; dimension is {} but corresponding boolean "
+                    "dimension is {}".format(axis, n, len(flat_list))
+                )
+            del_indices = [i for i, v in enumerate(flat_list) if v]
+        else:
+            del_indices = []
+            for x in flat_list:
+                i = int(x)
+                if i < -n or i >= n:
+                    raise IndexError(
+                        "index {} is out of bounds for axis {} with size "
+                        "{}".format(i, axis, n)
+                    )
+                del_indices.append(i)
+    elif isinstance(obj, (list, tuple)):
+        if len(obj) == 0:
+            del_indices = []
+        elif all(isinstance(x, bool) for x in obj):
+            if len(obj) != n:
+                raise ValueError(
+                    "boolean index did not match indexed array along "
+                    "dimension {}; dimension is {} but corresponding boolean "
+                    "dimension is {}".format(axis, n, len(obj))
+                )
+            del_indices = [i for i, v in enumerate(obj) if v]
+        else:
+            del_indices = []
+            for x in obj:
+                i = int(x)
+                if i < -n or i >= n:
+                    raise IndexError(
+                        "index {} is out of bounds for axis {} with size "
+                        "{}".format(i, axis, n)
+                    )
+                del_indices.append(i)
+    elif isinstance(obj, int):
+        if obj < -n or obj >= n:
+            raise IndexError(
+                "index {} is out of bounds for axis {} with size {}".format(
+                    obj, axis, n
+                )
+            )
+        del_indices = [obj]
     else:
-        indices_to_del = [int(obj)]
-    del_set = set(indices_to_del)
-    keep = [i for i in range(n) if i not in del_set]
-    if not keep:
-        # All deleted - return empty
+        try:
+            i = int(obj)
+            if i < -n or i >= n:
+                raise IndexError(
+                    "index {} is out of bounds for axis {} with size {}".format(
+                        i, axis, n
+                    )
+                )
+            del_indices = [i]
+        except (TypeError, ValueError):
+            raise IndexError(
+                "only integers, slices (`:`), ellipsis (`...`), "
+                "numpy.newaxis (`None`) and integer or boolean arrays are "
+                "valid indices"
+            )
+
+    # Normalize negative indices and build keep list
+    del_set = set(i if i >= 0 else n + i for i in del_indices)
+    keep = [i for i in _builtin_range(n) if i not in del_set]
+
+    # Build result by selecting kept slices along axis and concatenating
+    if len(keep) == 0:
         new_shape = list(arr.shape)
         new_shape[axis] = 0
-        return array([])
-    # Build result by selecting kept indices along axis
-    if arr.ndim == 1:
-        result = [float(arr[i]) for i in keep]
-        return array(result)
+        result = zeros(new_shape, dtype=str(arr.dtype))
     else:
-        if axis == 0:
-            # For multi-dimensional, concatenate slices along axis 0
-            slices = []
-            for i in keep:
-                slices.append(arr[i])
-            if slices:
-                rows = []
-                for s in slices:
-                    if s.ndim == 0:
-                        rows.append([float(s)])
-                    else:
-                        rows.append([float(s[j]) for j in range(len(s))])
-                return array(rows)
-            return array([])
-        else:
-            # For non-zero axis: transpose so target axis is first,
-            # delete along axis 0, then transpose back
-            # Build axis permutation: move target axis to front
-            ndim = arr.ndim
-            perm = [axis] + [i for i in range(ndim) if i != axis]
-            inv_perm = [0] * ndim
-            for i, p in enumerate(perm):
-                inv_perm[p] = i
-            t = transpose(arr, perm)
-            t_del = delete(t, obj, axis=0)
-            return transpose(t_del, inv_perm)
+        parts = []
+        for i in keep:
+            sl = [slice(None)] * arr.ndim
+            sl[axis] = slice(i, i + 1)
+            parts.append(arr[tuple(sl)])
+        result = concatenate(parts, axis=axis)
+
+    if wrap is not None:
+        try:
+            result = result.view(wrap)
+        except Exception:
+            pass
+
+    return result
 
 
 def insert(arr, obj, values, axis=None):
@@ -1718,22 +1853,135 @@ def select(condlist, choicelist, default=0):
     """Return array drawn from elements in choicelist, depending on conditions."""
     if len(condlist) != len(choicelist):
         raise ValueError("condlist and choicelist must be the same length")
+    if len(condlist) == 0:
+        raise ValueError("select with an empty condition list is not possible")
     condlist = [asarray(c) for c in condlist]
+    # Validate all conditions are bool dtype
+    for cond in condlist:
+        if str(cond.dtype) not in ('bool',):
+            raise TypeError(
+                "condlist must be a list of bool arrays")
     choicelist = [asarray(c) for c in choicelist]
-    # Determine output shape from first array
-    shape = condlist[0].shape
-    n = condlist[0].size
-    result = [float(default)] * n
+    # Determine output shape by broadcasting all arrays together
+    def _bcast_shapes(s1, s2):
+        """Compute broadcast shape of two shape tuples."""
+        if len(s1) < len(s2):
+            s1 = (1,) * (len(s2) - len(s1)) + s1
+        elif len(s2) < len(s1):
+            s2 = (1,) * (len(s1) - len(s2)) + s2
+        out = []
+        for a_dim, b_dim in zip(s1, s2):
+            if a_dim == 1:
+                out.append(b_dim)
+            elif b_dim == 1:
+                out.append(a_dim)
+            elif a_dim == b_dim:
+                out.append(a_dim)
+            else:
+                raise ValueError("shape mismatch")
+        return tuple(out)
+    all_arrays = condlist + choicelist
+    out_shape = condlist[0].shape
+    for arr in all_arrays[1:]:
+        try:
+            out_shape = _bcast_shapes(out_shape, arr.shape)
+        except Exception:
+            pass
+    # Determine output dtype
+    _is_complex = isinstance(default, complex)
+    for ch in choicelist:
+        if 'complex' in str(ch.dtype):
+            _is_complex = True
+    if _is_complex:
+        _default_val = complex(default) if not isinstance(default, complex) else default
+        out_dtype = 'complex128'
+    elif isinstance(default, float) or any('float' in str(ch.dtype) for ch in choicelist):
+        _default_val = float(default)
+        out_dtype = 'float64'
+    else:
+        try:
+            _default_val = float(default)
+        except (TypeError, ValueError):
+            _default_val = 0.0
+        out_dtype = None
+        for ch in choicelist:
+            _dt = str(ch.dtype)
+            if 'int' in _dt or 'float' in _dt:
+                out_dtype = _dt
+                break
+        if out_dtype is None:
+            out_dtype = 'float64'
+    # Build result by broadcasting conditions and choices
+    # Start with default value broadcast to output shape
+    _size = 1
+    for s in out_shape:
+        _size *= s
+    if _is_complex:
+        _re = _default_val.real
+        _im = _default_val.imag
+        result_re = [_re] * _size
+        result_im = [_im] * _size
+    else:
+        result_flat = [float(_default_val)] * _size
+    # Broadcast each array to out_shape
+    def _broadcast_to_flat(arr, shape):
+        """Broadcast arr to shape and return flat list."""
+        if arr.shape == shape:
+            return arr.flatten().tolist()
+        # Simple broadcast: expand dimensions
+        _arr = arr
+        while _arr.ndim < len(shape):
+            _arr = _arr.reshape([1] + list(_arr.shape))
+        return broadcast_to(_arr, shape).flatten().tolist()
+    def _broadcast_cond_flat(cond, shape):
+        """Broadcast boolean cond to flat list of ints."""
+        if cond.shape == shape:
+            vals = cond.flatten().tolist()
+        elif cond.size == 1:
+            v = cond.flatten().tolist()[0]
+            _size2 = 1
+            for s in shape:
+                _size2 *= s
+            vals = [v] * _size2
+        else:
+            _c = cond
+            while _c.ndim < len(shape):
+                _c = _c.reshape([1] + list(_c.shape))
+            _c = broadcast_to(_c, shape)
+            vals = _c.flatten().tolist()
+        return [bool(v) for v in vals]
     # Process in reverse order so first matching condition wins
-    for i in range(len(condlist) - 1, -1, -1):
-        cond = condlist[i].flatten()
-        choice = choicelist[i].flatten()
-        for j in range(n):
-            if float(cond[j]) != 0.0:
-                result[j] = float(choice[j])
-    result_arr = array(result)
-    if len(shape) > 1:
-        result_arr = result_arr.reshape(list(shape))
+    for i in _builtin_range(len(condlist) - 1, -1, -1):
+        cond_flat = _broadcast_cond_flat(condlist[i], out_shape)
+        choice_flat = _broadcast_to_flat(choicelist[i], out_shape)
+        if _is_complex:
+            ch_arr = choicelist[i]
+            if 'complex' in str(ch_arr.dtype):
+                ch_re = ch_arr.real
+                ch_im = ch_arr.imag
+                if not isinstance(ch_re, ndarray):
+                    ch_re = array([float(ch_re)])
+                    ch_im = array([float(ch_im)])
+                ch_re_flat = _broadcast_to_flat(ch_re, out_shape)
+                ch_im_flat = _broadcast_to_flat(ch_im, out_shape)
+            else:
+                ch_re_flat = choice_flat
+                ch_im_flat = [0.0] * len(choice_flat)
+            for j in _builtin_range(_size):
+                if cond_flat[j]:
+                    result_re[j] = ch_re_flat[j]
+                    result_im[j] = ch_im_flat[j]
+        else:
+            for j in _builtin_range(_size):
+                if cond_flat[j]:
+                    result_flat[j] = float(choice_flat[j])
+    if _is_complex:
+        _vals = [complex(result_re[j], result_im[j]) for j in _builtin_range(_size)]
+        result_arr = array(_vals, dtype='complex128')
+    else:
+        result_arr = array(result_flat, dtype=out_dtype)
+    if len(out_shape) != 1 or out_shape != result_arr.shape:
+        result_arr = result_arr.reshape(list(out_shape))
     return result_arr
 
 
@@ -2095,27 +2343,126 @@ def broadcast_shapes(*shapes):
     return tuple(result)
 
 
-def trim_zeros(filt, trim='fb'):
-    """Trim leading and/or trailing zeros from a 1-D array."""
-    filt = asarray(filt)
-    data = filt.tolist()
-    first = 0
-    last = len(data)
-    if 'f' in trim or 'F' in trim:
-        for i in _builtin_range(len(data)):
-            if data[i] != 0:
-                first = i
-                break
+def _trim_zeros_is_nonzero(v):
+    """Check if a value is nonzero; handles complex-as-tuple from RustPython."""
+    if isinstance(v, tuple) and len(v) == 2:
+        return v[0] != 0 or v[1] != 0
+    try:
+        return bool(v != 0)
+    except (TypeError, ValueError):
+        return bool(v)
+
+
+def _trim_zeros_slice_nonzero(sl):
+    """Return True if sl (scalar or array) has any nonzero element."""
+    if isinstance(sl, ndarray):
+        if sl.ndim == 0:
+            v = sl[()]
+            if v is None:
+                return False
+            return _trim_zeros_is_nonzero(v)
+        for v in sl.flatten().tolist():
+            if _trim_zeros_is_nonzero(v):
+                return True
+        return False
+    # Plain Python scalar (int, float, complex, tuple, etc.)
+    return _trim_zeros_is_nonzero(sl)
+
+
+def trim_zeros(filt, trim='fb', axis=None):
+    """Trim leading and/or trailing zeros from a 1-D array or along axes."""
+    # Validate trim parameter
+    for ch in trim:
+        if ch not in ('f', 'F', 'b', 'B'):
+            raise ValueError(
+                "unexpected character(s) in `trim`: '{}'".format(trim)
+            )
+    if not trim:
+        raise ValueError(
+            "unexpected character(s) in `trim`: '{}'".format(trim)
+        )
+
+    is_list = isinstance(filt, list)
+    arr = asarray(filt)
+
+    if arr.ndim == 0:
+        return arr
+
+    trim_lower = trim.lower()
+
+    # Determine axes to process
+    if axis is None:
+        axes = tuple(_builtin_range(arr.ndim))
+    elif isinstance(axis, int):
+        axes = (arr.ndim + axis if axis < 0 else axis,)
+    else:
+        ax_list = list(axis)
+        if not ax_list:
+            # Empty axis tuple → no trimming
+            if is_list and arr.ndim == 1:
+                return arr.tolist()
+            return arr
+        axes = tuple(arr.ndim + ax if ax < 0 else ax for ax in ax_list)
+
+    slices = [slice(None)] * arr.ndim
+
+    for ax in axes:
+        n = arr.shape[ax]
+        start = 0
+        end = n
+
+        if 'f' in trim_lower:
+            found = False
+            for i in _builtin_range(n):
+                idx = tuple(i if dim == ax else slice(None)
+                            for dim in _builtin_range(arr.ndim))
+                sl = arr[idx]
+                # Check if any element is nonzero (sl may be scalar or array)
+                nonz = _trim_zeros_slice_nonzero(sl)
+                if nonz:
+                    start = i
+                    found = True
+                    break
+            if not found:
+                start = n
+
+        if 'b' in trim_lower:
+            found = False
+            for i in _builtin_range(n - 1, -1, -1):
+                idx = tuple(i if dim == ax else slice(None)
+                            for dim in _builtin_range(arr.ndim))
+                sl = arr[idx]
+                nonz = _trim_zeros_slice_nonzero(sl)
+                if nonz:
+                    end = i + 1
+                    found = True
+                    break
+            if not found:
+                end = start  # make this axis empty
+
+        if start >= end:
+            slices[ax] = slice(0, 0)
         else:
-            return array([])
-    if 'b' in trim or 'B' in trim:
-        for i in _builtin_range(len(data) - 1, -1, -1):
-            if data[i] != 0:
-                last = i + 1
-                break
-        else:
-            return array([])
-    return array(data[first:last])
+            slices[ax] = slice(start, end)
+
+    from ._helpers import _ObjectArray as _ObjArr
+    if isinstance(arr, _ObjArr):
+        # _ObjectArray doesn't support tuple indexing with slices
+        # Extract elements individually for 1D case
+        if arr.ndim == 1:
+            sl = slices[0]
+            start_i = sl.start if sl.start is not None else 0
+            stop_i = sl.stop if sl.stop is not None else arr.shape[0]
+            elems = [arr[i] for i in _builtin_range(start_i, stop_i)]
+            result = asarray(elems)
+            if is_list:
+                return elems
+            return result
+    result = arr[tuple(slices)]
+
+    if is_list and arr.ndim == 1:
+        return result.tolist()
+    return result
 
 
 # ---------------------------------------------------------------------------

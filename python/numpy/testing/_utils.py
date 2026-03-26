@@ -360,7 +360,7 @@ def _isnan_safe(v):
 
 
 def assert_allclose(actual, desired, rtol=1e-7, atol=0, equal_nan=True,
-                    err_msg="", verbose=True):
+                    err_msg="", verbose=True, strict=None):
     actual = numpy.asarray(actual)
     desired = numpy.asarray(desired)
     a_vals = _as_list(actual) if _is_array_like(actual) else [float(actual)]
