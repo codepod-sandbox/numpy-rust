@@ -402,6 +402,105 @@ impl NdArray {
         }
     }
 
+    /// Set the real part of the array from `real_values` (in-place replacement).
+    pub fn set_real(&mut self, real_values: &NdArray) {
+        match &self.data {
+            ArrayData::Complex64(a) => {
+                let re = real_values.astype(crate::DType::Float32);
+                if let ArrayData::Float32(re_arr) = &re.data {
+                    let re_vec: Vec<f32> = re_arr.iter().copied().collect();
+                    let new_data: Vec<_> = if re_vec.len() == 1 {
+                        a.iter()
+                            .map(|c| num_complex::Complex::new(re_vec[0], c.im))
+                            .collect()
+                    } else {
+                        a.iter()
+                            .zip(re_vec.iter())
+                            .map(|(c, &r)| num_complex::Complex::new(r, c.im))
+                            .collect()
+                    };
+                    let shape = ndarray::IxDyn(a.shape());
+                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
+                        self.data = ArrayData::Complex64(new_arr.into_shared());
+                    }
+                }
+            }
+            ArrayData::Complex128(a) => {
+                let re = real_values.astype(crate::DType::Float64);
+                if let ArrayData::Float64(re_arr) = &re.data {
+                    let re_vec: Vec<f64> = re_arr.iter().copied().collect();
+                    let new_data: Vec<_> = if re_vec.len() == 1 {
+                        a.iter()
+                            .map(|c| num_complex::Complex::new(re_vec[0], c.im))
+                            .collect()
+                    } else {
+                        a.iter()
+                            .zip(re_vec.iter())
+                            .map(|(c, &r)| num_complex::Complex::new(r, c.im))
+                            .collect()
+                    };
+                    let shape = ndarray::IxDyn(a.shape());
+                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
+                        self.data = ArrayData::Complex128(new_arr.into_shared());
+                    }
+                }
+            }
+            _ => {
+                // For real arrays: set_real copies values in
+                *self = real_values.astype(self.dtype());
+            }
+        }
+    }
+
+    /// Set the imaginary part of the array from `imag_values` (in-place replacement).
+    pub fn set_imag(&mut self, imag_values: &NdArray) {
+        match &self.data {
+            ArrayData::Complex64(a) => {
+                let im = imag_values.astype(crate::DType::Float32);
+                if let ArrayData::Float32(im_arr) = &im.data {
+                    let im_vec: Vec<f32> = im_arr.iter().copied().collect();
+                    let new_data: Vec<_> = if im_vec.len() == 1 {
+                        a.iter()
+                            .map(|c| num_complex::Complex::new(c.re, im_vec[0]))
+                            .collect()
+                    } else {
+                        a.iter()
+                            .zip(im_vec.iter())
+                            .map(|(c, &v)| num_complex::Complex::new(c.re, v))
+                            .collect()
+                    };
+                    let shape = ndarray::IxDyn(a.shape());
+                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
+                        self.data = ArrayData::Complex64(new_arr.into_shared());
+                    }
+                }
+            }
+            ArrayData::Complex128(a) => {
+                let im = imag_values.astype(crate::DType::Float64);
+                if let ArrayData::Float64(im_arr) = &im.data {
+                    let im_vec: Vec<f64> = im_arr.iter().copied().collect();
+                    let new_data: Vec<_> = if im_vec.len() == 1 {
+                        a.iter()
+                            .map(|c| num_complex::Complex::new(c.re, im_vec[0]))
+                            .collect()
+                    } else {
+                        a.iter()
+                            .zip(im_vec.iter())
+                            .map(|(c, &v)| num_complex::Complex::new(c.re, v))
+                            .collect()
+                    };
+                    let shape = ndarray::IxDyn(a.shape());
+                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
+                        self.data = ArrayData::Complex128(new_arr.into_shared());
+                    }
+                }
+            }
+            _ => {
+                // For real arrays: setting imag is a no-op (values are all zero)
+            }
+        }
+    }
+
     /// Return the complex conjugate.
     pub fn conj(&self) -> NdArray {
         match &self.data {

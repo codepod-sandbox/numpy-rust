@@ -204,6 +204,31 @@ class _ObjectArray:
             vals = [v.real if isinstance(v, complex) else float(v) for v in self._data]
             return _native.array(vals).reshape(list(self._shape)) if len(self._shape) > 1 else _native.array(vals)
         return self
+    @real.setter
+    def real(self, value):
+        """Set real part of each element."""
+        dt = str(self._dtype) if hasattr(self._dtype, '__str__') else self._dtype
+        if 'complex' in str(dt):
+            if hasattr(value, 'flat'):
+                reals = [float(v) for v in value.flat]
+            elif hasattr(value, '__iter__'):
+                reals = [float(v) for v in value]
+            else:
+                reals = [float(value)] * len(self._data)
+            for i, r in enumerate(reals):
+                v = self._data[i]
+                im = v.imag if isinstance(v, complex) else 0.0
+                self._data[i] = complex(r, im)
+        else:
+            # For real arrays, copy values in
+            if hasattr(value, 'flat'):
+                vals = [float(v) for v in value.flat]
+            elif hasattr(value, '__iter__'):
+                vals = [float(v) for v in value]
+            else:
+                vals = [float(value)] * len(self._data)
+            for i, v in enumerate(vals):
+                self._data[i] = v
     @property
     def imag(self):
         """Return imaginary part of each element."""
@@ -213,6 +238,21 @@ class _ObjectArray:
             return _native.array(vals).reshape(list(self._shape)) if len(self._shape) > 1 else _native.array(vals)
         import numpy as _np
         return _np.zeros(self._shape)
+    @imag.setter
+    def imag(self, value):
+        """Set imaginary part of each element."""
+        dt = str(self._dtype) if hasattr(self._dtype, '__str__') else self._dtype
+        if 'complex' in str(dt):
+            if hasattr(value, 'flat'):
+                imags = [float(v) for v in value.flat]
+            elif hasattr(value, '__iter__'):
+                imags = [float(v) for v in value]
+            else:
+                imags = [float(value)] * len(self._data)
+            for i, im in enumerate(imags):
+                v = self._data[i]
+                re = v.real if isinstance(v, complex) else float(v)
+                self._data[i] = complex(re, im)
     @property
     def flags(self): return _ArrayFlags(c_contiguous=not self._is_fortran, f_contiguous=self._is_fortran)
     @property

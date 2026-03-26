@@ -1032,26 +1032,368 @@ def _apply_keepdims(result, a, axis):
     return result.reshape(shape)
 
 
+def _normalize_axis_arg(axis, ndim):
+    """Normalize a single integer axis, raising AxisError if out of bounds."""
+    from ._helpers import AxisError
+    ax = int(axis)
+    if ax < 0:
+        ax += ndim
+    if ax < 0 or ax >= ndim:
+        raise AxisError("axis {} is out of bounds for array of dimension {}".format(int(axis), ndim))
+    return ax
+
+
+def _normalize_axes_tuple(axis, ndim):
+    """Normalize a tuple/list of axes, raising AxisError/ValueError on invalid."""
+    from ._helpers import AxisError
+    axes = []
+    for ax in axis:
+        ax = int(ax)
+        if ax < 0:
+            ax += ndim
+        if ax < 0 or ax >= ndim:
+            raise AxisError("axis {} is out of bounds for array of dimension {}".format(int(ax - (ndim if ax >= 0 else 0)), ndim))
+        if ax in axes:
+            raise ValueError("duplicate value in 'axis'")
+        axes.append(ax)
+    return axes
+
+
+_VALID_QUANTILE_METHODS = frozenset([
+    'inverted_cdf', 'averaged_inverted_cdf', 'closest_observation',
+    'interpolated_inverted_cdf', 'hazen', 'weibull', 'linear',
+    'median_unbiased', 'normal_unbiased', 'nearest', 'lower', 'higher',
+    'midpoint'
+])
+
+
+def _compute_quantile_1d(sorted_vals, q, method='linear'):
+    """Compute quantile on a sorted 1D list (NaN already at end) using H&F method."""
+    _max = _builtin_max
+    _min = _builtin_min
+    n = len(sorted_vals)
+    if n == 0:
+        return float('nan')
+    # Check for NaN (sorted to end)
+    n_nan = sum(1 for v in sorted_vals if v != v)
+    n_valid = n - n_nan
+    if n_valid == 0:
+        return float('nan')
+    # NaN propagation: if any NaN exists → result is NaN
+    if n_nan > 0:
+        return float('nan')
+
+    if q <= 0.0:
+        return float(sorted_vals[0])
+    if q >= 1.0:
+        return float(sorted_vals[n_valid - 1])
+
+    def _lerp(a, b, t):
+        return a + t * (b - a)
+
+    def _interp_at(h):
+        h = _max(0.0, _min(h, n_valid - 1.0))
+        lo = int(_math.floor(h))
+        hi = int(_math.ceil(h))
+        if lo == hi:
+            return float(sorted_vals[lo])
+        return _lerp(float(sorted_vals[lo]), float(sorted_vals[hi]), h - lo)
+
+    if method == 'linear':
+        return _interp_at(q * (n_valid - 1))
+    elif method == 'lower':
+        i = _min(int(_math.floor(q * (n_valid - 1))), n_valid - 1)
+        return float(sorted_vals[i])
+    elif method == 'higher':
+        i = _min(int(_math.ceil(q * (n_valid - 1))), n_valid - 1)
+        return float(sorted_vals[i])
+    elif method == 'midpoint':
+        lo = int(_math.floor(q * (n_valid - 1)))
+        hi = _min(int(_math.ceil(q * (n_valid - 1))), n_valid - 1)
+        return _lerp(float(sorted_vals[lo]), float(sorted_vals[hi]), 0.5)
+    elif method == 'nearest':
+        h = q * (n_valid - 1)
+        lo = int(_math.floor(h))
+        hi = int(_math.ceil(h))
+        frac = h - lo
+        if frac < 0.5:
+            return float(sorted_vals[lo])
+        elif frac > 0.5:
+            return float(sorted_vals[hi])
+        else:  # tie: round half to even
+            return float(sorted_vals[lo if lo % 2 == 0 else hi])
+    elif method == 'inverted_cdf':
+        # H&F 1: 0-indexed = ceil(q*n) - 1
+        idx = _max(int(_math.ceil(q * n_valid)) - 1, 0)
+        return float(sorted_vals[_min(idx, n_valid - 1)])
+    elif method == 'averaged_inverted_cdf':
+        # H&F 2: if q*n integer → average neighbors; else like inverted_cdf
+        h = q * n_valid
+        h_floor = _math.floor(h)
+        if h != h_floor:
+            idx = _max(int(_math.ceil(h)) - 1, 0)
+            return float(sorted_vals[_min(idx, n_valid - 1)])
+        else:
+            i_lo = _max(int(h) - 1, 0)
+            i_hi = _min(int(h), n_valid - 1)
+            return _lerp(float(sorted_vals[i_lo]), float(sorted_vals[i_hi]), 0.5)
+    elif method == 'closest_observation':
+        # H&F 3: round half to odd
+        h = q * n_valid
+        h_floor = int(_math.floor(h))
+        frac = h - h_floor
+        if frac == 0.5:
+            # prefer odd (1-indexed): h_floor is the lower 1-indexed value
+            if h_floor % 2 == 1:  # h_floor is odd (1-indexed) → 0-indexed = h_floor-1
+                idx = h_floor - 1
+            else:
+                idx = h_floor
+        else:
+            idx = _max(int(_math.ceil(h)) - 1, 0)
+        return float(sorted_vals[_min(_max(idx, 0), n_valid - 1)])
+    elif method == 'interpolated_inverted_cdf':
+        # H&F 4: h (0-indexed) = q*n - 1
+        return _interp_at(_max(q * n_valid - 1, 0))
+    elif method == 'hazen':
+        # H&F 5: h (0-indexed) = q*n - 0.5
+        return _interp_at(_max(q * n_valid - 0.5, 0))
+    elif method == 'weibull':
+        # H&F 6: h (0-indexed) = q*(n+1) - 1
+        return _interp_at(_max(_min(q * (n_valid + 1) - 1, n_valid - 1), 0))
+    elif method == 'median_unbiased':
+        # H&F 8: h (0-indexed) = q*(n+1/3)+1/3 - 1
+        return _interp_at(_max(_min(q * (n_valid + 1.0 / 3.0) + 1.0 / 3.0 - 1, n_valid - 1), 0))
+    elif method == 'normal_unbiased':
+        # H&F 9: h (0-indexed) = q*(n+0.25)+0.375 - 1
+        return _interp_at(_max(_min(q * (n_valid + 0.25) + 0.375 - 1, n_valid - 1), 0))
+    else:
+        raise ValueError("method '{}' is not recognized".format(method))
+
+
+def _quantile_along_axis(a, q, axis, method):
+    """Apply quantile computation along a single axis using Python implementation."""
+    from ._manipulation import moveaxis
+    import numpy as _np
+
+    n = a.shape[axis]
+    # Move reduction axis to last position
+    a_moved = moveaxis(a, axis, -1)
+    orig_shape = a_moved.shape[:-1]
+    # Flatten all but last axis
+    if len(orig_shape) == 0:
+        # Result is scalar
+        vals = a_moved.flatten().tolist()
+        vals.sort(key=lambda x: (x != x, x))  # NaN to end
+        return asarray(_compute_quantile_1d(vals, q, method))
+    a_2d = a_moved.reshape(-1, n)
+    m = a_2d.shape[0]
+    results = []
+    for i in range(m):
+        row = a_2d[i].tolist()
+        row.sort(key=lambda x: (x != x, x))  # NaN to end
+        results.append(_compute_quantile_1d(row, q, method))
+    return asarray(results).reshape(orig_shape)
+
+
+def _quantile_tuple_axis(a, q, axes, method):
+    """Apply quantile over multiple axes by collapsing them first."""
+    from ._manipulation import moveaxis
+    import numpy as _np
+
+    # Move all reduction axes to the end, then reshape to 2D
+    ndim = a.ndim
+    axes_sorted = sorted(axes)
+    other_axes = [i for i in range(ndim) if i not in axes_sorted]
+    # Transpose: other_axes first, then reduction axes
+    perm = other_axes + axes_sorted
+    a_t = a.transpose(perm)
+    result_shape = tuple(a.shape[ax] for ax in other_axes)
+    n_reduce = 1
+    for ax in axes_sorted:
+        n_reduce *= a.shape[ax]
+
+    if len(result_shape) == 0:
+        vals = a_t.flatten().tolist()
+        vals.sort(key=lambda x: (x != x, x))
+        return asarray(_compute_quantile_1d(vals, q, method))
+
+    a_2d = a_t.reshape(-1, n_reduce)
+    m = a_2d.shape[0]
+    results = []
+    for i in range(m):
+        row = a_2d[i].tolist()
+        row.sort(key=lambda x: (x != x, x))
+        results.append(_compute_quantile_1d(row, q, method))
+    return asarray(results).reshape(result_shape)
+
+
+_NON_INTERPOLATING_METHODS = frozenset([
+    'inverted_cdf', 'closest_observation', 'lower', 'higher', 'nearest'
+])
+
+
+def _get_quantile_result_dtype(a, method):
+    """Get the expected output dtype for quantile given input array and method."""
+    if method in _NON_INTERPOLATING_METHODS:
+        # Preserve input dtype (object → float64)
+        if a.dtype.kind == 'O':
+            return 'float64'
+        return str(a.dtype)
+    else:
+        # Interpolating methods:
+        # integer → float64; float → same; object → float64
+        if a.dtype.kind in ('i', 'u'):
+            return 'float64'
+        elif a.dtype.kind == 'f':
+            return str(a.dtype)
+        else:
+            return 'float64'
+
+
+def _quantile_core(a, q, axis, method, keepdims, orig_axis_for_keepdims=None):
+    """Core quantile computation dispatching to Rust (linear) or Python (other methods).
+    axis can be None, int (already normalized), or list of ints (already normalized)."""
+    import numpy as _np
+
+    is_tuple_axis = isinstance(axis, list)
+
+    if method == 'linear':
+        # Use Rust backend for linear interpolation (fast path)
+        if is_tuple_axis:
+            # Reduce one axis at a time in descending order
+            axes_sorted = sorted(axis, reverse=True)
+            result = a
+            for ax in axes_sorted:
+                result = _native.quantile(result, q, ax)
+                if not isinstance(result, ndarray):
+                    result = asarray(result)
+        else:
+            result = _native.quantile(a, q, axis)
+            if not isinstance(result, ndarray):
+                result = asarray(result)
+        # Apply NaN mask for float arrays (Rust doesn't always propagate NaN)
+        if a.dtype.kind == 'f':
+            result = _apply_nan_mask(result, a, axis)
+    else:
+        # Python implementation for non-linear methods
+        if is_tuple_axis:
+            result = _quantile_tuple_axis(a, q, axis, method)
+        elif axis is None:
+            vals = a.flatten().tolist()
+            vals.sort(key=lambda x: (x != x, x))
+            result = asarray(_compute_quantile_1d(vals, q, method))
+        else:
+            result = _quantile_along_axis(a, q, axis, method)
+
+    # Apply result dtype based on method and input dtype
+    target_dtype = _get_quantile_result_dtype(a, method)
+    if not isinstance(result, ndarray):
+        result = asarray(result)
+    try:
+        result = result.astype(target_dtype)
+    except Exception:
+        pass
+
+    if keepdims:
+        kd_axis = orig_axis_for_keepdims if orig_axis_for_keepdims is not None else axis
+        result = _apply_keepdims(result, a, kd_axis)
+    return result
+
+
+def _apply_nan_mask(result, a, axis):
+    """Set result positions to NaN where the input slice has any NaN."""
+    import numpy as _np
+    if a.dtype.kind != 'f':
+        return result
+    # Compute where NaN exists in input
+    isnan_a = _np.isnan(a)
+    has_nan = _np.any(isnan_a, axis=axis if not isinstance(axis, list) else tuple(axis))
+    if not isinstance(has_nan, ndarray):
+        has_nan = asarray(has_nan)
+    # If has_nan is a scalar
+    if has_nan.ndim == 0:
+        if bool(has_nan.tolist()):
+            if isinstance(result, ndarray):
+                if result.ndim == 0:
+                    return asarray(float('nan'))
+                return full(result.shape, float('nan'))
+            return asarray(float('nan'))
+        return result
+    # has_nan is an array: set NaN where True
+    if not isinstance(result, ndarray):
+        result = asarray(result)
+    result_f = result.astype('float64')
+    # Use fancy indexing to set NaN
+    has_nan_list = has_nan.flatten().tolist()
+    res_list = result_f.flatten().tolist()
+    out_list = [float('nan') if hn else rv for hn, rv in zip(has_nan_list, res_list)]
+    return asarray(out_list).reshape(result_f.shape)
+
+
+def _validate_q_range(q, is_percentile=False):
+    """Validate q is in valid range. Raises ValueError if out of bounds."""
+    lo, hi = (0.0, 100.0) if is_percentile else (0.0, 1.0)
+    if hasattr(q, '__iter__') and not isinstance(q, ndarray):
+        for qi in q:
+            qi = float(qi)
+            if qi < lo or qi > hi:
+                raise ValueError("quantile must be in the range [0, 1]" if not is_percentile
+                                  else "percentile must be in the range [0, 100]")
+    elif isinstance(q, ndarray):
+        q_list = q.flatten().tolist()
+        for qi in q_list:
+            qi = float(qi)
+            if qi < lo or qi > hi:
+                raise ValueError("quantile must be in the range [0, 1]" if not is_percentile
+                                  else "percentile must be in the range [0, 100]")
+    else:
+        qi = float(q)
+        if qi < lo or qi > hi:
+            raise ValueError("quantile must be in the range [0, 1]" if not is_percentile
+                              else "percentile must be in the range [0, 100]")
+
+
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
     import numpy as _np
+
+    # Validate method
+    if method not in _VALID_QUANTILE_METHODS:
+        raise ValueError("method '{}' is not recognized".format(method))
+
+    # Validate q range
+    _validate_q_range(q, is_percentile=False)
+
+    # Normalize and validate axis
+    orig_axis = axis
+    if isinstance(axis, (list, tuple)):
+        axis = _normalize_axes_tuple(axis, a.ndim)  # returns list
+    elif axis is not None:
+        axis = _normalize_axis_arg(axis, a.ndim)
+
     if isinstance(q, (list, tuple, ndarray)):
         q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
         q_flat = q_arr.flatten().tolist()
-        results = [_native.quantile(a, float(qi), axis) for qi in q_flat]
+        results = [_quantile_core(a, float(qi), axis, method, keepdims=False) for qi in q_flat]
         results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
         if keepdims:
-            results = [_apply_keepdims(r, a, axis) for r in results]
+            results = [_apply_keepdims(r, a, orig_axis) for r in results]
         stacked = _np.stack(results)
         if q_arr.ndim > 1:
             stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
+        if out is not None:
+            out[...] = stacked
+            return out
         return stacked
-    result = _native.quantile(a, float(q), axis)
-    if keepdims:
-        result = _apply_keepdims(result if isinstance(result, ndarray) else asarray(result), a, axis)
+
+    result = _quantile_core(a, float(q), axis, method, keepdims=keepdims,
+                            orig_axis_for_keepdims=orig_axis)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
+    if out is not None:
+        out[...] = result
+        return out
     return result
 
 
@@ -1059,33 +1401,94 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
     if not isinstance(a, ndarray):
         a = array(a)
     import numpy as _np
+
+    # Validate method
+    if method not in _VALID_QUANTILE_METHODS:
+        raise ValueError("method '{}' is not recognized".format(method))
+
+    # Validate q range (0-100)
+    _validate_q_range(q, is_percentile=True)
+
+    # Normalize and validate axis
+    orig_axis = axis
+    if isinstance(axis, (list, tuple)):
+        axis = _normalize_axes_tuple(axis, a.ndim)
+    elif axis is not None:
+        axis = _normalize_axis_arg(axis, a.ndim)
+
+    # Convert percentile to quantile
     if isinstance(q, (list, tuple, ndarray)):
         q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        q_flat = q_arr.flatten().tolist()
-        results = [_native.percentile(a, float(qi), axis) for qi in q_flat]
+        q_flat = [float(qi) / 100.0 for qi in q_arr.flatten().tolist()]
+        results = [_quantile_core(a, qi, axis, method, keepdims=False) for qi in q_flat]
         results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
         if keepdims:
-            results = [_apply_keepdims(r, a, axis) for r in results]
+            results = [_apply_keepdims(r, a, orig_axis) for r in results]
         stacked = _np.stack(results)
         if q_arr.ndim > 1:
             stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
+        if out is not None:
+            out[...] = stacked
+            return out
         return stacked
-    result = _native.percentile(a, float(q), axis)
-    if keepdims:
-        result = _apply_keepdims(result if isinstance(result, ndarray) else asarray(result), a, axis)
+
+    q_val = float(q) / 100.0
+    result = _quantile_core(a, q_val, axis, method, keepdims=keepdims,
+                            orig_axis_for_keepdims=orig_axis)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
+    if out is not None:
+        out[...] = result
+        return out
     return result
 
 
 def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
+    import warnings as _warnings
     if not isinstance(a, ndarray):
         a = array(a)
-    result = _native.quantile(a, 0.5, axis)
-    if keepdims and axis is not None:
-        result = _apply_keepdims(result, a, axis)
+
+    # Normalize axis
+    orig_axis = axis
+    if isinstance(axis, (list, tuple)):
+        axis = _normalize_axes_tuple(axis, a.ndim)
+    elif axis is not None:
+        axis = _normalize_axis_arg(axis, a.ndim)
+
+    # Handle empty array
+    if a.size == 0:
+        _warnings.warn("Mean of empty slice", RuntimeWarning, stacklevel=2)
+        _warnings.warn("invalid value encountered in scalar divide", RuntimeWarning, stacklevel=2)
+        if axis is None or isinstance(axis, list):
+            result = asarray(float('nan'))
+        else:
+            res_shape = list(a.shape)
+            res_shape.pop(int(axis))
+            result = full(tuple(res_shape), float('nan')) if tuple(res_shape) else asarray(float('nan'))
+        if keepdims:
+            result = _apply_keepdims(result, a, orig_axis)
+        if out is not None:
+            out[...] = result
+            return out
+        return result
+
+    try:
+        result = _quantile_core(a, 0.5, axis, 'linear', keepdims=keepdims,
+                                orig_axis_for_keepdims=orig_axis)
+    except Exception as e:
+        if 'empty' in str(e).lower():
+            _warnings.warn("Mean of empty slice", RuntimeWarning, stacklevel=2)
+            result = asarray(float('nan'))
+            if keepdims:
+                result = _apply_keepdims(result, a, orig_axis)
+        else:
+            raise
+
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
+    if out is not None:
+        out[...] = result
+        return out
     return result
 
 

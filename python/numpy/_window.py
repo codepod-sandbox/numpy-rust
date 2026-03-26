@@ -21,15 +21,12 @@ def bartlett(M):
         return array([], dtype='float64')
     if M == 1:
         return array([1.0])
-    n = arange(0, M)
-    mid = (M - 1) / 2.0
-    vals = []
-    for i in range(M):
-        v = float(n[i])
-        if v <= mid:
-            vals.append(2.0 * v / (M - 1))
-        else:
-            vals.append(2.0 - 2.0 * v / (M - 1))
+    # Use min(i, M-1-i) to guarantee exact symmetry
+    vals = [0.0] * M
+    for i in range((M + 1) // 2):
+        v = 2.0 * i / (M - 1)
+        vals[i] = v
+        vals[M - 1 - i] = v
     return array(vals)
 
 
@@ -40,9 +37,11 @@ def blackman(M):
         return array([], dtype='float64')
     if M == 1:
         return array([1.0])
-    vals = []
-    for i in range(M):
-        vals.append(0.42 - 0.5 * _math.cos(2.0 * _pi * i / (M - 1)) + 0.08 * _math.cos(4.0 * _pi * i / (M - 1)))
+    vals = [0.0] * M
+    for i in range((M + 1) // 2):
+        v = 0.42 - 0.5 * _math.cos(2.0 * _pi * i / (M - 1)) + 0.08 * _math.cos(4.0 * _pi * i / (M - 1))
+        vals[i] = v
+        vals[M - 1 - i] = v
     return array(vals)
 
 
@@ -53,9 +52,11 @@ def hamming(M):
         return array([], dtype='float64')
     if M == 1:
         return array([1.0])
-    vals = []
-    for i in range(M):
-        vals.append(0.54 - 0.46 * _math.cos(2.0 * _pi * i / (M - 1)))
+    vals = [0.0] * M
+    for i in range((M + 1) // 2):
+        v = 0.54 - 0.46 * _math.cos(2.0 * _pi * i / (M - 1))
+        vals[i] = v
+        vals[M - 1 - i] = v
     return array(vals)
 
 
@@ -66,9 +67,11 @@ def hanning(M):
         return array([], dtype='float64')
     if M == 1:
         return array([1.0])
-    vals = []
-    for i in range(M):
-        vals.append(0.5 - 0.5 * _math.cos(2.0 * _pi * i / (M - 1)))
+    vals = [0.0] * M
+    for i in range((M + 1) // 2):
+        v = 0.5 - 0.5 * _math.cos(2.0 * _pi * i / (M - 1))
+        vals[i] = v
+        vals[M - 1 - i] = v
     return array(vals)
 
 
@@ -91,8 +94,11 @@ def kaiser(M, beta):
         return val
 
     alpha = (M - 1) / 2.0
-    vals = []
-    for i in range(M):
+    i0_beta = _i0(float(beta))
+    vals = [0.0] * M
+    for i in range((M + 1) // 2):
         arg = beta * _math.sqrt(1.0 - ((i - alpha) / alpha) ** 2)
-        vals.append(_i0(arg) / _i0(beta))
+        v = _i0(float(arg)) / i0_beta
+        vals[i] = v
+        vals[M - 1 - i] = v
     return array(vals)

@@ -1808,6 +1808,21 @@ random.bytes = _random_bytes
 random.RandomState = _RandomState
 
 
+_native_random_normal = random.normal
+
+
+def _random_normal(loc=0.0, scale=1.0, size=None):
+    """Draw random samples from a normal (Gaussian) distribution."""
+    if size is None:
+        return float(_native_random_normal(float(loc), float(scale), (1,))[0])
+    if isinstance(size, int):
+        size = (size,)
+    return _native_random_normal(float(loc), float(scale), size)
+
+
+random.normal = _random_normal
+
+
 # ---------------------------------------------------------------------------
 # Bit generator stubs (needed for numpy.random.MT19937, etc.)
 # ---------------------------------------------------------------------------

@@ -1802,31 +1802,80 @@ def delete(arr, obj, axis=None):
 
 def insert(arr, obj, values, axis=None):
     """Insert values along the given axis before the given indices."""
+    from ._helpers import AxisError
     arr = asarray(arr)
+
+    # Validate axis / handle axis=None
     if axis is None:
-        arr = arr.flatten()
+        if arr.ndim == 0:
+            arr = arr.flatten()
+        else:
+            arr = arr.flatten()
         axis = 0
+    else:
+        if not isinstance(axis, int):
+            raise TypeError("an integer is required")
+        if arr.ndim == 0:
+            raise AxisError("axis {} is out of bounds for array of dimension 0".format(axis))
+        if axis < 0:
+            axis = arr.ndim + axis
+        if axis < 0 or axis >= arr.ndim:
+            raise AxisError("axis {} is out of bounds for array of dimension {}".format(axis, arr.ndim))
 
     ndims = arr.ndim
-    if axis < 0:
-        axis = ndims + axis
     n = arr.shape[axis]
 
-    # Normalize obj to a sorted list of (original_index, normalized_index) pairs
-    if isinstance(obj, (list, tuple)) or (isinstance(obj, ndarray) and obj.ndim > 0):
-        obj_list = [int(x) for x in (obj if not isinstance(obj, ndarray) else obj.flatten().tolist())]
-        # Normalize negative indices
-        obj_list = [i if i >= 0 else n + i for i in obj_list]
-        multi = True
+    # Normalize obj to a list of integer indices
+    scalar_obj = False
+    if isinstance(obj, slice):
+        indices = list(_builtin_range(*obj.indices(n)))
+        scalar_obj = False
+    elif isinstance(obj, ndarray) and obj.dtype.kind == 'b':
+        # Boolean array: use nonzero
+        indices = [i for i in _builtin_range(obj.size) if bool(obj.flat[i])]
+    elif isinstance(obj, ndarray) and obj.dtype.kind == 'f':
+        raise IndexError("index {} is not a valid index for insertion".format(obj))
+    elif isinstance(obj, ndarray) and obj.size == 0:
+        indices = []
+    elif isinstance(obj, (list, tuple)):
+        # Check for floats
+        for v in obj:
+            if isinstance(v, float) and not hasattr(v, 'dtype'):
+                pass  # Python floats from float() are ok if int-valued? Actually no.
+        obj_raw = [v for v in obj]
+        # Convert to ints (numpy behavior: accept only integers)
+        indices = [int(v) for v in obj_raw]
+    elif isinstance(obj, ndarray) and obj.ndim > 0:
+        if obj.dtype.kind == 'f':
+            raise IndexError("index {} is not a valid index for insertion".format(obj))
+        indices = [int(v) for v in obj.flatten().tolist()]
+    elif isinstance(obj, ndarray) and obj.ndim == 0:
+        val = float(obj[()])
+        if obj.dtype.kind == 'f':
+            raise IndexError("index {} is not a valid index for insertion".format(obj))
+        scalar_obj = True
+        indices = [int(val)]
     else:
-        single_idx = obj if isinstance(obj, int) else int(obj)
-        if single_idx < 0:
-            single_idx = n + single_idx
-        obj_list = [single_idx]
-        multi = False
+        # Scalar
+        if isinstance(obj, float):
+            raise IndexError("index {} is not a valid index for insertion".format(obj))
+        scalar_obj = True
+        indices = [int(obj)]
 
-    # Move target axis to front (needed to compute sub_shape before building val_list)
-    perm = [axis] + [i for i in range(ndims) if i != axis]
+    # Normalize negative indices and check bounds
+    norm_indices = []
+    for idx in indices:
+        if idx < 0:
+            idx = n + idx
+        if idx < 0 or idx > n:
+            raise IndexError("index {} is out of bounds for axis {} with size {}".format(idx, axis, n))
+        norm_indices.append(idx)
+
+    if not norm_indices:
+        return arr.copy()
+
+    # Move target axis to front
+    perm = [axis] + [i for i in _builtin_range(ndims) if i != axis]
     inv_perm = [0] * ndims
     for i, p in enumerate(perm):
         inv_perm[p] = i
@@ -1836,13 +1885,17 @@ def insert(arr, obj, values, axis=None):
     for s in sub_shape:
         row_size *= s
 
-    # Normalize values: for single-index insertion, values may be an array matching sub_shape
     val_arr = asarray(values) if not isinstance(values, ndarray) else values
 
     def _make_val_row(v):
         """Create a sub-array row from value v (scalar or array)."""
         if not sub_shape:
-            return asarray(float(v) if not hasattr(v, 'shape') else v.flat[0])
+            if hasattr(v, '__float__'):
+                try:
+                    return asarray(float(v))
+                except Exception:
+                    return asarray(v)
+            return asarray(v)
         v_arr = asarray(v)
         if v_arr.ndim == 0:
             flat_row = [float(v_arr[()])] * row_size
@@ -1852,24 +1905,53 @@ def insert(arr, obj, values, axis=None):
             flat_row = [float(v_arr.flat[0])] * row_size
         return array(flat_row).reshape(list(sub_shape))
 
+    # Determine val_list matching norm_indices
     if val_arr.ndim == 0:
-        val_list = [val_arr[()] for _ in obj_list]
-    elif not multi and val_arr.size == row_size:
-        # Single insertion index + values array matching sub_shape: use as the row
+        # Scalar value: use for all insertions
+        val_list = [val_arr[()] for _ in norm_indices]
+    elif len(norm_indices) == 1 and val_arr.size == row_size:
+        # Single insertion with values matching sub_shape exactly (for scalar obj or 1-elem array obj)
         val_list = [val_arr]
+    elif scalar_obj:
+        # Scalar obj with multiple values: insert all values at the same position
+        if row_size == 1:
+            val_flat = val_arr.flatten()
+            val_list = list(val_flat.tolist())
+            norm_indices = [norm_indices[0]] * len(val_list)
+        else:
+            # ND case: each element of values (along first dim) is a separate insertion
+            val_flat = val_arr.flatten()
+            n_inserts = val_flat.size // row_size
+            if n_inserts == 0:
+                n_inserts = 1
+            val_list = []
+            for i in _builtin_range(n_inserts):
+                chunk = val_flat[i * row_size:(i + 1) * row_size]
+                val_list.append(chunk)
+            norm_indices = [norm_indices[0]] * len(val_list)
     else:
+        # Array obj: one value per index (with broadcasting for scalars)
         val_flat = val_arr.flatten()
         if val_flat.size == 1:
-            val_list = [val_flat[0] for _ in obj_list]
+            val_list = [val_flat[0] for _ in norm_indices]
+        elif val_flat.size == len(norm_indices):
+            val_list = [val_flat[i] for i in _builtin_range(len(norm_indices))]
+        elif len(norm_indices) == 1:
+            # 1 index, multiple values: treat each value as a separate scalar insertion
+            if row_size == 1:
+                val_list = list(val_flat.tolist())
+                norm_indices = [norm_indices[0]] * len(val_list)
+            else:
+                val_list = [val_arr]
         else:
-            val_list = [val_flat[i] for i in range(len(obj_list))]
+            val_list = [val_flat[i] for i in _builtin_range(len(norm_indices))]
 
-    # Build sorted insertion pairs: (original_index, value)
-    inserts = sorted(zip(obj_list, val_list), key=lambda x: x[0])
+    # Build sorted insertion pairs: (index, value)
+    inserts = sorted(zip(norm_indices, val_list), key=lambda x: x[0])
 
     all_rows = []
     ins_pos = 0
-    for orig_i in range(n):
+    for orig_i in _builtin_range(n):
         while ins_pos < len(inserts) and inserts[ins_pos][0] == orig_i:
             all_rows.append(_make_val_row(inserts[ins_pos][1]))
             ins_pos += 1
@@ -1882,13 +1964,14 @@ def insert(arr, obj, values, axis=None):
     flat = []
     for row in all_rows:
         r = asarray(row).flatten()
-        for j in range(row_size if row_size > 0 else 1):
-            flat.append(float(r[j]) if r.ndim > 0 else float(r[()]))
+        _rsize = r.size if r.size > 0 else (row_size if row_size > 0 else 1)
+        for j in _builtin_range(_rsize):
+            if r.ndim > 0:
+                flat.append(float(r[j]))
+            else:
+                flat.append(float(r[()]))
     new_shape = [len(all_rows)] + list(sub_shape)
-    if flat:
-        result = array(flat).reshape(new_shape)
-    else:
-        result = array(flat).reshape(new_shape)
+    result = array(flat).reshape(new_shape) if flat else array([]).reshape(new_shape)
     return transpose(result, inv_perm)
 
 
@@ -3262,25 +3345,135 @@ def vander(x, N=None, increasing=False):
 
 def interp(x, xp, fp, left=None, right=None, period=None):
     import _numpy_native as _nat
-    if not isinstance(x, ndarray):
-        x = array(x)
-    if not isinstance(xp, ndarray):
-        xp = array(xp)
-    if not isinstance(fp, ndarray):
-        fp = array(fp)
-    result = _nat.interp(x, xp, fp)
-    if left is not None or right is not None:
-        x_arr = asarray(x).flatten().tolist()
-        xp_arr = asarray(xp).flatten().tolist()
-        result_list = result.flatten().tolist()
-        xp_min = _builtin_min(xp_arr)
-        xp_max = _builtin_max(xp_arr)
-        for i, xi in enumerate(x_arr):
-            if left is not None and xi < xp_min:
-                result_list[i] = float(left)
-            if right is not None and xi > xp_max:
-                result_list[i] = float(right)
-        result = array(result_list)
+    import math as _mth
+
+    # Normalize inputs
+    xp_arr = asarray(xp, dtype='float64').flatten()
+    fp_arr = asarray(fp)
+
+    # Validation
+    if xp_arr.size == 0:
+        raise ValueError("xp and fp must be of at least size 1")
+    if xp_arr.size != fp_arr.size:
+        raise ValueError("xp and fp must have same length")
+    if period is not None:
+        period = float(period)
+        if period == 0:
+            raise ValueError("period must be a non-zero value")
+
+    # Determine if output should be scalar
+    x_in = x
+    x_arr = asarray(x_in)
+    x_is_scalar = (x_arr.ndim == 0) or (not isinstance(x_in, ndarray) and not isinstance(x_in, (list, tuple)))
+    x_shape = x_arr.shape
+    x_flat = asarray(x_arr, dtype='float64').flatten()
+
+    # Check for complex fp
+    fp_dtype = str(fp_arr.dtype)
+    is_complex = 'complex' in fp_dtype
+
+    def _complex_real(v):
+        if isinstance(v, tuple): return float(v[0])
+        return float(v.real) if hasattr(v, 'real') else float(v)
+
+    def _complex_imag(v):
+        if isinstance(v, tuple): return float(v[1])
+        return float(v.imag) if hasattr(v, 'imag') else 0.0
+
+    if period is not None:
+        # Sort xp/fp by xp modulo period, then interpolate
+        x_flat_list = x_flat.tolist()
+        xp_list = xp_arr.tolist()
+        if is_complex:
+            fp_re = [_complex_real(v) for v in fp_arr.flatten().tolist()]
+            fp_im = [_complex_imag(v) for v in fp_arr.flatten().tolist()]
+        else:
+            fp_list = [float(v) for v in fp_arr.flatten().tolist()]
+
+        # Normalize x to [0, period), then sort and add wrap-around points
+        # Build sorted (xp_norm, fp) pairs
+        pairs = list(zip(xp_list, fp_re if is_complex else fp_list))
+        if is_complex:
+            pairs_im = list(zip(xp_list, fp_im))
+        # Normalize xp to [0, period)
+        pairs = [((xpi % period), fpi) for xpi, fpi in pairs]
+        pairs.sort(key=lambda kv: kv[0])
+        if is_complex:
+            pairs_im = [((xpi % period), fpi) for xpi, fpi in pairs_im]
+            pairs_im.sort(key=lambda kv: kv[0])
+
+        # Add wrap-around: append first point at period and last point at -period
+        pairs = [(pairs[-1][0] - period, pairs[-1][1])] + pairs + [(pairs[0][0] + period, pairs[0][1])]
+        if is_complex:
+            pairs_im = [(pairs_im[-1][0] - period, pairs_im[-1][1])] + pairs_im + [(pairs_im[0][0] + period, pairs_im[0][1])]
+
+        xp_sorted = array([p[0] for p in pairs])
+        fp_sorted = array([p[1] for p in pairs])
+        x_norm = array([(xi % period) for xi in x_flat_list])
+
+        result_re = _nat.interp(x_norm, xp_sorted, fp_sorted)
+        if is_complex:
+            xp_sorted_im = array([p[0] for p in pairs_im])
+            fp_sorted_im = array([p[1] for p in pairs_im])
+            result_im = _nat.interp(x_norm, xp_sorted_im, fp_sorted_im)
+            result = result_re + result_im * 1j
+        else:
+            result = result_re
+    elif is_complex:
+        # Interpolate real and imag parts separately
+        fp_re_arr = asarray([_complex_real(v) for v in fp_arr.flatten().tolist()])
+        fp_im_arr = asarray([_complex_imag(v) for v in fp_arr.flatten().tolist()])
+        result_re = _nat.interp(x_flat, xp_arr, fp_re_arr)
+        result_im = _nat.interp(x_flat, xp_arr, fp_im_arr)
+        result = result_re + result_im * 1j
+
+        # Apply left/right for complex
+        if left is not None or right is not None:
+            x_list = x_flat.tolist()
+            xp_list = xp_arr.tolist()
+            xp_min = _builtin_min(xp_list)
+            xp_max = _builtin_max(xp_list)
+            result_list = result.flatten().tolist()
+            for i, xi in enumerate(x_list):
+                if left is not None and xi < xp_min:
+                    v = left
+                    result_list[i] = complex(v.real if hasattr(v, 'real') else float(v),
+                                             v.imag if hasattr(v, 'imag') else 0.0)
+                if right is not None and xi > xp_max:
+                    v = right
+                    result_list[i] = complex(v.real if hasattr(v, 'real') else float(v),
+                                             v.imag if hasattr(v, 'imag') else 0.0)
+            result = array(result_list)
+    else:
+        result = _nat.interp(x_flat, xp_arr, fp_arr)
+        if left is not None or right is not None:
+            x_list = x_flat.tolist()
+            xp_list = xp_arr.tolist()
+            result_list = result.flatten().tolist()
+            xp_min = _builtin_min(xp_list)
+            xp_max = _builtin_max(xp_list)
+            for i, xi in enumerate(x_list):
+                if left is not None and xi < xp_min:
+                    result_list[i] = float(left)
+                if right is not None and xi > xp_max:
+                    result_list[i] = float(right)
+            result = array(result_list)
+
+    # Restore original shape
+    if x_is_scalar:
+        # Return scalar float64 (or complex if complex fp)
+        v = result.flatten()[0] if result.size > 0 else 0.0
+        if is_complex:
+            # v might be a tuple (re, im) from native complex array
+            if isinstance(v, tuple):
+                return complex(v[0], v[1])
+            return complex(v)
+        return float(v)
+    if x_shape != result.shape:
+        try:
+            result = result.reshape(x_shape)
+        except Exception:
+            pass
     return result
 
 

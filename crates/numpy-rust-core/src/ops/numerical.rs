@@ -37,15 +37,29 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
 
     let mut result = Vec::with_capacity(x_arr.len());
     for &xi in x_arr.iter() {
+        // NaN input → NaN output
+        if xi.is_nan() {
+            result.push(f64::NAN);
+            continue;
+        }
         // Binary search: partition_point returns first index where xp[i] >= xi
         // (i.e., first index not satisfying v < xi)
         let idx = xp_slice.partition_point(|&v| v < xi);
         if idx == 0 {
-            // xi <= xp_slice[0] (or xp_slice[0] is NaN) → left boundary
-            result.push(fp_slice[0]);
+            // xi <= xp_slice[0] → left boundary; NaN in xp[0] gives NaN
+            if xp_slice[0].is_nan() {
+                result.push(f64::NAN);
+            } else {
+                result.push(fp_slice[0]);
+            }
         } else if idx == xp_slice.len() {
-            // xi >= xp_slice[last] → right boundary
-            result.push(*fp_slice.last().unwrap());
+            // xi >= xp_slice[last] → right boundary; NaN in xp[-1] gives NaN
+            let last = xp_slice.len() - 1;
+            if xp_slice[last].is_nan() {
+                result.push(f64::NAN);
+            } else {
+                result.push(*fp_slice.last().unwrap());
+            }
         } else {
             let lo = idx - 1;
             let hi = idx;
@@ -54,12 +68,34 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
                 result.push(f64::NAN);
                 continue;
             }
+            // Check for NaN in fp values
+            if fp_slice[lo].is_nan() || fp_slice[hi].is_nan() {
+                result.push(f64::NAN);
+                continue;
+            }
+            // Exact match at hi: return fp[hi] directly to avoid inf-inf = NaN
+            if xi == xp_slice[hi] {
+                result.push(fp_slice[hi]);
+                continue;
+            }
             let denom = xp_slice[hi] - xp_slice[lo];
             if denom == 0.0 {
                 result.push(fp_slice[lo]);
+            } else if denom.is_infinite() {
+                // Infinite bracket width: handle -inf/+inf xp boundaries
+                // If xp[lo] = -inf and xp[hi] is finite: t → 1
+                // If xp[lo] is finite and xp[hi] = +inf: t → 0
+                if xp_slice[lo].is_infinite() && xp_slice[lo] < 0.0 {
+                    // xp[lo] = -inf: result approaches fp[hi]
+                    result.push(fp_slice[hi]);
+                } else {
+                    // xp[hi] = +inf: result stays at fp[lo]
+                    result.push(fp_slice[lo]);
+                }
             } else {
                 let t = (xi - xp_slice[lo]) / denom;
-                result.push(fp_slice[lo] + t * (fp_slice[hi] - fp_slice[lo]));
+                let v = fp_slice[lo] + t * (fp_slice[hi] - fp_slice[lo]);
+                result.push(v);
             }
         }
     }

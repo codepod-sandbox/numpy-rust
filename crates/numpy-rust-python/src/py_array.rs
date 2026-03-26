@@ -745,9 +745,23 @@ impl PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().real())
     }
 
+    #[pygetset(setter)]
+    fn set_real(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+        let val_arr = obj_to_ndarray(&value, vm)?;
+        self.data.write().unwrap().set_real(&val_arr);
+        Ok(())
+    }
+
     #[pygetset]
     fn imag(&self) -> PyNdArray {
         PyNdArray::from_core(self.data.read().unwrap().imag())
+    }
+
+    #[pygetset(setter)]
+    fn set_imag(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+        let val_arr = obj_to_ndarray(&value, vm)?;
+        self.data.write().unwrap().set_imag(&val_arr);
+        Ok(())
     }
 
     #[pygetset(name = "__array_interface__")]
