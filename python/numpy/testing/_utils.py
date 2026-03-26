@@ -220,6 +220,26 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
         if isinstance(desired, (list, tuple)):
             desired = numpy.asarray(desired)
         if actual.shape != desired.shape:
+            # Allow broadcast when one is 0-d (scalar) — compare element-wise
+            if actual.ndim == 0 or desired.ndim == 0:
+                if actual.ndim == 0:
+                    scalar_val = actual.tolist() if hasattr(actual, 'tolist') else actual
+                    d_vals = _as_list(desired)
+                    for i, d in enumerate(d_vals):
+                        if not _val_equal(scalar_val, d):
+                            raise AssertionError(
+                                f"Arrays not equal at index {i}: {scalar_val} != {d}. {err_msg}"
+                            )
+                    return
+                else:
+                    scalar_val = desired.tolist() if hasattr(desired, 'tolist') else desired
+                    a_vals = _as_list(actual)
+                    for i, a in enumerate(a_vals):
+                        if not _val_equal(a, scalar_val):
+                            raise AssertionError(
+                                f"Arrays not equal at index {i}: {a} != {scalar_val}. {err_msg}"
+                            )
+                    return
             # Allow shape mismatch when either has 0 elements (vacuously true)
             if not (actual.size == 0 or desired.size == 0) or strict:
                 raise AssertionError(

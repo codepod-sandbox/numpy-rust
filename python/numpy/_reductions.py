@@ -1257,28 +1257,20 @@ def _quantile_core(a, q, axis, method, keepdims, orig_axis_for_keepdims=None):
 
     is_tuple_axis = isinstance(axis, list)
 
-    if method == 'linear':
+    if is_tuple_axis:
+        # Tuple axis: must collapse all axes at once (sequential reduction is wrong)
+        result = _quantile_tuple_axis(a, q, axis, method)
+    elif method == 'linear':
         # Use Rust backend for linear interpolation (fast path)
-        if is_tuple_axis:
-            # Reduce one axis at a time in descending order
-            axes_sorted = sorted(axis, reverse=True)
-            result = a
-            for ax in axes_sorted:
-                result = _native.quantile(result, q, ax)
-                if not isinstance(result, ndarray):
-                    result = asarray(result)
-        else:
-            result = _native.quantile(a, q, axis)
-            if not isinstance(result, ndarray):
-                result = asarray(result)
+        result = _native.quantile(a, q, axis)
+        if not isinstance(result, ndarray):
+            result = asarray(result)
         # Apply NaN mask for float arrays (Rust doesn't always propagate NaN)
         if a.dtype.kind == 'f':
             result = _apply_nan_mask(result, a, axis)
     else:
         # Python implementation for non-linear methods
-        if is_tuple_axis:
-            result = _quantile_tuple_axis(a, q, axis, method)
-        elif axis is None:
+        if axis is None:
             vals = a.flatten().tolist()
             vals.sort(key=lambda x: (x != x, x))
             result = asarray(_compute_quantile_1d(vals, q, method))
@@ -1332,25 +1324,22 @@ def _apply_nan_mask(result, a, axis):
 
 def _validate_q_range(q, is_percentile=False):
     """Validate q is in valid range. Raises ValueError if out of bounds."""
+    import math as _m
     lo, hi = (0.0, 100.0) if is_percentile else (0.0, 1.0)
+    label = "Percentiles" if is_percentile else "Quantiles"
+    rng = "[0, 100]" if is_percentile else "[0, 1]"
+    def _check(v):
+        v = float(v)
+        if _m.isnan(v) or v < lo or v > hi:
+            raise ValueError("{} must be in the range {}".format(label, rng))
     if hasattr(q, '__iter__') and not isinstance(q, ndarray):
         for qi in q:
-            qi = float(qi)
-            if qi < lo or qi > hi:
-                raise ValueError("quantile must be in the range [0, 1]" if not is_percentile
-                                  else "percentile must be in the range [0, 100]")
+            _check(qi)
     elif isinstance(q, ndarray):
-        q_list = q.flatten().tolist()
-        for qi in q_list:
-            qi = float(qi)
-            if qi < lo or qi > hi:
-                raise ValueError("quantile must be in the range [0, 1]" if not is_percentile
-                                  else "percentile must be in the range [0, 100]")
+        for qi in q.flatten().tolist():
+            _check(qi)
     else:
-        qi = float(q)
-        if qi < lo or qi > hi:
-            raise ValueError("quantile must be in the range [0, 1]" if not is_percentile
-                              else "percentile must be in the range [0, 100]")
+        _check(q)
 
 
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
@@ -1364,6 +1353,11 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
 
     # Validate q range
     _validate_q_range(q, is_percentile=False)
+
+    # Validate weights
+    if weights is not None:
+        if method != 'inverted_cdf':
+            raise ValueError("Only method 'inverted_cdf' supports weights")
 
     # Normalize and validate axis
     orig_axis = axis
@@ -1380,6 +1374,12 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
         if keepdims:
             results = [_apply_keepdims(r, a, orig_axis) for r in results]
         stacked = _np.stack(results)
+        # Preserve result dtype
+        _tdtype = _get_quantile_result_dtype(a, method)
+        try:
+            stacked = stacked.astype(_tdtype)
+        except Exception:
+            pass
         if q_arr.ndim > 1:
             stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
         if out is not None:
@@ -1409,6 +1409,11 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
     # Validate q range (0-100)
     _validate_q_range(q, is_percentile=True)
 
+    # Validate weights
+    if weights is not None:
+        if method != 'inverted_cdf':
+            raise ValueError("Only method 'inverted_cdf' supports weights")
+
     # Normalize and validate axis
     orig_axis = axis
     if isinstance(axis, (list, tuple)):
@@ -1425,6 +1430,11 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
         if keepdims:
             results = [_apply_keepdims(r, a, orig_axis) for r in results]
         stacked = _np.stack(results)
+        _tdtype = _get_quantile_result_dtype(a, method)
+        try:
+            stacked = stacked.astype(_tdtype)
+        except Exception:
+            pass
         if q_arr.ndim > 1:
             stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
         if out is not None:
