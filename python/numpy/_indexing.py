@@ -71,9 +71,35 @@ def trace(a, offset=0, axis1=0, axis2=1):
     return d.sum()
 
 
-def meshgrid(*xi, indexing='xy'):
+def meshgrid(*xi, indexing='xy', sparse=False, copy=True):
+    if indexing not in ('xy', 'ij'):
+        raise ValueError("Valid values for `indexing` are 'xy' and 'ij'.")
     arrays = [a if isinstance(a, ndarray) else array(a) for a in xi]
-    return _native.meshgrid(arrays, indexing)
+    if not arrays:
+        return []
+    result = _native.meshgrid(arrays, indexing)
+    if sparse:
+        # Return sparse (open) meshgrids: each output has shape with 1s except along its own axis
+        ndim = len(arrays)
+        sparse_result = []
+        for i, a in enumerate(arrays):
+            shape = [1] * ndim
+            if indexing == 'xy' and ndim >= 2:
+                if i == 0:
+                    shape[1] = len(a.flatten())
+                elif i == 1:
+                    shape[0] = len(a.flatten())
+                else:
+                    shape[i] = len(a.flatten())
+            else:
+                shape[i] = len(a.flatten())
+            sparse_result.append(a.flatten().reshape(shape))
+        if copy:
+            sparse_result = [s.copy() for s in sparse_result]
+        return sparse_result
+    if copy:
+        result = [r.copy() for r in result]
+    return result
 
 
 def indices(dimensions, dtype=None, sparse=False):

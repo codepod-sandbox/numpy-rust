@@ -1102,15 +1102,10 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn sum(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        keepdims: vm::function::OptionalArg<bool>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn sum(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims(&args, vm);
         let inner = self.data.read().unwrap();
-        let kd = keepdims.unwrap_or(false);
-        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
         match ax {
             AxisArg::None => inner.sum(None, kd),
             AxisArg::Single(a) => inner.sum(Some(a), kd),
@@ -1121,15 +1116,10 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn mean(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        keepdims: vm::function::OptionalArg<bool>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn mean(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims(&args, vm);
         let inner = self.data.read().unwrap();
-        let kd = keepdims.unwrap_or(false);
-        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
         match ax {
             AxisArg::None => inner.mean(None, kd),
             AxisArg::Single(a) => inner.mean(Some(a), kd),
@@ -1140,15 +1130,10 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn min(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        keepdims: vm::function::OptionalArg<bool>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn min(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims(&args, vm);
         let inner = self.data.read().unwrap();
-        let kd = keepdims.unwrap_or(false);
-        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
         match ax {
             AxisArg::None => inner.min(None, kd),
             AxisArg::Single(a) => inner.min(Some(a), kd),
@@ -1159,15 +1144,10 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn max(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        keepdims: vm::function::OptionalArg<bool>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn max(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims(&args, vm);
         let inner = self.data.read().unwrap();
-        let kd = keepdims.unwrap_or(false);
-        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
         match ax {
             AxisArg::None => inner.max(None, kd),
             AxisArg::Single(a) => inner.max(Some(a), kd),
@@ -1178,17 +1158,17 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn std(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        ddof: vm::function::OptionalArg<usize>,
-        keepdims: vm::function::OptionalArg<bool>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn std(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims_at(&args, vm, 2);
         let inner = self.data.read().unwrap();
-        let dd = ddof.unwrap_or(0);
-        let kd = keepdims.unwrap_or(false);
-        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        let dd = args
+            .args
+            .get(1)
+            .cloned()
+            .or_else(|| args.kwargs.get("ddof").cloned())
+            .and_then(|v| v.try_into_value::<usize>(vm).ok())
+            .unwrap_or(0);
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
         match ax {
             AxisArg::None => inner.std(None, dd, kd),
             AxisArg::Single(a) => inner.std(Some(a), dd, kd),
@@ -1199,17 +1179,17 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn var(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        ddof: vm::function::OptionalArg<usize>,
-        keepdims: vm::function::OptionalArg<bool>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn var(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims_at(&args, vm, 2);
         let inner = self.data.read().unwrap();
-        let dd = ddof.unwrap_or(0);
-        let kd = keepdims.unwrap_or(false);
-        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        let dd = args
+            .args
+            .get(1)
+            .cloned()
+            .or_else(|| args.kwargs.get("ddof").cloned())
+            .and_then(|v| v.try_into_value::<usize>(vm).ok())
+            .unwrap_or(0);
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
         match ax {
             AxisArg::None => inner.var(None, dd, kd),
             AxisArg::Single(a) => inner.var(Some(a), dd, kd),
@@ -1706,15 +1686,10 @@ impl PyNdArray {
     // --- Product reduction ---
 
     #[pymethod]
-    fn prod(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        keepdims: vm::function::OptionalArg<bool>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
+    fn prod(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims(&args, vm);
         let inner = self.data.read().unwrap();
-        let kd = keepdims.unwrap_or(false);
-        let ax = parse_axis_arg(axis, inner.ndim(), vm)?;
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
         match ax {
             AxisArg::None => inner.prod(None, kd),
             AxisArg::Single(a) => inner.prod(Some(a), kd),
@@ -2505,15 +2480,26 @@ impl PyNdArray {
     // --- Tier 27 Group A methods ---
 
     #[pymethod]
-    fn ptp(
-        &self,
-        axis: vm::function::OptionalArg<PyObjectRef>,
-        vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+    fn ptp(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let axis_obj = args
+            .args
+            .first()
+            .cloned()
+            .or_else(|| args.kwargs.get("axis").cloned());
+        let axis_arg = if let Some(obj) = axis_obj {
+            vm::function::OptionalArg::Present(obj)
+        } else {
+            vm::function::OptionalArg::Missing
+        };
+        let kd = args
+            .kwargs
+            .get("keepdims")
+            .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+            .unwrap_or(false);
+        let ax = parse_optional_axis(axis_arg, vm)?;
         let inner = self.data.read().unwrap();
-        let max_val = inner.max(ax, false).map_err(|e| numpy_err(e, vm))?;
-        let min_val = inner.min(ax, false).map_err(|e| numpy_err(e, vm))?;
+        let max_val = inner.max(ax, kd).map_err(|e| numpy_err(e, vm))?;
+        let min_val = inner.min(ax, kd).map_err(|e| numpy_err(e, vm))?;
         let result = (&max_val - &min_val).map_err(|e| numpy_err(e, vm))?;
         Ok(ndarray_or_scalar(result, vm))
     }
@@ -4043,6 +4029,40 @@ fn py_obj_to_slice_arg(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Slice
         return Ok(SliceArg::Index(i as isize));
     }
     Err(vm.new_type_error("index must be an integer or slice".to_owned()))
+}
+
+/// Extract axis and keepdims from FuncArgs (supports both positional and keyword).
+/// `keepdims_pos` is the positional index for keepdims (typically 1 for sum/min/max, 2 for std/var).
+fn extract_axis_keepdims(
+    args: &vm::function::FuncArgs,
+    vm: &VirtualMachine,
+) -> (vm::function::OptionalArg<PyObjectRef>, bool) {
+    extract_axis_keepdims_at(args, vm, 1)
+}
+
+fn extract_axis_keepdims_at(
+    args: &vm::function::FuncArgs,
+    vm: &VirtualMachine,
+    keepdims_pos: usize,
+) -> (vm::function::OptionalArg<PyObjectRef>, bool) {
+    let axis_obj = args
+        .args
+        .first()
+        .cloned()
+        .or_else(|| args.kwargs.get("axis").cloned());
+    let kd = args
+        .kwargs
+        .get("keepdims")
+        .cloned()
+        .or_else(|| args.args.get(keepdims_pos).cloned())
+        .and_then(|v| v.try_into_value::<bool>(vm).ok())
+        .unwrap_or(false);
+    let axis_arg = if let Some(obj) = axis_obj {
+        vm::function::OptionalArg::Present(obj)
+    } else {
+        vm::function::OptionalArg::Missing
+    };
+    (axis_arg, kd)
 }
 
 /// Parse an optional axis argument (None means reduce all).
