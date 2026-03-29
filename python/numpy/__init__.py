@@ -41,7 +41,13 @@ class _ObjectArray:
     def all(self): return all(self._data)
     def any(self): return any(self._data)
     def __len__(self): return len(self._data)
-    def __getitem__(self, key): return self._data[key]
+    def __getitem__(self, key):
+        if isinstance(key, tuple):
+            result = self._data
+            for k in key:
+                result = result[k]
+            return result
+        return self._data[key]
     def __eq__(self, other):
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a == b for a, b in zip(self._data, other._data)], "bool")
@@ -325,17 +331,66 @@ def ones_like(a, dtype=None, order="K", subok=True, shape=None):
 def isnan(x):
     """Check for NaN element-wise."""
     if isinstance(x, ndarray):
-        return _native.isnan(x)
+        try:
+            return _native.isnan(x)
+        except TypeError:
+            # Object arrays: check element-wise
+            vals = x.tolist() if hasattr(x, 'tolist') else list(x)
+            result = []
+            for v in vals:
+                try:
+                    result.append(_math.isnan(float(v)))
+                except (TypeError, ValueError):
+                    result.append(False)
+            return array(result, dtype=bool)
+    if hasattr(x, '__iter__') and not isinstance(x, str):
+        return array([_math.isnan(float(v)) if not isinstance(v, str) else False for v in x], dtype=bool)
     return _math.isnan(x)
+
+
+def atleast_1d(*arys):
+    """Convert inputs to arrays with at least 1 dimension."""
+    result = []
+    for a in arys:
+        if isinstance(a, ndarray):
+            if len(a.shape) == 0:
+                result.append(a.reshape((1,)))
+            else:
+                result.append(a)
+        else:
+            result.append(array([a]))
+    if len(result) == 1:
+        return result[0]
+    return result
 
 def isfinite(x):
     if isinstance(x, ndarray):
-        return _native.isfinite(x)
+        try:
+            return _native.isfinite(x)
+        except TypeError:
+            vals = x.tolist() if hasattr(x, 'tolist') else list(x)
+            result = []
+            for v in vals:
+                try:
+                    result.append(_math.isfinite(float(v)))
+                except (TypeError, ValueError):
+                    result.append(False)
+            return array(result, dtype=bool)
     return _math.isfinite(x)
 
 def isinf(x):
     if isinstance(x, ndarray):
-        return _native.isinf(x)
+        try:
+            return _native.isinf(x)
+        except TypeError:
+            vals = x.tolist() if hasattr(x, 'tolist') else list(x)
+            result = []
+            for v in vals:
+                try:
+                    result.append(_math.isinf(float(v)))
+                except (TypeError, ValueError):
+                    result.append(False)
+            return array(result, dtype=bool)
     return _math.isinf(x)
 
 def isscalar(x):
@@ -633,6 +688,26 @@ def hstack(tup):
     return concatenate(tup, axis=1) if tup[0].ndim > 1 else concatenate(tup, axis=0)
 
 row_stack = vstack
+
+def column_stack(tup):
+    """Stack 1-D arrays as columns into a 2-D array."""
+    cols = []
+    for a in tup:
+        if isinstance(a, ndarray):
+            vals = a.tolist()
+            if a.ndim == 1:
+                cols.append(vals)
+            else:
+                # Flatten to column
+                flat = [row[0] if isinstance(row, list) else row for row in vals]
+                cols.append(flat)
+        elif hasattr(a, '__iter__'):
+            cols.append(list(a))
+        else:
+            cols.append([a])
+    n = len(cols[0]) if cols else 0
+    rows = [[float(cols[c][r]) for c in range(len(cols))] for r in range(n)]
+    return array(rows)
 
 def split(a, indices_or_sections, axis=0):
     return _native.split(a, indices_or_sections, axis)

@@ -34,28 +34,36 @@ def _as_list(arr):
 
 
 def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
-    if isinstance(actual, numpy.ndarray) and isinstance(desired, numpy.ndarray):
-        if actual.shape != desired.shape:
+    # Normalize both sides to lists for comparison if either is array-like
+    actual_is_arr = isinstance(actual, numpy.ndarray)
+    desired_is_arr = isinstance(desired, numpy.ndarray)
+    actual_is_iter = hasattr(actual, '__iter__') and not isinstance(actual, str)
+    desired_is_iter = hasattr(desired, '__iter__') and not isinstance(desired, str)
+
+    if actual_is_arr or desired_is_arr or (actual_is_iter and desired_is_iter):
+        if actual_is_arr:
+            a_vals = _as_list(actual)
+        elif actual_is_iter:
+            a_vals = list(actual)
+        else:
+            a_vals = [actual]
+        if desired_is_arr:
+            d_vals = _as_list(desired)
+        elif desired_is_iter:
+            d_vals = list(desired)
+        else:
+            d_vals = [desired]
+        if len(a_vals) != len(d_vals):
             raise AssertionError(
-                f"Shape mismatch: {actual.shape} vs {desired.shape}. {err_msg}"
+                f"Length mismatch: {len(a_vals)} vs {len(d_vals)}. {err_msg}"
             )
-        a_vals = _as_list(actual)
-        d_vals = _as_list(desired)
         for i, (a, d) in enumerate(zip(a_vals, d_vals)):
-            if a != d:
+            if float(a) != float(d):
                 raise AssertionError(
-                    f"Arrays not equal at index {i}: {a} != {d}. {err_msg}"
+                    f"Arrays not equal at index {i}: {a} != {d}.\n"
+                    f" actual: {actual}\n desired: {desired}\n{err_msg}"
                 )
         return
-    if isinstance(actual, numpy.ndarray) or isinstance(desired, numpy.ndarray):
-        # one is array, one is scalar-like
-        arr = actual if isinstance(actual, numpy.ndarray) else desired
-        scalar = desired if isinstance(actual, numpy.ndarray) else actual
-        vals = _as_list(arr)
-        if arr.size == 1:
-            if vals[0] != scalar:
-                raise AssertionError(f"{vals[0]} != {scalar}. {err_msg}")
-            return
     if actual != desired:
         raise AssertionError(
             f"Items not equal:\n actual: {actual}\n desired: {desired}\n{err_msg}"
@@ -63,11 +71,24 @@ def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
 
 
 def assert_almost_equal(actual, desired, decimal=7, err_msg="", verbose=True):
-    if isinstance(actual, numpy.ndarray) or isinstance(desired, numpy.ndarray):
-        a_vals = _as_list(actual) if isinstance(actual, numpy.ndarray) else [actual]
-        d_vals = _as_list(desired) if isinstance(desired, numpy.ndarray) else [desired]
+    is_array_like = isinstance(actual, numpy.ndarray) or isinstance(desired, numpy.ndarray) \
+        or (hasattr(actual, '__iter__') and not isinstance(actual, str)) \
+        or (hasattr(desired, '__iter__') and not isinstance(desired, str))
+    if is_array_like:
+        if isinstance(actual, numpy.ndarray):
+            a_vals = _as_list(actual)
+        elif hasattr(actual, '__iter__') and not isinstance(actual, str):
+            a_vals = list(actual)
+        else:
+            a_vals = [actual]
+        if isinstance(desired, numpy.ndarray):
+            d_vals = _as_list(desired)
+        elif hasattr(desired, '__iter__') and not isinstance(desired, str):
+            d_vals = list(desired)
+        else:
+            d_vals = [desired]
         for a, d in zip(a_vals, d_vals):
-            if abs(a - d) >= 1.5 * 10**(-decimal):
+            if abs(float(a) - float(d)) >= 1.5 * 10**(-decimal):
                 raise AssertionError(
                     f"Not almost equal to {decimal} decimals:\n"
                     f" actual: {a}\n desired: {d}\n{err_msg}"
