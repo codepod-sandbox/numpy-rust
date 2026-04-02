@@ -70,6 +70,62 @@ impl ArrayData {
         self.shape().iter().product()
     }
 
+    /// Return the strides of the underlying array (in units of elements, not bytes).
+    pub fn strides(&self) -> Vec<isize> {
+        match self {
+            ArrayData::Bool(a) => a.strides().to_vec(),
+            ArrayData::Int32(a) => a.strides().to_vec(),
+            ArrayData::Int64(a) => a.strides().to_vec(),
+            ArrayData::Float32(a) => a.strides().to_vec(),
+            ArrayData::Float64(a) => a.strides().to_vec(),
+            ArrayData::Complex64(a) => a.strides().to_vec(),
+            ArrayData::Complex128(a) => a.strides().to_vec(),
+            ArrayData::Str(a) => a.strides().to_vec(),
+        }
+    }
+
+    /// Check if the array is C-contiguous (row-major, standard layout).
+    pub fn is_c_contiguous(&self) -> bool {
+        match self {
+            ArrayData::Bool(a) => a.is_standard_layout(),
+            ArrayData::Int32(a) => a.is_standard_layout(),
+            ArrayData::Int64(a) => a.is_standard_layout(),
+            ArrayData::Float32(a) => a.is_standard_layout(),
+            ArrayData::Float64(a) => a.is_standard_layout(),
+            ArrayData::Complex64(a) => a.is_standard_layout(),
+            ArrayData::Complex128(a) => a.is_standard_layout(),
+            ArrayData::Str(a) => a.is_standard_layout(),
+        }
+    }
+
+    /// Check if the array is Fortran-contiguous (column-major).
+    pub fn is_f_contiguous(&self) -> bool {
+        fn check_f_contiguous(shape: &[usize], strides: &[isize]) -> bool {
+            let ndim = shape.len();
+            if ndim <= 1 {
+                return true;
+            }
+            let mut expected_stride: isize = 1;
+            for d in 0..ndim {
+                if shape[d] > 1 && strides[d] != expected_stride {
+                    return false;
+                }
+                expected_stride *= shape[d] as isize;
+            }
+            true
+        }
+        match self {
+            ArrayData::Bool(a) => check_f_contiguous(a.shape(), a.strides()),
+            ArrayData::Int32(a) => check_f_contiguous(a.shape(), a.strides()),
+            ArrayData::Int64(a) => check_f_contiguous(a.shape(), a.strides()),
+            ArrayData::Float32(a) => check_f_contiguous(a.shape(), a.strides()),
+            ArrayData::Float64(a) => check_f_contiguous(a.shape(), a.strides()),
+            ArrayData::Complex64(a) => check_f_contiguous(a.shape(), a.strides()),
+            ArrayData::Complex128(a) => check_f_contiguous(a.shape(), a.strides()),
+            ArrayData::Str(a) => check_f_contiguous(a.shape(), a.strides()),
+        }
+    }
+
     /// Deep copy: creates an independent copy of the data (not just Arc refcount++).
     pub fn deep_copy(&self) -> Self {
         match self {

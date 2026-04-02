@@ -2448,20 +2448,12 @@ impl PyNdArray {
     #[pygetset]
     fn strides(&self, vm: &VirtualMachine) -> PyObjectRef {
         let inner = self.data.read().unwrap();
-        let shape = inner.shape();
         let itemsize = inner.dtype().itemsize();
-        // Compute C-contiguous strides
-        let ndim = shape.len();
-        let mut strides_vec = vec![0usize; ndim];
-        if ndim > 0 {
-            strides_vec[ndim - 1] = itemsize;
-            for i in (0..ndim - 1).rev() {
-                strides_vec[i] = strides_vec[i + 1] * shape[i + 1];
-            }
-        }
-        let py_strides: Vec<PyObjectRef> = strides_vec
+        // Return actual strides (element strides * itemsize = byte strides)
+        let elem_strides = inner.data().strides();
+        let py_strides: Vec<PyObjectRef> = elem_strides
             .iter()
-            .map(|&s| vm.ctx.new_int(s).into())
+            .map(|&s| vm.ctx.new_int(s * itemsize as isize).into())
             .collect();
         PyTuple::new_ref(py_strides, &vm.ctx).into()
     }
@@ -2748,8 +2740,16 @@ impl PyNdArray {
 
     #[pygetset]
     fn flags(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-        let is_f = self.is_fortran.load(Ordering::Relaxed);
-        let is_c = !is_f;
+        let data = self.data.read().unwrap();
+        let marked_fortran = self.is_fortran.load(Ordering::Relaxed);
+        let ndim = data.ndim();
+        let (is_c, is_f) = if marked_fortran && ndim > 1 {
+            // Array was marked Fortran-order at creation
+            (false, true)
+        } else {
+            (data.data().is_c_contiguous(), data.data().is_f_contiguous())
+        };
+        drop(data);
         let is_aligned = self.is_aligned.load(Ordering::Relaxed);
         let mut map = HashMap::new();
         map.insert("C_CONTIGUOUS".into(), is_c);

@@ -1251,16 +1251,33 @@ def empty(shape, dtype=None, order="C"):
 
 def _like_order(arr, source, order):
     """Apply ordering to result of a like function. K=keep source order, A=fortran if source is, else C."""
-    src_is_f = getattr(getattr(source, 'flags', None), 'f_contiguous', False)
+    import numpy as _np
+    src_flags = getattr(source, 'flags', None)
+    src_is_f = getattr(src_flags, 'f_contiguous', False)
+    src_is_c = getattr(src_flags, 'c_contiguous', True)
     if order == 'F':
         if hasattr(arr, '_mark_fortran'):
             arr._mark_fortran()
-    elif order == 'K':
+    elif order in ('K', 'A'):
         if src_is_f and hasattr(arr, '_mark_fortran'):
             arr._mark_fortran()
-    elif order == 'A':
-        if src_is_f and hasattr(arr, '_mark_fortran'):
-            arr._mark_fortran()
+        elif order == 'K' and not src_is_c and not src_is_f:
+            # Non-contiguous source with order='K': match the stride ordering
+            # Only when shapes match (shape override means K-order doesn't apply)
+            if (isinstance(arr, ndarray) and isinstance(source, ndarray)
+                    and hasattr(source, 'strides')
+                    and arr.shape == source.shape):
+                src_strides = source.strides
+                ndim = len(src_strides)
+                if ndim > 1:
+                    axes_by_stride = sorted(range(ndim), key=lambda i: -abs(src_strides[i]))
+                    perm_shape = tuple(arr.shape[i] for i in axes_by_stride)
+                    inv_perm = [0] * ndim
+                    for i, ax in enumerate(axes_by_stride):
+                        inv_perm[ax] = i
+                    fill = arr.flat[0] if arr.size > 0 else 0
+                    new_arr = _np.full(perm_shape, fill, dtype=arr.dtype)
+                    arr = new_arr.transpose(inv_perm)
     # order='C' is the default (no fortran)
     return arr
 
