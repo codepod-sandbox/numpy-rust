@@ -20,6 +20,8 @@ pub struct PyNdArray {
     data: RwLock<NdArray>,
     is_fortran: AtomicBool,
     is_aligned: AtomicBool,
+    /// Reference to the array this view was created from (None if owner).
+    base: RwLock<Option<PyObjectRef>>,
 }
 
 impl Clone for PyNdArray {
@@ -28,6 +30,7 @@ impl Clone for PyNdArray {
             data: RwLock::new(self.data.read().unwrap().clone()),
             is_fortran: AtomicBool::new(self.is_fortran.load(Ordering::Relaxed)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
+            base: RwLock::new(None),
         }
     }
 }
@@ -38,6 +41,7 @@ impl PyNdArray {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(false),
             is_aligned: AtomicBool::new(true),
+            base: RwLock::new(None),
         }
     }
 
@@ -46,6 +50,17 @@ impl PyNdArray {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(true),
             is_aligned: AtomicBool::new(true),
+            base: RwLock::new(None),
+        }
+    }
+
+    /// Create a view that references a parent array.
+    pub fn from_core_with_base(data: NdArray, parent: PyObjectRef) -> Self {
+        Self {
+            data: RwLock::new(data),
+            is_fortran: AtomicBool::new(false),
+            is_aligned: AtomicBool::new(true),
+            base: RwLock::new(Some(parent)),
         }
     }
 
@@ -891,6 +906,7 @@ impl PyNdArray {
             data: RwLock::new(result_data),
             is_fortran: AtomicBool::new(order_str == "F" || (order_str == "A" && is_f)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
+            base: RwLock::new(None),
         };
 
         Ok(result)
@@ -1056,6 +1072,7 @@ impl PyNdArray {
                     data: RwLock::new(data.clone()),
                     is_fortran: AtomicBool::new(is_f),
                     is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
+                    base: RwLock::new(None),
                 };
                 // Try into_ref_with_type first; if it fails (not a real ndarray subclass),
                 // try calling the type's _from_array classmethod as a fallback.
@@ -2754,14 +2771,15 @@ impl PyNdArray {
         let mut map = HashMap::new();
         map.insert("C_CONTIGUOUS".into(), is_c);
         map.insert("F_CONTIGUOUS".into(), is_f);
-        map.insert("OWNDATA".into(), true);
+        let owns_data = self.base.read().unwrap().is_none();
+        map.insert("OWNDATA".into(), owns_data);
         map.insert("WRITEABLE".into(), true);
         map.insert("ALIGNED".into(), is_aligned);
         map.insert("WRITEBACKIFCOPY".into(), false);
         // Short aliases
         map.insert("C".into(), is_c);
         map.insert("F".into(), is_f);
-        map.insert("O".into(), true);
+        map.insert("O".into(), owns_data);
         map.insert("W".into(), true);
         map.insert("A".into(), is_aligned);
         // Additional aliases
@@ -2789,6 +2807,11 @@ impl PyNdArray {
     }
 
     #[pymethod]
+    fn _set_base(&self, parent: PyObjectRef) {
+        *self.base.write().unwrap() = Some(parent);
+    }
+
+    #[pymethod]
     fn _set_unaligned(&self) {
         self.is_aligned.store(false, Ordering::Relaxed);
     }
@@ -2803,7 +2826,10 @@ impl PyNdArray {
 
     #[pygetset]
     fn base(&self, vm: &VirtualMachine) -> PyObjectRef {
-        vm.ctx.none() // We always own our data
+        match self.base.read().unwrap().as_ref() {
+            Some(b) => b.clone(),
+            None => vm.ctx.none(),
+        }
     }
 
     #[pygetset]
