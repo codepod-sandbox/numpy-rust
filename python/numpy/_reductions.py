@@ -2473,8 +2473,12 @@ def gradient(f, *varargs, axis=None, edge_order=1):
             "gradient() takes from 1 to {} positional arguments but {} "
             "were given".format(N + 1, len(varargs) + 1)
         )
-    # Validate spacings have correct sizes
+    # Validate spacings have correct sizes and dimensionality
     for i, sp in enumerate(spacings):
+        if isinstance(sp, ndarray) and sp.ndim > 1:
+            raise ValueError(
+                "Spacing must be scalars or 1d, not {}d".format(sp.ndim)
+            )
         if isinstance(sp, ndarray) and sp.ndim == 1 and sp.size != 1:
             ax = axes[i]
             if sp.size != f.shape[ax]:
