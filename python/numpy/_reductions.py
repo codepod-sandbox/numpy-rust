@@ -2034,24 +2034,37 @@ def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear
 
 def ediff1d(ary, to_end=None, to_begin=None):
     """The differences between consecutive elements of an array."""
+    from ._type_promotion import can_cast
     ary = asarray(ary).flatten()
     dtype_str = str(ary.dtype)
     n = ary.size
-    parts = []
+    # Validate to_begin/to_end casting compatibility (same_kind rule)
     if to_begin is not None:
         tb = asarray(to_begin).flatten()
-        parts.append(tb)
+        if not can_cast(tb, dtype_str, casting='same_kind'):
+            raise TypeError(
+                "dtype of `to_begin` must be compatible (same kind) with "
+                "the dtype of `ary`. "
+                "dtype of `to_begin` must be compatible with int")
+    if to_end is not None:
+        te = asarray(to_end).flatten()
+        if not can_cast(te, dtype_str, casting='same_kind'):
+            raise TypeError(
+                "dtype of `to_end` must be compatible (same kind) with "
+                "the dtype of `ary`. "
+                "dtype of `to_end` must be compatible with int")
+    parts = []
+    if to_begin is not None:
+        parts.append(asarray(to_begin).flatten().astype(dtype_str))
     if n > 1:
         diff_vals = [ary[i] - ary[i - 1] for i in range(1, n)]
         parts.append(array(diff_vals))
     elif n == 1:
-        # 0-length diff
         parts.append(array([], dtype=dtype_str))
     else:
         parts.append(array([], dtype=dtype_str))
     if to_end is not None:
-        te = asarray(to_end).flatten()
-        parts.append(te)
+        parts.append(asarray(to_end).flatten().astype(dtype_str))
     import numpy as _np
     result = _np.concatenate(parts) if parts else array([], dtype=dtype_str)
     return result.astype(dtype_str)
@@ -2153,10 +2166,10 @@ def argmin(a, axis=None, out=None, keepdims=False):
     return result
 
 
-def ptp(a, axis=None):
+def ptp(a, axis=None, keepdims=False):
     if not isinstance(a, ndarray):
         a = asarray(a)
-    return a.max(axis) - a.min(axis)
+    return a.max(axis=axis, keepdims=keepdims) - a.min(axis=axis, keepdims=keepdims)
 
 
 def argwhere(a):
@@ -2301,19 +2314,19 @@ def _gradient_1d_nonuniform(f_1d, x, edge_order):
         out[0] = (float(f_1d[1]) - float(f_1d[0])) / (x[1] - x[0])
         out[-1] = (float(f_1d[-1]) - float(f_1d[-2])) / (x[-1] - x[-2])
     else:
-        # 2nd order one-sided
-        dx0 = x[1] - x[0]
-        dx1 = x[2] - x[0]
-        a = -(2.0 * dx0 + dx1 - x[1] + x[0]) / (dx0 * dx1)
-        b = (dx0 + dx1) / (dx0 * (dx1 - dx0))
-        c = -dx0 / (dx1 * (dx1 - dx0))
+        # 2nd order one-sided (matches NumPy's formula using consecutive diffs)
+        dx1 = x[1] - x[0]  # first spacing
+        dx2 = x[2] - x[1]  # second spacing
+        a = -(2.0 * dx1 + dx2) / (dx1 * (dx1 + dx2))
+        b = (dx1 + dx2) / (dx1 * dx2)
+        c = -dx1 / (dx2 * (dx1 + dx2))
         out[0] = a * float(f_1d[0]) + b * float(f_1d[1]) + c * float(f_1d[2])
-        dxm1 = x[-2] - x[-1]
-        dxm2 = x[-3] - x[-1]
-        a = -(2.0 * dxm1 + dxm2 - x[-2] + x[-1]) / (dxm1 * dxm2)
-        b = (dxm1 + dxm2) / (dxm1 * (dxm2 - dxm1))
-        c = -dxm1 / (dxm2 * (dxm2 - dxm1))
-        out[-1] = a * float(f_1d[-1]) + b * float(f_1d[-2]) + c * float(f_1d[-3])
+        dx1 = x[-2] - x[-3]  # second-to-last spacing
+        dx2 = x[-1] - x[-2]  # last spacing
+        a = dx2 / (dx1 * (dx1 + dx2))
+        b = -(dx2 + dx1) / (dx1 * dx2)
+        c = (2.0 * dx2 + dx1) / (dx2 * (dx1 + dx2))
+        out[-1] = a * float(f_1d[-3]) + b * float(f_1d[-2]) + c * float(f_1d[-1])
     return out
 
 
@@ -2511,10 +2524,10 @@ def cumulative_trapezoid(y, x=None, dx=1.0, axis=-1, initial=None):
 
 def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
     import numpy as _np
-    if not isinstance(ar1, ndarray):
-        ar1 = array(ar1)
-    if not isinstance(ar2, ndarray):
-        ar2 = array(ar2)
+    if not isinstance(ar1, (ndarray, _ObjectArray)):
+        ar1 = asarray(ar1)
+    if not isinstance(ar2, (ndarray, _ObjectArray)):
+        ar2 = asarray(ar2)
     orig_dtype = ar1.dtype
     if not return_indices:
         if isinstance(ar1, _ObjectArray) or isinstance(ar2, _ObjectArray):
@@ -2605,9 +2618,9 @@ def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
             "Invalid value for `kind` argument: {!r}. "
             "Expected 'sort', 'table', or None.".format(kind)
         )
-    if not isinstance(element, ndarray):
+    if not isinstance(element, (ndarray, _ObjectArray)):
         element = array(element)
-    if not isinstance(test_elements, ndarray):
+    if not isinstance(test_elements, (ndarray, _ObjectArray)):
         test_elements = array(test_elements)
     # Handle _ObjectArray (strings, objects, etc.) in Python
     # (must be before kind='table' check since _ObjectArray raises ValueError for non-int)
@@ -2657,10 +2670,14 @@ def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
     # Use Python fallback for string dtypes (native isin doesn't handle them correctly)
     _el_dtype_str = str(element.dtype) if hasattr(element, 'dtype') else ''
     _te_dtype_str = str(test_elements.dtype) if hasattr(test_elements, 'dtype') else ''
+    # Use Python set-based fallback for types that could lose precision in native float64 ops
+    # (uint64, large int64 values) or for non-numeric types.
+    _large_int_dtypes = {'uint64', 'uint32'}  # uint32 can exceed float32 precision too
     _use_python = (_el_dtype_str in ('str', 'object', 'bytes') or
                    _te_dtype_str in ('str', 'object', 'bytes') or
                    _el_dtype_str.startswith('U') or _te_dtype_str.startswith('U') or
-                   _el_dtype_str.startswith('S') or _te_dtype_str.startswith('S'))
+                   _el_dtype_str.startswith('S') or _te_dtype_str.startswith('S') or
+                   _el_dtype_str in _large_int_dtypes or _te_dtype_str in _large_int_dtypes)
     if not _use_python:
         try:
             result = _native.isin(element, test_elements)

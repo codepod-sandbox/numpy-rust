@@ -147,7 +147,9 @@ class _ObjectArray:
         if shape is not None:
             self._shape = tuple(shape)
             self._ndim = len(self._shape)
-        elif isinstance(self._data, list) and len(self._data) > 0 and isinstance(self._data[0], (list, tuple)):
+        elif (isinstance(self._data, list) and len(self._data) > 0
+              and all(isinstance(x, (list, tuple)) for x in self._data)
+              and len(set(len(x) for x in self._data)) == 1):
             self._shape = (len(self._data), len(self._data[0]))
             self._ndim = 2
         else:
@@ -365,7 +367,8 @@ class _ObjectArray:
                     for k in key:
                         result = result[k]
                     return result
-            raise TypeError("tuple indices with slices are not supported for object arrays")
+            # Handle tuple with slices (N-D indexing)
+            return self._nd_getitem(key)
         if isinstance(key, int) and len(self._shape) > 1:
             # Integer key on N-D array: return sub-array with shape shape[1:]
             if key < 0:
@@ -405,7 +408,9 @@ class _ObjectArray:
                 idx = self._flat_index(key)
                 self._data[idx] = value
                 return
-            raise TypeError("tuple indices with slices are not supported for object arrays")
+            # Handle tuple with slices for __setitem__
+            self._nd_setitem(key, value)
+            return
         if isinstance(key, slice):
             if isinstance(value, (list, tuple)):
                 self._data[key] = value
@@ -430,6 +435,86 @@ class _ObjectArray:
             flat += k * mult
             mult *= dim
         return flat
+
+    def _nd_getitem(self, key_tuple):
+        """N-D indexing with a tuple of ints/slices."""
+        import itertools as _it
+        ndim = self._ndim
+        shape = list(self._shape)
+
+        # Pad key_tuple with slice(None) for missing trailing dims
+        key_list = list(key_tuple)
+        while len(key_list) < ndim:
+            key_list.append(slice(None))
+
+        # Compute per-dimension index lists and output shape
+        dim_indices = []
+        out_shape = []
+        for i, k in enumerate(key_list):
+            if isinstance(k, int):
+                d = k if k >= 0 else shape[i] + k
+                dim_indices.append([d])
+                # int key: dimension removed from output
+            elif isinstance(k, slice):
+                idxs = list(range(*k.indices(shape[i])))
+                dim_indices.append(idxs)
+                out_shape.append(len(idxs))
+            else:
+                raise TypeError("unsupported index type: %s" % type(k))
+
+        # Gather output data
+        out_data = []
+        for multi_idx in _it.product(*dim_indices):
+            flat_idx = 0
+            mult = 1
+            for d in range(ndim - 1, -1, -1):
+                flat_idx += multi_idx[d] * mult
+                mult *= shape[d]
+            out_data.append(self._data[flat_idx])
+
+        if not out_shape:
+            return self._wrap_element(out_data[0]) if out_data else None
+        return _ObjectArray(out_data, self._dtype, shape=tuple(out_shape))
+    def _nd_setitem(self, key_tuple, value):
+        """N-D __setitem__ with a tuple of ints/slices."""
+        import itertools as _it
+        ndim = self._ndim
+        shape = list(self._shape)
+
+        key_list = list(key_tuple)
+        while len(key_list) < ndim:
+            key_list.append(slice(None))
+
+        dim_indices = []
+        for i, k in enumerate(key_list):
+            if isinstance(k, int):
+                d = k if k >= 0 else shape[i] + k
+                dim_indices.append([d])
+            elif isinstance(k, slice):
+                dim_indices.append(list(range(*k.indices(shape[i]))))
+            else:
+                raise TypeError("unsupported index type: %s" % type(k))
+
+        # Get value as a flat list
+        if isinstance(value, _ObjectArray):
+            vdata = value._data
+        elif isinstance(value, (list, tuple)):
+            vdata = list(value)
+        else:
+            vdata = None  # scalar
+
+        all_combos = list(_it.product(*dim_indices))
+        for vi, multi_idx in enumerate(all_combos):
+            flat_idx = 0
+            mult = 1
+            for d in range(ndim - 1, -1, -1):
+                flat_idx += multi_idx[d] * mult
+                mult *= shape[d]
+            if vdata is not None:
+                self._data[flat_idx] = vdata[vi]
+            else:
+                self._data[flat_idx] = value
+
     def _to_bool_array(self, data):
         return _native.array([1.0 if x else 0.0 for x in data]).astype("bool")
     def _broadcast_other(self, other):

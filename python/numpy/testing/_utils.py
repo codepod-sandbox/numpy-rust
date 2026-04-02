@@ -156,6 +156,21 @@ def _is_masked_array(x):
     return hasattr(x, 'data') and hasattr(x, 'mask') and hasattr(x, 'filled')
 
 def assert_equal(actual, desired, err_msg="", verbose=True, *, strict=False):
+    # Convert objects with __array__ protocol to ndarray (e.g. custom array-like classes)
+    if (not isinstance(actual, (numpy.ndarray, numpy._ObjectArray, numpy.StructuredArray,
+                                list, tuple, int, float, complex, bool, str, bytes))
+            and hasattr(actual, '__array__')):
+        try:
+            actual = numpy.asarray(actual)
+        except Exception:
+            pass
+    if (not isinstance(desired, (numpy.ndarray, numpy._ObjectArray, numpy.StructuredArray,
+                                 list, tuple, int, float, complex, bool, str, bytes))
+            and hasattr(desired, '__array__')):
+        try:
+            desired = numpy.asarray(desired)
+        except Exception:
+            pass
     # Handle MaskedArray comparison: skip masked positions
     if _is_masked_array(actual) and _is_masked_array(desired):
         if actual.shape != desired.shape:

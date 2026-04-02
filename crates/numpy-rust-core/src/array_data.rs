@@ -84,21 +84,54 @@ impl ArrayData {
         }
     }
 
-    /// Check if two ArrayData share the same underlying buffer (Arc pointer equality).
+    /// Check if two ArrayData share the same underlying buffer.
+    /// Uses memory range overlap detection to handle views/slices correctly.
     pub fn shares_memory_with(&self, other: &Self) -> bool {
+        /// Check if two ArcArrays' memory ranges overlap.
+        fn ranges_overlap<T>(
+            a: &ArcArray<T, ndarray::IxDyn>,
+            b: &ArcArray<T, ndarray::IxDyn>,
+        ) -> bool {
+            if a.is_empty() || b.is_empty() {
+                return false;
+            }
+            let a_ptr = a.as_ptr() as usize;
+            let b_ptr = b.as_ptr() as usize;
+            // Compute the extent: max offset from as_ptr() across all elements
+            let a_end = a_ptr + memory_extent(a);
+            let b_end = b_ptr + memory_extent(b);
+            a_ptr < b_end && b_ptr < a_end
+        }
+
+        /// Compute the byte extent of an array's data in memory.
+        fn memory_extent<T>(a: &ArcArray<T, ndarray::IxDyn>) -> usize {
+            let elem_size = std::mem::size_of::<T>();
+            if elem_size == 0 || a.is_empty() {
+                return 0;
+            }
+            // The extent is the max offset of any element from the base pointer
+            let mut max_offset: isize = 0;
+            for (ax, &stride) in a.strides().iter().enumerate() {
+                let dim = a.shape()[ax];
+                if dim > 1 {
+                    let end_offset = stride * (dim as isize - 1);
+                    if end_offset > 0 {
+                        max_offset += end_offset;
+                    }
+                }
+            }
+            (max_offset as usize + 1) * elem_size
+        }
+
         match (self, other) {
-            (ArrayData::Bool(a), ArrayData::Bool(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
-            (ArrayData::Float32(a), ArrayData::Float32(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
-            (ArrayData::Float64(a), ArrayData::Float64(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
-            (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
-                std::ptr::eq(a.as_ptr(), b.as_ptr())
-            }
-            (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
-                std::ptr::eq(a.as_ptr(), b.as_ptr())
-            }
-            (ArrayData::Str(a), ArrayData::Str(b)) => std::ptr::eq(a.as_ptr(), b.as_ptr()),
+            (ArrayData::Bool(a), ArrayData::Bool(b)) => ranges_overlap(a, b),
+            (ArrayData::Int32(a), ArrayData::Int32(b)) => ranges_overlap(a, b),
+            (ArrayData::Int64(a), ArrayData::Int64(b)) => ranges_overlap(a, b),
+            (ArrayData::Float32(a), ArrayData::Float32(b)) => ranges_overlap(a, b),
+            (ArrayData::Float64(a), ArrayData::Float64(b)) => ranges_overlap(a, b),
+            (ArrayData::Complex64(a), ArrayData::Complex64(b)) => ranges_overlap(a, b),
+            (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ranges_overlap(a, b),
+            (ArrayData::Str(a), ArrayData::Str(b)) => ranges_overlap(a, b),
             _ => false, // different dtypes can't share memory
         }
     }

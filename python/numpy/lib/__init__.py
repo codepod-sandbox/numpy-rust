@@ -1,5 +1,35 @@
 """numpy.lib - library of routines."""
+import sys as _sys
 from numpy.lib import stride_tricks, mixins, format
+
+# Register all _*_impl submodules under their public names
+from numpy.lib import (
+    _index_tricks_impl as index_tricks,
+    _function_base_impl as function_base,
+    _arraypad_impl as arraypad,
+    _arraysetops_impl as arraysetops,
+    _histograms_impl as histograms,
+    _nanfunctions_impl as nanfunctions,
+    _polynomial_impl as polynomial,
+    _shape_base_impl as shape_base,
+    _stride_tricks_impl as _stride_tricks_impl_mod,
+    _twodim_base_impl as twodim_base,
+    _type_check_impl as type_check,
+    _ufunclike_impl as ufunclike,
+)
+
+# Make them importable as numpy.lib.X
+_sys.modules['numpy.lib.index_tricks'] = index_tricks
+_sys.modules['numpy.lib.function_base'] = function_base
+_sys.modules['numpy.lib.arraypad'] = arraypad
+_sys.modules['numpy.lib.arraysetops'] = arraysetops
+_sys.modules['numpy.lib.histograms'] = histograms
+_sys.modules['numpy.lib.nanfunctions'] = nanfunctions
+_sys.modules['numpy.lib.polynomial'] = polynomial
+_sys.modules['numpy.lib.shape_base'] = shape_base
+_sys.modules['numpy.lib.twodim_base'] = twodim_base
+_sys.modules['numpy.lib.type_check'] = type_check
+_sys.modules['numpy.lib.ufunclike'] = ufunclike
 
 
 class NumpyVersion:

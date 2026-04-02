@@ -139,8 +139,10 @@ impl NdArray {
             ($arr:expr) => {{
                 let info_ref = &info;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let view = $arr.slice(info_ref.as_slice());
-                    view.to_owned().into_shared()
+                    // clone() is O(1) for ArcArray (Arc refcount increment),
+                    // slice_move adjusts metadata without copying data,
+                    // so the result shares the same buffer (true view).
+                    $arr.clone().slice_move(info_ref.as_slice())
                 }));
                 match result {
                     Ok(v) => v,
@@ -491,15 +493,39 @@ impl NdArray {
             ($dst:expr, $src:expr) => {{
                 let mut val_idx = 0;
                 let src_flat: Vec<_> = $src.iter().copied().collect();
-                for (i, &m) in flat_mask.iter().enumerate() {
-                    if m {
-                        let flat = $dst.as_slice_mut().unwrap();
-                        flat[i] = if src_flat.len() == 1 {
-                            src_flat[0]
-                        } else {
-                            src_flat[val_idx]
-                        };
-                        val_idx += 1;
+                // Use flat iteration + indexed mutation for non-contiguous arrays
+                if let Some(flat) = $dst.as_slice_mut() {
+                    // Fast path: contiguous array
+                    for (i, &m) in flat_mask.iter().enumerate() {
+                        if m {
+                            flat[i] = if src_flat.len() == 1 {
+                                src_flat[0]
+                            } else {
+                                src_flat[val_idx]
+                            };
+                            val_idx += 1;
+                        }
+                    }
+                } else {
+                    // Slow path: non-contiguous array - use coordinate indexing
+                    let shape = $dst.shape().to_vec();
+                    for (i, &m) in flat_mask.iter().enumerate() {
+                        if m {
+                            // Convert flat index to nd coord
+                            let mut rem = i;
+                            let mut coord = vec![0usize; shape.len()];
+                            for d in (0..shape.len()).rev() {
+                                coord[d] = rem % shape[d];
+                                rem /= shape[d];
+                            }
+                            let val = if src_flat.len() == 1 {
+                                src_flat[0]
+                            } else {
+                                src_flat[val_idx]
+                            };
+                            $dst[ndarray::IxDyn(&coord)] = val;
+                            val_idx += 1;
+                        }
                     }
                 }
             }};

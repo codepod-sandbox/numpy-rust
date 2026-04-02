@@ -1920,10 +1920,23 @@ impl PyNdArray {
                 let result = data.mask_select(&arr_data).map_err(|e| numpy_err(e, vm))?;
                 return Ok(PyNdArray::from_core(result).to_py(vm));
             } else if arr_data.dtype().is_integer() || arr_data.dtype().is_float() {
+                let idx_shape = arr_data.shape().to_vec();
                 let indices = extract_int_indices(&arr_data, data.shape()[0], vm)?;
                 let result = data
                     .index_select(0, &indices)
                     .map_err(|e| numpy_err(e, vm))?;
+                // Preserve the shape of the index array in the result.
+                // For a 1D source array: result shape = idx_shape.
+                // For a nD source array indexed on axis 0: shape = (*idx_shape, *data.shape()[1..]).
+                if idx_shape.len() > 1 || (idx_shape.len() == 1 && data.ndim() > 1) {
+                    let mut new_shape = idx_shape.clone();
+                    if data.ndim() > 1 {
+                        new_shape.extend_from_slice(&data.shape()[1..]);
+                    }
+                    if let Ok(reshaped) = result.reshape(&new_shape) {
+                        return Ok(PyNdArray::from_core(reshaped).to_py(vm));
+                    }
+                }
                 return Ok(PyNdArray::from_core(result).to_py(vm));
             }
         }

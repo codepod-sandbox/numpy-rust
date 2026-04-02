@@ -532,11 +532,14 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             return _native.array(data)
         if dt in ("object", "<class 'object'>"):
             # Flatten nested list/tuple for object arrays (e.g. [[1,2],[3,4]])
-            if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (list, tuple)):
-                flat = [x for row in data for x in row]
+            # Only flatten if ALL elements are sequences of the same length.
+            if (isinstance(data, (list, tuple)) and len(data) > 0
+                    and all(isinstance(row, (list, tuple)) for row in data)):
                 inner_len = len(data[0])
-                shape = (len(data), inner_len)
-                return _ObjectArray(flat, "object", shape=shape)
+                if all(len(row) == inner_len for row in data):
+                    flat = [x for row in data for x in row]
+                    shape = (len(data), inner_len)
+                    return _ObjectArray(flat, "object", shape=shape)
             return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], "object")
         if dt == "void" or dt.startswith("V"):
             data_list = data if isinstance(data, (list, tuple)) else [data]
@@ -955,6 +958,14 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
             vals[-1] = stop_arr.copy()
         result = _np.stack(vals, axis=axis)
         if dtype is not None:
+            _is_int = dtype is int or (isinstance(dtype, type) and issubclass(dtype, int))
+            if not _is_int:
+                try:
+                    _is_int = _np.issubdtype(dtype, _np.integer)
+                except Exception:
+                    pass
+            if _is_int:
+                result = _np.floor(result)
             result = result.astype(str(dtype))
         if retstep:
             return result, step
@@ -1003,6 +1014,15 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
         step = (stop - start) / num
         result = array([start + i * step for i in range(num)])
     if dtype is not None:
+        import numpy as _np
+        _is_int = dtype is int or (isinstance(dtype, type) and issubclass(dtype, int))
+        if not _is_int:
+            try:
+                _is_int = _np.issubdtype(dtype, _np.integer)
+            except Exception:
+                pass
+        if _is_int:
+            result = _np.floor(result)
         result = result.astype(str(dtype))
     if retstep:
         return result, step
@@ -1010,29 +1030,22 @@ def linspace(start, stop, num=50, endpoint=True, retstep=False, dtype=None, axis
 
 def logspace(start, stop, num=50, endpoint=True, base=10.0, dtype=None, axis=0):
     import numpy as _np
-    from ._helpers import _ObjectArray
-    # Check if base is array-like
-    _base_is_array = isinstance(base, (ndarray, _ObjectArray, list, tuple))
-    # Check if start/stop are array-like
-    _start_is_array = isinstance(start, (ndarray, _ObjectArray, list, tuple))
-    _stop_is_array = isinstance(stop, (ndarray, _ObjectArray, list, tuple))
-    y = linspace(start, stop, num=num, endpoint=endpoint, axis=axis if (_start_is_array or _stop_is_array) else 0)
+    _base_is_array = not isinstance(base, (float, int)) and _np.asarray(base).ndim > 0
     if _base_is_array:
-        base_arr = _np.asarray(base, dtype='float64')
-        # For each y value, compute base_arr ** y_i, then stack along the given axis
-        y_flat = y.flatten().tolist()
-        base_flat = base_arr.flatten().tolist()
-        # Build rows: for each y value, compute [base[0]**y, base[1]**y, ...]
-        rows = []
-        for yi in y_flat:
-            rows.append([b ** yi for b in base_flat])
-        # Shape (num, k) - num linspace points, k base values
-        result = _np.array(rows)
-        # axis controls placement: axis=0 means (num, k), axis=1/-1 means (k, num)
-        if axis == 1 or axis == -1:
-            result = result.T
-    else:
-        result = _np.power(float(base), y)
+        _ndmax = max(_np.asarray(start).ndim, _np.asarray(stop).ndim, _np.asarray(base).ndim)
+        if _ndmax > 0:
+            start = _np.asarray(start)
+            stop = _np.asarray(stop)
+            base = _np.asarray(base)
+            if start.ndim < _ndmax:
+                start = start.reshape((1,) * (_ndmax - start.ndim) + start.shape)
+            if stop.ndim < _ndmax:
+                stop = stop.reshape((1,) * (_ndmax - stop.ndim) + stop.shape)
+            if base.ndim < _ndmax:
+                base = base.reshape((1,) * (_ndmax - base.ndim) + base.shape)
+            base = _np.expand_dims(base, axis=axis)
+    y = linspace(start, stop, num=num, endpoint=endpoint, axis=axis)
+    result = _np.power(base, y)
     if dtype is not None:
         result = result.astype(str(dtype))
     return result
@@ -1319,6 +1332,12 @@ def full(shape, fill_value, dtype=None, order="C"):
         return _apply_order(_ObjectArray([fill_val] * n, dt, shape=shape, itemsize=itemsize), order)
     if dt is not None:
         return _apply_order(_native.full(shape, float(fill_value), dt), order)
+    # If fill_value is not numeric (e.g. None, object), use object dtype
+    if not isinstance(fill_value, (int, float, complex, bool)):
+        n = 1
+        for s in (shape if isinstance(shape, (list, tuple)) else (shape,)):
+            n *= s
+        return _apply_order(_ObjectArray([fill_value] * n, "object", shape=shape if isinstance(shape, tuple) else tuple(shape)), order)
     return _apply_order(_native.full(shape, float(fill_value)), order)
 
 def full_like(a, fill_value, dtype=None, order="K", subok=True, shape=None):

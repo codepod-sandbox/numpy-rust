@@ -50,17 +50,18 @@ impl NdArray {
         Ok(NdArray::from_data(data).with_preserved_dtype(self))
     }
 
-    /// Transpose the array (reverse axes).
+    /// Transpose the array (reverse axes). Returns a view sharing the same data.
     pub fn transpose(&self) -> NdArray {
         let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(a.t().to_owned().into_shared()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.t().to_owned().into_shared()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.t().to_owned().into_shared()),
-            ArrayData::Float32(a) => ArrayData::Float32(a.t().to_owned().into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.t().to_owned().into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.t().to_owned().into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.t().to_owned().into_shared()),
-            ArrayData::Str(a) => ArrayData::Str(a.t().to_owned().into_shared()),
+            // clone() is O(1) for ArcArray, reversed_axes just swaps strides/dims
+            ArrayData::Bool(a) => ArrayData::Bool(a.clone().reversed_axes()),
+            ArrayData::Int32(a) => ArrayData::Int32(a.clone().reversed_axes()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.clone().reversed_axes()),
+            ArrayData::Float32(a) => ArrayData::Float32(a.clone().reversed_axes()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.clone().reversed_axes()),
+            ArrayData::Complex64(a) => ArrayData::Complex64(a.clone().reversed_axes()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.clone().reversed_axes()),
+            ArrayData::Str(a) => ArrayData::Str(a.clone().reversed_axes()),
         };
         NdArray::from_data(data).with_preserved_dtype(self)
     }
@@ -87,8 +88,8 @@ impl NdArray {
 
         macro_rules! do_perm {
             ($arr:expr) => {{
-                let view = $arr.view().permuted_axes(perm.clone());
-                view.to_owned().into_shared()
+                // clone() is O(1) for ArcArray, permuted_axes just rearranges strides/dims
+                $arr.clone().permuted_axes(perm.clone())
             }};
         }
 
@@ -123,8 +124,7 @@ impl NdArray {
 
         macro_rules! do_swap {
             ($arr:expr) => {{
-                let view = $arr.view().permuted_axes(perm.clone());
-                view.to_owned().into_shared()
+                $arr.clone().permuted_axes(perm.clone())
             }};
         }
 
