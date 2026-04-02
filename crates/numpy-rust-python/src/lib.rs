@@ -1859,30 +1859,71 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    /// gradient(f, spacings, edge_order, axes) -> list of arrays
     #[pyfunction]
     fn gradient(
         f: vm::PyRef<PyNdArray>,
-        spacing: vm::function::OptionalArg<f64>,
+        spacings: vm::PyRef<vm::builtins::PyList>,
+        edge_order: i64,
+        axes: vm::PyRef<vm::builtins::PyList>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyObjectRef> {
-        let sp = spacing.unwrap_or(1.0);
-        let data = f.inner();
-        if data.ndim() <= 1 {
-            numpy_rust_core::ops::numerical::gradient_1d(&data, sp)
-                .map(|arr| PyNdArray::from_core(arr).into_pyobject(vm))
-                .map_err(|e| vm.new_value_error(e.to_string()))
-        } else {
-            let grads = numpy_rust_core::ops::numerical::gradient_nd(&data, sp)
-                .map_err(|e| vm.new_value_error(e.to_string()))?;
-            let py_arrays: Vec<PyObjectRef> = grads
-                .into_iter()
-                .map(|a| PyNdArray::from_core(a).into_pyobject(vm))
-                .collect();
-            Ok(vm.ctx.new_list(py_arrays).into())
-        }
-    }
+    ) -> PyResult<vm::PyRef<vm::builtins::PyList>> {
+        use numpy_rust_core::ops::numerical::GradientSpacing;
 
-    // --- Reductions ---
+        let f_inner = f.inner();
+        let edge_order = edge_order as usize;
+
+        // Parse axes
+        let mut axes_vec = Vec::new();
+        for obj in axes.borrow_vec().iter() {
+            if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+                let v = i.try_to_primitive::<i64>(vm)?;
+                axes_vec.push(v as usize);
+            } else {
+                return Err(vm.new_type_error("axis must be an integer".to_string()));
+            }
+        }
+
+        // Parse spacings
+        let mut sp_vec = Vec::new();
+        for obj in spacings.borrow_vec().iter() {
+            if let Some(arr_ref) = obj.downcast_ref::<PyNdArray>() {
+                let arr_inner = arr_ref.inner();
+                let cast = arr_inner.astype(numpy_rust_core::DType::Float64);
+                if let numpy_rust_core::ArrayData::Float64(a) = cast.data() {
+                    let coords: Vec<f64> = a.iter().copied().collect();
+                    if coords.len() <= 1 {
+                        // Single-element array = scalar spacing
+                        sp_vec.push(GradientSpacing::Uniform(
+                            coords.first().copied().unwrap_or(1.0),
+                        ));
+                    } else {
+                        sp_vec.push(GradientSpacing::Coordinates(coords));
+                    }
+                } else {
+                    sp_vec.push(GradientSpacing::Uniform(1.0));
+                }
+            } else if let Some(f) = obj.downcast_ref::<vm::builtins::PyFloat>() {
+                sp_vec.push(GradientSpacing::Uniform(f.to_f64()));
+            } else if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+                let v = i.try_to_primitive::<i64>(vm)? as f64;
+                sp_vec.push(GradientSpacing::Uniform(v));
+            } else {
+                sp_vec.push(GradientSpacing::Uniform(1.0));
+            }
+        }
+
+        let results = numpy_rust_core::ops::numerical::gradient_full(
+            &f_inner, &sp_vec, edge_order, &axes_vec,
+        )
+        .map_err(|e| vm.new_value_error(e.to_string()))?;
+
+        let py_list: Vec<vm::PyObjectRef> = results
+            .into_iter()
+            .map(|arr| PyNdArray::from_core(arr).into_pyobject(vm))
+            .collect();
+        Ok(vm::builtins::PyList::from(py_list).into_ref(&vm.ctx))
+    }
 
     #[pyfunction]
     fn trapz(

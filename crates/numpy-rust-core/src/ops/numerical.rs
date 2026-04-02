@@ -180,6 +180,126 @@ pub fn gradient_nd(f: &NdArray, spacing: f64) -> Result<Vec<NdArray>> {
     Ok(results)
 }
 
+/// Full-featured gradient: supports non-uniform spacing, edge_order, axis selection.
+/// spacing: either scalar (uniform) or array (coordinate values along axis).
+/// edge_order: 1 or 2 for boundary accuracy.
+/// axes: which axes to compute gradient for (None = all).
+/// Returns one NdArray per axis.
+pub fn gradient_full(
+    f: &NdArray,
+    spacings: &[GradientSpacing],
+    edge_order: usize,
+    axes: &[usize],
+) -> Result<Vec<NdArray>> {
+    if edge_order != 1 && edge_order != 2 {
+        return Err(NumpyError::ValueError("'edge_order' must be 1 or 2".into()));
+    }
+
+    let arr = f.astype(DType::Float64);
+    let ArrayData::Float64(data) = &arr.data else {
+        unreachable!()
+    };
+    let shape = data.shape().to_vec();
+    let ndim = shape.len();
+
+    if ndim == 0 {
+        return Err(NumpyError::ValueError(
+            "gradient requires at least 1-D array".into(),
+        ));
+    }
+
+    let mut results = Vec::with_capacity(axes.len());
+
+    for (sp_idx, &ax) in axes.iter().enumerate() {
+        let n = shape[ax];
+        let min_size = edge_order + 1;
+        if n < min_size {
+            return Err(NumpyError::ValueError(format!(
+                "Shape of array too small to calculate a numerical gradient, \
+                 at least {} elements are required for edge_order={}",
+                min_size, edge_order
+            )));
+        }
+
+        let spacing = if sp_idx < spacings.len() {
+            &spacings[sp_idx]
+        } else {
+            &GradientSpacing::Uniform(1.0)
+        };
+
+        let mut grad = data.clone();
+
+        match spacing {
+            GradientSpacing::Uniform(dx) => {
+                let dx = *dx;
+                for mut lane in grad.lanes_mut(ndarray::Axis(ax)) {
+                    let vals: Vec<f64> = lane.iter().copied().collect();
+                    // Interior: central differences
+                    for i in 1..n - 1 {
+                        lane[i] = (vals[i + 1] - vals[i - 1]) / (2.0 * dx);
+                    }
+                    // Boundaries
+                    if edge_order == 1 {
+                        lane[0] = (vals[1] - vals[0]) / dx;
+                        lane[n - 1] = (vals[n - 1] - vals[n - 2]) / dx;
+                    } else {
+                        lane[0] = (-3.0 * vals[0] + 4.0 * vals[1] - vals[2]) / (2.0 * dx);
+                        lane[n - 1] =
+                            (vals[n - 3] - 4.0 * vals[n - 2] + 3.0 * vals[n - 1]) / (2.0 * dx);
+                    }
+                }
+            }
+            GradientSpacing::Coordinates(x) => {
+                // Compute consecutive differences
+                let diffs: Vec<f64> = x.windows(2).map(|w| w[1] - w[0]).collect();
+                for mut lane in grad.lanes_mut(ndarray::Axis(ax)) {
+                    let vals: Vec<f64> = lane.iter().copied().collect();
+                    // Interior: weighted central differences for non-uniform grid
+                    for i in 1..n - 1 {
+                        let dx1 = diffs[i - 1];
+                        let dx2 = diffs[i];
+                        lane[i] = (vals[i + 1] * dx1 * dx1 + (dx2 * dx2 - dx1 * dx1) * vals[i]
+                            - vals[i - 1] * dx2 * dx2)
+                            / (dx1 * dx2 * (dx1 + dx2));
+                    }
+                    // Boundaries
+                    if edge_order == 1 {
+                        lane[0] = (vals[1] - vals[0]) / diffs[0];
+                        lane[n - 1] = (vals[n - 1] - vals[n - 2]) / diffs[n - 2];
+                    } else {
+                        // 2nd order: left boundary
+                        let dx1 = diffs[0];
+                        let dx2 = diffs[1];
+                        let a = -(2.0 * dx1 + dx2) / (dx1 * (dx1 + dx2));
+                        let b = (dx1 + dx2) / (dx1 * dx2);
+                        let c = -dx1 / (dx2 * (dx1 + dx2));
+                        lane[0] = a * vals[0] + b * vals[1] + c * vals[2];
+                        // 2nd order: right boundary
+                        let dx1 = diffs[n - 3];
+                        let dx2 = diffs[n - 2];
+                        let a = dx2 / (dx1 * (dx1 + dx2));
+                        let b = -(dx2 + dx1) / (dx1 * dx2);
+                        let c = (2.0 * dx2 + dx1) / (dx2 * (dx1 + dx2));
+                        lane[n - 1] = a * vals[n - 3] + b * vals[n - 2] + c * vals[n - 1];
+                    }
+                }
+            }
+        }
+
+        results.push(NdArray::from_data(ArrayData::Float64(grad)));
+    }
+
+    Ok(results)
+}
+
+/// Spacing specification for gradient computation.
+pub enum GradientSpacing {
+    /// Uniform spacing between elements.
+    Uniform(f64),
+    /// Coordinate values along the axis.
+    Coordinates(Vec<f64>),
+}
+
 /// Trapezoidal numerical integration along axis.
 /// y: values array
 /// x: optional x-coordinates (if None, uses uniform spacing dx)

@@ -2483,9 +2483,8 @@ def gradient(f, *varargs, axis=None, edge_order=1):
                         sp.size, ax, f.shape[ax]
                     )
                 )
-    results = []
-    for i, ax in enumerate(axes):
-        results.append(_gradient_along_axis(f, ax, spacings[i], edge_order))
+    # Delegate to Rust for the actual computation
+    results = _native.gradient(f, spacings, edge_order, axes)
     if single_axis or (axis is None and N == 1):
         return results[0]
     return tuple(results)
