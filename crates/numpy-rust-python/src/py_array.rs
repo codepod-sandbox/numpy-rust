@@ -648,17 +648,20 @@ impl PyNdArray {
     }
 
     #[pygetset(name = "T")]
-    fn transpose_prop(&self) -> PyNdArray {
-        let result = PyNdArray::from_core(self.data.read().unwrap().transpose());
+    fn transpose_prop(zelf: PyRef<Self>, _vm: &VirtualMachine) -> PyNdArray {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let result =
+            PyNdArray::from_core_with_base(zelf.data.read().unwrap().transpose(), self_obj);
         result
             .is_aligned
-            .store(self.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
+            .store(zelf.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
         result
     }
 
     #[pygetset(name = "mT")]
-    fn matrix_transpose_prop(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let inner = self.data.read().unwrap();
+    fn matrix_transpose_prop(zelf: PyRef<Self>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let inner = zelf.data.read().unwrap();
         let ndim = inner.ndim();
         if ndim < 2 {
             return Err(
@@ -667,17 +670,22 @@ impl PyNdArray {
         }
         inner
             .swapaxes(ndim - 2, ndim - 1)
-            .map(PyNdArray::from_core)
+            .map(|r| PyNdArray::from_core_with_base(r, self_obj))
             .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
-    fn transpose(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let inner = self.data.read().unwrap();
+    fn transpose(
+        zelf: PyRef<Self>,
+        args: vm::function::FuncArgs,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let inner = zelf.data.read().unwrap();
 
         // No args or single None arg => simple transpose (reverse axes)
         if args.args.is_empty() {
-            return Ok(PyNdArray::from_core(inner.transpose()));
+            return Ok(PyNdArray::from_core_with_base(inner.transpose(), self_obj));
         }
 
         // Extract axes from args - could be transpose(1, 0, 2) or transpose((1, 0, 2))
@@ -685,7 +693,7 @@ impl PyNdArray {
         if args.args.len() == 1 {
             let first = &args.args[0];
             if vm.is_none(first) {
-                return Ok(PyNdArray::from_core(inner.transpose()));
+                return Ok(PyNdArray::from_core_with_base(inner.transpose(), self_obj));
             }
             // Try as tuple/list
             if let Ok(tuple) = first.clone().try_into_value::<vm::builtins::PyTupleRef>(vm) {
@@ -732,8 +740,8 @@ impl PyNdArray {
                 }
             } else {
                 let _idx: i64 = first.clone().try_into_value(vm)?;
-                // Single int arg for 1-d: just return copy
-                return Ok(PyNdArray::from_core(inner.transpose()));
+                // Single int arg for 1-d: just return view
+                return Ok(PyNdArray::from_core_with_base(inner.transpose(), self_obj));
             }
         } else {
             // Multiple positional args: transpose(1, 0, 2)
@@ -751,7 +759,7 @@ impl PyNdArray {
 
         inner
             .transpose_axes(&axes)
-            .map(PyNdArray::from_core)
+            .map(|r| PyNdArray::from_core_with_base(r, self_obj))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
@@ -1461,12 +1469,18 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn swapaxes(&self, axis1: usize, axis2: usize, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        self.data
+    fn swapaxes(
+        zelf: PyRef<Self>,
+        axis1: usize,
+        axis2: usize,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        zelf.data
             .read()
             .unwrap()
             .swapaxes(axis1, axis2)
-            .map(PyNdArray::from_core)
+            .map(|r| PyNdArray::from_core_with_base(r, self_obj))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -1726,7 +1740,23 @@ impl PyNdArray {
     // --- Indexing ---
 
     #[pymethod]
-    fn __getitem__(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+    fn __getitem__(
+        zelf: PyRef<Self>,
+        key: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let parent_obj: PyObjectRef = zelf.as_object().to_owned();
+        zelf.getitem_impl(key, parent_obj, vm)
+    }
+
+    /// Internal implementation of `__getitem__`.  `parent_obj` is the `PyObjectRef` of
+    /// the array being indexed, stored as the `base` on returned view arrays.
+    fn getitem_impl(
+        &self,
+        key: PyObjectRef,
+        parent_obj: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
         let data = self.data.read().unwrap();
 
         // Integer index -> scalar or sub-array
@@ -1744,7 +1774,7 @@ impl PyNdArray {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
                     .map_err(|e| numpy_err(e, vm))?;
-                return Ok(PyNdArray::from_core(result).to_py(vm));
+                return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
             }
         }
 
@@ -1752,7 +1782,7 @@ impl PyNdArray {
         if let Some(slice) = key.downcast_ref::<PySlice>() {
             let arg = py_slice_to_slice_arg(slice, vm)?;
             let result = data.slice(&[arg]).map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core(result).to_py(vm));
+            return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
         }
 
         // Tuple index -> multi-dimensional indexing (integers and/or slices)
@@ -1887,9 +1917,13 @@ impl PyNdArray {
                     if let Ok(reshaped) = result.reshape(&shape) {
                         result = reshaped;
                     }
-                    return Ok(PyNdArray::from_core(result).to_py(vm));
+                    return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
                 }
-                return Ok(ndarray_or_scalar(result, vm));
+                // Return view if ndim > 0, scalar otherwise
+                if result.ndim() == 0 {
+                    return Ok(ndarray_or_scalar(result, vm));
+                }
+                return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
             }
 
             // All integers (with possible newaxis insertions)
@@ -1927,7 +1961,7 @@ impl PyNdArray {
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core(result).to_py(vm));
+            return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
         }
 
         // NdArray index: boolean mask or integer fancy indexing
@@ -1978,10 +2012,10 @@ impl PyNdArray {
             return Ok(PyNdArray::from_core(result).to_py(vm));
         }
 
-        // Ellipsis -> return a copy/view of the entire array
+        // Ellipsis -> return a view of the entire array
         if key.is(&vm.ctx.ellipsis) {
             let result = data.clone();
-            return Ok(PyNdArray::from_core(result).to_py(vm));
+            return Ok(PyNdArray::from_core_with_base(result, parent_obj).to_py(vm));
         }
 
         Err(vm.new_type_error("unsupported index type".to_owned()))
@@ -3535,7 +3569,8 @@ impl AsMapping for PyNdArray {
             }),
             subscript: atomic_func!(|mapping, needle: &vm::PyObject, vm| {
                 let zelf = PyNdArray::mapping_downcast(mapping);
-                zelf.__getitem__(needle.to_owned(), vm)
+                let parent_obj = zelf.as_object().to_owned();
+                zelf.getitem_impl(needle.to_owned(), parent_obj, vm)
             }),
             ass_subscript: atomic_func!(|mapping, needle: &vm::PyObject, value, vm| {
                 let zelf = PyNdArray::mapping_downcast(mapping);
