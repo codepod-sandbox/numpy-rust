@@ -9,10 +9,10 @@ pub fn polyval(p: &NdArray, x: &NdArray) -> NdArray {
     let p_f = p.astype(DType::Float64).flatten();
     let x_f = x.astype(DType::Float64).flatten();
 
-    let ArrayData::Float64(p_arr) = &p_f.data else {
+    let ArrayData::Float64(p_arr) = p_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(x_arr) = &x_f.data else {
+    let ArrayData::Float64(x_arr) = x_f.data() else {
         unreachable!()
     };
 
@@ -49,10 +49,10 @@ pub fn polyfit(x: &NdArray, y: &NdArray, deg: usize) -> crate::error::Result<NdA
     let x_f = x.astype(DType::Float64).flatten();
     let y_f = y.astype(DType::Float64).flatten();
 
-    let ArrayData::Float64(x_arr) = &x_f.data else {
+    let ArrayData::Float64(x_arr) = x_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(y_arr) = &y_f.data else {
+    let ArrayData::Float64(y_arr) = y_f.data() else {
         unreachable!()
     };
 
@@ -205,7 +205,7 @@ mod tests {
         let y = NdArray::from_vec(vec![1.0_f64, 0.0, 1.0, 4.0]); // y = x^2 - 2x + 1
         let p = polyfit(&x, &y, 2).unwrap();
         let y_hat = polyval(&p, &x);
-        let ArrayData::Float64(y_arr) = &y.data else {
+        let ArrayData::Float64(y_arr) = y.data() else {
             panic!()
         };
         let ArrayData::Float64(yh_arr) = y_hat.data() else {

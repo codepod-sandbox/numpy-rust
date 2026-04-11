@@ -28,7 +28,7 @@ impl NdArray {
         }
 
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
 
@@ -88,7 +88,7 @@ impl NdArray {
         }
 
         let f = self.flatten().astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
 
@@ -143,7 +143,7 @@ impl NdArray {
     /// - `minlength` sets minimum output length.
     pub fn bincount(&self, weights: Option<&NdArray>, minlength: usize) -> Result<NdArray> {
         let int_arr = self.flatten().astype(DType::Int64);
-        let ArrayData::Int64(arr) = &int_arr.data else {
+        let ArrayData::Int64(arr) = int_arr.data() else {
             unreachable!()
         };
 
@@ -164,7 +164,7 @@ impl NdArray {
         match weights {
             Some(w) => {
                 let w_flat = w.flatten().astype(DType::Float64);
-                let ArrayData::Float64(w_arr) = &w_flat.data else {
+                let ArrayData::Float64(w_arr) = w_flat.data() else {
                     unreachable!()
                 };
                 if w_arr.len() != flat.len() {

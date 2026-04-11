@@ -107,7 +107,7 @@ impl NdArray {
             ));
         }
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
 
@@ -232,7 +232,7 @@ impl NdArray {
 
     /// True if all elements are truthy.
     pub fn all(&self) -> bool {
-        match &self.data {
+        match self.data() {
             ArrayData::Bool(a) => a.iter().all(|&x| x),
             ArrayData::Int32(a) => a.iter().all(|&x| x != 0),
             ArrayData::Int64(a) => a.iter().all(|&x| x != 0),
@@ -246,7 +246,7 @@ impl NdArray {
 
     /// True if any element is truthy.
     pub fn any(&self) -> bool {
-        match &self.data {
+        match self.data() {
             ArrayData::Bool(a) => a.iter().any(|&x| x),
             ArrayData::Int32(a) => a.iter().any(|&x| x != 0),
             ArrayData::Int64(a) => a.iter().any(|&x| x != 0),
@@ -266,7 +266,7 @@ impl NdArray {
                 "sum not supported for string arrays".into(),
             ));
         }
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Bool(a) => {
                 let s: i32 = a.iter().map(|&x| x as i32).sum();
                 ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
@@ -308,7 +308,7 @@ impl NdArray {
         }
         validate_axis(axis, self.ndim())?;
         let ax = Axis(axis);
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Bool(a) => {
                 let int_arr = a.mapv(|x| x as i32);
                 ArrayData::Int32(int_arr.sum_axis(ax).into_shared())
@@ -325,7 +325,7 @@ impl NdArray {
     }
 
     fn reduce_all_min(&self) -> Result<NdArray> {
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Bool(a) => {
                 let v = *a
                     .iter()
@@ -410,7 +410,7 @@ impl NdArray {
     }
 
     fn reduce_all_max(&self) -> Result<NdArray> {
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Bool(a) => {
                 let v = *a
                     .iter()
@@ -496,7 +496,7 @@ impl NdArray {
                 "argmin not supported for string arrays".into(),
             ));
         }
-        match &self.data {
+        match self.data() {
             ArrayData::Float64(a) => Ok(a
                 .iter()
                 .enumerate()
@@ -516,7 +516,7 @@ impl NdArray {
                 "argmax not supported for string arrays".into(),
             ));
         }
-        match &self.data {
+        match self.data() {
             ArrayData::Float64(a) => Ok(a
                 .iter()
                 .enumerate()
@@ -533,7 +533,7 @@ impl NdArray {
     fn reduce_axis_argmin(&self, axis: usize) -> Result<NdArray> {
         validate_axis(axis, self.ndim())?;
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
         let ax = Axis(axis);
@@ -562,7 +562,7 @@ impl NdArray {
     fn reduce_axis_argmax(&self, axis: usize) -> Result<NdArray> {
         validate_axis(axis, self.ndim())?;
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
         let ax = Axis(axis);
@@ -596,7 +596,7 @@ impl NdArray {
                 $arr.fold_axis(ax, $init, $fold)
             };
         }
-        let data = match (&self.data, op) {
+        let data = match (self.data(), op) {
             (ArrayData::Int32(a), ReduceOp::Min) => {
                 ArrayData::Int32(fold_axis!(a, i32::MAX, |&acc, &x| acc.min(x)).into_shared())
             }

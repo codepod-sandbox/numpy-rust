@@ -16,15 +16,15 @@ fn prepare_cmp(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
     // String+String: skip promotion (both already Str)
     if lhs.dtype().is_string() {
         let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
-        let a = broadcast_array_data(&lhs.data, &out_shape);
-        let b = broadcast_array_data(&rhs.data, &out_shape);
+        let a = broadcast_array_data(lhs.data(), &out_shape);
+        let b = broadcast_array_data(rhs.data(), &out_shape);
         return Ok((a, b));
     }
     let common_dtype = lhs.dtype().promote(rhs.dtype());
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(&lhs.data, common_dtype);
-    let b = cast_array_data(&rhs.data, common_dtype);
+    let a = cast_array_data(lhs.data(), common_dtype);
+    let b = cast_array_data(rhs.data(), common_dtype);
 
     let a = broadcast_array_data(&a, &out_shape);
     let b = broadcast_array_data(&b, &out_shape);

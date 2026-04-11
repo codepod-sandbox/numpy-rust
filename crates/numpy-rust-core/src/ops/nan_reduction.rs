@@ -42,7 +42,7 @@ fn maybe_keepdims(
 
 /// Helper: extract the Float64 inner array from an NdArray that has been cast.
 fn as_f64(arr: &NdArray) -> &ArrayD<f64> {
-    match &arr.data {
+    match arr.data() {
         ArrayData::Float64(a) => a,
         _ => unreachable!("expected Float64 after astype"),
     }

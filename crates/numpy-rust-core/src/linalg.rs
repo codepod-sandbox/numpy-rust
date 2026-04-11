@@ -40,8 +40,8 @@ mod inner {
 
     /// Matrix multiplication: (m x k) @ (k x n) -> (m x n).
     pub fn matmul(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-        let am = to_nalgebra(&a.data)?;
-        let bm = to_nalgebra(&b.data)?;
+        let am = to_nalgebra(a.data())?;
+        let bm = to_nalgebra(b.data())?;
         if am.ncols() != bm.nrows() {
             return Err(NumpyError::ShapeMismatch(format!(
                 "matmul: shapes {:?} and {:?} not aligned",
@@ -55,7 +55,7 @@ mod inner {
 
     /// Matrix inverse via LU decomposition.
     pub fn inv(a: &NdArray) -> Result<NdArray> {
-        let m = to_nalgebra(&a.data)?;
+        let m = to_nalgebra(a.data())?;
         check_square(&m)?;
         let result = m
             .clone()
@@ -66,9 +66,9 @@ mod inner {
 
     /// Solve Ax = b.
     pub fn solve(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-        let am = to_nalgebra(&a.data)?;
+        let am = to_nalgebra(a.data())?;
         check_square(&am)?;
-        let bm = to_nalgebra(&b.data)?;
+        let bm = to_nalgebra(b.data())?;
         let lu = am.lu();
         let result = lu
             .solve(&bm)
@@ -78,7 +78,7 @@ mod inner {
 
     /// Determinant via LU decomposition.
     pub fn det(a: &NdArray) -> Result<f64> {
-        let m = to_nalgebra(&a.data)?;
+        let m = to_nalgebra(a.data())?;
         check_square(&m)?;
         Ok(m.determinant())
     }
@@ -86,7 +86,7 @@ mod inner {
     /// Eigendecomposition for symmetric matrices.
     /// Returns (eigenvalues as 1-D array, eigenvectors as 2-D array).
     pub fn eig(a: &NdArray) -> Result<(NdArray, NdArray)> {
-        let m = to_nalgebra(&a.data)?;
+        let m = to_nalgebra(a.data())?;
         check_square(&m)?;
         let n = m.nrows();
 
@@ -235,7 +235,7 @@ mod inner {
     /// Singular Value Decomposition.
     /// Returns (U, S, Vt) where A ≈ U @ diag(S) @ Vt.
     pub fn svd(a: &NdArray) -> Result<(NdArray, NdArray, NdArray)> {
-        let m = to_nalgebra(&a.data)?;
+        let m = to_nalgebra(a.data())?;
         let decomp = m.svd(true, true);
 
         let u_mat = decomp
@@ -259,7 +259,7 @@ mod inner {
 
     /// QR decomposition. Returns (Q, R).
     pub fn qr(a: &NdArray) -> Result<(NdArray, NdArray)> {
-        let m = to_nalgebra(&a.data)?;
+        let m = to_nalgebra(a.data())?;
         let decomp = m.qr();
         let q = decomp.q();
         let r = decomp.r();
@@ -268,7 +268,7 @@ mod inner {
 
     /// Frobenius norm.
     pub fn norm(a: &NdArray) -> Result<f64> {
-        let f64_data = cast_array_data(&a.data, DType::Float64);
+        let f64_data = cast_array_data(a.data(), DType::Float64);
         match f64_data {
             ArrayData::Float64(arr) => {
                 let sum_sq: f64 = arr.iter().map(|&x| x * x).sum();
@@ -281,7 +281,7 @@ mod inner {
     /// Cholesky decomposition for symmetric positive-definite matrices.
     /// Returns L such that A = L @ L^T.
     pub fn cholesky(a: &NdArray) -> Result<NdArray> {
-        let m = to_nalgebra(&a.data)?;
+        let m = to_nalgebra(a.data())?;
         check_square(&m)?;
         let chol = nalgebra::linalg::Cholesky::new(m)
             .ok_or_else(|| NumpyError::ValueError("matrix is not positive definite".into()))?;
@@ -293,14 +293,14 @@ mod inner {
     /// Returns (solution, residuals, rank, singular_values).
     /// a: (m, n) matrix, b: (m,) or (m, k) matrix
     pub fn lstsq(a: &NdArray, b: &NdArray) -> Result<(NdArray, NdArray, usize, NdArray)> {
-        let am = to_nalgebra(&a.data)?;
+        let am = to_nalgebra(a.data())?;
         // b might be 1-D — reshape to column vector
         let b_2d = if b.ndim() == 1 {
             b.reshape(&[b.size(), 1])?
         } else {
             b.clone()
         };
-        let bm = to_nalgebra(&b_2d.data)?;
+        let bm = to_nalgebra(b_2d.data())?;
 
         let (m, n) = (am.nrows(), am.ncols());
         if bm.nrows() != m {

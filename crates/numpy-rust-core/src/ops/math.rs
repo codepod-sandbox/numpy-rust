@@ -25,7 +25,7 @@ macro_rules! float_unary {
     ($name:ident, $f32_op:expr, $f64_op:expr, $c64_op:expr, $c128_op:expr) => {
         impl NdArray {
             pub fn $name(&self) -> NdArray {
-                let data = ensure_float(&self.data);
+                let data = ensure_float(self.data());
                 let result = match data {
                     ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
                     ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
@@ -51,7 +51,7 @@ macro_rules! float_only_unary {
                         concat!(stringify!($name), " not supported for complex arrays").into(),
                     ));
                 }
-                let data = ensure_float(&self.data);
+                let data = ensure_float(self.data());
                 let result = match data {
                     ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
                     ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
@@ -218,8 +218,8 @@ macro_rules! math_binary {
                         concat!(stringify!($name), " not supported for complex arrays").into(),
                     ));
                 }
-                let data_a = ensure_float(&self.data);
-                let data_b = ensure_float(&other.data);
+                let data_a = ensure_float(self.data());
+                let data_b = ensure_float(other.data());
                 // Unify dtypes: Float32 only if BOTH inputs are Float32; otherwise Float64.
                 let out_dtype = match (&data_a, &data_b) {
                     (ArrayData::Float32(_), ArrayData::Float32(_)) => DType::Float32,
@@ -328,8 +328,8 @@ impl NdArray {
                 "ldexp not supported for complex arrays".into(),
             ));
         }
-        let data_a = ensure_float(&self.data);
-        let exp_i32 = cast_array_data(&exp_arr.data, DType::Int32);
+        let data_a = ensure_float(self.data());
+        let exp_i32 = cast_array_data(exp_arr.data(), DType::Int32);
         let out_shape = broadcast_shape(self.shape(), exp_arr.shape())?;
         let data_a = broadcast_array_data(&data_a, &out_shape);
         let exp_i32 = broadcast_array_data(&exp_i32, &out_shape);
@@ -356,7 +356,7 @@ impl NdArray {
     /// Element-wise absolute value. Works on int and float types.
     /// For complex types, returns the magnitude (norm) as a float.
     pub fn abs(&self) -> NdArray {
-        let result = match &self.data {
+        let result = match self.data() {
             ArrayData::Bool(a) => ArrayData::Bool(a.clone()),
             ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.abs()).into_shared()),
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.abs()).into_shared()),
@@ -369,14 +369,14 @@ impl NdArray {
         let mut r = NdArray::from_data(result);
         // Preserve narrow dtype for non-complex (complex abs returns float)
         if !self.dtype().is_complex() {
-            r.declared_dtype = self.declared_dtype;
+            r.preserve_descriptor_from(self);
         }
         r
     }
 
     /// Return the real part of the array.
     pub fn real(&self) -> NdArray {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
                 NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re).into_shared()))
             }
@@ -390,7 +390,7 @@ impl NdArray {
 
     /// Return the imaginary part of the array.
     pub fn imag(&self) -> NdArray {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
                 NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im).into_shared()))
             }
@@ -404,10 +404,10 @@ impl NdArray {
 
     /// Set the real part of the array from `real_values` (in-place replacement).
     pub fn set_real(&mut self, real_values: &NdArray) {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
                 let re = real_values.astype(crate::DType::Float32);
-                if let ArrayData::Float32(re_arr) = &re.data {
+                if let ArrayData::Float32(re_arr) = re.data() {
                     let re_vec: Vec<f32> = re_arr.iter().copied().collect();
                     let new_data: Vec<_> = if re_vec.len() == 1 {
                         a.iter()
@@ -421,13 +421,16 @@ impl NdArray {
                     };
                     let shape = ndarray::IxDyn(a.shape());
                     if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex64(new_arr.into_shared());
+                        self.replace_data_with_dtype(
+                            ArrayData::Complex64(new_arr.into_shared()),
+                            DType::Complex64,
+                        );
                     }
                 }
             }
             ArrayData::Complex128(a) => {
                 let re = real_values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(re_arr) = &re.data {
+                if let ArrayData::Float64(re_arr) = re.data() {
                     let re_vec: Vec<f64> = re_arr.iter().copied().collect();
                     let new_data: Vec<_> = if re_vec.len() == 1 {
                         a.iter()
@@ -441,7 +444,10 @@ impl NdArray {
                     };
                     let shape = ndarray::IxDyn(a.shape());
                     if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex128(new_arr.into_shared());
+                        self.replace_data_with_dtype(
+                            ArrayData::Complex128(new_arr.into_shared()),
+                            DType::Complex128,
+                        );
                     }
                 }
             }
@@ -454,10 +460,10 @@ impl NdArray {
 
     /// Set the imaginary part of the array from `imag_values` (in-place replacement).
     pub fn set_imag(&mut self, imag_values: &NdArray) {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
                 let im = imag_values.astype(crate::DType::Float32);
-                if let ArrayData::Float32(im_arr) = &im.data {
+                if let ArrayData::Float32(im_arr) = im.data() {
                     let im_vec: Vec<f32> = im_arr.iter().copied().collect();
                     let new_data: Vec<_> = if im_vec.len() == 1 {
                         a.iter()
@@ -471,13 +477,16 @@ impl NdArray {
                     };
                     let shape = ndarray::IxDyn(a.shape());
                     if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex64(new_arr.into_shared());
+                        self.replace_data_with_dtype(
+                            ArrayData::Complex64(new_arr.into_shared()),
+                            DType::Complex64,
+                        );
                     }
                 }
             }
             ArrayData::Complex128(a) => {
                 let im = imag_values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(im_arr) = &im.data {
+                if let ArrayData::Float64(im_arr) = im.data() {
                     let im_vec: Vec<f64> = im_arr.iter().copied().collect();
                     let new_data: Vec<_> = if im_vec.len() == 1 {
                         a.iter()
@@ -491,7 +500,10 @@ impl NdArray {
                     };
                     let shape = ndarray::IxDyn(a.shape());
                     if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex128(new_arr.into_shared());
+                        self.replace_data_with_dtype(
+                            ArrayData::Complex128(new_arr.into_shared()),
+                            DType::Complex128,
+                        );
                     }
                 }
             }
@@ -503,7 +515,7 @@ impl NdArray {
 
     /// Return the complex conjugate.
     pub fn conj(&self) -> NdArray {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
                 NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj()).into_shared()))
             }
@@ -517,7 +529,7 @@ impl NdArray {
 
     /// Return the angle (argument) of complex elements.
     pub fn angle(&self) -> NdArray {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
                 NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()).into_shared()))
             }
@@ -536,7 +548,7 @@ impl NdArray {
             return self.clone();
         }
         let factor = 10.0_f64.powi(decimals);
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float32(a) => {
                 let f = factor as f32;
@@ -552,7 +564,7 @@ impl NdArray {
 
     /// Returns a Bool array: true where sign bit is set (negative).
     pub fn signbit(&self) -> NdArray {
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Float32(a) => {
                 ArrayData::Bool(a.mapv(|x| x.is_sign_negative()).into_shared())
             }
@@ -570,7 +582,7 @@ impl NdArray {
 
     /// Element-wise sign function. Returns -1, 0, or 1.
     pub fn sign(&self) -> NdArray {
-        let result = match &self.data {
+        let result = match self.data() {
             ArrayData::Bool(a) => ArrayData::Int32(a.mapv(|x| if x { 1 } else { 0 }).into_shared()),
             ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.signum()).into_shared()),
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.signum()).into_shared()),
@@ -609,10 +621,10 @@ impl NdArray {
 
     /// Element-wise negation. Works on int and float types.
     pub fn neg(&self) -> NdArray {
-        let result = match &self.data {
+        let result = match self.data() {
             ArrayData::Bool(_) => {
                 // NumPy: -True == -1, -False == 0 -> cast to i32 then negate
-                let cast = cast_array_data(&self.data, DType::Int32);
+                let cast = cast_array_data(self.data(), DType::Int32);
                 match cast {
                     ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x).into_shared()),
                     _ => unreachable!(),
@@ -627,7 +639,7 @@ impl NdArray {
             ArrayData::Str(_) => panic!("negation not supported for string arrays"),
         };
         let mut r = NdArray::from_data(result);
-        r.declared_dtype = self.declared_dtype;
+        r.preserve_descriptor_from(self);
         r
     }
 }
@@ -642,8 +654,8 @@ impl NdArray {
                 "arctan2 not supported for complex arrays".into(),
             ));
         }
-        let data_y = ensure_float(&self.data);
-        let data_x = ensure_float(&other.data);
+        let data_y = ensure_float(self.data());
+        let data_x = ensure_float(other.data());
         // broadcast
         let out_shape = broadcast_shape(self.shape(), other.shape())?;
         let data_y = broadcast_array_data(&data_y, &out_shape);
@@ -671,7 +683,7 @@ impl NdArray {
 
     /// Clip (limit) array values to [a_min, a_max].
     pub fn clip(&self, a_min: Option<f64>, a_max: Option<f64>) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(
                 a.mapv(|x| {
@@ -719,7 +731,7 @@ impl NdArray {
         a_max: Option<num_complex::Complex<f64>>,
     ) -> NdArray {
         use crate::ops::comparison::complex_cmp;
-        match &self.data {
+        match self.data() {
             ArrayData::Complex128(a) => {
                 let result = a.mapv(|x| {
                     let mut v = x;
@@ -775,10 +787,10 @@ impl NdArray {
             crate::dtype::DType::Bool
             | crate::dtype::DType::Int32
             | crate::dtype::DType::Int64
-            | crate::dtype::DType::Str => return NdArray::from_data(self.data.deep_copy()),
+            | crate::dtype::DType::Str => return NdArray::from_data(self.data().deep_copy()),
             _ => {}
         }
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(
                 a.mapv(|x| {
@@ -858,7 +870,7 @@ impl NdArray {
             ),
             _ => {
                 // Bool/Int/Str already handled above; this shouldn't happen
-                return NdArray::from_data(self.data.deep_copy());
+                return NdArray::from_data(self.data().deep_copy());
             }
         };
         NdArray::from_data(result)
@@ -871,7 +883,7 @@ impl NdArray {
                 "spacing not supported for complex arrays".into(),
             ));
         }
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(
                 a.mapv(|x| {
@@ -895,7 +907,7 @@ impl NdArray {
     /// Modified Bessel function of the first kind, order 0.
     /// Uses series expansion: I0(x) = Σ ((x/2)^k / k!)^2
     pub fn i0(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float64(a) => ArrayData::Float64(
                 a.mapv(|x| {
@@ -944,7 +956,7 @@ impl NdArray {
                 "frexp not supported for complex arrays".into(),
             ));
         }
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let shape: Vec<usize> = self.shape().to_vec();
         match data {
             ArrayData::Float64(a) => {
@@ -997,7 +1009,7 @@ impl NdArray {
                 "modf not supported for complex arrays".into(),
             ));
         }
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let shape: Vec<usize> = self.shape().to_vec();
         match data {
             ArrayData::Float64(a) => {
@@ -1060,7 +1072,7 @@ fn maybe_complex(data: &ArrayData, is_out_of_domain: impl Fn(f64) -> bool) -> Ar
 
 impl NdArray {
     pub fn scimath_sqrt(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let data = maybe_complex(&data, |x| x < 0.0);
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.sqrt()).into_shared()),
@@ -1072,7 +1084,7 @@ impl NdArray {
     }
 
     pub fn scimath_log(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let data = maybe_complex(&data, |x| x < 0.0);
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.ln()).into_shared()),
@@ -1084,7 +1096,7 @@ impl NdArray {
     }
 
     pub fn scimath_log2(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let data = maybe_complex(&data, |x| x < 0.0);
         let ln2 = std::f64::consts::LN_2;
         let result = match data {
@@ -1099,7 +1111,7 @@ impl NdArray {
     }
 
     pub fn scimath_log10(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let data = maybe_complex(&data, |x| x < 0.0);
         let ln10 = std::f64::consts::LN_10;
         let result = match data {
@@ -1114,7 +1126,7 @@ impl NdArray {
     }
 
     pub fn scimath_arcsin(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let data = maybe_complex(&data, |x| x.abs() > 1.0);
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.asin()).into_shared()),
@@ -1126,7 +1138,7 @@ impl NdArray {
     }
 
     pub fn scimath_arccos(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let data = maybe_complex(&data, |x| x.abs() > 1.0);
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.acos()).into_shared()),
@@ -1138,7 +1150,7 @@ impl NdArray {
     }
 
     pub fn scimath_arctanh(&self) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let data = maybe_complex(&data, |x| x.abs() > 1.0);
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.atanh()).into_shared()),
@@ -1151,8 +1163,8 @@ impl NdArray {
 
     /// Complex-safe power: negative base → complex via powc.
     pub fn scimath_power(&self, exp_arr: &NdArray) -> Result<NdArray> {
-        let data_a = ensure_float(&self.data);
-        let data_e = ensure_float(&exp_arr.data);
+        let data_a = ensure_float(self.data());
+        let data_e = ensure_float(exp_arr.data());
         let out_shape = broadcast_shape(self.shape(), exp_arr.shape())?;
         let data_a = broadcast_array_data(&data_a, &out_shape);
         let data_e = broadcast_array_data(&data_e, &out_shape);

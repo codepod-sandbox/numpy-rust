@@ -13,13 +13,13 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
     let xp_f = xp.astype(DType::Float64).flatten();
     let fp_f = fp.astype(DType::Float64).flatten();
 
-    let ArrayData::Float64(x_arr) = &x_f.data else {
+    let ArrayData::Float64(x_arr) = x_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(xp_arr) = &xp_f.data else {
+    let ArrayData::Float64(xp_arr) = xp_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(fp_arr) = &fp_f.data else {
+    let ArrayData::Float64(fp_arr) = fp_f.data() else {
         unreachable!()
     };
 
@@ -109,7 +109,7 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
 /// Uses central differences for interior points, forward/backward at edges.
 pub fn gradient_1d(f: &NdArray, spacing: f64) -> Result<NdArray> {
     let arr = f.astype(DType::Float64).flatten();
-    let ArrayData::Float64(data) = &arr.data else {
+    let ArrayData::Float64(data) = arr.data() else {
         unreachable!()
     };
     let n = data.len();
@@ -138,7 +138,7 @@ pub fn gradient_1d(f: &NdArray, spacing: f64) -> Result<NdArray> {
 /// Returns one array per axis.
 pub fn gradient_nd(f: &NdArray, spacing: f64) -> Result<Vec<NdArray>> {
     let arr = f.astype(DType::Float64);
-    let ArrayData::Float64(data) = &arr.data else {
+    let ArrayData::Float64(data) = arr.data() else {
         unreachable!()
     };
     let shape = data.shape().to_vec();
@@ -196,7 +196,7 @@ pub fn gradient_full(
     }
 
     let arr = f.astype(DType::Float64);
-    let ArrayData::Float64(data) = &arr.data else {
+    let ArrayData::Float64(data) = arr.data() else {
         unreachable!()
     };
     let shape = data.shape().to_vec();
@@ -327,7 +327,7 @@ pub fn trapz(y: &NdArray, x: Option<&NdArray>, dx: f64, axis: Option<i64>) -> Re
     }
 
     let y_f = y.astype(DType::Float64);
-    let ArrayData::Float64(y_arr) = &y_f.data else {
+    let ArrayData::Float64(y_arr) = y_f.data() else {
         unreachable!()
     };
 
@@ -341,7 +341,7 @@ pub fn trapz(y: &NdArray, x: Option<&NdArray>, dx: f64, axis: Option<i64>) -> Re
     // Build dx array along axis_idx
     let dx_vals: Vec<f64> = if let Some(x_arr) = x {
         let x_f = x_arr.astype(DType::Float64);
-        let ArrayData::Float64(xa) = &x_f.data else {
+        let ArrayData::Float64(xa) = x_f.data() else {
             unreachable!()
         };
         let x_flat: Vec<f64> = xa.iter().copied().collect();
@@ -428,7 +428,7 @@ pub fn cumulative_trapezoid(
     }
 
     let y_f = y.astype(DType::Float64);
-    let ArrayData::Float64(y_arr) = &y_f.data else {
+    let ArrayData::Float64(y_arr) = y_f.data() else {
         unreachable!()
     };
     let n = y.shape()[axis_idx];
@@ -440,7 +440,7 @@ pub fn cumulative_trapezoid(
 
     let dx_vals: Vec<f64> = if let Some(x_arr) = x {
         let x_f = x_arr.astype(DType::Float64);
-        let ArrayData::Float64(xa) = &x_f.data else {
+        let ArrayData::Float64(xa) = x_f.data() else {
             unreachable!()
         };
         let x_flat: Vec<f64> = xa.iter().copied().collect();

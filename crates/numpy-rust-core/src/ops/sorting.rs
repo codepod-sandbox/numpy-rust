@@ -29,7 +29,7 @@ impl NdArray {
         let f = self.astype(DType::Float64);
         match axis {
             None => {
-                let ArrayData::Float64(arr) = &f.data else {
+                let ArrayData::Float64(arr) = f.data() else {
                     unreachable!()
                 };
                 let mut flat: Vec<f64> = arr.iter().copied().collect();
@@ -46,7 +46,7 @@ impl NdArray {
                         ndim: f.ndim(),
                     });
                 }
-                let ArrayData::Float64(arr) = &f.data else {
+                let ArrayData::Float64(arr) = f.data() else {
                     unreachable!()
                 };
                 let mut out = arr.clone();
@@ -78,7 +78,7 @@ impl NdArray {
         let f = self.astype(DType::Float64);
         match axis {
             None => {
-                let ArrayData::Float64(arr) = &f.data else {
+                let ArrayData::Float64(arr) = f.data() else {
                     unreachable!()
                 };
                 let flat: Vec<f64> = arr.iter().copied().collect();
@@ -96,7 +96,7 @@ impl NdArray {
                         ndim: f.ndim(),
                     });
                 }
-                let ArrayData::Float64(arr) = &f.data else {
+                let ArrayData::Float64(arr) = f.data() else {
                     unreachable!()
                 };
                 let mut result = ArrayD::<i64>::zeros(arr.raw_dim());

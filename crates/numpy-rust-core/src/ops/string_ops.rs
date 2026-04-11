@@ -5,7 +5,7 @@ use crate::NdArray;
 
 /// Helper: ensure the array is of string dtype.
 fn require_string(arr: &NdArray) -> Result<&ArrayD<String>> {
-    match &arr.data {
+    match arr.data() {
         ArrayData::Str(a) => Ok(a),
         _ => Err(NumpyError::TypeError(
             "string operation requires string array".into(),

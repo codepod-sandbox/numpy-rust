@@ -76,69 +76,72 @@ pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> Result<NdArray
     }
     let cols = m.unwrap_or(n);
     let mut arr = NdArray::zeros(&[n, cols], dtype);
-    match &mut arr.data {
-        ArrayData::Bool(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = true;
+    arr.mutate_data(|data| -> Result<()> {
+        match data {
+            ArrayData::Bool(a) => {
+                for i in 0..n {
+                    let j = i as isize + k;
+                    if j >= 0 && (j as usize) < cols {
+                        a[[i, j as usize]] = true;
+                    }
                 }
             }
-        }
-        ArrayData::Int32(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1;
+            ArrayData::Int32(a) => {
+                for i in 0..n {
+                    let j = i as isize + k;
+                    if j >= 0 && (j as usize) < cols {
+                        a[[i, j as usize]] = 1;
+                    }
                 }
             }
-        }
-        ArrayData::Int64(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1;
+            ArrayData::Int64(a) => {
+                for i in 0..n {
+                    let j = i as isize + k;
+                    if j >= 0 && (j as usize) < cols {
+                        a[[i, j as usize]] = 1;
+                    }
                 }
             }
-        }
-        ArrayData::Float32(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1.0;
+            ArrayData::Float32(a) => {
+                for i in 0..n {
+                    let j = i as isize + k;
+                    if j >= 0 && (j as usize) < cols {
+                        a[[i, j as usize]] = 1.0;
+                    }
                 }
             }
-        }
-        ArrayData::Float64(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1.0;
+            ArrayData::Float64(a) => {
+                for i in 0..n {
+                    let j = i as isize + k;
+                    if j >= 0 && (j as usize) < cols {
+                        a[[i, j as usize]] = 1.0;
+                    }
                 }
             }
-        }
-        ArrayData::Complex64(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = Complex::new(1.0f32, 0.0);
+            ArrayData::Complex64(a) => {
+                for i in 0..n {
+                    let j = i as isize + k;
+                    if j >= 0 && (j as usize) < cols {
+                        a[[i, j as usize]] = Complex::new(1.0f32, 0.0);
+                    }
                 }
             }
-        }
-        ArrayData::Complex128(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = Complex::new(1.0f64, 0.0);
+            ArrayData::Complex128(a) => {
+                for i in 0..n {
+                    let j = i as isize + k;
+                    if j >= 0 && (j as usize) < cols {
+                        a[[i, j as usize]] = Complex::new(1.0f64, 0.0);
+                    }
                 }
             }
+            ArrayData::Str(_) => {
+                return Err(NumpyError::TypeError(
+                    "eye() not supported for string dtype".into(),
+                ));
+            }
         }
-        ArrayData::Str(_) => {
-            return Err(NumpyError::TypeError(
-                "eye() not supported for string dtype".into(),
-            ));
-        }
-    }
+        Ok(())
+    })?;
     Ok(arr)
 }
 

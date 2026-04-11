@@ -37,7 +37,7 @@ pub fn einsum(subscripts: &str, operands: &[&NdArray]) -> Result<NdArray> {
     let float_ops: Vec<NdArray> = operands.iter().map(|a| a.astype(DType::Float64)).collect();
     let arrays: Vec<&ArrayD<f64>> = float_ops
         .iter()
-        .map(|a| match &a.data {
+        .map(|a| match a.data() {
             ArrayData::Float64(arr) => arr,
             _ => unreachable!(),
         })

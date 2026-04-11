@@ -82,14 +82,14 @@ fn f32_to_half_bits(f: f32) -> u16 {
 /// Element-wise ternary: select from `x` where `cond` is true, else from `y`.
 /// Like `numpy.where(cond, x, y)`.
 pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
-    let bool_cond = match &cond.data {
+    let bool_cond = match cond.data() {
         ArrayData::Bool(a) => a.clone(),
         _ => return Err(NumpyError::TypeError("condition must be boolean".into())),
     };
 
     // Promote x and y to common dtype (skip promotion for string+string)
     let (xd, yd) = if x.dtype().is_string() && y.dtype().is_string() {
-        (x.data.clone(), y.data.clone())
+        (x.data().clone(), y.data().clone())
     } else if x.dtype().is_string() || y.dtype().is_string() {
         return Err(NumpyError::TypeError(
             "where: cannot mix string and numeric arrays".into(),
@@ -97,8 +97,8 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
     } else {
         let common_dtype = x.dtype().promote(y.dtype());
         (
-            cast_array_data(&x.data, common_dtype),
-            cast_array_data(&y.data, common_dtype),
+            cast_array_data(x.data(), common_dtype),
+            cast_array_data(y.data(), common_dtype),
         )
     };
 
@@ -155,7 +155,7 @@ impl NdArray {
     /// For integer/bool types, always returns all-false.
     /// For complex types, true if either component is NaN.
     pub fn isnan(&self) -> NdArray {
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
             ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
             ArrayData::Complex64(a) => {
@@ -173,7 +173,7 @@ impl NdArray {
     /// For integer/bool types, always returns all-true.
     /// For complex types, true if both components are finite.
     pub fn isfinite(&self) -> NdArray {
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
             ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
             ArrayData::Complex64(a) => ArrayData::Bool(
@@ -192,7 +192,7 @@ impl NdArray {
     /// Returns a Bool array: true where elements are infinite.
     /// For integer/bool types, always returns all-false.
     pub fn isinf(&self) -> NdArray {
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
             ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
             ArrayData::Complex64(a) => ArrayData::Bool(
@@ -221,7 +221,7 @@ impl NdArray {
 
         // Same itemsize: reinterpret bytes 1:1
         if src_size == tgt_size {
-            match (&self.data, target) {
+            match (self.data(), target) {
                 // Bool (1 byte) <-> Int8 (1 byte)
                 (ArrayData::Bool(a), DType::Int8) => {
                     let raw: Vec<i32> = a.iter().map(|&b| if b { 1 } else { 0 }).collect();
@@ -245,39 +245,33 @@ impl NdArray {
                     if src_dt == DType::UInt16 || src_dt == DType::Int16 =>
                 {
                     let raw: Vec<f32> = a.iter().map(|&v| half_bits_to_f32(v as u16)).collect();
-                    Ok(NdArray {
-                        data: ArrayData::Float32(
-                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                                .unwrap()
-                                .into_shared(),
-                        ),
-                        declared_dtype: Some(DType::Float16),
-                    })
+                    Ok(NdArray::from_data(ArrayData::Float32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
+                    ))
+                    .with_declared_dtype(DType::Float16))
                 }
                 (ArrayData::Float32(a), DType::UInt16) if src_dt == DType::Float16 => {
                     let raw: Vec<i32> = a.iter().map(|&f| f32_to_half_bits(f) as i32).collect();
-                    Ok(NdArray {
-                        data: ArrayData::Int32(
-                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                                .unwrap()
-                                .into_shared(),
-                        ),
-                        declared_dtype: Some(DType::UInt16),
-                    })
+                    Ok(NdArray::from_data(ArrayData::Int32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
+                    ))
+                    .with_declared_dtype(DType::UInt16))
                 }
                 (ArrayData::Float32(a), DType::Int16) if src_dt == DType::Float16 => {
                     let raw: Vec<i32> = a
                         .iter()
                         .map(|&f| f32_to_half_bits(f) as i16 as i32)
                         .collect();
-                    Ok(NdArray {
-                        data: ArrayData::Int32(
-                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                                .unwrap()
-                                .into_shared(),
-                        ),
-                        declared_dtype: Some(DType::Int16),
-                    })
+                    Ok(NdArray::from_data(ArrayData::Int32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
+                    ))
+                    .with_declared_dtype(DType::Int16))
                 }
                 // Float32 (4 bytes) <-> Int32 (4 bytes)
                 (ArrayData::Float32(a), DType::Int32) => {
@@ -326,7 +320,7 @@ impl NdArray {
 
     /// Check if any element is infinite.
     pub fn has_inf(&self) -> bool {
-        match &self.data {
+        match self.data() {
             ArrayData::Float32(a) => a.iter().any(|x| x.is_infinite()),
             ArrayData::Float64(a) => a.iter().any(|x| x.is_infinite()),
             ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_infinite() || x.im.is_infinite()),
@@ -336,7 +330,7 @@ impl NdArray {
     }
 
     pub fn has_nan(&self) -> bool {
-        match &self.data {
+        match self.data() {
             ArrayData::Float32(a) => a.iter().any(|x| x.is_nan()),
             ArrayData::Float64(a) => a.iter().any(|x| x.is_nan()),
             ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_nan() || x.im.is_nan()),
@@ -347,15 +341,12 @@ impl NdArray {
 
     /// Deep copy of the array.
     pub fn copy(&self) -> NdArray {
-        NdArray {
-            data: self.data.deep_copy(),
-            declared_dtype: self.declared_dtype,
-        }
+        NdArray::from_data(self.data().deep_copy()).with_preserved_dtype(self)
     }
 
     /// Check if this array shares its underlying buffer with another.
     pub fn shares_memory_with(&self, other: &NdArray) -> bool {
-        self.data.shares_memory_with(&other.data)
+        self.storage().overlaps(other.storage())
     }
 }
 
@@ -364,7 +355,7 @@ pub fn argwhere(a: &NdArray) -> NdArray {
     let shape = a.shape().to_vec();
     let ndim = a.ndim();
     let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
+    let ArrayData::Float64(arr) = flat.data() else {
         unreachable!()
     };
 
@@ -402,7 +393,7 @@ pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
     let shape = a.shape().to_vec();
     let ndim = a.ndim().max(1); // at least 1-D
     let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
+    let ArrayData::Float64(arr) = flat.data() else {
         unreachable!()
     };
 
@@ -433,7 +424,7 @@ pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
 /// Count the number of non-zero elements.
 pub fn count_nonzero(a: &NdArray) -> usize {
     let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
+    let ArrayData::Float64(arr) = flat.data() else {
         unreachable!()
     };
     arr.iter().filter(|&&x| x != 0.0).count()
@@ -445,8 +436,8 @@ pub fn count_nonzero(a: &NdArray) -> usize {
 /// - 2-D x 1-D: matrix-vector multiply
 pub fn dot(a: &NdArray, b: &NdArray) -> Result<NdArray> {
     let common = a.dtype().promote(b.dtype());
-    let ad = cast_array_data(&a.data, common);
-    let bd = cast_array_data(&b.data, common);
+    let ad = cast_array_data(a.data(), common);
+    let bd = cast_array_data(b.data(), common);
 
     match (a.ndim(), b.ndim()) {
         (1, 1) => dot_1d_1d(&ad, &bd),
@@ -553,7 +544,7 @@ pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
 
     // Extract elements along diagonal
     let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
+    let ArrayData::Float64(arr) = flat.data() else {
         unreachable!()
     };
     let arr2 = arr.view().into_dimensionality::<ndarray::Ix2>().unwrap();
@@ -570,10 +561,10 @@ pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
 pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
     let a_flat = a.flatten().astype(crate::DType::Float64);
     let b_flat = b.flatten().astype(crate::DType::Float64);
-    let ArrayData::Float64(aa) = &a_flat.data else {
+    let ArrayData::Float64(aa) = a_flat.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(bb) = &b_flat.data else {
+    let ArrayData::Float64(bb) = b_flat.data() else {
         unreachable!()
     };
 

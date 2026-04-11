@@ -17,7 +17,7 @@ impl NdArray {
             ));
         }
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
         match axis {
@@ -65,7 +65,7 @@ impl NdArray {
             ));
         }
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
         match axis {
@@ -111,7 +111,7 @@ impl NdArray {
             ));
         }
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
         match axis {
@@ -161,7 +161,7 @@ impl NdArray {
             ));
         }
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
         match axis {
@@ -213,7 +213,7 @@ impl NdArray {
             ));
         }
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             unreachable!()
         };
 

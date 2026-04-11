@@ -23,8 +23,8 @@ fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData,
     let storage_dtype = logical_dtype.storage_dtype();
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(&lhs.data, storage_dtype);
-    let b = cast_array_data(&rhs.data, storage_dtype);
+    let a = cast_array_data(lhs.data(), storage_dtype);
+    let b = cast_array_data(rhs.data(), storage_dtype);
 
     let a = broadcast_array_data(&a, &out_shape);
     let b = broadcast_array_data(&b, &out_shape);
@@ -80,7 +80,7 @@ macro_rules! impl_binary_op {
                 };
                 let mut result = NdArray::from_data(data);
                 if logical_dtype.is_narrow() {
-                    result.declared_dtype = Some(logical_dtype);
+                    result.set_declared_dtype(logical_dtype);
                 }
                 Ok(result)
             }
@@ -219,7 +219,7 @@ impl NdArray {
         };
         let mut result = NdArray::from_data(data);
         if logical_dtype.is_narrow() {
-            result.declared_dtype = Some(logical_dtype);
+            result.set_declared_dtype(logical_dtype);
         }
         Ok(result)
     }
@@ -312,7 +312,7 @@ impl NdArray {
         };
         let mut result = NdArray::from_data(data);
         if logical_dtype.is_narrow() {
-            result.declared_dtype = Some(logical_dtype);
+            result.set_declared_dtype(logical_dtype);
         }
         Ok(result)
     }

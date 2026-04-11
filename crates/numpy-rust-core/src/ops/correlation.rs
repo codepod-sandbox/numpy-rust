@@ -25,7 +25,7 @@ impl NdArray {
 
         // Cast to Float64
         let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
+        let ArrayData::Float64(arr) = f.data() else {
             return Err(NumpyError::TypeError("cov requires numeric input".into()));
         };
 
@@ -123,7 +123,7 @@ impl NdArray {
 
     fn cov_complex(&self, rowvar: bool, ddof: i64) -> Result<NdArray> {
         let f = self.astype(DType::Complex128);
-        let ArrayData::Complex128(arr) = &f.data else {
+        let ArrayData::Complex128(arr) = f.data() else {
             unreachable!();
         };
 
@@ -231,7 +231,7 @@ impl NdArray {
         }
 
         let cov_arr = self.cov(rowvar, 0)?;
-        let ArrayData::Float64(c) = &cov_arr.data else {
+        let ArrayData::Float64(c) = cov_arr.data() else {
             unreachable!();
         };
 
@@ -258,7 +258,7 @@ impl NdArray {
 
     fn corrcoef_complex(&self, rowvar: bool) -> Result<NdArray> {
         let cov_arr = self.cov_complex(rowvar, 0)?;
-        let ArrayData::Complex128(c) = &cov_arr.data else {
+        let ArrayData::Complex128(c) = cov_arr.data() else {
             unreachable!();
         };
 

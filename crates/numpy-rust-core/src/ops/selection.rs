@@ -19,10 +19,10 @@ impl NdArray {
         }
         let sorted = self.astype(DType::Float64);
         let vals = values.astype(DType::Float64);
-        let ArrayData::Float64(sorted_arr) = &sorted.data else {
+        let ArrayData::Float64(sorted_arr) = sorted.data() else {
             unreachable!()
         };
-        let ArrayData::Float64(vals_arr) = &vals.data else {
+        let ArrayData::Float64(vals_arr) = vals.data() else {
             unreachable!()
         };
         let sorted_slice: Vec<f64> = sorted_arr.iter().copied().collect();
@@ -55,7 +55,7 @@ impl NdArray {
     /// Select slices along `axis` where `condition` is true.
     pub fn compress(&self, condition: &NdArray, axis: Option<usize>) -> Result<NdArray> {
         let cond = condition.astype(DType::Bool);
-        let ArrayData::Bool(mask) = &cond.data else {
+        let ArrayData::Bool(mask) = cond.data() else {
             unreachable!()
         };
 
@@ -93,7 +93,7 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
     }
     let idx = a.astype(DType::Int64);
     let flat_idx = idx.flatten();
-    let ArrayData::Int64(idx_arr) = &flat_idx.data else {
+    let ArrayData::Int64(idx_arr) = flat_idx.data() else {
         unreachable!()
     };
 
@@ -111,14 +111,14 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
                 let c = c.astype(DType::Complex128);
                 let bc = if c.shape() != target_shape {
                     NdArray::from_data(crate::broadcasting::broadcast_array_data(
-                        &c.data,
+                        c.data(),
                         target_shape,
                     ))
                 } else {
                     c
                 };
                 let f = bc.flatten();
-                match &f.data {
+                match f.data() {
                     ArrayData::Complex128(arr) => arr.iter().copied().collect(),
                     _ => unreachable!(),
                 }
@@ -162,14 +162,14 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
                 let c = c.astype(DType::Float64);
                 let bc = if c.shape() != target_shape {
                     NdArray::from_data(crate::broadcasting::broadcast_array_data(
-                        &c.data,
+                        c.data(),
                         target_shape,
                     ))
                 } else {
                     c
                 };
                 let f = bc.flatten();
-                let ArrayData::Float64(arr) = &f.data else {
+                let ArrayData::Float64(arr) = f.data() else {
                     unreachable!()
                 };
                 arr.iter().copied().collect()
@@ -212,10 +212,10 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
 pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
     let a_f = a.astype(DType::Float64).flatten();
     let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = &a_f.data else {
+    let ArrayData::Float64(a_arr) = a_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(b_arr) = &b_f.data else {
+    let ArrayData::Float64(b_arr) = b_f.data() else {
         unreachable!()
     };
 
@@ -238,10 +238,10 @@ pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
 pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
     let a_f = a.astype(DType::Float64).flatten();
     let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = &a_f.data else {
+    let ArrayData::Float64(a_arr) = a_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(b_arr) = &b_f.data else {
+    let ArrayData::Float64(b_arr) = b_f.data() else {
         unreachable!()
     };
 
@@ -258,10 +258,10 @@ pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
 pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
     let a_f = a.astype(DType::Float64).flatten();
     let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = &a_f.data else {
+    let ArrayData::Float64(a_arr) = a_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(b_arr) = &b_f.data else {
+    let ArrayData::Float64(b_arr) = b_f.data() else {
         unreachable!()
     };
 
@@ -283,10 +283,10 @@ pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
 pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
     let elem_f = element.astype(DType::Float64);
     let test_f = test_elements.astype(DType::Float64).flatten();
-    let ArrayData::Float64(elem_arr) = &elem_f.data else {
+    let ArrayData::Float64(elem_arr) = elem_f.data() else {
         unreachable!()
     };
-    let ArrayData::Float64(test_arr) = &test_f.data else {
+    let ArrayData::Float64(test_arr) = test_f.data() else {
         unreachable!()
     };
 

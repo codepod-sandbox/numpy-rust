@@ -29,8 +29,8 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
     let storage_dtype = logical_dtype.storage_dtype();
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(&lhs.data, storage_dtype);
-    let b = cast_array_data(&rhs.data, storage_dtype);
+    let a = cast_array_data(lhs.data(), storage_dtype);
+    let b = cast_array_data(rhs.data(), storage_dtype);
 
     let a = broadcast_array_data(&a, &out_shape);
     let b = broadcast_array_data(&b, &out_shape);
@@ -41,8 +41,8 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
 /// Prepare two NdArrays for logical ops: broadcast shapes. All dtypes allowed.
 fn prepare_logical(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
-    let a = broadcast_array_data(&lhs.data, &out_shape);
-    let b = broadcast_array_data(&rhs.data, &out_shape);
+    let a = broadcast_array_data(lhs.data(), &out_shape);
+    let b = broadcast_array_data(rhs.data(), &out_shape);
     Ok((a, b))
 }
 
@@ -79,7 +79,7 @@ impl NdArray {
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
+            r.set_declared_dtype(logical_dtype);
         }
         Ok(r)
     }
@@ -116,7 +116,7 @@ impl NdArray {
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
+            r.set_declared_dtype(logical_dtype);
         }
         Ok(r)
     }
@@ -153,7 +153,7 @@ impl NdArray {
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
+            r.set_declared_dtype(logical_dtype);
         }
         Ok(r)
     }
@@ -194,7 +194,7 @@ impl NdArray {
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
+            r.set_declared_dtype(logical_dtype);
         }
         Ok(r)
     }
@@ -253,14 +253,14 @@ impl NdArray {
         };
         let mut r = NdArray::from_data(result);
         if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
+            r.set_declared_dtype(logical_dtype);
         }
         Ok(r)
     }
 
     /// Element-wise logical NOT. Returns Bool array (true where element is falsy).
     pub fn logical_not(&self) -> NdArray {
-        let data = match &self.data {
+        let data = match self.data() {
             ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x).into_shared()),
             ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
             ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
@@ -356,7 +356,7 @@ impl NdArray {
                 "bitwise NOT not supported for complex arrays".into(),
             ));
         }
-        let result = match &self.data {
+        let result = match self.data() {
             ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x).into_shared()),
             ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| !x).into_shared()),
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| !x).into_shared()),
@@ -377,7 +377,7 @@ impl NdArray {
             }
         };
         let mut r = NdArray::from_data(result);
-        r.declared_dtype = self.declared_dtype;
+        r.preserve_descriptor_from(self);
         Ok(r)
     }
 }
@@ -504,7 +504,7 @@ mod tests {
         let c = a.logical_and(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
         assert_eq!(c.shape(), &[4]);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[true, false, false, false]);
         } else {
             panic!("expected Bool");
@@ -519,7 +519,7 @@ mod tests {
         let c = a.logical_or(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
         assert_eq!(c.shape(), &[4]);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[true, true, true, false]);
         } else {
             panic!("expected Bool");
@@ -534,7 +534,7 @@ mod tests {
         let c = a.logical_xor(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
         assert_eq!(c.shape(), &[4]);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[false, true, true, false]);
         } else {
             panic!("expected Bool");
@@ -548,7 +548,7 @@ mod tests {
         let b = NdArray::from_vec(vec![1_i32, 1, 0]);
         let c = a.logical_and(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[true, false, false]);
         } else {
             panic!("expected Bool");
