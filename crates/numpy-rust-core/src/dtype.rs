@@ -178,6 +178,11 @@ impl DType {
         matches!(self, DType::Float16 | DType::Float32 | DType::Float64)
     }
 
+    /// Returns true if this is the boolean dtype.
+    pub fn is_bool(self) -> bool {
+        matches!(self, DType::Bool)
+    }
+
     /// Returns true if this is an integer type (signed or unsigned).
     pub fn is_integer(self) -> bool {
         matches!(

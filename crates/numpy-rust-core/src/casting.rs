@@ -3,6 +3,7 @@ use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
+use crate::resolver::{resolve_cast, CastPlan, CastingRule};
 
 /// Convert a float to a string matching Python's str(float) behavior.
 /// Python always includes a decimal point: str(0.0) == "0.0", str(1.0) == "1.0".
@@ -51,13 +52,18 @@ pub fn narrow_truncate(data: ArrayData, dtype: DType) -> ArrayData {
 /// If already the target dtype, returns a clone.
 /// For narrow dtypes, casts to the storage type instead.
 pub fn cast_array_data(data: &ArrayData, target: DType) -> ArrayData {
-    // Map narrow dtypes to their storage type
-    let storage = target.storage_dtype();
-    if data.dtype() == storage {
+    let plan = resolve_cast(data.dtype(), target, CastingRule::Unsafe)
+        .expect("resolver must approve unsafe backend casts");
+
+    if !plan.requires_storage_cast() {
         return data.clone();
     }
 
-    match storage {
+    execute_cast_plan(data, plan)
+}
+
+fn execute_cast_plan(data: &ArrayData, plan: CastPlan) -> ArrayData {
+    match plan.target_storage_dtype() {
         DType::Bool => ArrayData::Bool(cast_to_bool(data)),
         DType::Int32 => ArrayData::Int32(cast_to_i32(data)),
         DType::Int64 => ArrayData::Int64(cast_to_i64(data)),
