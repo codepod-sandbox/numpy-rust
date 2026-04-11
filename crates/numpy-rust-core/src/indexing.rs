@@ -3,6 +3,8 @@ use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
+use crate::resolver::resolve_assignment_cast;
+use crate::DType;
 use crate::NdArray;
 
 /// Describes how to slice one axis.
@@ -31,6 +33,84 @@ pub enum Scalar {
     Complex64(Complex<f32>),
     Complex128(Complex<f64>),
     Str(String),
+}
+
+impl Scalar {
+    fn dtype(&self) -> DType {
+        match self {
+            Scalar::Bool(_) => DType::Bool,
+            Scalar::Int32(_) => DType::Int32,
+            Scalar::Int64(_) => DType::Int64,
+            Scalar::Float32(_) => DType::Float32,
+            Scalar::Float64(_) => DType::Float64,
+            Scalar::Complex64(_) => DType::Complex64,
+            Scalar::Complex128(_) => DType::Complex128,
+            Scalar::Str(_) => DType::Str,
+        }
+    }
+}
+
+fn scalar_to_array_data(value: &Scalar) -> ArrayData {
+    match value {
+        Scalar::Bool(v) => {
+            ArrayData::Bool(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        Scalar::Int32(v) => {
+            ArrayData::Int32(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        Scalar::Int64(v) => {
+            ArrayData::Int64(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        Scalar::Float32(v) => {
+            ArrayData::Float32(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        Scalar::Float64(v) => {
+            ArrayData::Float64(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        Scalar::Complex64(v) => {
+            ArrayData::Complex64(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        Scalar::Complex128(v) => {
+            ArrayData::Complex128(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        Scalar::Str(v) => {
+            ArrayData::Str(ndarray::ArrayD::from_elem(IxDyn(&[]), v.clone()).into_shared())
+        }
+    }
+}
+
+fn array_data_to_scalar(data: &ArrayData) -> Scalar {
+    match data {
+        ArrayData::Bool(a) => Scalar::Bool(a[IxDyn(&[])]),
+        ArrayData::Int32(a) => Scalar::Int32(a[IxDyn(&[])]),
+        ArrayData::Int64(a) => Scalar::Int64(a[IxDyn(&[])]),
+        ArrayData::Float32(a) => Scalar::Float32(a[IxDyn(&[])]),
+        ArrayData::Float64(a) => Scalar::Float64(a[IxDyn(&[])]),
+        ArrayData::Complex64(a) => Scalar::Complex64(a[IxDyn(&[])]),
+        ArrayData::Complex128(a) => Scalar::Complex128(a[IxDyn(&[])]),
+        ArrayData::Str(a) => Scalar::Str(a[IxDyn(&[])].clone()),
+    }
+}
+
+fn coerce_scalar_for_assignment(value: Scalar, target: DType) -> Result<Scalar> {
+    let plan = resolve_assignment_cast(value.dtype(), target)?;
+    let mut data = crate::casting::cast_array_data(
+        &scalar_to_array_data(&value),
+        plan.execution_storage_dtype(),
+    );
+    if plan.requires_narrowing() {
+        data = crate::casting::narrow_truncate(data, target);
+    }
+    Ok(array_data_to_scalar(&data))
+}
+
+fn coerce_array_for_assignment(values: &NdArray, target: DType) -> Result<NdArray> {
+    resolve_assignment_cast(values.dtype(), target)?;
+    Ok(if values.dtype() == target {
+        values.clone()
+    } else {
+        values.astype(target)
+    })
 }
 
 impl NdArray {
@@ -251,11 +331,7 @@ impl NdArray {
         }
 
         // Cast values to match self dtype if needed
-        let cast_values = if values.dtype() != self.dtype() {
-            values.astype(self.dtype())
-        } else {
-            values.clone()
-        };
+        let cast_values = coerce_array_for_assignment(values, self.dtype())?;
 
         let src = cast_values.data();
         self.mutate_data(|data| match (data, src) {
@@ -300,6 +376,7 @@ impl NdArray {
     /// Set a single element by multi-dimensional index.
     pub fn set(&mut self, index: &[usize], value: Scalar) -> Result<()> {
         let idx = IxDyn(index);
+        let value = coerce_scalar_for_assignment(value, self.dtype())?;
         self.mutate_data(|data| match (data, value) {
             (ArrayData::Bool(a), Scalar::Bool(v)) => {
                 let elem = a
@@ -348,49 +425,6 @@ impl NdArray {
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
-                Ok(())
-            }
-            // Allow cross-type numeric assignment (cast to target dtype)
-            (ArrayData::Float64(a), Scalar::Int64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as f64;
-                Ok(())
-            }
-            (ArrayData::Float64(a), Scalar::Int32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as f64;
-                Ok(())
-            }
-            (ArrayData::Float64(a), Scalar::Float32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as f64;
-                Ok(())
-            }
-            (ArrayData::Int64(a), Scalar::Int32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as i64;
-                Ok(())
-            }
-            (ArrayData::Complex128(a), Scalar::Float64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = Complex::new(v, 0.0);
-                Ok(())
-            }
-            (ArrayData::Complex128(a), Scalar::Complex64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = Complex::new(v.re as f64, v.im as f64);
                 Ok(())
             }
             (ArrayData::Str(a), Scalar::Str(v)) => {
@@ -464,7 +498,8 @@ impl NdArray {
             }};
         }
 
-        let src = values.data();
+        let cast_values = coerce_array_for_assignment(values, self.dtype())?;
+        let src = cast_values.data();
         self.mutate_data(|data| match (data, src) {
             (ArrayData::Bool(dst), ArrayData::Bool(src)) => {
                 do_set_slice!(dst, src);
@@ -497,26 +532,6 @@ impl NdArray {
             (ArrayData::Str(dst), ArrayData::Str(src)) => {
                 do_set_slice!(dst, src);
                 Ok(())
-            }
-            // Allow float64 array to accept cast from other numeric types
-            (ArrayData::Float64(dst), _) => {
-                let cast = values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(src) = cast.data() {
-                    do_set_slice!(dst, src);
-                    Ok(())
-                } else {
-                    unreachable!()
-                }
-            }
-            // Allow complex128 array to accept cast from other numeric types
-            (ArrayData::Complex128(dst), _) => {
-                let cast = values.astype(crate::DType::Complex128);
-                if let ArrayData::Complex128(src) = cast.data() {
-                    do_set_slice!(dst, src);
-                    Ok(())
-                } else {
-                    unreachable!()
-                }
             }
             _ => Err(NumpyError::TypeError(
                 "cannot assign array of incompatible dtype".into(),

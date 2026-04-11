@@ -150,7 +150,7 @@ impl PyFlatIter {
         let total = data.size();
         let idx = parse_flat_index(&key, total, vm)?;
         let coord = linear_to_coord(idx, data.shape());
-        let scalar = py_obj_to_scalar(&value, data.dtype(), vm)?;
+        let scalar = py_obj_to_scalar(&value, vm)?;
         data.set(&coord, scalar).map_err(|e| numpy_err(e, vm))
     }
 
@@ -321,57 +321,18 @@ fn scalar_to_0d_ndarray(s: Scalar) -> NdArray {
     }
 }
 
-/// Convert a Python object to a Scalar matching the target array dtype.
-/// For narrow dtypes, maps to the storage type's Scalar variant.
-pub(crate) fn py_obj_to_scalar(
-    obj: &PyObjectRef,
-    dtype: DType,
-    vm: &VirtualMachine,
-) -> PyResult<Scalar> {
-    // Use storage dtype for scalar conversion (narrow types map to wider storage)
-    let storage = dtype.storage_dtype();
-    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
-        return Ok(match storage {
-            DType::Float64 => Scalar::Float64(f),
-            DType::Float32 => Scalar::Float32(f as f32),
-            DType::Int64 => Scalar::Int64(f as i64),
-            DType::Int32 => Scalar::Int32(f as i32),
-            DType::Bool => Scalar::Bool(f != 0.0),
-            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(f as f32, 0.0)),
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(f, 0.0)),
-            DType::Str => Scalar::Str(f.to_string()),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
+/// Convert a Python object to a generic core Scalar.
+pub(crate) fn py_obj_to_scalar(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Scalar> {
+    if obj.class().is(vm.ctx.types.bool_type) {
+        let b = obj.clone().try_into_value::<bool>(vm)?;
+        return Ok(Scalar::Bool(b));
     }
-    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
-        return Ok(match storage {
-            DType::Float64 => Scalar::Float64(i as f64),
-            DType::Float32 => Scalar::Float32(i as f32),
-            DType::Int64 => Scalar::Int64(i),
-            DType::Int32 => Scalar::Int32(i as i32),
-            DType::Bool => Scalar::Bool(i != 0),
-            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(i as f32, 0.0)),
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(i as f64, 0.0)),
-            DType::Str => Scalar::Str(i.to_string()),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
-    }
-    // Handle Python complex numbers
     if let Some(c) = obj.downcast_ref::<vm::builtins::PyComplex>() {
         let cx = c.to_complex();
-        return Ok(match storage {
-            DType::Complex64 => {
-                Scalar::Complex64(num_complex::Complex::new(cx.re as f32, cx.im as f32))
-            }
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(cx.re, cx.im)),
-            DType::Float64 => Scalar::Float64(cx.re),
-            DType::Float32 => Scalar::Float32(cx.re as f32),
-            DType::Int64 => Scalar::Int64(cx.re as i64),
-            DType::Int32 => Scalar::Int32(cx.re as i32),
-            DType::Bool => Scalar::Bool(cx.re != 0.0 || cx.im != 0.0),
-            DType::Str => Scalar::Str(format!("({},{})", cx.re, cx.im)),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
+        return Ok(Scalar::Complex128(num_complex::Complex::new(cx.re, cx.im)));
+    }
+    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
+        return Ok(Scalar::Str(s.as_str().to_owned()));
     }
     // Handle (re, im) tuples (our complex scalar representation)
     if let Some(tup) = obj.downcast_ref::<vm::builtins::PyTuple>() {
@@ -379,34 +340,18 @@ pub(crate) fn py_obj_to_scalar(
         if elems.len() == 2 {
             let re = elems[0].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
             let im = elems[1].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
-            return Ok(match storage {
-                DType::Complex64 => {
-                    Scalar::Complex64(num_complex::Complex::new(re as f32, im as f32))
-                }
-                DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(re, im)),
-                DType::Float64 => Scalar::Float64(re),
-                DType::Float32 => Scalar::Float32(re as f32),
-                DType::Int64 => Scalar::Int64(re as i64),
-                DType::Int32 => Scalar::Int32(re as i32),
-                DType::Bool => Scalar::Bool(re != 0.0 || im != 0.0),
-                DType::Str => Scalar::Str(format!("({},{})", re, im)),
-                _ => unreachable!("storage_dtype maps to canonical types"),
-            });
+            return Ok(Scalar::Complex128(num_complex::Complex::new(re, im)));
         }
     }
-    // Handle str objects for Str dtype
-    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
-        return Ok(match storage {
-            DType::Str => Scalar::Str(s.as_str().to_owned()),
-            DType::Float64 => Scalar::Float64(s.as_str().parse().unwrap_or(0.0)),
-            DType::Float32 => Scalar::Float32(s.as_str().parse().unwrap_or(0.0)),
-            DType::Int64 => Scalar::Int64(s.as_str().parse().unwrap_or(0)),
-            DType::Int32 => Scalar::Int32(s.as_str().parse().unwrap_or(0)),
-            DType::Bool => Scalar::Bool(!s.as_str().is_empty()),
-            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(0.0, 0.0)),
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(0.0, 0.0)),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
+    if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+        if let Ok(val) = i.try_to_primitive::<i64>(vm) {
+            return Ok(Scalar::Int64(val));
+        }
+        let f = obj.clone().try_into_value::<f64>(vm)?;
+        return Ok(Scalar::Float64(f));
+    }
+    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
+        return Ok(Scalar::Float64(f));
     }
     Err(vm.new_type_error("cannot convert value to array scalar".to_owned()))
 }
@@ -4280,7 +4225,6 @@ fn setitem_impl(
         let data = zelf.data.read().unwrap();
         let shape = data.shape().to_vec();
         let ndim = data.ndim();
-        let dtype = data.dtype();
         drop(data);
 
         let resolved = if idx < 0 {
@@ -4291,7 +4235,7 @@ fn setitem_impl(
 
         if ndim == 1 {
             // Scalar assignment: a[i] = value
-            let scalar = py_obj_to_scalar(&value, dtype, vm)?;
+            let scalar = py_obj_to_scalar(&value, vm)?;
             zelf.data
                 .write()
                 .unwrap()
@@ -4313,13 +4257,6 @@ fn setitem_impl(
     if let Some(slice) = key.downcast_ref::<PySlice>() {
         let arg = py_slice_to_slice_arg(slice, vm)?;
         let value_arr = obj_to_ndarray(&value, vm)?;
-        // Cast value to target dtype if needed
-        let target_dt = zelf.data.read().unwrap().dtype();
-        let value_arr = if value_arr.dtype() != target_dt {
-            value_arr.astype(target_dt)
-        } else {
-            value_arr
-        };
         zelf.data
             .write()
             .unwrap()
@@ -4350,13 +4287,6 @@ fn setitem_impl(
                 .map(|item| py_obj_to_slice_arg(item, vm))
                 .collect::<PyResult<Vec<_>>>()?;
             let value_arr = obj_to_ndarray(&value, vm)?;
-            // Cast value to target dtype if needed
-            let target_dt = zelf.data.read().unwrap().dtype();
-            let value_arr = if value_arr.dtype() != target_dt {
-                value_arr.astype(target_dt)
-            } else {
-                value_arr
-            };
             zelf.data
                 .write()
                 .unwrap()
@@ -4373,7 +4303,6 @@ fn setitem_impl(
         }
         let data = zelf.data.read().unwrap();
         let shape = data.shape().to_vec();
-        let dtype = data.dtype();
         drop(data);
 
         let usize_indices: Vec<usize> = indices
@@ -4387,7 +4316,7 @@ fn setitem_impl(
                 }
             })
             .collect();
-        let scalar = py_obj_to_scalar(&value, dtype, vm)?;
+        let scalar = py_obj_to_scalar(&value, vm)?;
         zelf.data
             .write()
             .unwrap()
@@ -4456,21 +4385,13 @@ fn setitem_impl(
     // Ellipsis key → a[...] = value (set all elements)
     if key.is(&vm.ctx.ellipsis) {
         let value_arr = obj_to_ndarray(&value, vm)?;
-        // If value is a scalar (size 1), fill the entire array
-        let val_data = value_arr;
-        let target_dt = zelf.data.read().unwrap().dtype();
-        let val_data = if val_data.dtype() != target_dt {
-            val_data.astype(target_dt)
-        } else {
-            val_data
-        };
         // Use set_slice with full slice for each dimension
         let ndim = zelf.data.read().unwrap().ndim();
         let args: Vec<SliceArg> = (0..ndim).map(|_| SliceArg::Full).collect();
         zelf.data
             .write()
             .unwrap()
-            .set_slice(&args, &val_data)
+            .set_slice(&args, &value_arr)
             .map_err(|e| numpy_err(e, vm))?;
         return Ok(());
     }

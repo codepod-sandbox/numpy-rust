@@ -31,6 +31,12 @@ def test_zeros_3d():
     assert_eq(a.ndim, 3)
     assert_eq(a.size, 24)
 
+def test_zeros_respects_explicit_dtype():
+    a = np.zeros((2, 2), dtype="int32")
+    assert_eq(a.dtype, "int32")
+    assert_eq(a[(0, 0)], 0)
+    assert_eq(a[(1, 1)], 0)
+
 
 # --- np.ones ---
 

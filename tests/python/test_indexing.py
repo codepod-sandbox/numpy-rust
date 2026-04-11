@@ -201,6 +201,20 @@ def test_setitem_scalar():
     assert_close(a[1], 2.0)
     assert_close(a[2], 3.0)
 
+def test_setitem_scalar_assignment_coerces_in_runtime():
+    a = np.array([1, 2, 3], dtype="int32")
+    a[0] = 9.75
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[0]), 9)
+
+def test_setitem_slice_assignment_coerces_in_runtime():
+    a = np.array([1, 2, 3], dtype="int32")
+    a[1:] = np.array([7.25, 8.75], dtype="float64")
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[0]), 1)
+    assert_eq(int(a[1]), 7)
+    assert_eq(int(a[2]), 8)
+
 def test_setitem_negative():
     a = np.array([1.0, 2.0, 3.0])
     a[-1] = 99.0
@@ -228,6 +242,14 @@ def test_setitem_2d_row():
     assert_close(a[(0, 1)], 20.0)
     assert_close(a[(0, 2)], 30.0)
     assert_close(a[(1, 0)], 4.0)
+
+def test_setitem_2d_row_assignment_coerces_in_runtime():
+    a = np.array([[1, 2, 3], [4, 5, 6]], dtype="int32")
+    a[0] = np.array([10.5, 20.5, 30.5])
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[(0, 0)]), 10)
+    assert_eq(int(a[(0, 1)]), 20)
+    assert_eq(int(a[(0, 2)]), 30)
 
 
 # --- tolist ---

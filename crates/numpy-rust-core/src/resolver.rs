@@ -116,6 +116,16 @@ pub fn resolve_cast(source: DType, target: DType, rule: CastingRule) -> Result<C
     })
 }
 
+/// Resolve a cast used for assignment.
+///
+/// We prefer `same_kind` semantics first and fall back to `unsafe` so the
+/// runtime owns the coercion decision while preserving the current permissive
+/// behavior for basic writes.
+pub fn resolve_assignment_cast(source: DType, target: DType) -> Result<CastPlan> {
+    resolve_cast(source, target, CastingRule::SameKind)
+        .or_else(|_| resolve_cast(source, target, CastingRule::Unsafe))
+}
+
 pub fn resolve_binary_op(op: BinaryOp, lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
     match op {
         BinaryOp::Add => resolve_add(lhs, rhs),
