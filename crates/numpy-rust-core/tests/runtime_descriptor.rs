@@ -1,0 +1,14 @@
+use numpy_rust_core::{descriptor_for_dtype, resolve_binary_op, BinaryOp, DType};
+
+#[test]
+fn descriptor_lookup_returns_expected_metadata() {
+    let desc = descriptor_for_dtype(DType::Float64);
+    assert_eq!(desc.name(), "float64");
+    assert_eq!(desc.itemsize(), 8);
+}
+
+#[test]
+fn binary_add_resolution_promotes_int32_and_float64_to_float64() {
+    let plan = resolve_binary_op(BinaryOp::Add, DType::Int32, DType::Float64).unwrap();
+    assert_eq!(plan.output_dtype(), DType::Float64);
+}
