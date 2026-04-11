@@ -5,14 +5,21 @@ use ndarray::Zip;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
+use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::kernel::ArithmeticKernelOp;
+use crate::resolver::{resolve_binary_op, BinaryOp, BinaryOpPlan};
 use crate::NdArray;
 
-/// Prepare two NdArrays for a binary operation: promote types and broadcast shapes.
+struct PreparedAddExecution {
+    lhs: ArrayData,
+    rhs: ArrayData,
+    plan: BinaryOpPlan,
+}
+
+/// Prepare two NdArrays for a binary operation using the existing per-op dtype policy.
 /// Returns `(lhs_data, rhs_data, logical_result_dtype)`.
-/// The logical dtype may be a narrow type (e.g. Int8) while the actual data
-/// is stored as the corresponding storage type (e.g. Int32).
 fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData, DType)> {
     if lhs.dtype().is_string() || rhs.dtype().is_string() {
         return Err(crate::error::NumpyError::TypeError(
@@ -32,44 +39,76 @@ fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData,
     Ok((a, b, logical_dtype))
 }
 
+fn prepare_add_execution(lhs: &NdArray, rhs: &NdArray) -> Result<PreparedAddExecution> {
+    let plan = resolve_binary_op(BinaryOp::Add, lhs.dtype(), rhs.dtype())?;
+    let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
+
+    let lhs = broadcast_array_data(&lhs.cast_for_execution(plan.lhs_cast()), &out_shape);
+    let rhs = broadcast_array_data(&rhs.cast_for_execution(plan.rhs_cast()), &out_shape);
+
+    Ok(PreparedAddExecution { lhs, rhs, plan })
+}
+
+fn execute_resolved_add(lhs: &NdArray, rhs: &NdArray) -> Result<NdArray> {
+    let prepared = prepare_add_execution(lhs, rhs)?;
+    let descriptor = descriptor_for_dtype(prepared.plan.result_storage_dtype());
+    let kernel = descriptor
+        .binary_kernel(ArithmeticKernelOp::Add)
+        .ok_or_else(|| {
+            NumpyError::TypeError("unsupported operand types for binary operation".into())
+        })?;
+    let data = kernel(prepared.lhs, prepared.rhs)?;
+    Ok(NdArray::from_binary_plan_result(data, prepared.plan))
+}
+
 macro_rules! impl_binary_op {
     ($trait:ident, $method:ident, $op:tt) => {
         impl ops::$trait<&NdArray> for &NdArray {
             type Output = Result<NdArray>;
 
             fn $method(self, rhs: &NdArray) -> Result<NdArray> {
-                // Compute the logical result dtype. For arithmetic, Bool is treated
-                // as the other operand's type (Bool+Bool -> Int8).
                 let logical_dtype = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
-                    DType::Int8  // bool + bool -> int8 for arithmetic
+                    DType::Int8
                 } else {
                     self.dtype().promote(rhs.dtype())
                 };
 
-                // For actual computation, cast Bool operands to the storage type
                 let (lhs_ref, rhs_ref);
                 let (lhs_tmp, rhs_tmp);
                 let storage = logical_dtype.storage_dtype();
                 if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
-                    lhs_tmp = if self.dtype() == DType::Bool { self.astype(storage) } else { self.clone() };
-                    rhs_tmp = if rhs.dtype() == DType::Bool { rhs.astype(storage) } else { rhs.clone() };
+                    lhs_tmp = if self.dtype() == DType::Bool {
+                        self.astype(storage)
+                    } else {
+                        self.clone()
+                    };
+                    rhs_tmp = if rhs.dtype() == DType::Bool {
+                        rhs.astype(storage)
+                    } else {
+                        rhs.clone()
+                    };
                     lhs_ref = &lhs_tmp;
                     rhs_ref = &rhs_tmp;
                 } else {
                     lhs_ref = self;
                     rhs_ref = rhs;
                 }
+
                 let (a, b, _) = prepare_binary(lhs_ref, rhs_ref)?;
                 let data = match (a, b) {
                     (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
                     (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
                     (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(a $op b),
                     (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(a $op b),
-                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => ArrayData::Complex64(a $op b),
-                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ArrayData::Complex128(a $op b),
+                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
+                        ArrayData::Complex64(a $op b)
+                    }
+                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
+                        ArrayData::Complex128(a $op b)
+                    }
                     _ => {
                         return Err(NumpyError::TypeError(
-                            format!("unsupported operand types for binary operation"),
+                            "unsupported operand types for binary operation".into(),
                         ));
                     }
                 };
@@ -88,7 +127,14 @@ macro_rules! impl_binary_op {
     };
 }
 
-impl_binary_op!(Add, add, +);
+impl ops::Add<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn add(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_add(self, rhs)
+    }
+}
+
 impl_binary_op!(Sub, sub, -);
 impl_binary_op!(Mul, mul, *);
 impl_binary_op!(Div, div, /);
@@ -142,7 +188,6 @@ impl NdArray {
                 "floor division not supported for complex arrays".into(),
             ));
         }
-        // Cast Bool operands for floor division (matching NumPy promotion)
         if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
             let target = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
                 DType::Int8
@@ -186,7 +231,6 @@ impl NdArray {
                     if r == 0 {
                         *o = 0;
                     } else if *o == i64::MIN && r == -1 {
-                        // Overflow case: i64::MIN / -1 wraps; NumPy returns i64::MIN
                         *o = i64::MIN;
                     } else {
                         let d = *o / r;
@@ -231,7 +275,6 @@ impl NdArray {
                 "remainder not supported for complex arrays".into(),
             ));
         }
-        // Cast Bool operands for remainder (matching NumPy promotion)
         if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
             let target = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
                 DType::Int8
@@ -272,10 +315,8 @@ impl NdArray {
             (ArrayData::Int64(a), ArrayData::Int64(b)) => {
                 let mut out = a.clone();
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    if r == 0 {
+                    if r == 0 || (*o == i64::MIN && r == -1) {
                         *o = 0;
-                    } else if *o == i64::MIN && r == -1 {
-                        *o = 0; // i64::MIN % -1 = 0 mathematically
                     } else {
                         let rem = *o % r;
                         *o = if rem != 0 && (rem ^ r) < 0 {
@@ -290,7 +331,6 @@ impl NdArray {
             (ArrayData::Int32(a), ArrayData::Int32(b)) => {
                 let mut out = a.clone();
                 Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    // r==0: return 0; i32::MIN%-1 would overflow (= 0 mathematically)
                     if r == 0 || (*o == i32::MIN && r == -1) {
                         *o = 0;
                     } else {

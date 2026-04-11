@@ -1,4 +1,9 @@
-use crate::DType;
+use crate::kernel::{
+    binary_kernel_for_dtype, sum_all_kernel_for_dtype, sum_axis_kernel_for_dtype,
+    ArithmeticKernelOp, BinaryArrayKernel, ReduceAllArrayKernel, ReduceAxisArrayKernel,
+};
+use crate::resolver::{resolve_binary_op, resolve_cast, BinaryOp, CastPlan, CastingRule};
+use crate::{DType, NumpyError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DTypeKind {
@@ -29,6 +34,55 @@ impl DTypeDescriptor {
 
     pub fn kind(&self) -> DTypeKind {
         self.kind
+    }
+
+    pub fn binary_kernel(&self, op: ArithmeticKernelOp) -> Option<BinaryArrayKernel> {
+        binary_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn sum_all_kernel(&self) -> Option<ReduceAllArrayKernel> {
+        sum_all_kernel_for_dtype(self.id)
+    }
+
+    pub fn sum_axis_kernel(&self) -> Option<ReduceAxisArrayKernel> {
+        sum_axis_kernel_for_dtype(self.id)
+    }
+
+    pub fn sum_plan(&self) -> Result<ReductionPlan> {
+        if matches!(self.kind, DTypeKind::String) {
+            return Err(NumpyError::TypeError(
+                "sum not supported for string arrays".into(),
+            ));
+        }
+
+        let add_plan = resolve_binary_op(BinaryOp::Add, self.id, self.id)?;
+        let result_dtype = add_plan.result_storage_dtype();
+        let input_cast = resolve_cast(self.id, result_dtype, CastingRule::Unsafe)?;
+
+        Ok(ReductionPlan {
+            input_cast,
+            result_dtype,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReductionPlan {
+    input_cast: CastPlan,
+    result_dtype: DType,
+}
+
+impl ReductionPlan {
+    pub fn input_cast(&self) -> CastPlan {
+        self.input_cast
+    }
+
+    pub fn result_dtype(&self) -> DType {
+        self.result_dtype
+    }
+
+    pub fn result_storage_dtype(&self) -> DType {
+        self.result_dtype.storage_dtype()
     }
 }
 
@@ -154,5 +208,39 @@ pub fn descriptor_for_dtype(dtype: DType) -> &'static DTypeDescriptor {
         DType::Complex64 => &COMPLEX64_DESCRIPTOR,
         DType::Complex128 => &COMPLEX128_DESCRIPTOR,
         DType::Str => &STR_DESCRIPTOR,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::ArithmeticKernelOp;
+
+    #[test]
+    fn test_sum_plan_bool_uses_int32_accumulator() {
+        let plan = descriptor_for_dtype(DType::Bool).sum_plan().unwrap();
+        assert_eq!(plan.input_cast().target_storage_dtype(), DType::Int32);
+        assert_eq!(plan.result_dtype(), DType::Int32);
+    }
+
+    #[test]
+    fn test_sum_plan_int32_preserves_int32_result() {
+        let plan = descriptor_for_dtype(DType::Int32).sum_plan().unwrap();
+        assert_eq!(plan.input_cast().target_storage_dtype(), DType::Int32);
+        assert_eq!(plan.result_dtype(), DType::Int32);
+    }
+
+    #[test]
+    fn test_float64_descriptor_registers_add_kernel() {
+        assert!(descriptor_for_dtype(DType::Float64)
+            .binary_kernel(ArithmeticKernelOp::Add)
+            .is_some());
+    }
+
+    #[test]
+    fn test_float64_descriptor_does_not_register_sub_kernel_yet() {
+        assert!(descriptor_for_dtype(DType::Float64)
+            .binary_kernel(ArithmeticKernelOp::Sub)
+            .is_none());
     }
 }

@@ -41,6 +41,15 @@ def test_div():
     assert_close(c[0], 5.0)
     assert_close(c[1], 4.0)
 
+def test_promotes_int32_plus_float64_to_float64():
+    a = np.array([1, 2, 3], dtype="int32")
+    b = np.array([0.5, 1.5, 2.5], dtype="float64")
+    c = a + b
+    assert_eq(str(c.dtype), "float64")
+    assert_close(c[0], 1.5)
+    assert_close(c[1], 3.5)
+    assert_close(c[2], 5.5)
+
 def test_neg():
     a = np.ones((3,))
     b = -a
@@ -84,6 +93,11 @@ def test_sum_scalar():
     a = np.ones((2, 3))
     s = a.sum()
     assert_close(s, 6.0)
+
+def test_sum_of_int32_array_returns_expected_scalar():
+    a = np.array([1, 2, 3, 4], dtype="int32")
+    s = a.sum()
+    assert_eq(int(s), 10)
 
 def test_sum_axis0():
     a = np.ones((2, 3))

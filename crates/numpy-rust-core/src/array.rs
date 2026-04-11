@@ -5,6 +5,7 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::descriptor::{descriptor_for_dtype, DTypeDescriptor};
 use crate::dtype::DType;
+use crate::resolver::{BinaryOpPlan, CastPlan};
 use crate::storage::ArrayStorage;
 
 /// The main N-dimensional array type, analogous to `numpy.ndarray`.
@@ -180,6 +181,22 @@ impl NdArray {
         };
         let descriptor = descriptor_for_dtype(dtype);
         Self::from_parts(ArrayStorage::from_array_data(data), descriptor)
+    }
+
+    pub(crate) fn cast_for_execution(&self, plan: CastPlan) -> ArrayData {
+        crate::casting::cast_array_data(self.data(), plan.execution_storage_dtype())
+    }
+
+    pub(crate) fn from_binary_plan_result(mut data: ArrayData, plan: BinaryOpPlan) -> Self {
+        if plan.requires_output_narrowing() {
+            data = crate::casting::narrow_truncate(data, plan.output_dtype());
+        }
+
+        let mut result = Self::from_data(data);
+        if plan.requires_output_narrowing() {
+            result.set_declared_dtype(plan.output_dtype());
+        }
+        result
     }
 
     pub fn slice_axis_for_test(&self, start: usize, end: usize) -> Self {

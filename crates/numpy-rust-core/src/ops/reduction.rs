@@ -1,8 +1,8 @@
 use crate::array_data::ArrayD;
 use ndarray::{Axis, IxDyn};
-use num_complex::Complex;
 
 use crate::array_data::ArrayData;
+use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
@@ -260,68 +260,31 @@ impl NdArray {
 
     // --- Internal helpers ---
 
+    fn prepare_sum_reduction(&self) -> Result<(ArrayData, DType)> {
+        let plan = self.descriptor().sum_plan()?;
+        Ok((
+            self.cast_for_execution(plan.input_cast()),
+            plan.result_dtype(),
+        ))
+    }
+
     fn reduce_all_sum(&self) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "sum not supported for string arrays".into(),
-            ));
-        }
-        let data = match self.data() {
-            ArrayData::Bool(a) => {
-                let s: i32 = a.iter().map(|&x| x as i32).sum();
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-            }
-            ArrayData::Int32(a) => {
-                let s: i32 = a.iter().sum();
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-            }
-            ArrayData::Int64(a) => {
-                let s: i64 = a.iter().sum();
-                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-            }
-            ArrayData::Float32(a) => {
-                let s: f32 = a.iter().sum();
-                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-            }
-            ArrayData::Float64(a) => {
-                let s: f64 = a.iter().sum();
-                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-            }
-            ArrayData::Complex64(a) => {
-                let s: Complex<f32> = a.iter().copied().sum();
-                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-            }
-            ArrayData::Complex128(a) => {
-                let s: Complex<f64> = a.iter().copied().sum();
-                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-            }
-            ArrayData::Str(_) => unreachable!(),
-        };
-        Ok(NdArray::from_data(data))
+        let (data, result_dtype) = self.prepare_sum_reduction()?;
+        let descriptor = descriptor_for_dtype(result_dtype);
+        let kernel = descriptor
+            .sum_all_kernel()
+            .ok_or_else(|| NumpyError::TypeError("sum kernel not registered".into()))?;
+        Ok(NdArray::from_data(kernel(data)?))
     }
 
     fn reduce_axis_sum(&self, axis: usize) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "sum not supported for string arrays".into(),
-            ));
-        }
         validate_axis(axis, self.ndim())?;
-        let ax = Axis(axis);
-        let data = match self.data() {
-            ArrayData::Bool(a) => {
-                let int_arr = a.mapv(|x| x as i32);
-                ArrayData::Int32(int_arr.sum_axis(ax).into_shared())
-            }
-            ArrayData::Int32(a) => ArrayData::Int32(a.sum_axis(ax).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.sum_axis(ax).into_shared()),
-            ArrayData::Float32(a) => ArrayData::Float32(a.sum_axis(ax).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.sum_axis(ax).into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.sum_axis(ax).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.sum_axis(ax).into_shared()),
-            ArrayData::Str(_) => unreachable!(),
-        };
-        Ok(NdArray::from_data(data))
+        let (data, result_dtype) = self.prepare_sum_reduction()?;
+        let descriptor = descriptor_for_dtype(result_dtype);
+        let kernel = descriptor
+            .sum_axis_kernel()
+            .ok_or_else(|| NumpyError::TypeError("sum kernel not registered".into()))?;
+        Ok(NdArray::from_data(kernel(data, axis)?))
     }
 
     fn reduce_all_min(&self) -> Result<NdArray> {
