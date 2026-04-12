@@ -30,7 +30,7 @@ def test_chararray_upper_matches_np_char_bridge():
     assert np_char_out.shape == (2, 2)
     assert carr_out.shape == (2, 2)
     assert isinstance(np_char_out, np.ndarray)
-    assert type(carr_out).__name__ == "chararray"
+    assert isinstance(carr_out, type(carr))
     assert np_char_out.tolist() == expected
     assert carr_out.tolist() == expected
 
