@@ -7,6 +7,7 @@ a thin shim over the shared string behavior, not as a separate runtime path.
 import _numpy_native  # ensure tests run against the repo runtime
 import numpy as np
 import pytest
+from numpy._core._exceptions import UFuncTypeError
 from numpy._helpers import _ObjectArray
 
 
@@ -20,13 +21,14 @@ def test_char_upper_preserves_shape_for_ndarray():
 def test_char_upper_preserves_shape_for_object_array_bridge():
     arr = _ObjectArray(["ab", "cd", "ef", "gh"], "str", shape=(2, 2))
     out = np.char.upper(arr)
+    assert isinstance(out, np.ndarray)
     assert out.shape == (2, 2)
     assert out.tolist() == [["AB", "CD"], ["EF", "GH"]]
 
 
 def test_char_strip_object_array_raises_type_error():
     arr = np.array([["  a  ", " b "], ["c ", "  d"]], dtype=object)
-    with pytest.raises(TypeError):
+    with pytest.raises(UFuncTypeError):
         np.char.strip(arr)
 
 
