@@ -23,10 +23,13 @@ def test_char_strip_preserves_object_array_shape():
 
 def test_chararray_upper_matches_np_char_bridge():
     carr = np.char.asarray([["ab", "cd"], ["ef", "gh"]])
-    expected = np.char.upper(carr)
-    actual = carr.upper()
-    assert actual.shape == (2, 2)
-    assert actual.tolist() == expected.tolist()
+    expected = [["AB", "CD"], ["EF", "GH"]]
+    np_char_out = np.char.upper(carr)
+    carr_out = carr.upper()
+    assert np_char_out.shape == (2, 2)
+    assert carr_out.shape == (2, 2)
+    assert np_char_out.tolist() == expected
+    assert carr_out.tolist() == expected
 
 
 def test_chararray_compare_keeps_trailing_whitespace_quirk():
