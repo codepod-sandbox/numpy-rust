@@ -42,6 +42,35 @@ def _to_str(v):
     return str(v)
 
 
+def _coerce_native_string_array(a):
+    """Normalize string-op inputs to a native ndarray boundary once."""
+    if isinstance(a, chararray):
+        return a._arr, True
+    if isinstance(a, ndarray):
+        return a, False
+    if isinstance(a, _ObjectArray):
+        return asarray(a._data), False
+    return asarray(a), False
+
+
+def _native_string_output(a, native_op, *args):
+    arr, wrap_chararray = _coerce_native_string_array(a)
+    result = native_op(arr, *args)
+    if wrap_chararray:
+        return chararray._from_array(result)
+    return result
+
+
+def _native_bool_output(a, native_op, *args):
+    arr, _ = _coerce_native_string_array(a)
+    return native_op(arr, *args)
+
+
+def _native_int_output(a, native_op, *args):
+    arr, _ = _coerce_native_string_array(a)
+    return native_op(arr, *args)
+
+
 class chararray:
     """Character array — a wrapper around ndarray that provides string methods
     and strips trailing whitespace in comparisons."""
@@ -996,15 +1025,11 @@ class _char_mod:
 
     @staticmethod
     def upper(a):
-        if isinstance(a, chararray):
-            return a.upper()
-        return _native.char_upper(a)
+        return _native_string_output(a, _native.char_upper)
 
     @staticmethod
     def lower(a):
-        if isinstance(a, chararray):
-            return a.lower()
-        return _native.char_lower(a)
+        return _native_string_output(a, _native.char_lower)
 
     @staticmethod
     def capitalize(a):
@@ -1014,33 +1039,31 @@ class _char_mod:
 
     @staticmethod
     def strip(a, chars=None):
-        if isinstance(a, chararray):
+        if chars is not None and isinstance(a, chararray):
             return a.strip(chars)
-        return _native.char_strip(a)
+        return _native_string_output(a, _native.char_strip)
 
     @staticmethod
     def str_len(a):
-        if isinstance(a, chararray):
-            return _native.char_str_len(a._arr)
-        return _native.char_str_len(a)
+        return _native_int_output(a, _native.char_str_len)
 
     @staticmethod
     def startswith(a, prefix, start=0, end=None):
-        if isinstance(a, chararray):
+        if (start != 0 or end is not None) and isinstance(a, chararray):
             return a.startswith(prefix, start, end)
-        return _native.char_startswith(a, prefix)
+        return _native_bool_output(a, _native.char_startswith, prefix)
 
     @staticmethod
     def endswith(a, suffix, start=0, end=None):
-        if isinstance(a, chararray):
+        if (start != 0 or end is not None) and isinstance(a, chararray):
             return a.endswith(suffix, start, end)
-        return _native.char_endswith(a, suffix)
+        return _native_bool_output(a, _native.char_endswith, suffix)
 
     @staticmethod
     def replace(a, old, new, count=None):
-        if isinstance(a, chararray):
+        if count is not None and isinstance(a, chararray):
             return a.replace(old, new, count=count)
-        return _native.char_replace(a, old, new)
+        return _native_string_output(a, _native.char_replace, old, new)
 
     @staticmethod
     def split(a, sep=None, maxsplit=-1):

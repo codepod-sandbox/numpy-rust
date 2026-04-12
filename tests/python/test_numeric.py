@@ -5104,6 +5104,25 @@ def test_char_strip_preserves_shape():
     assert_eq(str(r[0, 0]), "hi")
     assert_eq(str(r[1, 1]), "y")
 
+def test_char_native_string_wrappers_coerce_sequence_inputs():
+    upper = np.char.upper(["hello", "world"])
+    assert_eq(upper.tolist(), ["HELLO", "WORLD"])
+
+    lower = np.char.lower(("HELLO", "WORLD"))
+    assert_eq(lower.tolist(), ["hello", "world"])
+
+    stripped = np.char.strip(["  hi  ", " there "])
+    assert_eq(stripped.tolist(), ["hi", "there"])
+
+    starts = np.char.startswith(("hello", "world"), "he")
+    assert_eq(starts.tolist(), [True, False])
+
+    ends = np.char.endswith(["hello", "world"], "ld")
+    assert_eq(ends.tolist(), [False, True])
+
+    replaced = np.char.replace(("alpha", "beta"), "a", "A")
+    assert_eq(replaced.tolist(), ["AlphA", "betA"])
+
 def test_char_rjust():
     r = np.char.rjust(["hi"], 10)
     assert str(r[0]).endswith("hi")
