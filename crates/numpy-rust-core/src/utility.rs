@@ -354,10 +354,7 @@ impl NdArray {
 pub fn argwhere(a: &NdArray) -> NdArray {
     let shape = a.shape().to_vec();
     let ndim = a.ndim();
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = flat.data() else {
-        unreachable!()
-    };
+    let arr = a.to_float64_data();
 
     let mut coords: Vec<i64> = Vec::new();
     let mut count = 0usize;
@@ -392,10 +389,7 @@ pub fn argwhere(a: &NdArray) -> NdArray {
 pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
     let shape = a.shape().to_vec();
     let ndim = a.ndim().max(1); // at least 1-D
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = flat.data() else {
-        unreachable!()
-    };
+    let arr = a.to_float64_data();
 
     let mut indices: Vec<Vec<i64>> = vec![Vec::new(); ndim];
     for (linear_idx, &val) in arr.iter().enumerate() {
@@ -423,10 +417,7 @@ pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
 
 /// Count the number of non-zero elements.
 pub fn count_nonzero(a: &NdArray) -> usize {
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = flat.data() else {
-        unreachable!()
-    };
+    let arr = a.to_float64_data();
     arr.iter().filter(|&&x| x != 0.0).count()
 }
 
@@ -535,38 +526,29 @@ pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
     };
 
     if n == 0 {
-        return Ok(NdArray::from_data(ArrayData::Float64(
+        return Ok(NdArray::from_float64_data(
             ArrayD::from_shape_vec(IxDyn(&[0]), vec![])
                 .unwrap()
                 .into_shared(),
-        )));
+        ));
     }
 
     // Extract elements along diagonal
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = flat.data() else {
-        unreachable!()
-    };
+    let arr = a.to_float64_data();
     let arr2 = arr.view().into_dimensionality::<ndarray::Ix2>().unwrap();
     let vals: Vec<f64> = (0..n).map(|i| arr2[[start_r + i, start_c + i]]).collect();
 
-    Ok(NdArray::from_data(ArrayData::Float64(
+    Ok(NdArray::from_float64_data(
         ArrayD::from_shape_vec(IxDyn(&[n]), vals)
             .unwrap()
             .into_shared(),
-    )))
+    ))
 }
 
 /// Compute outer product of two arrays (flattened).
 pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_flat = a.flatten().astype(crate::DType::Float64);
-    let b_flat = b.flatten().astype(crate::DType::Float64);
-    let ArrayData::Float64(aa) = a_flat.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(bb) = b_flat.data() else {
-        unreachable!()
-    };
+    let aa = a.flatten().to_float64_data();
+    let bb = b.flatten().to_float64_data();
 
     let m = aa.len();
     let n = bb.len();
@@ -576,11 +558,11 @@ pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
             result.push(ai * bi);
         }
     }
-    NdArray::from_data(ArrayData::Float64(
+    NdArray::from_float64_data(
         ArrayD::from_shape_vec(IxDyn(&[m, n]), result)
             .unwrap()
             .into_shared(),
-    ))
+    )
 }
 
 #[cfg(test)]

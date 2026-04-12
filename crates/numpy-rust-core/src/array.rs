@@ -125,6 +125,18 @@ impl NdArray {
     pub fn from_scalar(value: f64) -> Self {
         Self::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), value)))
     }
+
+    pub(crate) fn from_float64_data(data: ArrayD<f64>) -> Self {
+        Self::from_data(ArrayData::Float64(data))
+    }
+
+    pub(crate) fn to_float64_data(&self) -> ArrayD<f64> {
+        let cast = self.astype(DType::Float64);
+        match cast.data() {
+            ArrayData::Float64(data) => data.clone(),
+            _ => unreachable!("astype(float64) must produce float64 storage"),
+        }
+    }
 }
 
 // --- Attributes ---

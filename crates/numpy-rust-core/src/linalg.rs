@@ -7,41 +7,33 @@ mod inner {
     use nalgebra::DMatrix;
     use ndarray::IxDyn;
 
-    use crate::array_data::ArrayData;
-    use crate::casting::cast_array_data;
-    use crate::dtype::DType;
     use crate::error::{NumpyError, Result};
     use crate::NdArray;
 
     /// Convert a 2-D NdArray to nalgebra DMatrix<f64>.
-    fn to_nalgebra(data: &ArrayData) -> Result<DMatrix<f64>> {
-        let f64_data = cast_array_data(data, DType::Float64);
-        match f64_data {
-            ArrayData::Float64(a) => {
-                if a.ndim() != 2 {
-                    return Err(NumpyError::ValueError(format!(
-                        "expected 2-D array, got {}-D",
-                        a.ndim()
-                    )));
-                }
-                let (m, n) = (a.shape()[0], a.shape()[1]);
-                Ok(DMatrix::from_fn(m, n, |i, j| a[[i, j]]))
-            }
-            _ => unreachable!(),
+    fn to_nalgebra(array: &NdArray) -> Result<DMatrix<f64>> {
+        let data = array.to_float64_data();
+        if data.ndim() != 2 {
+            return Err(NumpyError::ValueError(format!(
+                "expected 2-D array, got {}-D",
+                data.ndim()
+            )));
         }
+        let (m, n) = (data.shape()[0], data.shape()[1]);
+        Ok(DMatrix::from_fn(m, n, |i, j| data[[i, j]]))
     }
 
     /// Convert nalgebra DMatrix<f64> back to NdArray.
     fn from_nalgebra(mat: &DMatrix<f64>) -> NdArray {
         let (m, n) = mat.shape();
         let data = ArrayD::from_shape_fn(IxDyn(&[m, n]), |idx| mat[(idx[0], idx[1])]);
-        NdArray::from_data(ArrayData::Float64(data))
+        NdArray::from_float64_data(data)
     }
 
     /// Matrix multiplication: (m x k) @ (k x n) -> (m x n).
     pub fn matmul(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-        let am = to_nalgebra(a.data())?;
-        let bm = to_nalgebra(b.data())?;
+        let am = to_nalgebra(a)?;
+        let bm = to_nalgebra(b)?;
         if am.ncols() != bm.nrows() {
             return Err(NumpyError::ShapeMismatch(format!(
                 "matmul: shapes {:?} and {:?} not aligned",
@@ -55,7 +47,7 @@ mod inner {
 
     /// Matrix inverse via LU decomposition.
     pub fn inv(a: &NdArray) -> Result<NdArray> {
-        let m = to_nalgebra(a.data())?;
+        let m = to_nalgebra(a)?;
         check_square(&m)?;
         let result = m
             .clone()
@@ -66,9 +58,9 @@ mod inner {
 
     /// Solve Ax = b.
     pub fn solve(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-        let am = to_nalgebra(a.data())?;
+        let am = to_nalgebra(a)?;
         check_square(&am)?;
-        let bm = to_nalgebra(b.data())?;
+        let bm = to_nalgebra(b)?;
         let lu = am.lu();
         let result = lu
             .solve(&bm)
@@ -78,7 +70,7 @@ mod inner {
 
     /// Determinant via LU decomposition.
     pub fn det(a: &NdArray) -> Result<f64> {
-        let m = to_nalgebra(a.data())?;
+        let m = to_nalgebra(a)?;
         check_square(&m)?;
         Ok(m.determinant())
     }
@@ -86,7 +78,7 @@ mod inner {
     /// Eigendecomposition for symmetric matrices.
     /// Returns (eigenvalues as 1-D array, eigenvectors as 2-D array).
     pub fn eig(a: &NdArray) -> Result<(NdArray, NdArray)> {
-        let m = to_nalgebra(a.data())?;
+        let m = to_nalgebra(a)?;
         check_square(&m)?;
         let n = m.nrows();
 
@@ -120,8 +112,8 @@ mod inner {
             });
 
             Ok((
-                NdArray::from_data(ArrayData::Float64(eigenvalues)),
-                NdArray::from_data(ArrayData::Float64(eigenvectors)),
+                NdArray::from_float64_data(eigenvalues),
+                NdArray::from_float64_data(eigenvectors),
             ))
         } else {
             // Use real Schur decomposition for general (non-symmetric) matrices
@@ -194,8 +186,8 @@ mod inner {
                         },
                     );
                 Ok((
-                    NdArray::from_data(ArrayData::Float64(eigenvalues_arr)),
-                    NdArray::from_data(ArrayData::Float64(eigenvectors_arr)),
+                    NdArray::from_float64_data(eigenvalues_arr),
+                    NdArray::from_float64_data(eigenvectors_arr),
                 ))
             } else {
                 // All real eigenvalues - sort ascending
@@ -225,8 +217,8 @@ mod inner {
                     );
 
                 Ok((
-                    NdArray::from_data(ArrayData::Float64(eigenvalues_arr)),
-                    NdArray::from_data(ArrayData::Float64(eigenvectors_arr)),
+                    NdArray::from_float64_data(eigenvalues_arr),
+                    NdArray::from_float64_data(eigenvectors_arr),
                 ))
             }
         }
@@ -235,7 +227,7 @@ mod inner {
     /// Singular Value Decomposition.
     /// Returns (U, S, Vt) where A ≈ U @ diag(S) @ Vt.
     pub fn svd(a: &NdArray) -> Result<(NdArray, NdArray, NdArray)> {
-        let m = to_nalgebra(a.data())?;
+        let m = to_nalgebra(a)?;
         let decomp = m.svd(true, true);
 
         let u_mat = decomp
@@ -250,16 +242,12 @@ mod inner {
             .v_t
             .ok_or_else(|| NumpyError::ValueError("SVD computation failed (Vt)".into()))?;
 
-        Ok((
-            u,
-            NdArray::from_data(ArrayData::Float64(s)),
-            from_nalgebra(&v_t),
-        ))
+        Ok((u, NdArray::from_float64_data(s), from_nalgebra(&v_t)))
     }
 
     /// QR decomposition. Returns (Q, R).
     pub fn qr(a: &NdArray) -> Result<(NdArray, NdArray)> {
-        let m = to_nalgebra(a.data())?;
+        let m = to_nalgebra(a)?;
         let decomp = m.qr();
         let q = decomp.q();
         let r = decomp.r();
@@ -268,20 +256,15 @@ mod inner {
 
     /// Frobenius norm.
     pub fn norm(a: &NdArray) -> Result<f64> {
-        let f64_data = cast_array_data(a.data(), DType::Float64);
-        match f64_data {
-            ArrayData::Float64(arr) => {
-                let sum_sq: f64 = arr.iter().map(|&x| x * x).sum();
-                Ok(sum_sq.sqrt())
-            }
-            _ => unreachable!(),
-        }
+        let arr = a.to_float64_data();
+        let sum_sq: f64 = arr.iter().map(|&x| x * x).sum();
+        Ok(sum_sq.sqrt())
     }
 
     /// Cholesky decomposition for symmetric positive-definite matrices.
     /// Returns L such that A = L @ L^T.
     pub fn cholesky(a: &NdArray) -> Result<NdArray> {
-        let m = to_nalgebra(a.data())?;
+        let m = to_nalgebra(a)?;
         check_square(&m)?;
         let chol = nalgebra::linalg::Cholesky::new(m)
             .ok_or_else(|| NumpyError::ValueError("matrix is not positive definite".into()))?;
@@ -293,14 +276,14 @@ mod inner {
     /// Returns (solution, residuals, rank, singular_values).
     /// a: (m, n) matrix, b: (m,) or (m, k) matrix
     pub fn lstsq(a: &NdArray, b: &NdArray) -> Result<(NdArray, NdArray, usize, NdArray)> {
-        let am = to_nalgebra(a.data())?;
+        let am = to_nalgebra(a)?;
         // b might be 1-D — reshape to column vector
         let b_2d = if b.ndim() == 1 {
             b.reshape(&[b.size(), 1])?
         } else {
             b.clone()
         };
-        let bm = to_nalgebra(b_2d.data())?;
+        let bm = to_nalgebra(&b_2d)?;
 
         let (m, n) = (am.nrows(), am.ncols());
         if bm.nrows() != m {
@@ -360,7 +343,7 @@ mod inner {
 
         // Singular values as NdArray
         let sv_arr = ArrayD::from_shape_fn(IxDyn(&[k]), |idx| sv[idx[0]]);
-        let sv_nd = NdArray::from_data(ArrayData::Float64(sv_arr));
+        let sv_nd = NdArray::from_float64_data(sv_arr);
 
         Ok((solution, residuals, rank, sv_nd))
     }
