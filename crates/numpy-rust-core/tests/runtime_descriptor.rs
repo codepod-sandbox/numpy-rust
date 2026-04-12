@@ -1,6 +1,7 @@
 use numpy_rust_core::kernel::{
-    DecomposeUnaryKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp,
-    RealUnaryKernelOp, TruthKernelOp, TruthReduceKernelOp, ValueUnaryKernelOp,
+    BitwiseBinaryKernelOp, BitwiseUnaryKernelOp, DecomposeUnaryKernelOp, MathBinaryKernelOp,
+    MathUnaryKernelOp, RealBinaryKernelOp, RealUnaryKernelOp, TruthKernelOp, TruthReduceKernelOp,
+    ValueUnaryKernelOp,
 };
 use numpy_rust_core::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
 use numpy_rust_core::{descriptor_for_dtype, resolve_binary_op, BinaryOp, DType};
@@ -60,6 +61,20 @@ fn float64_descriptor_registers_truth_kernels() {
         .is_some());
     assert!(desc
         .truth_reduce_kernel(TruthReduceKernelOp::AnyTruthy)
+        .is_some());
+}
+
+#[test]
+fn int64_descriptor_registers_bitwise_kernels() {
+    let desc = descriptor_for_dtype(DType::Int64);
+    assert!(desc
+        .bitwise_unary_kernel(BitwiseUnaryKernelOp::Not)
+        .is_some());
+    assert!(desc
+        .bitwise_binary_kernel(BitwiseBinaryKernelOp::And)
+        .is_some());
+    assert!(desc
+        .bitwise_binary_kernel(BitwiseBinaryKernelOp::LeftShift)
         .is_some());
 }
 

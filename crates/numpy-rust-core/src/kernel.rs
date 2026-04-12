@@ -68,6 +68,20 @@ pub enum TruthReduceKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitwiseUnaryKernelOp {
+    Not,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitwiseBinaryKernelOp {
+    And,
+    Or,
+    Xor,
+    LeftShift,
+    RightShift,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueUnaryKernelOp {
     SignBit,
     Sign,
@@ -166,6 +180,8 @@ pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type PredicatePresenceKernel = fn(&ArrayData) -> Result<bool>;
 pub type TruthArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type TruthReduceKernel = fn(&ArrayData) -> Result<bool>;
+pub type BitwiseUnaryArrayKernel = fn(ArrayData) -> Result<ArrayData>;
+pub type BitwiseBinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type UnaryArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type BinaryMathArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type RealBinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
@@ -240,6 +256,42 @@ pub fn comparison_kernel_for_dtype(
         (DType::Str, ComparisonKernelOp::Le) => Some(cmp_le_str),
         (DType::Str, ComparisonKernelOp::Gt) => Some(cmp_gt_str),
         (DType::Str, ComparisonKernelOp::Ge) => Some(cmp_ge_str),
+        _ => None,
+    }
+}
+
+pub fn bitwise_unary_kernel_for_dtype(
+    dtype: DType,
+    op: BitwiseUnaryKernelOp,
+) -> Option<BitwiseUnaryArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, BitwiseUnaryKernelOp::Not) => Some(bitwise_not_bool),
+        (DType::Int32, BitwiseUnaryKernelOp::Not) => Some(bitwise_not_int32),
+        (DType::Int64, BitwiseUnaryKernelOp::Not) => Some(bitwise_not_int64),
+        _ => None,
+    }
+}
+
+pub fn bitwise_binary_kernel_for_dtype(
+    dtype: DType,
+    op: BitwiseBinaryKernelOp,
+) -> Option<BitwiseBinaryArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, BitwiseBinaryKernelOp::And) => Some(bitwise_and_bool),
+        (DType::Bool, BitwiseBinaryKernelOp::Or) => Some(bitwise_or_bool),
+        (DType::Bool, BitwiseBinaryKernelOp::Xor) => Some(bitwise_xor_bool),
+        (DType::Bool, BitwiseBinaryKernelOp::LeftShift) => Some(left_shift_bool),
+        (DType::Bool, BitwiseBinaryKernelOp::RightShift) => Some(right_shift_bool),
+        (DType::Int32, BitwiseBinaryKernelOp::And) => Some(bitwise_and_int32),
+        (DType::Int32, BitwiseBinaryKernelOp::Or) => Some(bitwise_or_int32),
+        (DType::Int32, BitwiseBinaryKernelOp::Xor) => Some(bitwise_xor_int32),
+        (DType::Int32, BitwiseBinaryKernelOp::LeftShift) => Some(left_shift_int32),
+        (DType::Int32, BitwiseBinaryKernelOp::RightShift) => Some(right_shift_int32),
+        (DType::Int64, BitwiseBinaryKernelOp::And) => Some(bitwise_and_int64),
+        (DType::Int64, BitwiseBinaryKernelOp::Or) => Some(bitwise_or_int64),
+        (DType::Int64, BitwiseBinaryKernelOp::Xor) => Some(bitwise_xor_int64),
+        (DType::Int64, BitwiseBinaryKernelOp::LeftShift) => Some(left_shift_int64),
+        (DType::Int64, BitwiseBinaryKernelOp::RightShift) => Some(right_shift_int64),
         _ => None,
     }
 }
@@ -977,6 +1029,119 @@ truth_reduce_kernel!(any_truthy_complex128, Complex128, any, |x| x.re != 0.0
     || x.im != 0.0);
 truth_reduce_kernel!(all_truthy_str, Str, all, |x| !x.is_empty());
 truth_reduce_kernel!(any_truthy_str, Str, any, |x| !x.is_empty());
+
+macro_rules! bitwise_unary_kernel {
+    ($name:ident, $variant:ident, $expr:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => {
+                    Ok(ArrayData::$variant(data.mapv($expr).into_shared()))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "bitwise unary kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! bitwise_binary_kernel {
+    ($name:ident, $variant:ident, $expr:expr) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => Ok(ArrayData::$variant(
+                    ndarray::Zip::from(&a)
+                        .and(&b)
+                        .map_collect($expr)
+                        .into_shared(),
+                )),
+                _ => Err(NumpyError::TypeError(
+                    "bitwise binary kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! shift_binary_kernel {
+    ($name:ident, $lhs_variant:ident, $rhs_variant:ident, $out_variant:ident, |$x:ident : $xt:ty, $y:ident : $yt:ty| $body:expr) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$lhs_variant(a), ArrayData::$rhs_variant(b)) => {
+                    Ok(ArrayData::$out_variant(
+                        ndarray::Zip::from(&a)
+                            .and(&b)
+                            .map_collect(|&$x: &$xt, &$y: &$yt| $body)
+                            .into_shared(),
+                    ))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "bitwise binary kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+bitwise_unary_kernel!(bitwise_not_bool, Bool, |x: bool| !x);
+bitwise_unary_kernel!(bitwise_not_int32, Int32, |x: i32| !x);
+bitwise_unary_kernel!(bitwise_not_int64, Int64, |x: i64| !x);
+
+bitwise_binary_kernel!(bitwise_and_bool, Bool, |&x, &y| x && y);
+bitwise_binary_kernel!(bitwise_or_bool, Bool, |&x, &y| x || y);
+bitwise_binary_kernel!(bitwise_xor_bool, Bool, |&x, &y| x ^ y);
+bitwise_binary_kernel!(bitwise_and_int32, Int32, |&x, &y| x & y);
+bitwise_binary_kernel!(bitwise_or_int32, Int32, |&x, &y| x | y);
+bitwise_binary_kernel!(bitwise_xor_int32, Int32, |&x, &y| x ^ y);
+bitwise_binary_kernel!(bitwise_and_int64, Int64, |&x, &y| x & y);
+bitwise_binary_kernel!(bitwise_or_int64, Int64, |&x, &y| x | y);
+bitwise_binary_kernel!(bitwise_xor_int64, Int64, |&x, &y| x ^ y);
+shift_binary_kernel!(left_shift_int32, Int32, Int32, Int32, |x: i32, y: i32| {
+    if !(0..32).contains(&y) {
+        0
+    } else {
+        x << y
+    }
+});
+shift_binary_kernel!(right_shift_int32, Int32, Int32, Int32, |x: i32, y: i32| {
+    if !(0..32).contains(&y) {
+        x >> 31
+    } else {
+        x >> y
+    }
+});
+shift_binary_kernel!(left_shift_int64, Int64, Int64, Int64, |x: i64, y: i64| {
+    if !(0..64).contains(&y) {
+        0
+    } else {
+        x << y
+    }
+});
+shift_binary_kernel!(right_shift_int64, Int64, Int64, Int64, |x: i64, y: i64| {
+    if !(0..64).contains(&y) {
+        x >> 63
+    } else {
+        x >> y
+    }
+});
+shift_binary_kernel!(left_shift_bool, Bool, Bool, Int64, |x: bool, y: bool| {
+    let x = x as i64;
+    let y = y as i64;
+    if !(0..64).contains(&y) {
+        0
+    } else {
+        x << y
+    }
+});
+shift_binary_kernel!(right_shift_bool, Bool, Bool, Int64, |x: bool, y: bool| {
+    let x = x as i64;
+    let y = y as i64;
+    if !(0..64).contains(&y) {
+        x >> 63
+    } else {
+        x >> y
+    }
+});
 
 macro_rules! constant_bool_unary_kernel {
     ($name:ident, $variant:ident, $value:expr) => {

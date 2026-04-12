@@ -1,14 +1,16 @@
 use crate::kernel::{
     arg_reduction_all_kernel_for_dtype, arg_reduction_axis_kernel_for_dtype,
-    binary_kernel_for_dtype, comparison_kernel_for_dtype, decompose_unary_kernel_for_dtype,
-    dot_kernel_for_dtype, math_binary_kernel_for_dtype, math_unary_kernel_for_dtype,
-    predicate_kernel_for_dtype, predicate_presence_kernel_for_dtype, real_binary_kernel_for_dtype,
-    real_unary_kernel_for_dtype, reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype,
-    truth_kernel_for_dtype, truth_reduce_kernel_for_dtype, value_unary_kernel_for_dtype,
-    where_kernel_for_dtype, ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp,
-    ArithmeticKernelOp, BinaryArrayKernel, BinaryMathArrayKernel, ComparisonArrayKernel,
-    ComparisonKernelOp, DecomposeUnaryArrayKernel, DecomposeUnaryKernelOp, DotArrayKernel,
-    DotKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, PredicateArrayKernel, PredicateKernelOp,
+    binary_kernel_for_dtype, bitwise_binary_kernel_for_dtype, bitwise_unary_kernel_for_dtype,
+    comparison_kernel_for_dtype, decompose_unary_kernel_for_dtype, dot_kernel_for_dtype,
+    math_binary_kernel_for_dtype, math_unary_kernel_for_dtype, predicate_kernel_for_dtype,
+    predicate_presence_kernel_for_dtype, real_binary_kernel_for_dtype, real_unary_kernel_for_dtype,
+    reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype, truth_kernel_for_dtype,
+    truth_reduce_kernel_for_dtype, value_unary_kernel_for_dtype, where_kernel_for_dtype,
+    ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp, ArithmeticKernelOp,
+    BinaryArrayKernel, BinaryMathArrayKernel, BitwiseBinaryArrayKernel, BitwiseBinaryKernelOp,
+    BitwiseUnaryArrayKernel, BitwiseUnaryKernelOp, ComparisonArrayKernel, ComparisonKernelOp,
+    DecomposeUnaryArrayKernel, DecomposeUnaryKernelOp, DotArrayKernel, DotKernelOp,
+    MathBinaryKernelOp, MathUnaryKernelOp, PredicateArrayKernel, PredicateKernelOp,
     PredicatePresenceKernel, PredicatePresenceOp, RealBinaryArrayKernel, RealBinaryKernelOp,
     RealUnaryKernelOp, ReduceAllArrayKernel, ReduceAxisArrayKernel, ReductionKernelOp,
     TruthArrayKernel, TruthKernelOp, TruthReduceKernel, TruthReduceKernelOp, UnaryArrayKernel,
@@ -81,6 +83,20 @@ impl DTypeDescriptor {
 
     pub fn truth_reduce_kernel(&self, op: TruthReduceKernelOp) -> Option<TruthReduceKernel> {
         truth_reduce_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn bitwise_unary_kernel(
+        &self,
+        op: BitwiseUnaryKernelOp,
+    ) -> Option<BitwiseUnaryArrayKernel> {
+        bitwise_unary_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn bitwise_binary_kernel(
+        &self,
+        op: BitwiseBinaryKernelOp,
+    ) -> Option<BitwiseBinaryArrayKernel> {
+        bitwise_binary_kernel_for_dtype(self.id, op)
     }
 
     pub fn math_unary_kernel(&self, op: MathUnaryKernelOp) -> Option<UnaryArrayKernel> {
