@@ -226,92 +226,47 @@ impl NdArray {
     /// Mean of array elements, ignoring NaN values.
     /// If all values along the reduction are NaN, the result is NaN.
     pub fn nanmean(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let (sum, count) = arr.iter().fold((0.0_f64, 0_usize), |(s, c), &x| {
-                    if x.is_nan() {
-                        (s, c)
-                    } else {
-                        (s + x, c + 1)
-                    }
-                });
-                let mean = if count == 0 {
-                    f64::NAN
-                } else {
-                    sum / count as f64
-                };
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), mean)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr = arr.map_axis(Axis(ax), |lane| {
-                    let (sum, count) = lane.iter().fold((0.0_f64, 0_usize), |(s, c), &x| {
-                        if x.is_nan() {
-                            (s, c)
-                        } else {
-                            (s + x, c + 1)
-                        }
-                    });
-                    if count == 0 {
-                        f64::NAN
-                    } else {
-                        sum / count as f64
-                    }
-                });
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| nanmean_slice(arr.iter().copied()),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| nanmean_slice(lane.iter().copied()))
+                    .into_shared()
+            },
+        )
     }
 
     /// Variance of array elements, ignoring NaN values.
     /// Uses the formula: sum((x - mean)^2) / (n - ddof) on NaN-filtered values.
     /// If all values are NaN, or n <= ddof, the result is NaN.
     pub fn nanvar(&self, axis: Option<usize>, ddof: usize, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let val = nanvar_slice(arr.iter().copied(), ddof);
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), val)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr =
-                    arr.map_axis(Axis(ax), |lane| nanvar_slice(lane.iter().copied(), ddof));
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| nanvar_slice(arr.iter().copied(), ddof),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| nanvar_slice(lane.iter().copied(), ddof))
+                    .into_shared()
+            },
+        )
     }
 
     /// Standard deviation of array elements, ignoring NaN values.
     /// This is the square root of nanvar.
     pub fn nanstd(&self, axis: Option<usize>, ddof: usize, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let val = nanvar_slice(arr.iter().copied(), ddof).sqrt();
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), val)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr = arr.map_axis(Axis(ax), |lane| {
-                    nanvar_slice(lane.iter().copied(), ddof).sqrt()
-                });
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| nanstd_slice(arr.iter().copied(), ddof),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| nanstd_slice(lane.iter().copied(), ddof))
+                    .into_shared()
+            },
+        )
     }
 
     /// Minimum of array elements, ignoring NaN values.
@@ -427,6 +382,25 @@ fn nanvar_slice(values: impl Iterator<Item = f64>, ddof: usize) -> f64 {
     let mean = filtered.iter().sum::<f64>() / n as f64;
     let sum_sq: f64 = filtered.iter().map(|&x| (x - mean) * (x - mean)).sum();
     sum_sq / (n - ddof) as f64
+}
+
+fn nanmean_slice(values: impl Iterator<Item = f64>) -> f64 {
+    let (sum, count) = values.fold((0.0_f64, 0_usize), |(s, c), x| {
+        if x.is_nan() {
+            (s, c)
+        } else {
+            (s + x, c + 1)
+        }
+    });
+    if count == 0 {
+        f64::NAN
+    } else {
+        sum / count as f64
+    }
+}
+
+fn nanstd_slice(values: impl Iterator<Item = f64>, ddof: usize) -> f64 {
+    nanvar_slice(values, ddof).sqrt()
 }
 
 #[cfg(test)]
