@@ -179,6 +179,39 @@ pub fn object_to_ndarray(data: &vm::PyObject, vm: &VirtualMachine) -> PyResult<N
     scalar_ndarray_with_dtype(data, None, vm)
 }
 
+pub fn is_array_like_object(obj: &vm::PyObject, vm: &VirtualMachine) -> bool {
+    obj.downcast_ref::<PyNdArray>().is_some() || obj.get_attr("_numpy_dtype_name", vm).is_ok()
+}
+
+pub fn object_to_ndarray_weak(
+    obj: &vm::PyObject,
+    target_dtype: DType,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    if is_array_like_object(obj, vm) || obj.class().is(vm.ctx.types.bool_type) {
+        return object_to_ndarray(obj, vm);
+    }
+
+    if obj.class().is(vm.ctx.types.float_type) {
+        if target_dtype.is_float() || target_dtype.is_complex() {
+            if let Ok(value) = obj.to_owned().try_into_value::<f64>(vm) {
+                return Ok(NdArray::from_scalar(value).astype(target_dtype));
+            }
+        }
+        return object_to_ndarray(obj, vm);
+    }
+
+    if obj.class().is(vm.ctx.types.int_type) {
+        if let Some(value) = obj.downcast_ref::<vm::builtins::PyInt>() {
+            if let Ok(int_value) = value.try_to_primitive::<i64>(vm) {
+                return Ok(NdArray::from_scalar(int_value as f64).astype(target_dtype));
+            }
+        }
+    }
+
+    object_to_ndarray(obj, vm)
+}
+
 /// numpy.array(data) — convert a Python list to an NdArray.
 pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
     object_to_ndarray(&data, vm).map(PyNdArray::from_core)

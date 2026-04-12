@@ -1994,7 +1994,7 @@ impl PyNdArray {
         } else {
             zelf_dtype
         };
-        let other = match obj_to_ndarray_nep50(other, nep50_target, vm) {
+        let other = match crate::py_creation::object_to_ndarray_weak(other, nep50_target, vm) {
             Ok(arr) => arr,
             Err(_) => {
                 return Ok(vm::function::Either::B(
@@ -2915,48 +2915,6 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
     crate::py_creation::object_to_ndarray(obj, vm)
 }
 
-/// NEP50-aware scalar conversion: plain Python scalars (int, float) adopt the target dtype
-/// (weak typing), while numpy scalars and arrays keep their explicit dtype (strong typing).
-fn obj_to_ndarray_nep50(
-    obj: &vm::PyObject,
-    target_dtype: DType,
-    vm: &VirtualMachine,
-) -> PyResult<NdArray> {
-    // numpy array: strong typing, unchanged
-    if obj.downcast_ref::<PyNdArray>().is_some() {
-        return obj_to_ndarray(obj, vm);
-    }
-    // numpy scalar (has _numpy_dtype_name): strong typing, unchanged
-    if obj.get_attr("_numpy_dtype_name", vm).is_ok() {
-        return obj_to_ndarray(obj, vm);
-    }
-    // Python bool: stays bool (don't demote to integer/float)
-    if obj.class().is(vm.ctx.types.bool_type) {
-        return obj_to_ndarray(obj, vm);
-    }
-    // Plain Python float: weak typing, but only adopts float/complex target dtypes.
-    // For int targets, float stays as float64 (normal promotion will widen).
-    if obj.class().is(vm.ctx.types.float_type) {
-        if target_dtype.is_float() || target_dtype.is_complex() {
-            if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
-                return Ok(NdArray::from_scalar(f).astype(target_dtype));
-            }
-        }
-        // Fall through to normal conversion (creates float64)
-        return obj_to_ndarray(obj, vm);
-    }
-    // Plain Python int: weak typing → cast to target_dtype
-    if obj.class().is(vm.ctx.types.int_type) {
-        if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-            if let Ok(val) = i.try_to_primitive::<i64>(vm) {
-                return Ok(NdArray::from_scalar(val as f64).astype(target_dtype));
-            }
-        }
-    }
-    // Fallback: use normal conversion
-    obj_to_ndarray(obj, vm)
-}
-
 /// Check numpy errstate for invalid operations (NaN results from subtraction etc).
 /// Handles 'raise' and 'call' modes.
 fn check_invalid_errstate(result_obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
@@ -3034,35 +2992,28 @@ fn number_bin_op(
     op: fn(&NdArray, &NdArray) -> numpy_rust_core::Result<NdArray>,
     vm: &VirtualMachine,
 ) -> PyResult {
-    // Use NEP 50 weak-type semantics: if one operand is a Python scalar (int/float/complex)
-    // and the other is an ndarray or numpy scalar, cast the Python scalar to the array's dtype.
-    let a_is_arr =
-        a.downcast_ref::<PyNdArray>().is_some() || a.get_attr("_numpy_dtype_name", vm).is_ok();
-    let b_is_arr =
-        b.downcast_ref::<PyNdArray>().is_some() || b.get_attr("_numpy_dtype_name", vm).is_ok();
+    let a_is_arr = crate::py_creation::is_array_like_object(a, vm);
+    let b_is_arr = crate::py_creation::is_array_like_object(b, vm);
 
     let (a_arr, b_arr) = if a_is_arr && !b_is_arr {
         let a_arr = obj_to_ndarray(a, vm)?;
-        let target = a_arr.dtype();
-        // For Bool arrays, NEP 50 weak typing targets Int8 (Bool arithmetic -> int8)
-        let nep50_target = if target == DType::Bool {
+        let weak_target = if a_arr.dtype() == DType::Bool {
             DType::Int8
         } else {
-            target
+            a_arr.dtype()
         };
-        match obj_to_ndarray_nep50(b, nep50_target, vm) {
+        match crate::py_creation::object_to_ndarray_weak(b, weak_target, vm) {
             Ok(b_arr) => (a_arr, b_arr),
             Err(_) => return Ok(vm.ctx.not_implemented()),
         }
     } else if b_is_arr && !a_is_arr {
         let b_arr = obj_to_ndarray(b, vm)?;
-        let target = b_arr.dtype();
-        let nep50_target = if target == DType::Bool {
+        let weak_target = if b_arr.dtype() == DType::Bool {
             DType::Int8
         } else {
-            target
+            b_arr.dtype()
         };
-        match obj_to_ndarray_nep50(a, nep50_target, vm) {
+        match crate::py_creation::object_to_ndarray_weak(a, weak_target, vm) {
             Ok(a_arr) => (a_arr, b_arr),
             Err(_) => return Ok(vm.ctx.not_implemented()),
         }
