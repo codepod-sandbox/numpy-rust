@@ -3,25 +3,36 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
+fn to_float64(array: &NdArray) -> ndarray::ArrayD<f64> {
+    let cast = array.astype(DType::Float64);
+    let ArrayData::Float64(data) = cast.data() else {
+        unreachable!("float64 cast must produce float64 storage")
+    };
+    data.to_owned()
+}
+
+fn flatten_to_float64(array: &NdArray) -> ndarray::ArrayD<f64> {
+    to_float64(&array.flatten())
+}
+
+fn spacing_deltas(x: Option<&NdArray>, dx: f64, n: usize) -> Vec<f64> {
+    if let Some(x_arr) = x {
+        let x_flat: Vec<f64> = flatten_to_float64(x_arr).iter().copied().collect();
+        x_flat.windows(2).map(|w| w[1] - w[0]).collect()
+    } else {
+        vec![dx; n - 1]
+    }
+}
+
 /// One-dimensional linear interpolation.
 /// x: x-coordinates at which to evaluate
 /// xp: x-coordinates of data points (must be sorted ascending)
 /// fp: y-coordinates of data points (same length as xp)
 /// Values outside xp range are clamped to fp[0] and fp[last].
 pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
-    let x_f = x.astype(DType::Float64).flatten();
-    let xp_f = xp.astype(DType::Float64).flatten();
-    let fp_f = fp.astype(DType::Float64).flatten();
-
-    let ArrayData::Float64(x_arr) = x_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(xp_arr) = xp_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(fp_arr) = fp_f.data() else {
-        unreachable!()
-    };
+    let x_arr = flatten_to_float64(x);
+    let xp_arr = flatten_to_float64(xp);
+    let fp_arr = flatten_to_float64(fp);
 
     if xp_arr.len() != fp_arr.len() {
         return Err(NumpyError::ValueError(
@@ -108,10 +119,7 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
 /// spacing: uniform spacing between elements (default 1.0).
 /// Uses central differences for interior points, forward/backward at edges.
 pub fn gradient_1d(f: &NdArray, spacing: f64) -> Result<NdArray> {
-    let arr = f.astype(DType::Float64).flatten();
-    let ArrayData::Float64(data) = arr.data() else {
-        unreachable!()
-    };
+    let data = flatten_to_float64(f);
     let n = data.len();
 
     if n < 2 {
@@ -137,10 +145,7 @@ pub fn gradient_1d(f: &NdArray, spacing: f64) -> Result<NdArray> {
 /// N-D gradient: compute gradient along each axis.
 /// Returns one array per axis.
 pub fn gradient_nd(f: &NdArray, spacing: f64) -> Result<Vec<NdArray>> {
-    let arr = f.astype(DType::Float64);
-    let ArrayData::Float64(data) = arr.data() else {
-        unreachable!()
-    };
+    let data = to_float64(f);
     let shape = data.shape().to_vec();
     let ndim = shape.len();
 
@@ -174,7 +179,7 @@ pub fn gradient_nd(f: &NdArray, spacing: f64) -> Result<Vec<NdArray>> {
             }
         }
 
-        results.push(NdArray::from_data(ArrayData::Float64(grad)));
+        results.push(NdArray::from_data(ArrayData::Float64(grad.into_shared())));
     }
 
     Ok(results)
@@ -195,10 +200,7 @@ pub fn gradient_full(
         return Err(NumpyError::ValueError("'edge_order' must be 1 or 2".into()));
     }
 
-    let arr = f.astype(DType::Float64);
-    let ArrayData::Float64(data) = arr.data() else {
-        unreachable!()
-    };
+    let data = to_float64(f);
     let shape = data.shape().to_vec();
     let ndim = shape.len();
 
@@ -286,7 +288,7 @@ pub fn gradient_full(
             }
         }
 
-        results.push(NdArray::from_data(ArrayData::Float64(grad)));
+        results.push(NdArray::from_data(ArrayData::Float64(grad.into_shared())));
     }
 
     Ok(results)
@@ -326,10 +328,7 @@ pub fn trapz(y: &NdArray, x: Option<&NdArray>, dx: f64, axis: Option<i64>) -> Re
         )));
     }
 
-    let y_f = y.astype(DType::Float64);
-    let ArrayData::Float64(y_arr) = y_f.data() else {
-        unreachable!()
-    };
+    let y_arr = to_float64(y);
 
     let n = y.shape()[axis_idx];
     if n < 2 {
@@ -339,16 +338,7 @@ pub fn trapz(y: &NdArray, x: Option<&NdArray>, dx: f64, axis: Option<i64>) -> Re
     }
 
     // Build dx array along axis_idx
-    let dx_vals: Vec<f64> = if let Some(x_arr) = x {
-        let x_f = x_arr.astype(DType::Float64);
-        let ArrayData::Float64(xa) = x_f.data() else {
-            unreachable!()
-        };
-        let x_flat: Vec<f64> = xa.iter().copied().collect();
-        x_flat.windows(2).map(|w| w[1] - w[0]).collect()
-    } else {
-        vec![dx; n - 1]
-    };
+    let dx_vals = spacing_deltas(x, dx, n);
 
     // For 1-D case:
     if y.ndim() == 1 {
@@ -427,10 +417,7 @@ pub fn cumulative_trapezoid(
         )));
     }
 
-    let y_f = y.astype(DType::Float64);
-    let ArrayData::Float64(y_arr) = y_f.data() else {
-        unreachable!()
-    };
+    let y_arr = to_float64(y);
     let n = y.shape()[axis_idx];
     if n < 2 {
         return Err(NumpyError::ValueError(
@@ -438,16 +425,7 @@ pub fn cumulative_trapezoid(
         ));
     }
 
-    let dx_vals: Vec<f64> = if let Some(x_arr) = x {
-        let x_f = x_arr.astype(DType::Float64);
-        let ArrayData::Float64(xa) = x_f.data() else {
-            unreachable!()
-        };
-        let x_flat: Vec<f64> = xa.iter().copied().collect();
-        x_flat.windows(2).map(|w| w[1] - w[0]).collect()
-    } else {
-        vec![dx; n - 1]
-    };
+    let dx_vals = spacing_deltas(x, dx, n);
 
     let mut out_shape = y.shape().to_vec();
     out_shape[axis_idx] = n - 1;
