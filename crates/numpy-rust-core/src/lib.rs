@@ -32,5 +32,8 @@ pub use manipulation::{
 };
 pub use ops::einsum::einsum;
 pub use ops::selection::{choose, intersect1d, isin, setdiff1d, union1d};
-pub use resolver::{resolve_binary_op, resolve_dot_op, BinaryOp, BinaryOpPlan, DotOp, DotOpPlan};
+pub use resolver::{
+    resolve_binary_op, resolve_dot_op, resolve_where_op, BinaryOp, BinaryOpPlan, DotOp, DotOpPlan,
+    WhereOp, WhereOpPlan,
+};
 pub use utility::{argwhere, count_nonzero, diagonal, dot, nonzero, outer, where_cond};

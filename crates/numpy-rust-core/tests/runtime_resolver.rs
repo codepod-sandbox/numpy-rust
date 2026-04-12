@@ -1,5 +1,8 @@
 use numpy_rust_core::resolver::{resolve_cast, resolve_reduction_op, CastingRule, ReductionOp};
-use numpy_rust_core::{resolve_binary_op, resolve_dot_op, BinaryOp, DType, DotOp, NumpyError};
+use numpy_rust_core::{
+    resolve_binary_op, resolve_dot_op, resolve_where_op, BinaryOp, DType, DotOp, NumpyError,
+    WhereOp,
+};
 
 #[test]
 fn same_kind_cast_rejects_float64_to_int32() {
@@ -83,5 +86,25 @@ fn dot_resolution_rejects_string_operands() {
     assert_eq!(
         error.to_string(),
         "type error: dot not supported for string arrays"
+    );
+}
+
+#[test]
+fn where_resolution_promotes_numeric_inputs() {
+    let plan = resolve_where_op(WhereOp::Select, DType::Int32, DType::Float64).unwrap();
+
+    assert_eq!(plan.execution_dtype(), DType::Float64);
+    assert_eq!(plan.x_cast().target_dtype(), DType::Float64);
+    assert_eq!(plan.y_cast().target_dtype(), DType::Float64);
+}
+
+#[test]
+fn where_resolution_rejects_mixed_string_and_numeric_inputs() {
+    let error = resolve_where_op(WhereOp::Select, DType::Str, DType::Float64).unwrap_err();
+
+    assert!(matches!(error, NumpyError::TypeError(_)));
+    assert_eq!(
+        error.to_string(),
+        "type error: where: cannot mix string and numeric arrays"
     );
 }

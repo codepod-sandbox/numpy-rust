@@ -3,11 +3,10 @@ use ndarray::IxDyn;
 
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
-use crate::casting::cast_array_data;
 use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
-use crate::kernel::DotKernelOp;
-use crate::resolver::{resolve_dot_op, DotOp, DotOpPlan};
+use crate::kernel::{DotKernelOp, WhereKernelOp};
+use crate::resolver::{resolve_dot_op, resolve_where_op, DotOp, DotOpPlan, WhereOp, WhereOpPlan};
 use crate::{DType, NdArray};
 
 /// Convert IEEE 754 half-precision (16-bit) bit pattern to f32.
@@ -85,72 +84,38 @@ fn f32_to_half_bits(f: f32) -> u16 {
 /// Element-wise ternary: select from `x` where `cond` is true, else from `y`.
 /// Like `numpy.where(cond, x, y)`.
 pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
+    let (cond, x, y, plan) = prepare_where_execution(cond, x, y)?;
+    let descriptor = descriptor_for_dtype(plan.execution_dtype());
+    let kernel = descriptor
+        .where_kernel(WhereKernelOp::Select)
+        .ok_or_else(|| NumpyError::TypeError("where kernel not registered".into()))?;
+    let data = kernel(cond, x, y)?;
+    let mut result = NdArray::from_data(data);
+    if plan.execution_dtype().is_narrow() {
+        result.set_declared_dtype(plan.execution_dtype());
+    }
+    Ok(result)
+}
+
+fn prepare_where_execution(
+    cond: &NdArray,
+    x: &NdArray,
+    y: &NdArray,
+) -> Result<(ArrayData, ArrayData, ArrayData, WhereOpPlan)> {
     let bool_cond = match cond.data() {
         ArrayData::Bool(a) => a.clone(),
         _ => return Err(NumpyError::TypeError("condition must be boolean".into())),
     };
 
-    // Promote x and y to common dtype (skip promotion for string+string)
-    let (xd, yd) = if x.dtype().is_string() && y.dtype().is_string() {
-        (x.data().clone(), y.data().clone())
-    } else if x.dtype().is_string() || y.dtype().is_string() {
-        return Err(NumpyError::TypeError(
-            "where: cannot mix string and numeric arrays".into(),
-        ));
-    } else {
-        let common_dtype = x.dtype().promote(y.dtype());
-        (
-            cast_array_data(x.data(), common_dtype),
-            cast_array_data(y.data(), common_dtype),
-        )
-    };
-
-    // Broadcast all three to common shape
+    let plan = resolve_where_op(WhereOp::Select, x.dtype(), y.dtype())?;
     let shape_xy = broadcast_shape(x.shape(), y.shape())?;
     let out_shape = broadcast_shape(cond.shape(), &shape_xy)?;
 
-    let cond_b = broadcast_array_data(&ArrayData::Bool(bool_cond), &out_shape);
-    let xb = broadcast_array_data(&xd, &out_shape);
-    let yb = broadcast_array_data(&yd, &out_shape);
+    let cond = broadcast_array_data(&ArrayData::Bool(bool_cond), &out_shape);
+    let x = broadcast_array_data(&x.cast_for_execution(plan.x_cast()), &out_shape);
+    let y = broadcast_array_data(&y.cast_for_execution(plan.y_cast()), &out_shape);
 
-    let cond_arr = match cond_b {
-        ArrayData::Bool(a) => a,
-        _ => unreachable!(),
-    };
-
-    macro_rules! do_where {
-        ($xa:expr, $ya:expr, $variant:ident) => {{
-            let result = ndarray::Zip::from(&cond_arr)
-                .and($xa)
-                .and($ya)
-                .map_collect(|&c, &xv, &yv| if c { xv } else { yv });
-            ArrayData::$variant(result.into_shared())
-        }};
-    }
-
-    let data = match (xb, yb) {
-        (ArrayData::Float64(xa), ArrayData::Float64(ya)) => do_where!(&xa, &ya, Float64),
-        (ArrayData::Float32(xa), ArrayData::Float32(ya)) => do_where!(&xa, &ya, Float32),
-        (ArrayData::Int64(xa), ArrayData::Int64(ya)) => do_where!(&xa, &ya, Int64),
-        (ArrayData::Int32(xa), ArrayData::Int32(ya)) => do_where!(&xa, &ya, Int32),
-        (ArrayData::Bool(xa), ArrayData::Bool(ya)) => do_where!(&xa, &ya, Bool),
-        (ArrayData::Complex64(xa), ArrayData::Complex64(ya)) => {
-            do_where!(&xa, &ya, Complex64)
-        }
-        (ArrayData::Complex128(xa), ArrayData::Complex128(ya)) => {
-            do_where!(&xa, &ya, Complex128)
-        }
-        (ArrayData::Str(xa), ArrayData::Str(ya)) => {
-            let result = ndarray::Zip::from(&cond_arr)
-                .and(&xa)
-                .and(&ya)
-                .map_collect(|&c, xv, yv| if c { xv.clone() } else { yv.clone() });
-            ArrayData::Str(result.into_shared())
-        }
-        _ => unreachable!("promotion ensures matching types"),
-    };
-
-    Ok(NdArray::from_data(data))
+    Ok((cond, x, y, plan))
 }
 
 impl NdArray {

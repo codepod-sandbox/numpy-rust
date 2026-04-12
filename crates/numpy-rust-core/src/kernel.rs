@@ -39,6 +39,11 @@ pub enum DotKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhereKernelOp {
+    Select,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionKernelOp {
     Sum,
     Prod,
@@ -55,6 +60,7 @@ pub enum ArgReductionKernelOp {
 pub type BinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ComparisonArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type DotArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
+pub type WhereArrayKernel = fn(ArrayData, ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -149,6 +155,20 @@ pub fn dot_kernel_for_dtype(dtype: DType, op: DotKernelOp) -> Option<DotArrayKer
         (DType::Int64, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_int64),
         (DType::Complex64, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_complex64),
         (DType::Complex128, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_complex128),
+        _ => None,
+    }
+}
+
+pub fn where_kernel_for_dtype(dtype: DType, op: WhereKernelOp) -> Option<WhereArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, WhereKernelOp::Select) => Some(where_select_bool),
+        (DType::Int32, WhereKernelOp::Select) => Some(where_select_int32),
+        (DType::Int64, WhereKernelOp::Select) => Some(where_select_int64),
+        (DType::Float32, WhereKernelOp::Select) => Some(where_select_float32),
+        (DType::Float64, WhereKernelOp::Select) => Some(where_select_float64),
+        (DType::Complex64, WhereKernelOp::Select) => Some(where_select_complex64),
+        (DType::Complex128, WhereKernelOp::Select) => Some(where_select_complex128),
+        (DType::Str, WhereKernelOp::Select) => Some(where_select_str),
         _ => None,
     }
 }
@@ -325,6 +345,46 @@ matmul_2d_1d_kernel!(matmul_2d_1d_float32, Float32);
 matmul_2d_1d_kernel!(matmul_2d_1d_float64, Float64);
 matmul_2d_1d_kernel!(matmul_2d_1d_complex64, Complex64);
 matmul_2d_1d_kernel!(matmul_2d_1d_complex128, Complex128);
+
+macro_rules! primitive_where_kernel {
+    ($name:ident, $variant:ident) => {
+        fn $name(cond: ArrayData, x: ArrayData, y: ArrayData) -> Result<ArrayData> {
+            match (cond, x, y) {
+                (ArrayData::Bool(cond), ArrayData::$variant(x), ArrayData::$variant(y)) => {
+                    Ok(ArrayData::$variant(
+                        ndarray::Zip::from(&cond)
+                            .and(&x)
+                            .and(&y)
+                            .map_collect(|&c, &xv, &yv| if c { xv } else { yv })
+                            .into_shared(),
+                    ))
+                }
+                _ => Err(NumpyError::TypeError("where kernel dtype mismatch".into())),
+            }
+        }
+    };
+}
+
+fn where_select_str(cond: ArrayData, x: ArrayData, y: ArrayData) -> Result<ArrayData> {
+    match (cond, x, y) {
+        (ArrayData::Bool(cond), ArrayData::Str(x), ArrayData::Str(y)) => Ok(ArrayData::Str(
+            ndarray::Zip::from(&cond)
+                .and(&x)
+                .and(&y)
+                .map_collect(|&c, xv, yv| if c { xv.clone() } else { yv.clone() })
+                .into_shared(),
+        )),
+        _ => Err(NumpyError::TypeError("where kernel dtype mismatch".into())),
+    }
+}
+
+primitive_where_kernel!(where_select_bool, Bool);
+primitive_where_kernel!(where_select_int32, Int32);
+primitive_where_kernel!(where_select_int64, Int64);
+primitive_where_kernel!(where_select_float32, Float32);
+primitive_where_kernel!(where_select_float64, Float64);
+primitive_where_kernel!(where_select_complex64, Complex64);
+primitive_where_kernel!(where_select_complex128, Complex128);
 
 pub(crate) fn complex_cmp<T: num_traits::Float>(
     a: &Complex<T>,

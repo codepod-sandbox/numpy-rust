@@ -16,6 +16,11 @@ pub enum DotOp {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum WhereOp {
+    Select,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum ComparisonOp {
     Eq,
     Ne,
@@ -113,6 +118,13 @@ pub struct DotOpPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WhereOpPlan {
+    x_cast: CastPlan,
+    y_cast: CastPlan,
+    execution_dtype: DType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReductionPlan {
     input_cast: CastPlan,
     result_dtype: DType,
@@ -139,6 +151,20 @@ impl DotOpPlan {
 
     pub fn rhs_cast(&self) -> CastPlan {
         self.rhs_cast
+    }
+
+    pub fn execution_dtype(&self) -> DType {
+        self.execution_dtype
+    }
+}
+
+impl WhereOpPlan {
+    pub fn x_cast(&self) -> CastPlan {
+        self.x_cast
+    }
+
+    pub fn y_cast(&self) -> CastPlan {
+        self.y_cast
     }
 
     pub fn execution_dtype(&self) -> DType {
@@ -250,6 +276,24 @@ pub fn resolve_dot_op(_op: DotOp, lhs: DType, rhs: DType) -> Result<DotOpPlan> {
     Ok(DotOpPlan {
         lhs_cast: resolve_cast(lhs, execution_dtype, CastingRule::Unsafe)?,
         rhs_cast: resolve_cast(rhs, execution_dtype, CastingRule::Unsafe)?,
+        execution_dtype,
+    })
+}
+
+pub fn resolve_where_op(_op: WhereOp, x: DType, y: DType) -> Result<WhereOpPlan> {
+    let execution_dtype = if x.is_string() && y.is_string() {
+        DType::Str
+    } else if x.is_string() || y.is_string() {
+        return Err(NumpyError::TypeError(
+            "where: cannot mix string and numeric arrays".into(),
+        ));
+    } else {
+        x.promote(y)
+    };
+
+    Ok(WhereOpPlan {
+        x_cast: resolve_cast(x, execution_dtype, CastingRule::Unsafe)?,
+        y_cast: resolve_cast(y, execution_dtype, CastingRule::Unsafe)?,
         execution_dtype,
     })
 }
