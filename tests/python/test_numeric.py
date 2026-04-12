@@ -7856,6 +7856,16 @@ def test_t38_lib_scimath_log():
     v = flat[0]
     assert isinstance(v, complex), f"expected complex, got {type(v)}: {v}"
 
+def test_t38_lib_scimath_power():
+    """lib.scimath.power should promote negative bases into the complex domain."""
+    import numpy as np
+    result = np.lib.scimath.power(np.array([-4.0]), 0.5)
+    flat = result.flatten()
+    v = flat[0]
+    assert isinstance(v, complex), f"expected complex, got {type(v)}: {v}"
+    assert abs(v.real) < 1e-10
+    assert abs(v.imag - 2.0) < 1e-10
+
 def test_t38_lib_numpyversion():
     """lib.NumpyVersion should support comparison."""
     import numpy as np

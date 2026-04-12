@@ -783,45 +783,19 @@ impl NdArray {
     /// Complex-safe power: negative base → complex via powc.
     pub fn scimath_power(&self, exp_arr: &NdArray) -> Result<NdArray> {
         let data_a = ensure_float(self.data());
-        let data_e = ensure_float(exp_arr.data());
-        let out_shape = broadcast_shape(self.shape(), exp_arr.shape())?;
-        let data_a = broadcast_array_data(&data_a, &out_shape);
-        let data_e = broadcast_array_data(&data_e, &out_shape);
-        // Check if any base is negative (needs complex)
         let needs_complex = match &data_a {
             ArrayData::Float32(a) => a.iter().any(|&x| x < 0.0),
             ArrayData::Float64(a) => a.iter().any(|&x| x < 0.0),
             _ => false,
         };
         if needs_complex {
-            let c_a = cast_array_data(&data_a, DType::Complex128);
-            let c_e = cast_array_data(&data_e, DType::Complex128);
-            if let (ArrayData::Complex128(a), ArrayData::Complex128(e)) = (c_a, c_e) {
-                return Ok(NdArray::from_data(ArrayData::Complex128(
-                    ndarray::Zip::from(&a)
-                        .and(&e)
-                        .map_collect(|&b, &p| b.powc(p))
-                        .into_shared(),
-                )));
-            }
+            let base = NdArray::from_data(cast_array_data(&data_a, DType::Complex128));
+            let exp = exp_arr.astype(DType::Complex128);
+            return base.pow(&exp);
         }
-        // Normal float power
-        let result = match (data_a, data_e) {
-            (ArrayData::Float32(a), ArrayData::Float32(e)) => ArrayData::Float32(
-                ndarray::Zip::from(&a)
-                    .and(&e)
-                    .map_collect(|&x, &p| x.powf(p))
-                    .into_shared(),
-            ),
-            (ArrayData::Float64(a), ArrayData::Float64(e)) => ArrayData::Float64(
-                ndarray::Zip::from(&a)
-                    .and(&e)
-                    .map_collect(|&x, &p| x.powf(p))
-                    .into_shared(),
-            ),
-            _ => unreachable!(),
-        };
-        Ok(NdArray::from_data(result))
+        let base = NdArray::from_data(data_a);
+        let exp = NdArray::from_data(ensure_float(exp_arr.data()));
+        base.pow(&exp)
     }
 }
 

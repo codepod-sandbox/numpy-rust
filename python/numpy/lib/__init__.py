@@ -135,7 +135,12 @@ class _ScimathModule:
     @staticmethod
     def power(x, p):
         import numpy as np
-        return np.power(np.asarray(x, dtype='complex128'), p)
+        result = np.power(np.asarray(x, dtype='complex128'), p)
+        if isinstance(result, tuple):
+            return complex(result[0], result[1])
+        flat = result.flatten().tolist()
+        flat_complex = [complex(v[0], v[1]) if isinstance(v, tuple) else complex(v) for v in flat]
+        return np.array(flat_complex).reshape(result.shape)
 
     @staticmethod
     def arccos(x):
