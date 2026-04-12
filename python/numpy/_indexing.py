@@ -155,6 +155,66 @@ def matrix_transpose(a):
     return a.T
 
 
+def _histogram_range_from_flat(flat, range):
+    """Resolve histogram low/high bounds from explicit range or data."""
+    if range is not None:
+        lo, hi = float(range[0]), float(range[1])
+    elif flat:
+        lo, hi = _builtin_min(flat), _builtin_max(flat)
+    else:
+        lo, hi = 0.0, 1.0
+    if lo == hi:
+        lo = lo - 0.5
+        hi = hi + 0.5
+    return lo, hi
+
+
+def _coerce_histogram_edges(bins):
+    """Normalize explicit 1-D histogram edges."""
+    edges = asarray(bins).flatten()
+    if edges.ndim != 1:
+        raise ValueError("bins must be 1d")
+    edge_list = edges.tolist()
+    n_bins = len(edge_list) - 1
+    if n_bins < 1:
+        raise ValueError("bins must have at least 2 edges")
+    for edge in edge_list:
+        if _math.isinf(edge) or _math.isnan(edge):
+            raise ValueError("bins must be finite")
+    return edges, edge_list, n_bins
+
+
+def _normalize_histogramdd_bins(bins, n_dims):
+    """Normalize histogramdd-style bins into one spec per dimension."""
+    if isinstance(bins, int):
+        return [bins] * n_dims
+    if isinstance(bins, (list, tuple)):
+        if len(bins) == n_dims:
+            return list(bins)
+        return [bins] * n_dims
+    return [int(bins)] * n_dims
+
+
+def _resolve_histogramdd_edges(bin_spec, values, range_spec):
+    """Resolve one histogramdd dimension bin spec to explicit edges."""
+    if isinstance(bin_spec, ndarray):
+        edge = bin_spec.flatten().tolist()
+        return edge, len(edge) - 1
+    if isinstance(bin_spec, (list, tuple)):
+        edge = [float(v) for v in bin_spec]
+        return edge, len(edge) - 1
+
+    nb = int(bin_spec)
+    if range_spec is not None:
+        lo, hi = float(range_spec[0]), float(range_spec[1])
+    elif values:
+        lo, hi = _builtin_min(values), _builtin_max(values)
+    else:
+        lo, hi = 0.0, 1.0
+    edge = linspace(lo, hi, num=nb + 1, endpoint=True).tolist()
+    return edge, nb
+
+
 def histogram_bin_edges(a, bins=10, range=None, weights=None):
     """Compute the bin edges for a histogram without computing the histogram itself."""
     a = asarray(a)
@@ -162,16 +222,7 @@ def histogram_bin_edges(a, bins=10, range=None, weights=None):
         return _histogram_bin_edges_from_method(a, bins, range=range)
     if isinstance(bins, int):
         flat = a.flatten().tolist()
-        if range is not None:
-            lo, hi = float(range[0]), float(range[1])
-        else:
-            if flat:
-                lo, hi = _builtin_min(flat), _builtin_max(flat)
-            else:
-                lo, hi = 0.0, 1.0
-        if lo == hi:
-            lo = lo - 0.5
-            hi = hi + 0.5
+        lo, hi = _histogram_range_from_flat(flat, range)
         edges = linspace(lo, hi, bins + 1)
         return edges
     else:
@@ -269,18 +320,7 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
         edges = _histogram_bin_edges_from_method(a, bins, range=range)
         return histogram(a, bins=edges, range=range, density=density, weights=weights)
     if isinstance(bins, (list, tuple, ndarray)):
-        # Custom bin edges
-        edges = asarray(bins).flatten()
-        if edges.ndim != 1:
-            raise ValueError("bins must be 1d")
-        edge_list = edges.tolist()
-        n_bins = len(edge_list) - 1
-        if n_bins < 1:
-            raise ValueError("bins must have at least 2 edges")
-        # Validate finite range
-        for e in edge_list:
-            if _math.isinf(e) or _math.isnan(e):
-                raise ValueError("bins must be finite")
+        edges, edge_list, n_bins = _coerce_histogram_edges(bins)
         flat = a.flatten().tolist()
         counts = [0.0] * n_bins
         w_list = None
@@ -317,13 +357,7 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
         # Python fallback for weights/range with integer bins
         flat = a.flatten().tolist()
         if range is None:
-            if len(flat) == 0:
-                lo, hi = 0.0, 1.0
-            else:
-                lo, hi = _builtin_min(flat), _builtin_max(flat)
-            if lo == hi:
-                lo = lo - 0.5
-                hi = hi + 0.5
+            lo, hi = _histogram_range_from_flat(flat, None)
         edges = linspace(lo, hi, num=bins + 1, endpoint=True)
         edge_list = edges.tolist()
         counts = [0.0] * bins
@@ -368,14 +402,9 @@ def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
 
     # Build bins for histogramdd
     if isinstance(bins, (list, tuple)):
-        if len(bins) == 1:
+        if len(bins) != 2:
             raise ValueError("bins must be a sequence of 1 or 2 elements")
-        if len(bins) == 2:
-            xbins, ybins = bins[0], bins[1]
-        else:
-            raise ValueError("bins must be a sequence of 1 or 2 elements")
-        # Each bin spec can be int or array-like
-        dd_bins = [xbins, ybins]
+        dd_bins = [bins[0], bins[1]]
     else:
         dd_bins = [bins, bins]
 
@@ -398,55 +427,17 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
     _range = range
 
     # Determine bins per dimension - each can be int or array-like edge list
-    if isinstance(bins, int):
-        bins_spec = [bins] * n_dims
-    elif isinstance(bins, (list, tuple)):
-        if len(bins) == n_dims:
-            bins_spec = list(bins)
-        else:
-            # Try to interpret as a single int/array for all dims
-            bins_spec = [bins] * n_dims
-    else:
-        bins_spec = [int(bins)] * n_dims
+    bins_spec = _normalize_histogramdd_bins(bins, n_dims)
 
     # Build edges for each dimension
     edges = []
     bins_per_dim = []
     for d in _builtin_range(n_dims):
-        b = bins_spec[d]
-        if isinstance(b, (int, float)):
-            nb = int(b)
-            vals = [row[d] for row in sample_list] if n_samples > 0 else []
-            if _range is not None and _range[d] is not None:
-                lo, hi = float(_range[d][0]), float(_range[d][1])
-            elif len(vals) > 0:
-                lo, hi = _builtin_min(vals), _builtin_max(vals)
-            else:
-                lo, hi = 0.0, 1.0
-            edge = linspace(lo, hi, num=nb + 1, endpoint=True).tolist()
-            edges.append(edge)
-            bins_per_dim.append(nb)
-        elif isinstance(b, (list, tuple)):
-            # b is edge array
-            edge = [float(v) for v in b]
-            edges.append(edge)
-            bins_per_dim.append(len(edge) - 1)
-        elif isinstance(b, ndarray):
-            edge = b.flatten().tolist()
-            edges.append(edge)
-            bins_per_dim.append(len(edge) - 1)
-        else:
-            nb = int(b)
-            vals = [row[d] for row in sample_list] if n_samples > 0 else []
-            if _range is not None and _range[d] is not None:
-                lo, hi = float(_range[d][0]), float(_range[d][1])
-            elif len(vals) > 0:
-                lo, hi = _builtin_min(vals), _builtin_max(vals)
-            else:
-                lo, hi = 0.0, 1.0
-            edge = linspace(lo, hi, num=nb + 1, endpoint=True).tolist()
-            edges.append(edge)
-            bins_per_dim.append(nb)
+        values = [row[d] for row in sample_list] if n_samples > 0 else []
+        range_spec = _range[d] if _range is not None and _range[d] is not None else None
+        edge, nb = _resolve_histogramdd_edges(bins_spec[d], values, range_spec)
+        edges.append(edge)
+        bins_per_dim.append(nb)
 
     # Build histogram
     shape = bins_per_dim

@@ -5359,6 +5359,12 @@ def test_histogramdd():
     hist, edges = np.histogramdd(data, bins=2)
     assert len(edges) == 2
 
+def test_histogramdd_custom_edges():
+    data = np.array([[0.5, 0.5], [1.5, 1.5], [0.5, 1.5]])
+    hist, edges = np.histogramdd(data, bins=([0.0, 1.0, 2.0], [0.0, 1.0, 2.0]))
+    assert_eq(hist.shape, (2, 2))
+    assert_eq(len(edges), 2)
+
 def test_linalg_eigvalsh():
     a = np.array([[2.0, 1.0], [1.0, 3.0]])
     vals = np.linalg.eigvalsh(a)
