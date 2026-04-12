@@ -3,8 +3,10 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
+use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::kernel::MathUnaryKernelOp;
 use crate::NdArray;
 
 fn map_complex_data<R>(
@@ -90,22 +92,37 @@ fn ensure_float(data: &ArrayData) -> ArrayData {
     }
 }
 
+fn execute_math_unary_on_data(data: ArrayData, op: MathUnaryKernelOp) -> NdArray {
+    let descriptor = descriptor_for_dtype(data.dtype());
+    let kernel = descriptor
+        .math_unary_kernel(op)
+        .unwrap_or_else(|| panic!("math unary kernel not registered for {}", data.dtype()));
+    NdArray::from_data(kernel(data).expect("math unary kernel dtype mismatch"))
+}
+
+fn execute_math_unary(input: &NdArray, op: MathUnaryKernelOp) -> NdArray {
+    execute_math_unary_on_data(ensure_float(input.data()), op)
+}
+
+fn execute_real_math_unary(
+    input: &NdArray,
+    op: MathUnaryKernelOp,
+    op_name: &'static str,
+) -> Result<NdArray> {
+    if input.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+    Ok(execute_math_unary(input, op))
+}
+
 /// Apply a float unary op (works on Float32, Float64, Complex64, Complex128).
 macro_rules! float_unary {
-    ($name:ident, $f32_op:expr, $f64_op:expr, $c64_op:expr, $c128_op:expr) => {
+    ($name:ident, $op:expr) => {
         impl NdArray {
             pub fn $name(&self) -> NdArray {
-                let data = ensure_float(self.data());
-                let result = match data {
-                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
-                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
-                    ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv($c64_op).into_shared()),
-                    ArrayData::Complex128(a) => {
-                        ArrayData::Complex128(a.mapv($c128_op).into_shared())
-                    }
-                    _ => unreachable!(),
-                };
-                NdArray::from_data(result)
+                execute_math_unary(self, $op)
             }
         }
     };
@@ -113,170 +130,57 @@ macro_rules! float_unary {
 
 /// Apply a float unary op that does NOT work on complex types.
 macro_rules! float_only_unary {
-    ($name:ident, $f32_op:expr, $f64_op:expr) => {
+    ($name:ident, $op:expr) => {
         impl NdArray {
             pub fn $name(&self) -> Result<NdArray> {
-                if self.dtype().is_complex() {
-                    return Err(NumpyError::TypeError(
-                        concat!(stringify!($name), " not supported for complex arrays").into(),
-                    ));
-                }
-                let data = ensure_float(self.data());
-                let result = match data {
-                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
-                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
-                    _ => unreachable!(),
-                };
-                Ok(NdArray::from_data(result))
+                execute_real_math_unary(self, $op, stringify!($name))
             }
         }
     };
 }
 
-float_unary!(
-    sqrt,
-    |x: f32| x.sqrt(),
-    |x: f64| x.sqrt(),
-    |x: Complex<f32>| x.sqrt(),
-    |x: Complex<f64>| x.sqrt()
-);
-float_unary!(
-    exp,
-    |x: f32| x.exp(),
-    |x: f64| x.exp(),
-    |x: Complex<f32>| x.exp(),
-    |x: Complex<f64>| x.exp()
-);
-float_unary!(
-    log,
-    |x: f32| x.ln(),
-    |x: f64| x.ln(),
-    |x: Complex<f32>| x.ln(),
-    |x: Complex<f64>| x.ln()
-);
-float_unary!(
-    sin,
-    |x: f32| x.sin(),
-    |x: f64| x.sin(),
-    |x: Complex<f32>| x.sin(),
-    |x: Complex<f64>| x.sin()
-);
-float_unary!(
-    cos,
-    |x: f32| x.cos(),
-    |x: f64| x.cos(),
-    |x: Complex<f32>| x.cos(),
-    |x: Complex<f64>| x.cos()
-);
-float_unary!(
-    tan,
-    |x: f32| x.tan(),
-    |x: f64| x.tan(),
-    |x: Complex<f32>| x.tan(),
-    |x: Complex<f64>| x.tan()
-);
+float_unary!(sqrt, MathUnaryKernelOp::Sqrt);
+float_unary!(exp, MathUnaryKernelOp::Exp);
+float_unary!(log, MathUnaryKernelOp::Log);
+float_unary!(sin, MathUnaryKernelOp::Sin);
+float_unary!(cos, MathUnaryKernelOp::Cos);
+float_unary!(tan, MathUnaryKernelOp::Tan);
 
-float_only_unary!(floor, |x: f32| x.floor(), |x: f64| x.floor());
-float_only_unary!(ceil, |x: f32| x.ceil(), |x: f64| x.ceil());
-float_only_unary!(round, |x: f32| x.round(), |x: f64| x.round());
+float_only_unary!(floor, MathUnaryKernelOp::Floor);
+float_only_unary!(ceil, MathUnaryKernelOp::Ceil);
+float_only_unary!(round, MathUnaryKernelOp::Round);
 
-float_unary!(
-    log10,
-    |x: f32| x.log10(),
-    |x: f64| x.log10(),
-    |x: Complex<f32>| x.ln() / Complex::new(std::f32::consts::LN_10, 0.0),
-    |x: Complex<f64>| x.ln() / Complex::new(std::f64::consts::LN_10, 0.0)
-);
-float_unary!(
-    log2,
-    |x: f32| x.log2(),
-    |x: f64| x.log2(),
-    |x: Complex<f32>| x.ln() / Complex::new(std::f32::consts::LN_2, 0.0),
-    |x: Complex<f64>| x.ln() / Complex::new(std::f64::consts::LN_2, 0.0)
-);
-float_unary!(
-    sinh,
-    |x: f32| x.sinh(),
-    |x: f64| x.sinh(),
-    |x: Complex<f32>| x.sinh(),
-    |x: Complex<f64>| x.sinh()
-);
-float_unary!(
-    cosh,
-    |x: f32| x.cosh(),
-    |x: f64| x.cosh(),
-    |x: Complex<f32>| x.cosh(),
-    |x: Complex<f64>| x.cosh()
-);
-float_unary!(
-    tanh,
-    |x: f32| x.tanh(),
-    |x: f64| x.tanh(),
-    |x: Complex<f32>| x.tanh(),
-    |x: Complex<f64>| x.tanh()
-);
-float_unary!(
-    arcsin,
-    |x: f32| x.asin(),
-    |x: f64| x.asin(),
-    |x: Complex<f32>| x.asin(),
-    |x: Complex<f64>| x.asin()
-);
-float_unary!(
-    arccos,
-    |x: f32| x.acos(),
-    |x: f64| x.acos(),
-    |x: Complex<f32>| x.acos(),
-    |x: Complex<f64>| x.acos()
-);
-float_unary!(
-    arctan,
-    |x: f32| x.atan(),
-    |x: f64| x.atan(),
-    |x: Complex<f32>| x.atan(),
-    |x: Complex<f64>| x.atan()
-);
+float_unary!(log10, MathUnaryKernelOp::Log10);
+float_unary!(log2, MathUnaryKernelOp::Log2);
+float_unary!(sinh, MathUnaryKernelOp::Sinh);
+float_unary!(cosh, MathUnaryKernelOp::Cosh);
+float_unary!(tanh, MathUnaryKernelOp::Tanh);
+float_unary!(arcsin, MathUnaryKernelOp::ArcSin);
+float_unary!(arccos, MathUnaryKernelOp::ArcCos);
+float_unary!(arctan, MathUnaryKernelOp::ArcTan);
 
-float_unary!(
-    arcsinh,
-    |x: f32| x.asinh(),
-    |x: f64| x.asinh(),
-    |x: Complex<f32>| x.asinh(),
-    |x: Complex<f64>| x.asinh()
-);
-float_unary!(
-    arccosh,
-    |x: f32| x.acosh(),
-    |x: f64| x.acosh(),
-    |x: Complex<f32>| x.acosh(),
-    |x: Complex<f64>| x.acosh()
-);
-float_unary!(
-    arctanh,
-    |x: f32| x.atanh(),
-    |x: f64| x.atanh(),
-    |x: Complex<f32>| x.atanh(),
-    |x: Complex<f64>| x.atanh()
-);
+float_unary!(arcsinh, MathUnaryKernelOp::ArcSinh);
+float_unary!(arccosh, MathUnaryKernelOp::ArcCosh);
+float_unary!(arctanh, MathUnaryKernelOp::ArcTanh);
 
-float_only_unary!(log1p, |x: f32| x.ln_1p(), |x: f64| x.ln_1p());
-float_only_unary!(expm1, |x: f32| x.exp_m1(), |x: f64| x.exp_m1());
-float_only_unary!(deg2rad, |x: f32| x.to_radians(), |x: f64| x.to_radians());
-float_only_unary!(rad2deg, |x: f32| x.to_degrees(), |x: f64| x.to_degrees());
-float_only_unary!(trunc, |x: f32| x.trunc(), |x: f64| x.trunc());
+float_only_unary!(log1p, MathUnaryKernelOp::Log1p);
+float_only_unary!(expm1, MathUnaryKernelOp::Expm1);
+float_only_unary!(deg2rad, MathUnaryKernelOp::Deg2Rad);
+float_only_unary!(rad2deg, MathUnaryKernelOp::Rad2Deg);
+float_only_unary!(trunc, MathUnaryKernelOp::Trunc);
 
 // --- libm-backed unary functions ---
 // These use float_only_unary! (no complex support).
 // libm functions return NaN for out-of-domain inputs; no panics.
-float_only_unary!(cbrt, libm::cbrtf, libm::cbrt);
-float_only_unary!(gamma, libm::tgammaf, libm::tgamma);
-float_only_unary!(lgamma, libm::lgammaf, libm::lgamma);
-float_only_unary!(erf, libm::erff, libm::erf);
-float_only_unary!(erfc, libm::erfcf, libm::erfc);
-float_only_unary!(j0, libm::j0f, libm::j0);
-float_only_unary!(j1, libm::j1f, libm::j1);
-float_only_unary!(y0, libm::y0f, libm::y0);
-float_only_unary!(y1, libm::y1f, libm::y1);
+float_only_unary!(cbrt, MathUnaryKernelOp::Cbrt);
+float_only_unary!(gamma, MathUnaryKernelOp::Gamma);
+float_only_unary!(lgamma, MathUnaryKernelOp::LGamma);
+float_only_unary!(erf, MathUnaryKernelOp::Erf);
+float_only_unary!(erfc, MathUnaryKernelOp::Erfc);
+float_only_unary!(j0, MathUnaryKernelOp::J0);
+float_only_unary!(j1, MathUnaryKernelOp::J1);
+float_only_unary!(y0, MathUnaryKernelOp::Y0);
+float_only_unary!(y1, MathUnaryKernelOp::Y1);
 
 // --- Binary float math macro ---
 macro_rules! math_binary {

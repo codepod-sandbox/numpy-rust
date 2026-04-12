@@ -57,6 +57,44 @@ pub enum PredicatePresenceOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathUnaryKernelOp {
+    Sqrt,
+    Exp,
+    Log,
+    Sin,
+    Cos,
+    Tan,
+    Log10,
+    Log2,
+    Sinh,
+    Cosh,
+    Tanh,
+    ArcSin,
+    ArcCos,
+    ArcTan,
+    ArcSinh,
+    ArcCosh,
+    ArcTanh,
+    Floor,
+    Ceil,
+    Round,
+    Log1p,
+    Expm1,
+    Deg2Rad,
+    Rad2Deg,
+    Trunc,
+    Cbrt,
+    Gamma,
+    LGamma,
+    Erf,
+    Erfc,
+    J0,
+    J1,
+    Y0,
+    Y1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionKernelOp {
     Sum,
     Prod,
@@ -76,6 +114,7 @@ pub type DotArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type WhereArrayKernel = fn(ArrayData, ArrayData, ArrayData) -> Result<ArrayData>;
 pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type PredicatePresenceKernel = fn(&ArrayData) -> Result<bool>;
+pub type UnaryArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -242,6 +281,117 @@ pub fn predicate_presence_kernel_for_dtype(
         (DType::Complex128, PredicatePresenceOp::HasInf) => Some(has_inf_complex128),
         (DType::Str, PredicatePresenceOp::HasNaN) => Some(has_nan_str),
         (DType::Str, PredicatePresenceOp::HasInf) => Some(has_inf_str),
+        _ => None,
+    }
+}
+
+pub fn math_unary_kernel_for_dtype(
+    dtype: DType,
+    op: MathUnaryKernelOp,
+) -> Option<UnaryArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float32, MathUnaryKernelOp::Sqrt) => Some(unary_sqrt_float32),
+        (DType::Float64, MathUnaryKernelOp::Sqrt) => Some(unary_sqrt_float64),
+        (DType::Complex64, MathUnaryKernelOp::Sqrt) => Some(unary_sqrt_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Sqrt) => Some(unary_sqrt_complex128),
+        (DType::Float32, MathUnaryKernelOp::Exp) => Some(unary_exp_float32),
+        (DType::Float64, MathUnaryKernelOp::Exp) => Some(unary_exp_float64),
+        (DType::Complex64, MathUnaryKernelOp::Exp) => Some(unary_exp_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Exp) => Some(unary_exp_complex128),
+        (DType::Float32, MathUnaryKernelOp::Log) => Some(unary_log_float32),
+        (DType::Float64, MathUnaryKernelOp::Log) => Some(unary_log_float64),
+        (DType::Complex64, MathUnaryKernelOp::Log) => Some(unary_log_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Log) => Some(unary_log_complex128),
+        (DType::Float32, MathUnaryKernelOp::Sin) => Some(unary_sin_float32),
+        (DType::Float64, MathUnaryKernelOp::Sin) => Some(unary_sin_float64),
+        (DType::Complex64, MathUnaryKernelOp::Sin) => Some(unary_sin_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Sin) => Some(unary_sin_complex128),
+        (DType::Float32, MathUnaryKernelOp::Cos) => Some(unary_cos_float32),
+        (DType::Float64, MathUnaryKernelOp::Cos) => Some(unary_cos_float64),
+        (DType::Complex64, MathUnaryKernelOp::Cos) => Some(unary_cos_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Cos) => Some(unary_cos_complex128),
+        (DType::Float32, MathUnaryKernelOp::Tan) => Some(unary_tan_float32),
+        (DType::Float64, MathUnaryKernelOp::Tan) => Some(unary_tan_float64),
+        (DType::Complex64, MathUnaryKernelOp::Tan) => Some(unary_tan_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Tan) => Some(unary_tan_complex128),
+        (DType::Float32, MathUnaryKernelOp::Log10) => Some(unary_log10_float32),
+        (DType::Float64, MathUnaryKernelOp::Log10) => Some(unary_log10_float64),
+        (DType::Complex64, MathUnaryKernelOp::Log10) => Some(unary_log10_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Log10) => Some(unary_log10_complex128),
+        (DType::Float32, MathUnaryKernelOp::Log2) => Some(unary_log2_float32),
+        (DType::Float64, MathUnaryKernelOp::Log2) => Some(unary_log2_float64),
+        (DType::Complex64, MathUnaryKernelOp::Log2) => Some(unary_log2_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Log2) => Some(unary_log2_complex128),
+        (DType::Float32, MathUnaryKernelOp::Sinh) => Some(unary_sinh_float32),
+        (DType::Float64, MathUnaryKernelOp::Sinh) => Some(unary_sinh_float64),
+        (DType::Complex64, MathUnaryKernelOp::Sinh) => Some(unary_sinh_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Sinh) => Some(unary_sinh_complex128),
+        (DType::Float32, MathUnaryKernelOp::Cosh) => Some(unary_cosh_float32),
+        (DType::Float64, MathUnaryKernelOp::Cosh) => Some(unary_cosh_float64),
+        (DType::Complex64, MathUnaryKernelOp::Cosh) => Some(unary_cosh_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Cosh) => Some(unary_cosh_complex128),
+        (DType::Float32, MathUnaryKernelOp::Tanh) => Some(unary_tanh_float32),
+        (DType::Float64, MathUnaryKernelOp::Tanh) => Some(unary_tanh_float64),
+        (DType::Complex64, MathUnaryKernelOp::Tanh) => Some(unary_tanh_complex64),
+        (DType::Complex128, MathUnaryKernelOp::Tanh) => Some(unary_tanh_complex128),
+        (DType::Float32, MathUnaryKernelOp::ArcSin) => Some(unary_arcsin_float32),
+        (DType::Float64, MathUnaryKernelOp::ArcSin) => Some(unary_arcsin_float64),
+        (DType::Complex64, MathUnaryKernelOp::ArcSin) => Some(unary_arcsin_complex64),
+        (DType::Complex128, MathUnaryKernelOp::ArcSin) => Some(unary_arcsin_complex128),
+        (DType::Float32, MathUnaryKernelOp::ArcCos) => Some(unary_arccos_float32),
+        (DType::Float64, MathUnaryKernelOp::ArcCos) => Some(unary_arccos_float64),
+        (DType::Complex64, MathUnaryKernelOp::ArcCos) => Some(unary_arccos_complex64),
+        (DType::Complex128, MathUnaryKernelOp::ArcCos) => Some(unary_arccos_complex128),
+        (DType::Float32, MathUnaryKernelOp::ArcTan) => Some(unary_arctan_float32),
+        (DType::Float64, MathUnaryKernelOp::ArcTan) => Some(unary_arctan_float64),
+        (DType::Complex64, MathUnaryKernelOp::ArcTan) => Some(unary_arctan_complex64),
+        (DType::Complex128, MathUnaryKernelOp::ArcTan) => Some(unary_arctan_complex128),
+        (DType::Float32, MathUnaryKernelOp::ArcSinh) => Some(unary_arcsinh_float32),
+        (DType::Float64, MathUnaryKernelOp::ArcSinh) => Some(unary_arcsinh_float64),
+        (DType::Complex64, MathUnaryKernelOp::ArcSinh) => Some(unary_arcsinh_complex64),
+        (DType::Complex128, MathUnaryKernelOp::ArcSinh) => Some(unary_arcsinh_complex128),
+        (DType::Float32, MathUnaryKernelOp::ArcCosh) => Some(unary_arccosh_float32),
+        (DType::Float64, MathUnaryKernelOp::ArcCosh) => Some(unary_arccosh_float64),
+        (DType::Complex64, MathUnaryKernelOp::ArcCosh) => Some(unary_arccosh_complex64),
+        (DType::Complex128, MathUnaryKernelOp::ArcCosh) => Some(unary_arccosh_complex128),
+        (DType::Float32, MathUnaryKernelOp::ArcTanh) => Some(unary_arctanh_float32),
+        (DType::Float64, MathUnaryKernelOp::ArcTanh) => Some(unary_arctanh_float64),
+        (DType::Complex64, MathUnaryKernelOp::ArcTanh) => Some(unary_arctanh_complex64),
+        (DType::Complex128, MathUnaryKernelOp::ArcTanh) => Some(unary_arctanh_complex128),
+        (DType::Float32, MathUnaryKernelOp::Floor) => Some(unary_floor_float32),
+        (DType::Float64, MathUnaryKernelOp::Floor) => Some(unary_floor_float64),
+        (DType::Float32, MathUnaryKernelOp::Ceil) => Some(unary_ceil_float32),
+        (DType::Float64, MathUnaryKernelOp::Ceil) => Some(unary_ceil_float64),
+        (DType::Float32, MathUnaryKernelOp::Round) => Some(unary_round_float32),
+        (DType::Float64, MathUnaryKernelOp::Round) => Some(unary_round_float64),
+        (DType::Float32, MathUnaryKernelOp::Log1p) => Some(unary_log1p_float32),
+        (DType::Float64, MathUnaryKernelOp::Log1p) => Some(unary_log1p_float64),
+        (DType::Float32, MathUnaryKernelOp::Expm1) => Some(unary_expm1_float32),
+        (DType::Float64, MathUnaryKernelOp::Expm1) => Some(unary_expm1_float64),
+        (DType::Float32, MathUnaryKernelOp::Deg2Rad) => Some(unary_deg2rad_float32),
+        (DType::Float64, MathUnaryKernelOp::Deg2Rad) => Some(unary_deg2rad_float64),
+        (DType::Float32, MathUnaryKernelOp::Rad2Deg) => Some(unary_rad2deg_float32),
+        (DType::Float64, MathUnaryKernelOp::Rad2Deg) => Some(unary_rad2deg_float64),
+        (DType::Float32, MathUnaryKernelOp::Trunc) => Some(unary_trunc_float32),
+        (DType::Float64, MathUnaryKernelOp::Trunc) => Some(unary_trunc_float64),
+        (DType::Float32, MathUnaryKernelOp::Cbrt) => Some(unary_cbrt_float32),
+        (DType::Float64, MathUnaryKernelOp::Cbrt) => Some(unary_cbrt_float64),
+        (DType::Float32, MathUnaryKernelOp::Gamma) => Some(unary_gamma_float32),
+        (DType::Float64, MathUnaryKernelOp::Gamma) => Some(unary_gamma_float64),
+        (DType::Float32, MathUnaryKernelOp::LGamma) => Some(unary_lgamma_float32),
+        (DType::Float64, MathUnaryKernelOp::LGamma) => Some(unary_lgamma_float64),
+        (DType::Float32, MathUnaryKernelOp::Erf) => Some(unary_erf_float32),
+        (DType::Float64, MathUnaryKernelOp::Erf) => Some(unary_erf_float64),
+        (DType::Float32, MathUnaryKernelOp::Erfc) => Some(unary_erfc_float32),
+        (DType::Float64, MathUnaryKernelOp::Erfc) => Some(unary_erfc_float64),
+        (DType::Float32, MathUnaryKernelOp::J0) => Some(unary_j0_float32),
+        (DType::Float64, MathUnaryKernelOp::J0) => Some(unary_j0_float64),
+        (DType::Float32, MathUnaryKernelOp::J1) => Some(unary_j1_float32),
+        (DType::Float64, MathUnaryKernelOp::J1) => Some(unary_j1_float64),
+        (DType::Float32, MathUnaryKernelOp::Y0) => Some(unary_y0_float32),
+        (DType::Float64, MathUnaryKernelOp::Y0) => Some(unary_y0_float64),
+        (DType::Float32, MathUnaryKernelOp::Y1) => Some(unary_y1_float32),
+        (DType::Float64, MathUnaryKernelOp::Y1) => Some(unary_y1_float64),
         _ => None,
     }
 }
@@ -576,6 +726,142 @@ iter_presence_kernel!(has_inf_complex128, Complex128, |x| x.re.is_infinite()
     || x.im.is_infinite());
 constant_presence_kernel!(has_nan_str, Str, false);
 constant_presence_kernel!(has_inf_str, Str, false);
+
+macro_rules! unary_math_kernel {
+    ($name:ident, $variant:ident, $op:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => Ok(ArrayData::$variant(data.mapv($op).into_shared())),
+                _ => Err(NumpyError::TypeError(
+                    "unary math kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+unary_math_kernel!(unary_sqrt_float32, Float32, |x: f32| x.sqrt());
+unary_math_kernel!(unary_sqrt_float64, Float64, |x: f64| x.sqrt());
+unary_math_kernel!(unary_sqrt_complex64, Complex64, |x: Complex<f32>| x.sqrt());
+unary_math_kernel!(unary_sqrt_complex128, Complex128, |x: Complex<f64>| x
+    .sqrt());
+unary_math_kernel!(unary_exp_float32, Float32, |x: f32| x.exp());
+unary_math_kernel!(unary_exp_float64, Float64, |x: f64| x.exp());
+unary_math_kernel!(unary_exp_complex64, Complex64, |x: Complex<f32>| x.exp());
+unary_math_kernel!(unary_exp_complex128, Complex128, |x: Complex<f64>| x.exp());
+unary_math_kernel!(unary_log_float32, Float32, |x: f32| x.ln());
+unary_math_kernel!(unary_log_float64, Float64, |x: f64| x.ln());
+unary_math_kernel!(unary_log_complex64, Complex64, |x: Complex<f32>| x.ln());
+unary_math_kernel!(unary_log_complex128, Complex128, |x: Complex<f64>| x.ln());
+unary_math_kernel!(unary_sin_float32, Float32, |x: f32| x.sin());
+unary_math_kernel!(unary_sin_float64, Float64, |x: f64| x.sin());
+unary_math_kernel!(unary_sin_complex64, Complex64, |x: Complex<f32>| x.sin());
+unary_math_kernel!(unary_sin_complex128, Complex128, |x: Complex<f64>| x.sin());
+unary_math_kernel!(unary_cos_float32, Float32, |x: f32| x.cos());
+unary_math_kernel!(unary_cos_float64, Float64, |x: f64| x.cos());
+unary_math_kernel!(unary_cos_complex64, Complex64, |x: Complex<f32>| x.cos());
+unary_math_kernel!(unary_cos_complex128, Complex128, |x: Complex<f64>| x.cos());
+unary_math_kernel!(unary_tan_float32, Float32, |x: f32| x.tan());
+unary_math_kernel!(unary_tan_float64, Float64, |x: f64| x.tan());
+unary_math_kernel!(unary_tan_complex64, Complex64, |x: Complex<f32>| x.tan());
+unary_math_kernel!(unary_tan_complex128, Complex128, |x: Complex<f64>| x.tan());
+unary_math_kernel!(unary_log10_float32, Float32, |x: f32| x.log10());
+unary_math_kernel!(unary_log10_float64, Float64, |x: f64| x.log10());
+unary_math_kernel!(unary_log10_complex64, Complex64, |x: Complex<f32>| x.ln()
+    / Complex::new(std::f32::consts::LN_10, 0.0));
+unary_math_kernel!(unary_log10_complex128, Complex128, |x: Complex<f64>| x.ln()
+    / Complex::new(std::f64::consts::LN_10, 0.0));
+unary_math_kernel!(unary_log2_float32, Float32, |x: f32| x.log2());
+unary_math_kernel!(unary_log2_float64, Float64, |x: f64| x.log2());
+unary_math_kernel!(unary_log2_complex64, Complex64, |x: Complex<f32>| x.ln()
+    / Complex::new(std::f32::consts::LN_2, 0.0));
+unary_math_kernel!(unary_log2_complex128, Complex128, |x: Complex<f64>| x.ln()
+    / Complex::new(std::f64::consts::LN_2, 0.0));
+unary_math_kernel!(unary_sinh_float32, Float32, |x: f32| x.sinh());
+unary_math_kernel!(unary_sinh_float64, Float64, |x: f64| x.sinh());
+unary_math_kernel!(unary_sinh_complex64, Complex64, |x: Complex<f32>| x.sinh());
+unary_math_kernel!(unary_sinh_complex128, Complex128, |x: Complex<f64>| x
+    .sinh());
+unary_math_kernel!(unary_cosh_float32, Float32, |x: f32| x.cosh());
+unary_math_kernel!(unary_cosh_float64, Float64, |x: f64| x.cosh());
+unary_math_kernel!(unary_cosh_complex64, Complex64, |x: Complex<f32>| x.cosh());
+unary_math_kernel!(unary_cosh_complex128, Complex128, |x: Complex<f64>| x
+    .cosh());
+unary_math_kernel!(unary_tanh_float32, Float32, |x: f32| x.tanh());
+unary_math_kernel!(unary_tanh_float64, Float64, |x: f64| x.tanh());
+unary_math_kernel!(unary_tanh_complex64, Complex64, |x: Complex<f32>| x.tanh());
+unary_math_kernel!(unary_tanh_complex128, Complex128, |x: Complex<f64>| x
+    .tanh());
+unary_math_kernel!(unary_arcsin_float32, Float32, |x: f32| x.asin());
+unary_math_kernel!(unary_arcsin_float64, Float64, |x: f64| x.asin());
+unary_math_kernel!(unary_arcsin_complex64, Complex64, |x: Complex<f32>| x
+    .asin());
+unary_math_kernel!(unary_arcsin_complex128, Complex128, |x: Complex<f64>| x
+    .asin());
+unary_math_kernel!(unary_arccos_float32, Float32, |x: f32| x.acos());
+unary_math_kernel!(unary_arccos_float64, Float64, |x: f64| x.acos());
+unary_math_kernel!(unary_arccos_complex64, Complex64, |x: Complex<f32>| x
+    .acos());
+unary_math_kernel!(unary_arccos_complex128, Complex128, |x: Complex<f64>| x
+    .acos());
+unary_math_kernel!(unary_arctan_float32, Float32, |x: f32| x.atan());
+unary_math_kernel!(unary_arctan_float64, Float64, |x: f64| x.atan());
+unary_math_kernel!(unary_arctan_complex64, Complex64, |x: Complex<f32>| x
+    .atan());
+unary_math_kernel!(unary_arctan_complex128, Complex128, |x: Complex<f64>| x
+    .atan());
+unary_math_kernel!(unary_arcsinh_float32, Float32, |x: f32| x.asinh());
+unary_math_kernel!(unary_arcsinh_float64, Float64, |x: f64| x.asinh());
+unary_math_kernel!(unary_arcsinh_complex64, Complex64, |x: Complex<f32>| x
+    .asinh());
+unary_math_kernel!(unary_arcsinh_complex128, Complex128, |x: Complex<f64>| x
+    .asinh());
+unary_math_kernel!(unary_arccosh_float32, Float32, |x: f32| x.acosh());
+unary_math_kernel!(unary_arccosh_float64, Float64, |x: f64| x.acosh());
+unary_math_kernel!(unary_arccosh_complex64, Complex64, |x: Complex<f32>| x
+    .acosh());
+unary_math_kernel!(unary_arccosh_complex128, Complex128, |x: Complex<f64>| x
+    .acosh());
+unary_math_kernel!(unary_arctanh_float32, Float32, |x: f32| x.atanh());
+unary_math_kernel!(unary_arctanh_float64, Float64, |x: f64| x.atanh());
+unary_math_kernel!(unary_arctanh_complex64, Complex64, |x: Complex<f32>| x
+    .atanh());
+unary_math_kernel!(unary_arctanh_complex128, Complex128, |x: Complex<f64>| x
+    .atanh());
+unary_math_kernel!(unary_floor_float32, Float32, |x: f32| x.floor());
+unary_math_kernel!(unary_floor_float64, Float64, |x: f64| x.floor());
+unary_math_kernel!(unary_ceil_float32, Float32, |x: f32| x.ceil());
+unary_math_kernel!(unary_ceil_float64, Float64, |x: f64| x.ceil());
+unary_math_kernel!(unary_round_float32, Float32, |x: f32| x.round());
+unary_math_kernel!(unary_round_float64, Float64, |x: f64| x.round());
+unary_math_kernel!(unary_log1p_float32, Float32, |x: f32| x.ln_1p());
+unary_math_kernel!(unary_log1p_float64, Float64, |x: f64| x.ln_1p());
+unary_math_kernel!(unary_expm1_float32, Float32, |x: f32| x.exp_m1());
+unary_math_kernel!(unary_expm1_float64, Float64, |x: f64| x.exp_m1());
+unary_math_kernel!(unary_deg2rad_float32, Float32, |x: f32| x.to_radians());
+unary_math_kernel!(unary_deg2rad_float64, Float64, |x: f64| x.to_radians());
+unary_math_kernel!(unary_rad2deg_float32, Float32, |x: f32| x.to_degrees());
+unary_math_kernel!(unary_rad2deg_float64, Float64, |x: f64| x.to_degrees());
+unary_math_kernel!(unary_trunc_float32, Float32, |x: f32| x.trunc());
+unary_math_kernel!(unary_trunc_float64, Float64, |x: f64| x.trunc());
+unary_math_kernel!(unary_cbrt_float32, Float32, libm::cbrtf);
+unary_math_kernel!(unary_cbrt_float64, Float64, libm::cbrt);
+unary_math_kernel!(unary_gamma_float32, Float32, libm::tgammaf);
+unary_math_kernel!(unary_gamma_float64, Float64, libm::tgamma);
+unary_math_kernel!(unary_lgamma_float32, Float32, libm::lgammaf);
+unary_math_kernel!(unary_lgamma_float64, Float64, libm::lgamma);
+unary_math_kernel!(unary_erf_float32, Float32, libm::erff);
+unary_math_kernel!(unary_erf_float64, Float64, libm::erf);
+unary_math_kernel!(unary_erfc_float32, Float32, libm::erfcf);
+unary_math_kernel!(unary_erfc_float64, Float64, libm::erfc);
+unary_math_kernel!(unary_j0_float32, Float32, libm::j0f);
+unary_math_kernel!(unary_j0_float64, Float64, libm::j0);
+unary_math_kernel!(unary_j1_float32, Float32, libm::j1f);
+unary_math_kernel!(unary_j1_float64, Float64, libm::j1);
+unary_math_kernel!(unary_y0_float32, Float32, libm::y0f);
+unary_math_kernel!(unary_y0_float64, Float64, libm::y0);
+unary_math_kernel!(unary_y1_float32, Float32, libm::y1f);
+unary_math_kernel!(unary_y1_float64, Float64, libm::y1);
 
 pub(crate) fn complex_cmp<T: num_traits::Float>(
     a: &Complex<T>,
