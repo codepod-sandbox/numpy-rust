@@ -8,6 +8,16 @@ pub enum BinaryOp {
     Add,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ComparisonOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CastingRule {
     SameKind,
@@ -71,6 +81,27 @@ pub struct BinaryOpPlan {
     requires_output_narrowing: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComparisonOpPlan {
+    lhs_cast: CastPlan,
+    rhs_cast: CastPlan,
+    execution_dtype: DType,
+}
+
+impl ComparisonOpPlan {
+    pub fn lhs_cast(&self) -> CastPlan {
+        self.lhs_cast
+    }
+
+    pub fn rhs_cast(&self) -> CastPlan {
+        self.rhs_cast
+    }
+
+    pub fn execution_dtype(&self) -> DType {
+        self.execution_dtype
+    }
+}
+
 impl BinaryOpPlan {
     pub fn lhs_cast(&self) -> CastPlan {
         self.lhs_cast
@@ -124,6 +155,30 @@ pub fn resolve_cast(source: DType, target: DType, rule: CastingRule) -> Result<C
 pub fn resolve_assignment_cast(source: DType, target: DType) -> Result<CastPlan> {
     resolve_cast(source, target, CastingRule::SameKind)
         .or_else(|_| resolve_cast(source, target, CastingRule::Unsafe))
+}
+
+pub fn resolve_comparison_op(
+    _op: ComparisonOp,
+    lhs: DType,
+    rhs: DType,
+) -> Result<ComparisonOpPlan> {
+    if lhs.is_string() != rhs.is_string() {
+        return Err(NumpyError::TypeError(
+            "comparison between string and numeric arrays not supported".into(),
+        ));
+    }
+
+    let execution_dtype = if lhs.is_string() {
+        DType::Str
+    } else {
+        lhs.promote(rhs)
+    };
+
+    Ok(ComparisonOpPlan {
+        lhs_cast: resolve_cast(lhs, execution_dtype, CastingRule::Unsafe)?,
+        rhs_cast: resolve_cast(rhs, execution_dtype, CastingRule::Unsafe)?,
+        execution_dtype,
+    })
 }
 
 pub fn resolve_binary_op(op: BinaryOp, lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {

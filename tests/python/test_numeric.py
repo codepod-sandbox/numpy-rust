@@ -86,6 +86,12 @@ def test_gt():
     c = a.__gt__(b)
     assert_eq(c.all(), True)
 
+def test_eq_cross_dtype_promotes_for_comparison():
+    a = np.array([1, 2, 3], dtype="int32")
+    b = np.array([1.0, 9.0, 3.0], dtype="float64")
+    c = a == b
+    assert_eq(c.tolist(), [True, False, True])
+
 
 # --- Reductions (no axis -> scalar) ---
 

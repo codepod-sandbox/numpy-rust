@@ -1,143 +1,81 @@
-use crate::array_data::ArrayD;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
-use crate::casting::cast_array_data;
-use crate::error::Result;
+use crate::descriptor::descriptor_for_dtype;
+use crate::error::{NumpyError, Result};
+use crate::kernel::ComparisonKernelOp;
+use crate::resolver::{resolve_comparison_op, ComparisonOp, ComparisonOpPlan};
 use crate::NdArray;
 
-/// Prepare two NdArrays for comparison: promote types and broadcast shapes.
-fn prepare_cmp(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
-    // String vs numeric comparison is not supported
-    if lhs.dtype().is_string() != rhs.dtype().is_string() {
-        return Err(crate::error::NumpyError::TypeError(
-            "comparison between string and numeric arrays not supported".into(),
-        ));
+fn comparison_kernel_op(op: ComparisonOp) -> ComparisonKernelOp {
+    match op {
+        ComparisonOp::Eq => ComparisonKernelOp::Eq,
+        ComparisonOp::Ne => ComparisonKernelOp::Ne,
+        ComparisonOp::Lt => ComparisonKernelOp::Lt,
+        ComparisonOp::Le => ComparisonKernelOp::Le,
+        ComparisonOp::Gt => ComparisonKernelOp::Gt,
+        ComparisonOp::Ge => ComparisonKernelOp::Ge,
     }
-    // String+String: skip promotion (both already Str)
-    if lhs.dtype().is_string() {
-        let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
-        let a = broadcast_array_data(lhs.data(), &out_shape);
-        let b = broadcast_array_data(rhs.data(), &out_shape);
-        return Ok((a, b));
-    }
-    let common_dtype = lhs.dtype().promote(rhs.dtype());
+}
+
+fn prepare_comparison_execution(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: ComparisonOp,
+) -> Result<(ArrayData, ArrayData, ComparisonOpPlan)> {
+    let plan = resolve_comparison_op(op, lhs.dtype(), rhs.dtype())?;
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(lhs.data(), common_dtype);
-    let b = cast_array_data(rhs.data(), common_dtype);
+    let lhs = broadcast_array_data(&lhs.cast_for_execution(plan.lhs_cast()), &out_shape);
+    let rhs = broadcast_array_data(&rhs.cast_for_execution(plan.rhs_cast()), &out_shape);
 
-    let a = broadcast_array_data(&a, &out_shape);
-    let b = broadcast_array_data(&b, &out_shape);
-
-    Ok((a, b))
+    Ok((lhs, rhs, plan))
 }
 
-/// Implement equality / inequality for complex (they support == and !=).
-macro_rules! impl_eq_cmp {
-    ($name:ident, $op:tt) => {
-        impl NdArray {
-            pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
-                let (a, b) = prepare_cmp(self, other)?;
-                let result: ArrayD<bool> = match (a, b) {
-                    (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Float32(a), ArrayData::Float32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Str(a), ArrayData::Str(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y).into_shared()
-                    }
-                    _ => unreachable!("promotion ensures matching types"),
-                };
-                Ok(NdArray::from_data(ArrayData::Bool(result)))
-            }
-        }
-    };
+fn execute_comparison(lhs: &NdArray, rhs: &NdArray, op: ComparisonOp) -> Result<NdArray> {
+    let (lhs, rhs, plan) = prepare_comparison_execution(lhs, rhs, op)?;
+    let descriptor = descriptor_for_dtype(plan.execution_dtype());
+    let kernel = descriptor
+        .comparison_kernel(comparison_kernel_op(op))
+        .ok_or_else(|| NumpyError::TypeError("comparison kernel not registered".into()))?;
+    Ok(NdArray::from_data(kernel(lhs, rhs)?))
 }
 
-impl_eq_cmp!(eq, ==);
-impl_eq_cmp!(ne, !=);
+impl NdArray {
+    pub fn eq(&self, other: &NdArray) -> Result<NdArray> {
+        execute_comparison(self, other, ComparisonOp::Eq)
+    }
 
-/// Lexicographic comparison helper for complex numbers: (real, imag).
+    pub fn ne(&self, other: &NdArray) -> Result<NdArray> {
+        execute_comparison(self, other, ComparisonOp::Ne)
+    }
+
+    pub fn lt(&self, other: &NdArray) -> Result<NdArray> {
+        execute_comparison(self, other, ComparisonOp::Lt)
+    }
+
+    pub fn le(&self, other: &NdArray) -> Result<NdArray> {
+        execute_comparison(self, other, ComparisonOp::Le)
+    }
+
+    pub fn gt(&self, other: &NdArray) -> Result<NdArray> {
+        execute_comparison(self, other, ComparisonOp::Gt)
+    }
+
+    pub fn ge(&self, other: &NdArray) -> Result<NdArray> {
+        execute_comparison(self, other, ComparisonOp::Ge)
+    }
+}
+
 pub fn complex_cmp<T: num_traits::Float>(
     a: &num_complex::Complex<T>,
     b: &num_complex::Complex<T>,
 ) -> std::cmp::Ordering {
-    match a.re.partial_cmp(&b.re) {
-        Some(std::cmp::Ordering::Equal) => {
-            a.im.partial_cmp(&b.im).unwrap_or(std::cmp::Ordering::Equal)
-        }
-        Some(ord) => ord,
-        None => std::cmp::Ordering::Equal,
-    }
+    crate::kernel::complex_cmp(a, b)
 }
-
-/// Implement ordering comparisons with complex support (lexicographic).
-macro_rules! impl_ord_cmp {
-    ($name:ident, $op:tt, $cmp_ord:pat) => {
-        impl NdArray {
-            pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
-                let (a, b) = prepare_cmp(self, other)?;
-                let result: ArrayD<bool> = match (a, b) {
-                    (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Float32(a), ArrayData::Float32(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|&x, &y| x $op y).into_shared()
-                    }
-                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| {
-                            matches!(complex_cmp(x, y), $cmp_ord)
-                        }).into_shared()
-                    }
-                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| {
-                            matches!(complex_cmp(x, y), $cmp_ord)
-                        }).into_shared()
-                    }
-                    (ArrayData::Str(a), ArrayData::Str(b)) => {
-                        ndarray::Zip::from(&a).and(&b).map_collect(|x, y| x $op y).into_shared()
-                    }
-                    _ => unreachable!("promotion ensures matching types"),
-                };
-                Ok(NdArray::from_data(ArrayData::Bool(result)))
-            }
-        }
-    };
-}
-
-impl_ord_cmp!(lt, <, std::cmp::Ordering::Less);
-impl_ord_cmp!(gt, >, std::cmp::Ordering::Greater);
-impl_ord_cmp!(le, <=, std::cmp::Ordering::Less | std::cmp::Ordering::Equal);
-impl_ord_cmp!(ge, >=, std::cmp::Ordering::Greater | std::cmp::Ordering::Equal);
 
 #[cfg(test)]
 mod tests {
+    use crate::resolver::{resolve_comparison_op, ComparisonOp};
     use crate::{DType, NdArray};
     use num_complex::Complex;
 
@@ -220,5 +158,16 @@ mod tests {
         let b = NdArray::from_vec(vec![Complex::new(1.0f64, 2.0)]);
         let c = a.gt(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
+    }
+
+    #[test]
+    fn test_resolve_comparison_promotes_cross_dtype_numeric() {
+        let plan = resolve_comparison_op(ComparisonOp::Eq, DType::Int32, DType::Float64).unwrap();
+        assert_eq!(plan.execution_dtype(), DType::Float64);
+    }
+
+    #[test]
+    fn test_resolve_comparison_rejects_string_numeric_mix() {
+        assert!(resolve_comparison_op(ComparisonOp::Eq, DType::Str, DType::Float64).is_err());
     }
 }

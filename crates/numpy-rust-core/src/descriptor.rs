@@ -1,6 +1,7 @@
 use crate::kernel::{
-    binary_kernel_for_dtype, sum_all_kernel_for_dtype, sum_axis_kernel_for_dtype,
-    ArithmeticKernelOp, BinaryArrayKernel, ReduceAllArrayKernel, ReduceAxisArrayKernel,
+    binary_kernel_for_dtype, comparison_kernel_for_dtype, sum_all_kernel_for_dtype,
+    sum_axis_kernel_for_dtype, ArithmeticKernelOp, BinaryArrayKernel, ComparisonArrayKernel,
+    ComparisonKernelOp, ReduceAllArrayKernel, ReduceAxisArrayKernel,
 };
 use crate::resolver::{resolve_binary_op, resolve_cast, BinaryOp, CastPlan, CastingRule};
 use crate::{DType, NumpyError, Result};
@@ -38,6 +39,10 @@ impl DTypeDescriptor {
 
     pub fn binary_kernel(&self, op: ArithmeticKernelOp) -> Option<BinaryArrayKernel> {
         binary_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn comparison_kernel(&self, op: ComparisonKernelOp) -> Option<ComparisonArrayKernel> {
+        comparison_kernel_for_dtype(self.id, op)
     }
 
     pub fn sum_all_kernel(&self) -> Option<ReduceAllArrayKernel> {
