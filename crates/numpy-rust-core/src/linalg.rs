@@ -256,8 +256,9 @@ mod inner {
     /// a: (m, n) matrix, b: (m,) or (m, k) matrix
     pub fn lstsq(a: &NdArray, b: &NdArray) -> Result<(NdArray, NdArray, usize, NdArray)> {
         let am = to_nalgebra(a)?;
+        let vector_rhs = b.ndim() == 1;
         // b might be 1-D — reshape to column vector
-        let b_2d = if b.ndim() == 1 {
+        let b_2d = if vector_rhs {
             b.reshape(&[b.size(), 1])?
         } else {
             b.clone()
@@ -300,7 +301,11 @@ mod inner {
             }
         }
         let x = v_t.transpose() * scaled;
-        let solution = from_nalgebra(&x);
+        let solution = if vector_rhs {
+            float64_vector(x.column(0).as_slice())
+        } else {
+            from_nalgebra(&x)
+        };
 
         // Residuals: ||b - Ax||^2 for each column (only if m > n and rank == n)
         let residuals = if m > n && rank == n {
@@ -347,6 +352,7 @@ mod tests {
     use super::*;
     use crate::array_data::ArrayData;
     use crate::{DType, NdArray};
+    use ndarray::IxDyn;
 
     fn eye_3x3() -> NdArray {
         crate::creation::eye(3, None, 0, DType::Float64).unwrap()
@@ -475,5 +481,22 @@ mod tests {
             .unwrap();
         let (_, _, rank, _) = lstsq(&a, &b).unwrap();
         assert_eq!(rank, 2);
+    }
+
+    #[test]
+    fn test_lstsq_vector_rhs_returns_1d_solution() {
+        let a = NdArray::from_vec(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+            .reshape(&[3, 2])
+            .unwrap();
+        let b = NdArray::from_vec(vec![1.0, 2.0, 0.0]);
+        let (x, residuals, rank, sv) = lstsq(&a, &b).unwrap();
+
+        assert_eq!(x.shape(), &[2]);
+        let x_data = x.to_float64_data();
+        assert!((x_data[IxDyn(&[0])] - 1.0).abs() < 1e-10);
+        assert!((x_data[IxDyn(&[1])] - 2.0).abs() < 1e-10);
+        assert_eq!(residuals.shape(), &[1]);
+        assert_eq!(rank, 2);
+        assert_eq!(sv.shape(), &[2]);
     }
 }
