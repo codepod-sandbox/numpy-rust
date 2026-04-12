@@ -1,10 +1,12 @@
 use crate::kernel::{
-    binary_kernel_for_dtype, comparison_kernel_for_dtype, sum_all_kernel_for_dtype,
-    sum_axis_kernel_for_dtype, ArithmeticKernelOp, BinaryArrayKernel, ComparisonArrayKernel,
-    ComparisonKernelOp, ReduceAllArrayKernel, ReduceAxisArrayKernel,
+    arg_reduction_all_kernel_for_dtype, arg_reduction_axis_kernel_for_dtype,
+    binary_kernel_for_dtype, comparison_kernel_for_dtype, reduction_all_kernel_for_dtype,
+    reduction_axis_kernel_for_dtype, ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp,
+    ArithmeticKernelOp, BinaryArrayKernel, ComparisonArrayKernel, ComparisonKernelOp,
+    ReduceAllArrayKernel, ReduceAxisArrayKernel, ReductionKernelOp,
 };
-use crate::resolver::{resolve_binary_op, resolve_cast, BinaryOp, CastPlan, CastingRule};
-use crate::{DType, NumpyError, Result};
+use crate::resolver::{resolve_reduction_op, ReductionOp, ReductionPlan};
+use crate::DType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DTypeKind {
@@ -45,49 +47,27 @@ impl DTypeDescriptor {
         comparison_kernel_for_dtype(self.id, op)
     }
 
-    pub fn sum_all_kernel(&self) -> Option<ReduceAllArrayKernel> {
-        sum_all_kernel_for_dtype(self.id)
+    pub fn reduction_all_kernel(&self, op: ReductionKernelOp) -> Option<ReduceAllArrayKernel> {
+        reduction_all_kernel_for_dtype(self.id, op)
     }
 
-    pub fn sum_axis_kernel(&self) -> Option<ReduceAxisArrayKernel> {
-        sum_axis_kernel_for_dtype(self.id)
+    pub fn reduction_axis_kernel(&self, op: ReductionKernelOp) -> Option<ReduceAxisArrayKernel> {
+        reduction_axis_kernel_for_dtype(self.id, op)
     }
 
-    pub fn sum_plan(&self) -> Result<ReductionPlan> {
-        if matches!(self.kind, DTypeKind::String) {
-            return Err(NumpyError::TypeError(
-                "sum not supported for string arrays".into(),
-            ));
-        }
-
-        let add_plan = resolve_binary_op(BinaryOp::Add, self.id, self.id)?;
-        let result_dtype = add_plan.result_storage_dtype();
-        let input_cast = resolve_cast(self.id, result_dtype, CastingRule::Unsafe)?;
-
-        Ok(ReductionPlan {
-            input_cast,
-            result_dtype,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReductionPlan {
-    input_cast: CastPlan,
-    result_dtype: DType,
-}
-
-impl ReductionPlan {
-    pub fn input_cast(&self) -> CastPlan {
-        self.input_cast
+    pub fn arg_reduction_all_kernel(&self, op: ArgReductionKernelOp) -> Option<ArgReduceAllKernel> {
+        arg_reduction_all_kernel_for_dtype(self.id, op)
     }
 
-    pub fn result_dtype(&self) -> DType {
-        self.result_dtype
+    pub fn arg_reduction_axis_kernel(
+        &self,
+        op: ArgReductionKernelOp,
+    ) -> Option<ArgReduceAxisKernel> {
+        arg_reduction_axis_kernel_for_dtype(self.id, op)
     }
 
-    pub fn result_storage_dtype(&self) -> DType {
-        self.result_dtype.storage_dtype()
+    pub fn reduction_plan(&self, op: ReductionOp) -> crate::Result<ReductionPlan> {
+        resolve_reduction_op(op, self.id)
     }
 }
 
@@ -223,14 +203,18 @@ mod tests {
 
     #[test]
     fn test_sum_plan_bool_uses_int32_accumulator() {
-        let plan = descriptor_for_dtype(DType::Bool).sum_plan().unwrap();
+        let plan = descriptor_for_dtype(DType::Bool)
+            .reduction_plan(ReductionOp::Sum)
+            .unwrap();
         assert_eq!(plan.input_cast().target_storage_dtype(), DType::Int32);
         assert_eq!(plan.result_dtype(), DType::Int32);
     }
 
     #[test]
     fn test_sum_plan_int32_preserves_int32_result() {
-        let plan = descriptor_for_dtype(DType::Int32).sum_plan().unwrap();
+        let plan = descriptor_for_dtype(DType::Int32)
+            .reduction_plan(ReductionOp::Sum)
+            .unwrap();
         assert_eq!(plan.input_cast().target_storage_dtype(), DType::Int32);
         assert_eq!(plan.result_dtype(), DType::Int32);
     }

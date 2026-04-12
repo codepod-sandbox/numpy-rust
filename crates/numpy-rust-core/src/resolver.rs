@@ -18,6 +18,15 @@ pub enum ComparisonOp {
     Ge,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ReductionOp {
+    Sum,
+    Min,
+    Max,
+    ArgMin,
+    ArgMax,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CastingRule {
     SameKind,
@@ -88,6 +97,12 @@ pub struct ComparisonOpPlan {
     execution_dtype: DType,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReductionPlan {
+    input_cast: CastPlan,
+    result_dtype: DType,
+}
+
 impl ComparisonOpPlan {
     pub fn lhs_cast(&self) -> CastPlan {
         self.lhs_cast
@@ -99,6 +114,20 @@ impl ComparisonOpPlan {
 
     pub fn execution_dtype(&self) -> DType {
         self.execution_dtype
+    }
+}
+
+impl ReductionPlan {
+    pub fn input_cast(&self) -> CastPlan {
+        self.input_cast
+    }
+
+    pub fn result_dtype(&self) -> DType {
+        self.result_dtype
+    }
+
+    pub fn result_storage_dtype(&self) -> DType {
+        self.result_dtype.storage_dtype()
     }
 }
 
@@ -181,10 +210,60 @@ pub fn resolve_comparison_op(
     })
 }
 
+pub fn resolve_reduction_op(op: ReductionOp, input: DType) -> Result<ReductionPlan> {
+    match op {
+        ReductionOp::Sum => resolve_sum_reduction(input),
+        ReductionOp::Min | ReductionOp::Max => resolve_extrema_reduction(input),
+        ReductionOp::ArgMin | ReductionOp::ArgMax => resolve_arg_reduction(input),
+    }
+}
+
 pub fn resolve_binary_op(op: BinaryOp, lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
     match op {
         BinaryOp::Add => resolve_add(lhs, rhs),
     }
+}
+
+fn resolve_sum_reduction(input: DType) -> Result<ReductionPlan> {
+    if input.is_string() {
+        return Err(NumpyError::TypeError(
+            "sum not supported for string arrays".into(),
+        ));
+    }
+
+    let add_plan = resolve_binary_op(BinaryOp::Add, input, input)?;
+    let result_dtype = add_plan.result_storage_dtype();
+    let input_cast = resolve_cast(input, result_dtype, CastingRule::Unsafe)?;
+
+    Ok(ReductionPlan {
+        input_cast,
+        result_dtype,
+    })
+}
+
+fn resolve_extrema_reduction(input: DType) -> Result<ReductionPlan> {
+    Ok(ReductionPlan {
+        input_cast: resolve_cast(input, input, CastingRule::Unsafe)?,
+        result_dtype: input,
+    })
+}
+
+fn resolve_arg_reduction(input: DType) -> Result<ReductionPlan> {
+    if input.is_string() {
+        return Err(NumpyError::TypeError(
+            "arg reduction not supported for string arrays".into(),
+        ));
+    }
+    if input.is_complex() {
+        return Err(NumpyError::TypeError(
+            "arg reduction not supported for complex arrays".into(),
+        ));
+    }
+
+    Ok(ReductionPlan {
+        input_cast: resolve_cast(input, DType::Float64, CastingRule::Unsafe)?,
+        result_dtype: DType::Int64,
+    })
 }
 
 fn resolve_add(lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {

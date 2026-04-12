@@ -5,6 +5,8 @@ use crate::array_data::ArrayData;
 use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::kernel::{ArgReductionKernelOp, ReductionKernelOp};
+use crate::resolver::ReductionOp;
 use crate::NdArray;
 
 /// Validate an axis index against the array's dimensionality.
@@ -261,7 +263,7 @@ impl NdArray {
     // --- Internal helpers ---
 
     fn prepare_sum_reduction(&self) -> Result<(ArrayData, DType)> {
-        let plan = self.descriptor().sum_plan()?;
+        let plan = self.descriptor().reduction_plan(ReductionOp::Sum)?;
         Ok((
             self.cast_for_execution(plan.input_cast()),
             plan.result_dtype(),
@@ -272,7 +274,7 @@ impl NdArray {
         let (data, result_dtype) = self.prepare_sum_reduction()?;
         let descriptor = descriptor_for_dtype(result_dtype);
         let kernel = descriptor
-            .sum_all_kernel()
+            .reduction_all_kernel(ReductionKernelOp::Sum)
             .ok_or_else(|| NumpyError::TypeError("sum kernel not registered".into()))?;
         Ok(NdArray::from_data(kernel(data)?))
     }
@@ -282,383 +284,112 @@ impl NdArray {
         let (data, result_dtype) = self.prepare_sum_reduction()?;
         let descriptor = descriptor_for_dtype(result_dtype);
         let kernel = descriptor
-            .sum_axis_kernel()
+            .reduction_axis_kernel(ReductionKernelOp::Sum)
             .ok_or_else(|| NumpyError::TypeError("sum kernel not registered".into()))?;
         Ok(NdArray::from_data(kernel(data, axis)?))
     }
 
     fn reduce_all_min(&self) -> Result<NdArray> {
-        let data = match self.data() {
-            ArrayData::Bool(a) => {
-                let v = *a
-                    .iter()
-                    .min()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Bool(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Int32(a) => {
-                let v = *a
-                    .iter()
-                    .min()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Int64(a) => {
-                let v = *a
-                    .iter()
-                    .min()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Float32(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(f32::min)
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Float64(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(f64::min)
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Complex64(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(|acc, x| {
-                        if crate::ops::comparison::complex_cmp(&acc, &x) == std::cmp::Ordering::Less
-                            || crate::ops::comparison::complex_cmp(&acc, &x)
-                                == std::cmp::Ordering::Equal
-                        {
-                            acc
-                        } else {
-                            x
-                        }
-                    })
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Complex128(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(|acc, x| {
-                        if crate::ops::comparison::complex_cmp(&acc, &x) == std::cmp::Ordering::Less
-                            || crate::ops::comparison::complex_cmp(&acc, &x)
-                                == std::cmp::Ordering::Equal
-                        {
-                            acc
-                        } else {
-                            x
-                        }
-                    })
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Str(a) => {
-                let v = a
-                    .iter()
-                    .min()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?
-                    .clone();
-                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-        };
-        Ok(NdArray::from_data(data))
+        self.execute_extrema_reduction_all(ReductionOp::Min, ReductionKernelOp::Min)
     }
 
     fn reduce_all_max(&self) -> Result<NdArray> {
-        let data = match self.data() {
-            ArrayData::Bool(a) => {
-                let v = *a
-                    .iter()
-                    .max()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Bool(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Int32(a) => {
-                let v = *a
-                    .iter()
-                    .max()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Int64(a) => {
-                let v = *a
-                    .iter()
-                    .max()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Float32(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(f32::max)
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Float64(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(f64::max)
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Complex64(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(|acc, x| {
-                        if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less
-                        {
-                            acc
-                        } else {
-                            x
-                        }
-                    })
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Complex128(a) => {
-                let v = a
-                    .iter()
-                    .copied()
-                    .reduce(|acc, x| {
-                        if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less
-                        {
-                            acc
-                        } else {
-                            x
-                        }
-                    })
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
-                ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-            ArrayData::Str(a) => {
-                let v = a
-                    .iter()
-                    .max()
-                    .ok_or_else(|| NumpyError::ValueError("empty array".into()))?
-                    .clone();
-                ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v).into_shared())
-            }
-        };
-        Ok(NdArray::from_data(data))
+        self.execute_extrema_reduction_all(ReductionOp::Max, ReductionKernelOp::Max)
     }
 
     fn reduce_all_argmin(&self) -> Result<usize> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "argmin not supported for string arrays".into(),
-            ));
-        }
-        match self.data() {
-            ArrayData::Float64(a) => Ok(a
-                .iter()
-                .enumerate()
-                .min_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(i, _)| i)
-                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?),
-            _ => {
-                let f = self.astype(DType::Float64);
-                f.reduce_all_argmin()
-            }
-        }
+        self.execute_arg_reduction_all(ReductionOp::ArgMin, ArgReductionKernelOp::ArgMin)
     }
 
     fn reduce_all_argmax(&self) -> Result<usize> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "argmax not supported for string arrays".into(),
-            ));
-        }
-        match self.data() {
-            ArrayData::Float64(a) => Ok(a
-                .iter()
-                .enumerate()
-                .max_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(i, _)| i)
-                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?),
-            _ => {
-                let f = self.astype(DType::Float64);
-                f.reduce_all_argmax()
-            }
-        }
+        self.execute_arg_reduction_all(ReductionOp::ArgMax, ArgReductionKernelOp::ArgMax)
     }
 
     fn reduce_axis_argmin(&self, axis: usize) -> Result<NdArray> {
-        validate_axis(axis, self.ndim())?;
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = f.data() else {
-            unreachable!()
-        };
-        let ax = Axis(axis);
-        let mut result_shape = arr.shape().to_vec();
-        result_shape.remove(axis);
-        let result_dim = if result_shape.is_empty() {
-            IxDyn(&[])
-        } else {
-            IxDyn(&result_shape)
-        };
-        let mut result = ArrayD::<i64>::zeros(result_dim);
-        for (lane_in, result_elem) in arr.lanes(ax).into_iter().zip(result.iter_mut()) {
-            let mut min_idx: usize = 0;
-            let mut min_val = f64::INFINITY;
-            for (i, &v) in lane_in.iter().enumerate() {
-                if v < min_val {
-                    min_val = v;
-                    min_idx = i;
-                }
-            }
-            *result_elem = min_idx as i64;
-        }
-        Ok(NdArray::from_data(ArrayData::Int64(result.into_shared())))
+        self.execute_arg_reduction_axis(axis, ReductionOp::ArgMin, ArgReductionKernelOp::ArgMin)
     }
 
     fn reduce_axis_argmax(&self, axis: usize) -> Result<NdArray> {
-        validate_axis(axis, self.ndim())?;
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = f.data() else {
-            unreachable!()
-        };
-        let ax = Axis(axis);
-        let mut result_shape = arr.shape().to_vec();
-        result_shape.remove(axis);
-        let result_dim = if result_shape.is_empty() {
-            IxDyn(&[])
-        } else {
-            IxDyn(&result_shape)
-        };
-        let mut result = ArrayD::<i64>::zeros(result_dim);
-        for (lane_in, result_elem) in arr.lanes(ax).into_iter().zip(result.iter_mut()) {
-            let mut max_idx: usize = 0;
-            let mut max_val = f64::NEG_INFINITY;
-            for (i, &v) in lane_in.iter().enumerate() {
-                if v > max_val {
-                    max_val = v;
-                    max_idx = i;
-                }
-            }
-            *result_elem = max_idx as i64;
-        }
-        Ok(NdArray::from_data(ArrayData::Int64(result.into_shared())))
+        self.execute_arg_reduction_axis(axis, ReductionOp::ArgMax, ArgReductionKernelOp::ArgMax)
     }
 
     fn reduce_axis_fold(&self, axis: usize, op: ReduceOp) -> Result<NdArray> {
-        validate_axis(axis, self.ndim())?;
-        let ax = Axis(axis);
-        macro_rules! fold_axis {
-            ($arr:expr, $init:expr, $fold:expr) => {
-                $arr.fold_axis(ax, $init, $fold)
-            };
+        match op {
+            ReduceOp::Min => {
+                self.execute_extrema_reduction_axis(axis, ReductionOp::Min, ReductionKernelOp::Min)
+            }
+            ReduceOp::Max => {
+                self.execute_extrema_reduction_axis(axis, ReductionOp::Max, ReductionKernelOp::Max)
+            }
         }
-        let data = match (self.data(), op) {
-            (ArrayData::Int32(a), ReduceOp::Min) => {
-                ArrayData::Int32(fold_axis!(a, i32::MAX, |&acc, &x| acc.min(x)).into_shared())
-            }
-            (ArrayData::Int32(a), ReduceOp::Max) => {
-                ArrayData::Int32(fold_axis!(a, i32::MIN, |&acc, &x| acc.max(x)).into_shared())
-            }
-            (ArrayData::Int64(a), ReduceOp::Min) => {
-                ArrayData::Int64(fold_axis!(a, i64::MAX, |&acc, &x| acc.min(x)).into_shared())
-            }
-            (ArrayData::Int64(a), ReduceOp::Max) => {
-                ArrayData::Int64(fold_axis!(a, i64::MIN, |&acc, &x| acc.max(x)).into_shared())
-            }
-            (ArrayData::Float32(a), ReduceOp::Min) => ArrayData::Float32(
-                fold_axis!(a, f32::INFINITY, |&acc, &x| acc.min(x)).into_shared(),
-            ),
-            (ArrayData::Float32(a), ReduceOp::Max) => ArrayData::Float32(
-                fold_axis!(a, f32::NEG_INFINITY, |&acc, &x| acc.max(x)).into_shared(),
-            ),
-            (ArrayData::Float64(a), ReduceOp::Min) => ArrayData::Float64(
-                fold_axis!(a, f64::INFINITY, |&acc, &x| acc.min(x)).into_shared(),
-            ),
-            (ArrayData::Float64(a), ReduceOp::Max) => ArrayData::Float64(
-                fold_axis!(a, f64::NEG_INFINITY, |&acc, &x| acc.max(x)).into_shared(),
-            ),
-            (ArrayData::Bool(a), ReduceOp::Min) => {
-                ArrayData::Bool(fold_axis!(a, true, |&acc, &x| acc && x).into_shared())
-            }
-            (ArrayData::Bool(a), ReduceOp::Max) => {
-                ArrayData::Bool(fold_axis!(a, false, |&acc, &x| acc || x).into_shared())
-            }
-            (ArrayData::Str(a), ReduceOp::Min) => {
-                // fold_axis with String requires Clone-based fold
-                let result = a.fold_axis(ax, String::from("\u{10FFFF}"), |acc, x| {
-                    if x < acc {
-                        x.clone()
-                    } else {
-                        acc.clone()
-                    }
-                });
-                ArrayData::Str(result.into_shared())
-            }
-            (ArrayData::Str(a), ReduceOp::Max) => {
-                let result = a.fold_axis(ax, String::new(), |acc, x| {
-                    if x > acc {
-                        x.clone()
-                    } else {
-                        acc.clone()
-                    }
-                });
-                ArrayData::Str(result.into_shared())
-            }
-            (ArrayData::Complex64(a), ReduceOp::Min) => {
-                let init = num_complex::Complex::new(f32::INFINITY, 0.0);
-                let result = a.fold_axis(ax, init, |&acc, &x| {
-                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Greater
-                    {
-                        acc
-                    } else {
-                        x
-                    }
-                });
-                ArrayData::Complex64(result.into_shared())
-            }
-            (ArrayData::Complex64(a), ReduceOp::Max) => {
-                let init = num_complex::Complex::new(f32::NEG_INFINITY, 0.0);
-                let result = a.fold_axis(ax, init, |&acc, &x| {
-                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less {
-                        acc
-                    } else {
-                        x
-                    }
-                });
-                ArrayData::Complex64(result.into_shared())
-            }
-            (ArrayData::Complex128(a), ReduceOp::Min) => {
-                let init = num_complex::Complex::new(f64::INFINITY, 0.0);
-                let result = a.fold_axis(ax, init, |&acc, &x| {
-                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Greater
-                    {
-                        acc
-                    } else {
-                        x
-                    }
-                });
-                ArrayData::Complex128(result.into_shared())
-            }
-            (ArrayData::Complex128(a), ReduceOp::Max) => {
-                let init = num_complex::Complex::new(f64::NEG_INFINITY, 0.0);
-                let result = a.fold_axis(ax, init, |&acc, &x| {
-                    if crate::ops::comparison::complex_cmp(&acc, &x) != std::cmp::Ordering::Less {
-                        acc
-                    } else {
-                        x
-                    }
-                });
-                ArrayData::Complex128(result.into_shared())
-            }
-        };
-        Ok(NdArray::from_data(data))
+    }
+
+    fn execute_extrema_reduction_all(
+        &self,
+        plan_op: ReductionOp,
+        kernel_op: ReductionKernelOp,
+    ) -> Result<NdArray> {
+        let plan = self.descriptor().reduction_plan(plan_op)?;
+        let data = self.cast_for_execution(plan.input_cast());
+        let descriptor = descriptor_for_dtype(plan.result_dtype());
+        let kernel = descriptor
+            .reduction_all_kernel(kernel_op)
+            .ok_or_else(|| NumpyError::TypeError("reduction kernel not registered".into()))?;
+        let mut result = NdArray::from_data(kernel(data)?);
+        if plan.result_dtype().is_narrow() {
+            result.set_declared_dtype(plan.result_dtype());
+        }
+        Ok(result)
+    }
+
+    fn execute_extrema_reduction_axis(
+        &self,
+        axis: usize,
+        plan_op: ReductionOp,
+        kernel_op: ReductionKernelOp,
+    ) -> Result<NdArray> {
+        validate_axis(axis, self.ndim())?;
+        let plan = self.descriptor().reduction_plan(plan_op)?;
+        let data = self.cast_for_execution(plan.input_cast());
+        let descriptor = descriptor_for_dtype(plan.result_dtype());
+        let kernel = descriptor
+            .reduction_axis_kernel(kernel_op)
+            .ok_or_else(|| NumpyError::TypeError("reduction kernel not registered".into()))?;
+        let mut result = NdArray::from_data(kernel(data, axis)?);
+        if plan.result_dtype().is_narrow() {
+            result.set_declared_dtype(plan.result_dtype());
+        }
+        Ok(result)
+    }
+
+    fn execute_arg_reduction_all(
+        &self,
+        plan_op: ReductionOp,
+        kernel_op: ArgReductionKernelOp,
+    ) -> Result<usize> {
+        let plan = self.descriptor().reduction_plan(plan_op)?;
+        let data = self.cast_for_execution(plan.input_cast());
+        let descriptor = descriptor_for_dtype(plan.input_cast().target_dtype());
+        let kernel = descriptor
+            .arg_reduction_all_kernel(kernel_op)
+            .ok_or_else(|| NumpyError::TypeError("arg reduction kernel not registered".into()))?;
+        kernel(data)
+    }
+
+    fn execute_arg_reduction_axis(
+        &self,
+        axis: usize,
+        plan_op: ReductionOp,
+        kernel_op: ArgReductionKernelOp,
+    ) -> Result<NdArray> {
+        validate_axis(axis, self.ndim())?;
+        let plan = self.descriptor().reduction_plan(plan_op)?;
+        let data = self.cast_for_execution(plan.input_cast());
+        let descriptor = descriptor_for_dtype(plan.input_cast().target_dtype());
+        let kernel = descriptor
+            .arg_reduction_axis_kernel(kernel_op)
+            .ok_or_else(|| NumpyError::TypeError("arg reduction kernel not registered".into()))?;
+        Ok(NdArray::from_data(kernel(data, axis)?))
     }
 }
 

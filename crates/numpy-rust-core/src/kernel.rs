@@ -31,10 +31,25 @@ pub enum ComparisonKernelOp {
     Ge,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReductionKernelOp {
+    Sum,
+    Min,
+    Max,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgReductionKernelOp {
+    ArgMin,
+    ArgMax,
+}
+
 pub type BinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ComparisonArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
+pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
+pub type ArgReduceAxisKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 
 pub fn binary_kernel_for_dtype(dtype: DType, op: ArithmeticKernelOp) -> Option<BinaryArrayKernel> {
     match (dtype.storage_dtype(), op) {
@@ -125,6 +140,90 @@ pub fn sum_axis_kernel_for_dtype(dtype: DType) -> Option<ReduceAxisArrayKernel> 
         DType::Float64 => Some(sum_axis_float64),
         DType::Complex64 => Some(sum_axis_complex64),
         DType::Complex128 => Some(sum_axis_complex128),
+        _ => None,
+    }
+}
+
+pub fn reduction_all_kernel_for_dtype(
+    dtype: DType,
+    op: ReductionKernelOp,
+) -> Option<ReduceAllArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Int32, ReductionKernelOp::Sum) => Some(sum_all_int32),
+        (DType::Int64, ReductionKernelOp::Sum) => Some(sum_all_int64),
+        (DType::Float32, ReductionKernelOp::Sum) => Some(sum_all_float32),
+        (DType::Float64, ReductionKernelOp::Sum) => Some(sum_all_float64),
+        (DType::Complex64, ReductionKernelOp::Sum) => Some(sum_all_complex64),
+        (DType::Complex128, ReductionKernelOp::Sum) => Some(sum_all_complex128),
+        (DType::Bool, ReductionKernelOp::Min) => Some(min_all_bool),
+        (DType::Bool, ReductionKernelOp::Max) => Some(max_all_bool),
+        (DType::Int32, ReductionKernelOp::Min) => Some(min_all_int32),
+        (DType::Int32, ReductionKernelOp::Max) => Some(max_all_int32),
+        (DType::Int64, ReductionKernelOp::Min) => Some(min_all_int64),
+        (DType::Int64, ReductionKernelOp::Max) => Some(max_all_int64),
+        (DType::Float32, ReductionKernelOp::Min) => Some(min_all_float32),
+        (DType::Float32, ReductionKernelOp::Max) => Some(max_all_float32),
+        (DType::Float64, ReductionKernelOp::Min) => Some(min_all_float64),
+        (DType::Float64, ReductionKernelOp::Max) => Some(max_all_float64),
+        (DType::Complex64, ReductionKernelOp::Min) => Some(min_all_complex64),
+        (DType::Complex64, ReductionKernelOp::Max) => Some(max_all_complex64),
+        (DType::Complex128, ReductionKernelOp::Min) => Some(min_all_complex128),
+        (DType::Complex128, ReductionKernelOp::Max) => Some(max_all_complex128),
+        (DType::Str, ReductionKernelOp::Min) => Some(min_all_str),
+        (DType::Str, ReductionKernelOp::Max) => Some(max_all_str),
+        _ => None,
+    }
+}
+
+pub fn reduction_axis_kernel_for_dtype(
+    dtype: DType,
+    op: ReductionKernelOp,
+) -> Option<ReduceAxisArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Int32, ReductionKernelOp::Sum) => Some(sum_axis_int32),
+        (DType::Int64, ReductionKernelOp::Sum) => Some(sum_axis_int64),
+        (DType::Float32, ReductionKernelOp::Sum) => Some(sum_axis_float32),
+        (DType::Float64, ReductionKernelOp::Sum) => Some(sum_axis_float64),
+        (DType::Complex64, ReductionKernelOp::Sum) => Some(sum_axis_complex64),
+        (DType::Complex128, ReductionKernelOp::Sum) => Some(sum_axis_complex128),
+        (DType::Bool, ReductionKernelOp::Min) => Some(min_axis_bool),
+        (DType::Bool, ReductionKernelOp::Max) => Some(max_axis_bool),
+        (DType::Int32, ReductionKernelOp::Min) => Some(min_axis_int32),
+        (DType::Int32, ReductionKernelOp::Max) => Some(max_axis_int32),
+        (DType::Int64, ReductionKernelOp::Min) => Some(min_axis_int64),
+        (DType::Int64, ReductionKernelOp::Max) => Some(max_axis_int64),
+        (DType::Float32, ReductionKernelOp::Min) => Some(min_axis_float32),
+        (DType::Float32, ReductionKernelOp::Max) => Some(max_axis_float32),
+        (DType::Float64, ReductionKernelOp::Min) => Some(min_axis_float64),
+        (DType::Float64, ReductionKernelOp::Max) => Some(max_axis_float64),
+        (DType::Complex64, ReductionKernelOp::Min) => Some(min_axis_complex64),
+        (DType::Complex64, ReductionKernelOp::Max) => Some(max_axis_complex64),
+        (DType::Complex128, ReductionKernelOp::Min) => Some(min_axis_complex128),
+        (DType::Complex128, ReductionKernelOp::Max) => Some(max_axis_complex128),
+        (DType::Str, ReductionKernelOp::Min) => Some(min_axis_str),
+        (DType::Str, ReductionKernelOp::Max) => Some(max_axis_str),
+        _ => None,
+    }
+}
+
+pub fn arg_reduction_all_kernel_for_dtype(
+    dtype: DType,
+    op: ArgReductionKernelOp,
+) -> Option<ArgReduceAllKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float64, ArgReductionKernelOp::ArgMin) => Some(argmin_all_float64),
+        (DType::Float64, ArgReductionKernelOp::ArgMax) => Some(argmax_all_float64),
+        _ => None,
+    }
+}
+
+pub fn arg_reduction_axis_kernel_for_dtype(
+    dtype: DType,
+    op: ArgReductionKernelOp,
+) -> Option<ArgReduceAxisKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float64, ArgReductionKernelOp::ArgMin) => Some(argmin_axis_float64),
+        (DType::Float64, ArgReductionKernelOp::ArgMax) => Some(argmax_axis_float64),
         _ => None,
     }
 }
@@ -317,3 +416,380 @@ sum_axis_kernel!(sum_axis_float32, Float32);
 sum_axis_kernel!(sum_axis_float64, Float64);
 sum_axis_kernel!(sum_axis_complex64, Complex64);
 sum_axis_kernel!(sum_axis_complex128, Complex128);
+
+macro_rules! scalar_all_ord_kernel {
+    ($name:ident, $variant:ident, $expr:expr) => {
+        fn $name(data: ArrayData) -> Result<ArrayData> {
+            match data {
+                ArrayData::$variant(a) => {
+                    let v = $expr(a).ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+                    Ok(ArrayData::$variant(
+                        ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+                    ))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "reduction kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+scalar_all_ord_kernel!(min_all_bool, Bool, |a: ndarray::ArrayBase<
+    ndarray::OwnedArcRepr<bool>,
+    IxDyn,
+>| a.iter().min().copied());
+scalar_all_ord_kernel!(max_all_bool, Bool, |a: ndarray::ArrayBase<
+    ndarray::OwnedArcRepr<bool>,
+    IxDyn,
+>| a.iter().max().copied());
+scalar_all_ord_kernel!(min_all_int32, Int32, |a: ndarray::ArrayBase<
+    ndarray::OwnedArcRepr<i32>,
+    IxDyn,
+>| a.iter().min().copied());
+scalar_all_ord_kernel!(max_all_int32, Int32, |a: ndarray::ArrayBase<
+    ndarray::OwnedArcRepr<i32>,
+    IxDyn,
+>| a.iter().max().copied());
+scalar_all_ord_kernel!(min_all_int64, Int64, |a: ndarray::ArrayBase<
+    ndarray::OwnedArcRepr<i64>,
+    IxDyn,
+>| a.iter().min().copied());
+scalar_all_ord_kernel!(max_all_int64, Int64, |a: ndarray::ArrayBase<
+    ndarray::OwnedArcRepr<i64>,
+    IxDyn,
+>| a.iter().max().copied());
+
+fn min_all_float32(data: ArrayData) -> Result<ArrayData> {
+    match data {
+        ArrayData::Float32(a) => {
+            let v = a
+                .iter()
+                .copied()
+                .reduce(f32::min)
+                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+            Ok(ArrayData::Float32(
+                ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+            ))
+        }
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn max_all_float32(data: ArrayData) -> Result<ArrayData> {
+    match data {
+        ArrayData::Float32(a) => {
+            let v = a
+                .iter()
+                .copied()
+                .reduce(f32::max)
+                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+            Ok(ArrayData::Float32(
+                ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+            ))
+        }
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn min_all_float64(data: ArrayData) -> Result<ArrayData> {
+    match data {
+        ArrayData::Float64(a) => {
+            let v = a
+                .iter()
+                .copied()
+                .reduce(f64::min)
+                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+            Ok(ArrayData::Float64(
+                ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+            ))
+        }
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn max_all_float64(data: ArrayData) -> Result<ArrayData> {
+    match data {
+        ArrayData::Float64(a) => {
+            let v = a
+                .iter()
+                .copied()
+                .reduce(f64::max)
+                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+            Ok(ArrayData::Float64(
+                ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+            ))
+        }
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+macro_rules! complex_all_kernel {
+    ($name:ident, $variant:ident, $keep_acc_when:pat) => {
+        fn $name(data: ArrayData) -> Result<ArrayData> {
+            match data {
+                ArrayData::$variant(a) => {
+                    let v = a
+                        .iter()
+                        .copied()
+                        .reduce(|acc, x| {
+                            if matches!(complex_cmp(&acc, &x), $keep_acc_when) {
+                                acc
+                            } else {
+                                x
+                            }
+                        })
+                        .ok_or_else(|| NumpyError::ValueError("empty array".into()))?;
+                    Ok(ArrayData::$variant(
+                        ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+                    ))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "reduction kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+complex_all_kernel!(
+    min_all_complex64,
+    Complex64,
+    std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+);
+complex_all_kernel!(
+    max_all_complex64,
+    Complex64,
+    std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+);
+complex_all_kernel!(
+    min_all_complex128,
+    Complex128,
+    std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+);
+complex_all_kernel!(
+    max_all_complex128,
+    Complex128,
+    std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+);
+
+fn min_all_str(data: ArrayData) -> Result<ArrayData> {
+    match data {
+        ArrayData::Str(a) => {
+            let v = a
+                .iter()
+                .min()
+                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?
+                .clone();
+            Ok(ArrayData::Str(
+                ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+            ))
+        }
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn max_all_str(data: ArrayData) -> Result<ArrayData> {
+    match data {
+        ArrayData::Str(a) => {
+            let v = a
+                .iter()
+                .max()
+                .ok_or_else(|| NumpyError::ValueError("empty array".into()))?
+                .clone();
+            Ok(ArrayData::Str(
+                ArrayD::from_elem(IxDyn(&[]), v).into_shared(),
+            ))
+        }
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+macro_rules! fold_axis_ord_kernel {
+    ($name:ident, $variant:ident, $init:expr, $fold:expr) => {
+        fn $name(data: ArrayData, axis: usize) -> Result<ArrayData> {
+            match data {
+                ArrayData::$variant(a) => Ok(ArrayData::$variant(
+                    a.fold_axis(Axis(axis), $init, $fold).into_shared(),
+                )),
+                _ => Err(NumpyError::TypeError(
+                    "reduction kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+fold_axis_ord_kernel!(min_axis_bool, Bool, true, |&acc, &x| acc && x);
+fold_axis_ord_kernel!(max_axis_bool, Bool, false, |&acc, &x| acc || x);
+fold_axis_ord_kernel!(min_axis_int32, Int32, i32::MAX, |&acc, &x| acc.min(x));
+fold_axis_ord_kernel!(max_axis_int32, Int32, i32::MIN, |&acc, &x| acc.max(x));
+fold_axis_ord_kernel!(min_axis_int64, Int64, i64::MAX, |&acc, &x| acc.min(x));
+fold_axis_ord_kernel!(max_axis_int64, Int64, i64::MIN, |&acc, &x| acc.max(x));
+fold_axis_ord_kernel!(min_axis_float32, Float32, f32::INFINITY, |&acc, &x| acc
+    .min(x));
+fold_axis_ord_kernel!(max_axis_float32, Float32, f32::NEG_INFINITY, |&acc, &x| acc
+    .max(x));
+fold_axis_ord_kernel!(min_axis_float64, Float64, f64::INFINITY, |&acc, &x| acc
+    .min(x));
+fold_axis_ord_kernel!(max_axis_float64, Float64, f64::NEG_INFINITY, |&acc, &x| acc
+    .max(x));
+
+fn min_axis_str(data: ArrayData, axis: usize) -> Result<ArrayData> {
+    match data {
+        ArrayData::Str(a) => Ok(ArrayData::Str(
+            a.fold_axis(Axis(axis), String::from("\u{10FFFF}"), |acc, x| {
+                if x < acc {
+                    x.clone()
+                } else {
+                    acc.clone()
+                }
+            })
+            .into_shared(),
+        )),
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn max_axis_str(data: ArrayData, axis: usize) -> Result<ArrayData> {
+    match data {
+        ArrayData::Str(a) => Ok(ArrayData::Str(
+            a.fold_axis(Axis(axis), String::new(), |acc, x| {
+                if x > acc {
+                    x.clone()
+                } else {
+                    acc.clone()
+                }
+            })
+            .into_shared(),
+        )),
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+macro_rules! complex_axis_kernel {
+    ($name:ident, $variant:ident, $init:expr, $keep_acc_when:pat) => {
+        fn $name(data: ArrayData, axis: usize) -> Result<ArrayData> {
+            match data {
+                ArrayData::$variant(a) => Ok(ArrayData::$variant(
+                    a.fold_axis(Axis(axis), $init, |&acc, &x| {
+                        if matches!(complex_cmp(&acc, &x), $keep_acc_when) {
+                            acc
+                        } else {
+                            x
+                        }
+                    })
+                    .into_shared(),
+                )),
+                _ => Err(NumpyError::TypeError(
+                    "reduction kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+complex_axis_kernel!(
+    min_axis_complex64,
+    Complex64,
+    Complex::new(f32::INFINITY, 0.0),
+    std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+);
+complex_axis_kernel!(
+    max_axis_complex64,
+    Complex64,
+    Complex::new(f32::NEG_INFINITY, 0.0),
+    std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+);
+complex_axis_kernel!(
+    min_axis_complex128,
+    Complex128,
+    Complex::new(f64::INFINITY, 0.0),
+    std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+);
+complex_axis_kernel!(
+    max_axis_complex128,
+    Complex128,
+    Complex::new(f64::NEG_INFINITY, 0.0),
+    std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+);
+
+fn argmin_all_float64(data: ArrayData) -> Result<usize> {
+    match data {
+        ArrayData::Float64(a) => a
+            .iter()
+            .enumerate()
+            .min_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .ok_or_else(|| NumpyError::ValueError("empty array".into())),
+        _ => Err(NumpyError::TypeError(
+            "arg reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn argmax_all_float64(data: ArrayData) -> Result<usize> {
+    match data {
+        ArrayData::Float64(a) => a
+            .iter()
+            .enumerate()
+            .max_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .ok_or_else(|| NumpyError::ValueError("empty array".into())),
+        _ => Err(NumpyError::TypeError(
+            "arg reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+macro_rules! arg_axis_kernel {
+    ($name:ident, $cmp:tt, $init:expr) => {
+        fn $name(data: ArrayData, axis: usize) -> Result<ArrayData> {
+            match data {
+                ArrayData::Float64(arr) => {
+                    let ax = Axis(axis);
+                    let mut result_shape = arr.shape().to_vec();
+                    result_shape.remove(axis);
+                    let result_dim = if result_shape.is_empty() {
+                        IxDyn(&[])
+                    } else {
+                        IxDyn(&result_shape)
+                    };
+                    let mut result = ArrayD::<i64>::zeros(result_dim);
+                    for (lane_in, result_elem) in arr.lanes(ax).into_iter().zip(result.iter_mut()) {
+                        let mut idx: usize = 0;
+                        let mut val = $init;
+                        for (i, &v) in lane_in.iter().enumerate() {
+                            if v $cmp val {
+                                val = v;
+                                idx = i;
+                            }
+                        }
+                        *result_elem = idx as i64;
+                    }
+                    Ok(ArrayData::Int64(result.into_shared()))
+                }
+                _ => Err(NumpyError::TypeError("arg reduction kernel dtype mismatch".into())),
+            }
+        }
+    };
+}
+
+arg_axis_kernel!(argmin_axis_float64, <, f64::INFINITY);
+arg_axis_kernel!(argmax_axis_float64, >, f64::NEG_INFINITY);
