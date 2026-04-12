@@ -2153,6 +2153,11 @@ def test_delete_multiple():
     assert_close(b[1], 3.0)
     assert_close(b[2], 5.0)
 
+def test_delete_bool_list():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    b = np.delete(a, [False, True, False, True])
+    assert_eq(b.tolist(), [1.0, 3.0])
+
 def test_insert_1d():
     a = np.array([1.0, 2.0, 3.0])
     b = np.insert(a, 1, 10.0)
@@ -2161,6 +2166,11 @@ def test_insert_1d():
     assert_close(b[1], 10.0)
     assert_close(b[2], 2.0)
     assert_close(b[3], 3.0)
+
+def test_insert_ndarray_indices():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.insert(a, np.array([1, 3]), 9.0)
+    assert_eq(b.tolist(), [1.0, 9.0, 2.0, 3.0, 9.0])
 
 def test_select():
     x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
