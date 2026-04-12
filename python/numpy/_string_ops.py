@@ -6,11 +6,19 @@ from ._creation import array, asarray
 from ._string_bridge import (
     native_string_unary,
     normalize_native_string_input,
-    python_string_broadcast,
+    python_string_join,
     python_string_items,
     python_string_map,
+    python_string_pad,
+    python_string_partition,
     python_string_predicate,
+    python_string_replace,
+    python_string_rsplit,
     python_string_search,
+    python_string_split,
+    python_string_splitlines,
+    python_string_strip,
+    python_string_transform,
 )
 
 __all__ = ['char']
@@ -69,105 +77,6 @@ def _native_bool_output(a, native_op, *args):
 def _native_int_output(a, native_op, *args):
     arr = _coerce_native_string_array(a)
     return native_op(arr, *args)
-
-
-def _python_string_strip(value, chars=None, *, method_name="strip", wrap_chararray=False):
-    if chars is None:
-        return python_string_map(
-            value,
-            lambda item: getattr(str(item), method_name)(),
-            wrap_chararray=wrap_chararray,
-        )
-    items, _ = python_string_items(value)
-    chars_values = python_string_broadcast(chars, len(items))
-    chars_iter = iter(chars_values)
-    return python_string_map(
-        value,
-        lambda item: getattr(str(item), method_name)(next(chars_iter)),
-        wrap_chararray=wrap_chararray,
-    )
-
-
-def _python_string_pad(value, width, method_name, fillchar=" ", *, wrap_chararray=False):
-    items, _ = python_string_items(value)
-    widths = python_string_broadcast(width, len(items))
-    width_iter = iter(widths)
-    fill = " " if fillchar is None else fillchar
-    return python_string_map(
-        value,
-        lambda item: getattr(str(item), method_name)(int(next(width_iter)), fill),
-        wrap_chararray=wrap_chararray,
-    )
-
-
-def _python_string_replace(value, old, new, count=None, *, wrap_chararray=False):
-    items, _ = python_string_items(value)
-    olds = python_string_broadcast(old, len(items))
-    news = python_string_broadcast(new, len(items))
-    old_iter = iter(olds)
-    new_iter = iter(news)
-    if count is None:
-        return python_string_map(
-            value,
-            lambda item: str(item).replace(next(old_iter), next(new_iter)),
-            wrap_chararray=wrap_chararray,
-        )
-    counts = python_string_broadcast(count, len(items))
-    count_iter = iter(counts)
-    return python_string_map(
-        value,
-        lambda item: str(item).replace(
-            next(old_iter),
-            next(new_iter),
-            int(next(count_iter)),
-        ),
-        wrap_chararray=wrap_chararray,
-    )
-
-
-def _python_string_split(value, sep=None, maxsplit=-1):
-    return python_string_map(
-        value,
-        lambda item: str(item).split(sep, maxsplit),
-        result_kind="object",
-    )
-
-
-def _python_string_rsplit(value, sep=None, maxsplit=-1):
-    return python_string_map(
-        value,
-        lambda item: str(item).rsplit(sep, maxsplit),
-        result_kind="object",
-    )
-
-
-def _python_string_splitlines(value):
-    return python_string_map(
-        value,
-        lambda item: str(item).splitlines(),
-        result_kind="object",
-    )
-
-
-def _python_string_partition(value, sep, *, method_name="partition", wrap_chararray=False):
-    items, _ = python_string_items(value)
-    seps = python_string_broadcast(sep, len(items))
-    sep_iter = iter(seps)
-    return python_string_map(
-        value,
-        lambda item: list(getattr(str(item), method_name)(next(sep_iter))),
-        result_kind="object",
-        wrap_chararray=wrap_chararray,
-        extra_shape=(3,),
-    )
-
-
-def _python_string_transform(value, method_name, *args, wrap_chararray=False):
-    return python_string_map(
-        value,
-        lambda item: getattr(str(item), method_name)(*args),
-        wrap_chararray=wrap_chararray,
-    )
 
 
 class chararray:
@@ -512,10 +421,10 @@ class chararray:
         return native_string_unary(self, _native.char_capitalize, wrap_chararray=True)
 
     def strip(self, chars=None):
-        return _python_string_strip(self, chars, wrap_chararray=True)
+        return python_string_strip(self, chars, wrap_chararray=True)
 
     def lstrip(self, chars=None):
-        return _python_string_strip(
+        return python_string_strip(
             self,
             chars,
             method_name="lstrip",
@@ -523,7 +432,7 @@ class chararray:
         )
 
     def rstrip(self, chars=None):
-        return _python_string_strip(
+        return python_string_strip(
             self,
             chars,
             method_name="rstrip",
@@ -531,13 +440,13 @@ class chararray:
         )
 
     def title(self):
-        return _python_string_transform(self, "title", wrap_chararray=True)
+        return python_string_transform(self, "title", wrap_chararray=True)
 
     def swapcase(self):
-        return _python_string_transform(self, "swapcase", wrap_chararray=True)
+        return python_string_transform(self, "swapcase", wrap_chararray=True)
 
     def center(self, width, fillchar=None):
-        return _python_string_pad(
+        return python_string_pad(
             self,
             width,
             "center",
@@ -546,7 +455,7 @@ class chararray:
         )
 
     def ljust(self, width, fillchar=None):
-        return _python_string_pad(
+        return python_string_pad(
             self,
             width,
             "ljust",
@@ -555,7 +464,7 @@ class chararray:
         )
 
     def rjust(self, width, fillchar=None):
-        return _python_string_pad(
+        return python_string_pad(
             self,
             width,
             "rjust",
@@ -571,7 +480,7 @@ class chararray:
         )
 
     def replace(self, old, new, count=None):
-        return _python_string_replace(
+        return python_string_replace(
             self,
             old,
             new,
@@ -605,7 +514,7 @@ class chararray:
         return python_string_search(self, sub, "count", start=start, end=end)
 
     def expandtabs(self, tabsize=8):
-        return _python_string_transform(
+        return python_string_transform(
             self,
             "expandtabs",
             tabsize,
@@ -648,19 +557,19 @@ class chararray:
         return python_string_predicate(self, lambda item: item.isdecimal())
 
     def split(self, sep=None, maxsplit=-1):
-        return _python_string_split(self, sep=sep, maxsplit=maxsplit)
+        return python_string_split(self, sep=sep, maxsplit=maxsplit)
 
     def rsplit(self, sep=None, maxsplit=-1):
-        return _python_string_rsplit(self, sep=sep, maxsplit=maxsplit)
+        return python_string_rsplit(self, sep=sep, maxsplit=maxsplit)
 
     def splitlines(self):
-        return _python_string_splitlines(self)
+        return python_string_splitlines(self)
 
     def partition(self, sep):
-        return _python_string_partition(self, sep, wrap_chararray=True)
+        return python_string_partition(self, sep, wrap_chararray=True)
 
     def rpartition(self, sep):
-        return _python_string_partition(
+        return python_string_partition(
             self,
             sep,
             method_name="rpartition",
@@ -682,19 +591,7 @@ class chararray:
         )
 
     def join(self, seq):
-        seqs = _to_items(seq)
-        seps, shape = python_string_items(self)
-        if len(seps) == 1 and len(seqs) > 1:
-            seps = seps * len(seqs)
-            shape = (len(seqs),)
-        result = []
-        for idx, sep in enumerate(seps):
-            current = seqs[idx] if idx < len(seqs) else seqs[-1]
-            if isinstance(current, (list, tuple)):
-                result.append(str(sep).join(str(part) for part in current))
-            else:
-                result.append(str(sep).join(str(current)))
-        return chararray._from_array(array(result).reshape(shape))
+        return python_string_join(seq, self, wrap_chararray=True)
 
 
 class _char_mod:
@@ -850,7 +747,15 @@ class _char_mod:
             raise UFuncTypeError("strip", "object arrays are not supported")
         if chars is None and not isinstance(a, chararray):
             return _native_string_output(a, _native.char_strip)
-        return _python_string_strip(a, chars)
+        return python_string_strip(a, chars)
+
+    @staticmethod
+    def lstrip(a, chars=None):
+        return python_string_strip(a, chars, method_name="lstrip")
+
+    @staticmethod
+    def rstrip(a, chars=None):
+        return python_string_strip(a, chars, method_name="rstrip")
 
     @staticmethod
     def str_len(a):
@@ -884,28 +789,40 @@ class _char_mod:
     def replace(a, old, new, count=None):
         if count is None and not isinstance(a, chararray):
             return _native_string_output(a, _native.char_replace, old, new)
-        return _python_string_replace(a, old, new, count=count)
+        return python_string_replace(a, old, new, count=count)
 
     @staticmethod
     def split(a, sep=None, maxsplit=-1):
         """Split each element in a around sep."""
-        out = _python_string_split(a, sep=sep, maxsplit=maxsplit)
+        out = python_string_split(a, sep=sep, maxsplit=maxsplit)
+        values = out.tolist()
+        return values[0] if len(values) == 1 else values
+
+    @staticmethod
+    def rsplit(a, sep=None, maxsplit=-1):
+        out = python_string_rsplit(a, sep=sep, maxsplit=maxsplit)
+        values = out.tolist()
+        return values[0] if len(values) == 1 else values
+
+    @staticmethod
+    def splitlines(a):
+        out = python_string_splitlines(a)
         values = out.tolist()
         return values[0] if len(values) == 1 else values
 
     @staticmethod
     def join(sep, a):
         """Join strings in a with separator sep, element-wise."""
-        if isinstance(a, (str, bytes)):
+        if isinstance(a, (str, bytes)) and isinstance(sep, (str, bytes)):
             return str(sep).join(str(a))
-        if isinstance(a, (list, tuple)) and a and not isinstance(a[0], (list, tuple)):
+        if (
+            isinstance(sep, (str, bytes))
+            and isinstance(a, (list, tuple))
+            and a
+            and not isinstance(a[0], (list, tuple))
+        ):
             return str(sep).join(str(item) for item in a)
-        seps = python_string_broadcast(sep, len(python_string_items(a)[0]))
-        sep_iter = iter(seps)
-        return python_string_map(
-            a,
-            lambda item: str(next(sep_iter)).join(str(item)),
-        )
+        return python_string_join(a, sep)
 
     @staticmethod
     def find(a, sub, start=0, end=None):
@@ -1037,17 +954,17 @@ class _char_mod:
     @staticmethod
     def center(a, width, fillchar=' '):
         """Pad each string element in a to width, centering the string."""
-        return _python_string_pad(a, width, "center", fillchar=fillchar)
+        return python_string_pad(a, width, "center", fillchar=fillchar)
 
     @staticmethod
     def ljust(a, width, fillchar=' '):
         """Left-justify each string element in a to width."""
-        return _python_string_pad(a, width, "ljust", fillchar=fillchar)
+        return python_string_pad(a, width, "ljust", fillchar=fillchar)
 
     @staticmethod
     def rjust(a, width, fillchar=' '):
         """Right-justify each string element in a to width."""
-        return _python_string_pad(a, width, "rjust", fillchar=fillchar)
+        return python_string_pad(a, width, "rjust", fillchar=fillchar)
 
     @staticmethod
     def zfill(a, width):
@@ -1055,11 +972,11 @@ class _char_mod:
 
     @staticmethod
     def title(a):
-        return _python_string_transform(a, "title")
+        return python_string_transform(a, "title")
 
     @staticmethod
     def swapcase(a):
-        return _python_string_transform(a, "swapcase")
+        return python_string_transform(a, "swapcase")
 
     @staticmethod
     def isalpha(a):
@@ -1068,6 +985,10 @@ class _char_mod:
     @staticmethod
     def isdigit(a):
         return python_string_predicate(a, lambda item: item.isdigit())
+
+    @staticmethod
+    def isalnum(a):
+        return python_string_predicate(a, lambda item: item.isalnum())
 
     @staticmethod
     def isnumeric(a):
@@ -1090,6 +1011,10 @@ class _char_mod:
         return python_string_predicate(a, lambda item: item.isspace())
 
     @staticmethod
+    def istitle(a):
+        return python_string_predicate(a, lambda item: item.istitle())
+
+    @staticmethod
     def isdecimal(a):
         items, _ = python_string_items(a)
         for item in items:
@@ -1101,19 +1026,19 @@ class _char_mod:
     def expandtabs(a, tabsize=8):
         if isinstance(a, (str, bytes)):
             return a.expandtabs(tabsize)
-        return _python_string_transform(a, "expandtabs", tabsize)
+        return python_string_transform(a, "expandtabs", tabsize)
 
     @staticmethod
     def partition(a, sep):
         if isinstance(a, (str, bytes)):
             return list(a.partition(sep))
-        return _python_string_partition(a, sep)
+        return python_string_partition(a, sep)
 
     @staticmethod
     def rpartition(a, sep):
         if isinstance(a, (str, bytes)):
             return list(a.rpartition(sep))
-        return _python_string_partition(a, sep, method_name="rpartition")
+        return python_string_partition(a, sep, method_name="rpartition")
 
     @staticmethod
     def encode(a, encoding='utf-8', errors='strict'):

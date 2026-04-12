@@ -140,6 +140,50 @@ def test_char_join_preserves_shaped_inputs():
     assert out.tolist() == [["a-b", "c-d"], ["e-f", "g-h"]]
 
 
+def _to_python(value):
+    return value.tolist() if hasattr(value, "tolist") else value
+
+
+def test_char_join_matches_chararray_join_for_broadcast_separators():
+    sep = np.char.asarray(["-", "="])
+    seq = ["ab", "cd"]
+
+    np_char_out = np.char.join(sep, seq)
+    carr_out = sep.join(seq)
+
+    assert type(np_char_out) is np.ndarray
+    assert isinstance(carr_out, type(sep))
+    assert np_char_out.tolist() == ["a-b", "c=d"]
+    assert carr_out.tolist() == ["a-b", "c=d"]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "value", "args", "expected"),
+    [
+        ("lstrip", ["  ab", " cd"], (), ["ab", "cd"]),
+        ("rstrip", ["ab  ", "cd "], (), ["ab", "cd"]),
+        ("isalnum", ["a1", "b!"], (), [True, False]),
+        ("istitle", ["Hello World", "hello"], (), [True, False]),
+        ("rsplit", ["a-b-c", "d-e"], ("-", 1), [["a-b", "c"], ["d", "e"]]),
+        ("splitlines", ["a\nb", "c"], (), [["a", "b"], ["c"]]),
+    ],
+)
+def test_np_char_exposes_missing_chararray_entrypoints(
+    method_name, value, args, expected
+):
+    arr = np.array(value)
+    carr = np.char.asarray(value)
+
+    np_char = getattr(np.char, method_name)
+    arr_out = np_char(arr, *args)
+    carr_np_out = np_char(carr, *args)
+    carr_method_out = getattr(carr, method_name)(*args)
+
+    assert _to_python(arr_out) == expected
+    assert _to_python(carr_np_out) == expected
+    assert _to_python(carr_method_out) == expected
+
+
 def test_char_find_preserves_shape():
     arr = np.array([["hello", "world"], ["color", "cold"]])
     out = np.char.find(arr, "lo")

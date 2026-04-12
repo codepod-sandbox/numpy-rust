@@ -63,7 +63,10 @@ def python_string_items(value):
 
 
 def python_string_broadcast(value, size):
-    if isinstance(value, (list, tuple)):
+    raw = _unwrap_chararray(value)
+    if isinstance(raw, (ndarray, _ObjectArray)):
+        values, _ = python_string_items(value)
+    elif isinstance(value, (list, tuple)):
         values = list(value)
     else:
         values = [value]
@@ -129,3 +132,134 @@ def python_string_search(value, needle, method_name, start=0, end=None):
         else getattr(str(item), method_name)(next(state), start, end),
         result_kind="int",
     )
+
+
+def python_string_strip(
+    value,
+    chars=None,
+    *,
+    method_name="strip",
+    wrap_chararray=False,
+):
+    if chars is None:
+        return python_string_map(
+            value,
+            lambda item: getattr(str(item), method_name)(),
+            wrap_chararray=wrap_chararray,
+        )
+    items, _ = python_string_items(value)
+    chars_values = python_string_broadcast(chars, len(items))
+    chars_iter = iter(chars_values)
+    return python_string_map(
+        value,
+        lambda item: getattr(str(item), method_name)(next(chars_iter)),
+        wrap_chararray=wrap_chararray,
+    )
+
+
+def python_string_pad(
+    value,
+    width,
+    method_name,
+    fillchar=" ",
+    *,
+    wrap_chararray=False,
+):
+    items, _ = python_string_items(value)
+    widths = python_string_broadcast(width, len(items))
+    width_iter = iter(widths)
+    fill = " " if fillchar is None else fillchar
+    return python_string_map(
+        value,
+        lambda item: getattr(str(item), method_name)(int(next(width_iter)), fill),
+        wrap_chararray=wrap_chararray,
+    )
+
+
+def python_string_replace(value, old, new, count=None, *, wrap_chararray=False):
+    items, _ = python_string_items(value)
+    olds = python_string_broadcast(old, len(items))
+    news = python_string_broadcast(new, len(items))
+    old_iter = iter(olds)
+    new_iter = iter(news)
+    if count is None:
+        return python_string_map(
+            value,
+            lambda item: str(item).replace(next(old_iter), next(new_iter)),
+            wrap_chararray=wrap_chararray,
+        )
+    counts = python_string_broadcast(count, len(items))
+    count_iter = iter(counts)
+    return python_string_map(
+        value,
+        lambda item: str(item).replace(
+            next(old_iter),
+            next(new_iter),
+            int(next(count_iter)),
+        ),
+        wrap_chararray=wrap_chararray,
+    )
+
+
+def python_string_split(value, sep=None, maxsplit=-1):
+    return python_string_map(
+        value,
+        lambda item: str(item).split(sep, maxsplit),
+        result_kind="object",
+    )
+
+
+def python_string_rsplit(value, sep=None, maxsplit=-1):
+    return python_string_map(
+        value,
+        lambda item: str(item).rsplit(sep, maxsplit),
+        result_kind="object",
+    )
+
+
+def python_string_splitlines(value):
+    return python_string_map(
+        value,
+        lambda item: str(item).splitlines(),
+        result_kind="object",
+    )
+
+
+def python_string_partition(
+    value,
+    sep,
+    *,
+    method_name="partition",
+    wrap_chararray=False,
+):
+    items, _ = python_string_items(value)
+    seps = python_string_broadcast(sep, len(items))
+    sep_iter = iter(seps)
+    return python_string_map(
+        value,
+        lambda item: list(getattr(str(item), method_name)(next(sep_iter))),
+        result_kind="object",
+        wrap_chararray=wrap_chararray,
+        extra_shape=(3,),
+    )
+
+
+def python_string_transform(value, method_name, *args, wrap_chararray=False):
+    return python_string_map(
+        value,
+        lambda item: getattr(str(item), method_name)(*args),
+        wrap_chararray=wrap_chararray,
+    )
+
+
+def python_string_join(seq, sep, *, wrap_chararray=False):
+    items, shape = python_string_items(seq)
+    seps = python_string_broadcast(sep, len(items))
+    sep_iter = iter(seps)
+    return python_string_map(
+        seq,
+        lambda item: str(next(sep_iter)).join(str(part) for part in item)
+        if isinstance(item, (list, tuple))
+        else str(next(sep_iter)).join(str(item)),
+        wrap_chararray=wrap_chararray,
+    ).reshape(shape or (len(items),))
