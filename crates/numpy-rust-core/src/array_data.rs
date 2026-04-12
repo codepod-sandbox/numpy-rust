@@ -1,7 +1,8 @@
-use ndarray::{ArcArray, IxDyn};
+use ndarray::{ArcArray, Dimension, IxDyn};
 use num_complex::Complex;
 
 use crate::dtype::DType;
+use crate::error::{NumpyError, Result};
 
 /// Shared (reference-counted) dynamic-dimensional array.
 /// `clone()` is O(1) (Arc refcount increment). Mutation triggers copy-on-write.
@@ -189,6 +190,102 @@ impl ArrayData {
             (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ranges_overlap(a, b),
             (ArrayData::Str(a), ArrayData::Str(b)) => ranges_overlap(a, b),
             _ => false, // different dtypes can't share memory
+        }
+    }
+
+    pub fn reshape_clone(&self, shape: IxDyn) -> Result<Self> {
+        let target_shape = shape.slice().to_vec();
+        macro_rules! reshape_or_copy {
+            ($a:expr, $shape:expr) => {{
+                let arr = $a.clone();
+                match arr.into_shape_with_order($shape.clone()) {
+                    Ok(reshaped) => reshaped.into_shared(),
+                    Err(_) => {
+                        let contiguous = $a.as_standard_layout().into_owned();
+                        let original_len = contiguous.len();
+                        contiguous
+                            .into_shape_with_order($shape)
+                            .map_err(|_| NumpyError::ReshapeError {
+                                from: original_len,
+                                to: target_shape.clone(),
+                            })?
+                            .into_shared()
+                    }
+                }
+            }};
+        }
+
+        Ok(match self {
+            ArrayData::Bool(a) => ArrayData::Bool(reshape_or_copy!(a, shape)),
+            ArrayData::Int32(a) => ArrayData::Int32(reshape_or_copy!(a, shape)),
+            ArrayData::Int64(a) => ArrayData::Int64(reshape_or_copy!(a, shape)),
+            ArrayData::Float32(a) => ArrayData::Float32(reshape_or_copy!(a, shape)),
+            ArrayData::Float64(a) => ArrayData::Float64(reshape_or_copy!(a, shape)),
+            ArrayData::Complex64(a) => ArrayData::Complex64(reshape_or_copy!(a, shape)),
+            ArrayData::Complex128(a) => ArrayData::Complex128(reshape_or_copy!(a, shape)),
+            ArrayData::Str(a) => ArrayData::Str(reshape_or_copy!(a, shape)),
+        })
+    }
+
+    pub fn reversed_axes_view(&self) -> Self {
+        match self {
+            ArrayData::Bool(a) => ArrayData::Bool(a.clone().reversed_axes()),
+            ArrayData::Int32(a) => ArrayData::Int32(a.clone().reversed_axes()),
+            ArrayData::Int64(a) => ArrayData::Int64(a.clone().reversed_axes()),
+            ArrayData::Float32(a) => ArrayData::Float32(a.clone().reversed_axes()),
+            ArrayData::Float64(a) => ArrayData::Float64(a.clone().reversed_axes()),
+            ArrayData::Complex64(a) => ArrayData::Complex64(a.clone().reversed_axes()),
+            ArrayData::Complex128(a) => ArrayData::Complex128(a.clone().reversed_axes()),
+            ArrayData::Str(a) => ArrayData::Str(a.clone().reversed_axes()),
+        }
+    }
+
+    pub fn permuted_axes_view(&self, axes: Vec<usize>) -> Self {
+        macro_rules! permute {
+            ($a:expr, $axes:expr) => {
+                $a.clone().permuted_axes($axes)
+            };
+        }
+
+        match self {
+            ArrayData::Bool(a) => ArrayData::Bool(permute!(a, axes)),
+            ArrayData::Int32(a) => ArrayData::Int32(permute!(a, axes)),
+            ArrayData::Int64(a) => ArrayData::Int64(permute!(a, axes)),
+            ArrayData::Float32(a) => ArrayData::Float32(permute!(a, axes)),
+            ArrayData::Float64(a) => ArrayData::Float64(permute!(a, axes)),
+            ArrayData::Complex64(a) => ArrayData::Complex64(permute!(a, axes)),
+            ArrayData::Complex128(a) => ArrayData::Complex128(permute!(a, axes)),
+            ArrayData::Str(a) => ArrayData::Str(permute!(a, axes)),
+        }
+    }
+
+    pub fn broadcast_to(&self, target_shape: &[usize]) -> Self {
+        let target = IxDyn(target_shape);
+        match self {
+            ArrayData::Bool(a) => {
+                ArrayData::Bool(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
+            ArrayData::Int32(a) => {
+                ArrayData::Int32(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
+            ArrayData::Int64(a) => {
+                ArrayData::Int64(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
+            ArrayData::Float32(a) => {
+                ArrayData::Float32(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
+            ArrayData::Float64(a) => {
+                ArrayData::Float64(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
+            ArrayData::Complex64(a) => {
+                ArrayData::Complex64(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
+            ArrayData::Complex128(a) => {
+                ArrayData::Complex128(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
+            ArrayData::Str(a) => {
+                ArrayData::Str(a.broadcast(target).unwrap().to_owned().into_shared())
+            }
         }
     }
 }

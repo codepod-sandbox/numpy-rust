@@ -1,5 +1,3 @@
-use ndarray::IxDyn;
-
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
 
@@ -38,31 +36,7 @@ pub fn broadcast_array_data(data: &ArrayData, target_shape: &[usize]) -> ArrayDa
     if data.shape() == target_shape {
         return data.clone();
     }
-    let target = IxDyn(target_shape);
-    match data {
-        ArrayData::Bool(a) => {
-            ArrayData::Bool(a.broadcast(target).unwrap().to_owned().into_shared())
-        }
-        ArrayData::Int32(a) => {
-            ArrayData::Int32(a.broadcast(target).unwrap().to_owned().into_shared())
-        }
-        ArrayData::Int64(a) => {
-            ArrayData::Int64(a.broadcast(target).unwrap().to_owned().into_shared())
-        }
-        ArrayData::Float32(a) => {
-            ArrayData::Float32(a.broadcast(target).unwrap().to_owned().into_shared())
-        }
-        ArrayData::Float64(a) => {
-            ArrayData::Float64(a.broadcast(target).unwrap().to_owned().into_shared())
-        }
-        ArrayData::Complex64(a) => {
-            ArrayData::Complex64(a.broadcast(target).unwrap().to_owned().into_shared())
-        }
-        ArrayData::Complex128(a) => {
-            ArrayData::Complex128(a.broadcast(target).unwrap().to_owned().into_shared())
-        }
-        ArrayData::Str(a) => ArrayData::Str(a.broadcast(target).unwrap().to_owned().into_shared()),
-    }
+    data.broadcast_to(target_shape)
 }
 
 #[cfg(test)]
