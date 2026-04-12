@@ -9,6 +9,13 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum DotOp {
+    Dot1d1d,
+    MatMul2d2d,
+    MatMul2d1d,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum ComparisonOp {
     Eq,
     Ne,
@@ -99,12 +106,33 @@ pub struct ComparisonOpPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DotOpPlan {
+    lhs_cast: CastPlan,
+    rhs_cast: CastPlan,
+    execution_dtype: DType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReductionPlan {
     input_cast: CastPlan,
     result_dtype: DType,
 }
 
 impl ComparisonOpPlan {
+    pub fn lhs_cast(&self) -> CastPlan {
+        self.lhs_cast
+    }
+
+    pub fn rhs_cast(&self) -> CastPlan {
+        self.rhs_cast
+    }
+
+    pub fn execution_dtype(&self) -> DType {
+        self.execution_dtype
+    }
+}
+
+impl DotOpPlan {
     pub fn lhs_cast(&self) -> CastPlan {
         self.lhs_cast
     }
@@ -205,6 +233,21 @@ pub fn resolve_comparison_op(
     };
 
     Ok(ComparisonOpPlan {
+        lhs_cast: resolve_cast(lhs, execution_dtype, CastingRule::Unsafe)?,
+        rhs_cast: resolve_cast(rhs, execution_dtype, CastingRule::Unsafe)?,
+        execution_dtype,
+    })
+}
+
+pub fn resolve_dot_op(_op: DotOp, lhs: DType, rhs: DType) -> Result<DotOpPlan> {
+    if lhs.is_string() || rhs.is_string() {
+        return Err(NumpyError::TypeError(
+            "dot not supported for string arrays".into(),
+        ));
+    }
+
+    let execution_dtype = lhs.promote(rhs);
+    Ok(DotOpPlan {
         lhs_cast: resolve_cast(lhs, execution_dtype, CastingRule::Unsafe)?,
         rhs_cast: resolve_cast(rhs, execution_dtype, CastingRule::Unsafe)?,
         execution_dtype,

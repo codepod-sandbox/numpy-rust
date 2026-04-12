@@ -4,7 +4,10 @@ use ndarray::IxDyn;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
+use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
+use crate::kernel::DotKernelOp;
+use crate::resolver::{resolve_dot_op, DotOp, DotOpPlan};
 use crate::{DType, NdArray};
 
 /// Convert IEEE 754 half-precision (16-bit) bit pattern to f32.
@@ -426,14 +429,10 @@ pub fn count_nonzero(a: &NdArray) -> usize {
 /// - 2-D x 2-D: matrix multiply
 /// - 2-D x 1-D: matrix-vector multiply
 pub fn dot(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-    let common = a.dtype().promote(b.dtype());
-    let ad = cast_array_data(a.data(), common);
-    let bd = cast_array_data(b.data(), common);
-
     match (a.ndim(), b.ndim()) {
-        (1, 1) => dot_1d_1d(&ad, &bd),
-        (2, 2) => matmul_2d_2d(&ad, &bd),
-        (2, 1) => matmul_2d_1d(&ad, &bd),
+        (1, 1) => execute_resolved_dot(a, b, DotOp::Dot1d1d, DotKernelOp::Dot1d1d),
+        (2, 2) => execute_resolved_dot(a, b, DotOp::MatMul2d2d, DotKernelOp::MatMul2d2d),
+        (2, 1) => execute_resolved_dot(a, b, DotOp::MatMul2d1d, DotKernelOp::MatMul2d1d),
         _ => Err(NumpyError::ValueError(format!(
             "dot not supported for {}D x {}D arrays",
             a.ndim(),
@@ -442,68 +441,34 @@ pub fn dot(a: &NdArray, b: &NdArray) -> Result<NdArray> {
     }
 }
 
-fn dot_1d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
-    macro_rules! do_dot {
-        ($a:expr, $b:expr, $variant:ident) => {{
-            let s = $a.iter().zip($b.iter()).map(|(&x, &y)| x * y).sum();
-            ArrayData::$variant(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-        }};
-    }
-
-    let data = match (a, b) {
-        (ArrayData::Float64(a), ArrayData::Float64(b)) => do_dot!(a, b, Float64),
-        (ArrayData::Float32(a), ArrayData::Float32(b)) => do_dot!(a, b, Float32),
-        (ArrayData::Int64(a), ArrayData::Int64(b)) => do_dot!(a, b, Int64),
-        (ArrayData::Int32(a), ArrayData::Int32(b)) => do_dot!(a, b, Int32),
-        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_dot!(a, b, Complex64),
-        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_dot!(a, b, Complex128),
-        _ => unreachable!(),
-    };
-    Ok(NdArray::from_data(data))
+fn prepare_dot_execution(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: DotOp,
+) -> Result<(ArrayData, ArrayData, DotOpPlan)> {
+    let plan = resolve_dot_op(op, lhs.dtype(), rhs.dtype())?;
+    let lhs = lhs.cast_for_execution(plan.lhs_cast());
+    let rhs = rhs.cast_for_execution(plan.rhs_cast());
+    Ok((lhs, rhs, plan))
 }
 
-fn matmul_2d_2d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
-    macro_rules! do_matmul {
-        ($a:expr, $b:expr, $variant:ident) => {{
-            let a2 = $a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
-            let b2 = $b.view().into_dimensionality::<ndarray::Ix2>().unwrap();
-            let result = a2.dot(&b2).into_dyn().into_shared();
-            ArrayData::$variant(result)
-        }};
+fn execute_resolved_dot(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: DotOp,
+    kernel_op: DotKernelOp,
+) -> Result<NdArray> {
+    let (lhs, rhs, plan) = prepare_dot_execution(lhs, rhs, op)?;
+    let descriptor = descriptor_for_dtype(plan.execution_dtype());
+    let kernel = descriptor
+        .dot_kernel(kernel_op)
+        .ok_or_else(|| NumpyError::TypeError("unsupported operand types for dot".into()))?;
+    let data = kernel(lhs, rhs)?;
+    let mut result = NdArray::from_data(data);
+    if plan.execution_dtype().is_narrow() {
+        result.set_declared_dtype(plan.execution_dtype());
     }
-
-    let data = match (a, b) {
-        (ArrayData::Float64(a), ArrayData::Float64(b)) => do_matmul!(a, b, Float64),
-        (ArrayData::Float32(a), ArrayData::Float32(b)) => do_matmul!(a, b, Float32),
-        (ArrayData::Int64(a), ArrayData::Int64(b)) => do_matmul!(a, b, Int64),
-        (ArrayData::Int32(a), ArrayData::Int32(b)) => do_matmul!(a, b, Int32),
-        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_matmul!(a, b, Complex64),
-        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_matmul!(a, b, Complex128),
-        _ => unreachable!(),
-    };
-    Ok(NdArray::from_data(data))
-}
-
-fn matmul_2d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
-    macro_rules! do_matvec {
-        ($a:expr, $b:expr, $variant:ident) => {{
-            let a2 = $a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
-            let b1 = $b.view().into_dimensionality::<ndarray::Ix1>().unwrap();
-            let result = a2.dot(&b1).into_dyn().into_shared();
-            ArrayData::$variant(result)
-        }};
-    }
-
-    let data = match (a, b) {
-        (ArrayData::Float64(a), ArrayData::Float64(b)) => do_matvec!(a, b, Float64),
-        (ArrayData::Float32(a), ArrayData::Float32(b)) => do_matvec!(a, b, Float32),
-        (ArrayData::Int64(a), ArrayData::Int64(b)) => do_matvec!(a, b, Int64),
-        (ArrayData::Int32(a), ArrayData::Int32(b)) => do_matvec!(a, b, Int32),
-        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_matvec!(a, b, Complex64),
-        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_matvec!(a, b, Complex128),
-        _ => unreachable!(),
-    };
-    Ok(NdArray::from_data(data))
+    Ok(result)
 }
 
 /// Extract diagonal from a 2D array.

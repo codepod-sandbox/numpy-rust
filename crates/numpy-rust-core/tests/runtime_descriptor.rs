@@ -1,3 +1,4 @@
+use numpy_rust_core::kernel::DotKernelOp;
 use numpy_rust_core::{descriptor_for_dtype, resolve_binary_op, BinaryOp, DType};
 
 #[test]
@@ -11,4 +12,12 @@ fn descriptor_lookup_returns_expected_metadata() {
 fn binary_add_resolution_promotes_int32_and_float64_to_float64() {
     let plan = resolve_binary_op(BinaryOp::Add, DType::Int32, DType::Float64).unwrap();
     assert_eq!(plan.output_dtype(), DType::Float64);
+}
+
+#[test]
+fn float64_descriptor_registers_dot_kernel() {
+    let desc = descriptor_for_dtype(DType::Float64);
+    assert!(desc.dot_kernel(DotKernelOp::Dot1d1d).is_some());
+    assert!(desc.dot_kernel(DotKernelOp::MatMul2d2d).is_some());
+    assert!(desc.dot_kernel(DotKernelOp::MatMul2d1d).is_some());
 }

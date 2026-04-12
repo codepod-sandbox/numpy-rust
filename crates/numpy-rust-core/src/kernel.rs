@@ -32,6 +32,13 @@ pub enum ComparisonKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DotKernelOp {
+    Dot1d1d,
+    MatMul2d2d,
+    MatMul2d1d,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionKernelOp {
     Sum,
     Prod,
@@ -47,6 +54,7 @@ pub enum ArgReductionKernelOp {
 
 pub type BinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ComparisonArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
+pub type DotArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -117,6 +125,30 @@ pub fn comparison_kernel_for_dtype(
         (DType::Str, ComparisonKernelOp::Le) => Some(cmp_le_str),
         (DType::Str, ComparisonKernelOp::Gt) => Some(cmp_gt_str),
         (DType::Str, ComparisonKernelOp::Ge) => Some(cmp_ge_str),
+        _ => None,
+    }
+}
+
+pub fn dot_kernel_for_dtype(dtype: DType, op: DotKernelOp) -> Option<DotArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float32, DotKernelOp::Dot1d1d) => Some(dot_1d_1d_float32),
+        (DType::Float64, DotKernelOp::Dot1d1d) => Some(dot_1d_1d_float64),
+        (DType::Int32, DotKernelOp::Dot1d1d) => Some(dot_1d_1d_int32),
+        (DType::Int64, DotKernelOp::Dot1d1d) => Some(dot_1d_1d_int64),
+        (DType::Complex64, DotKernelOp::Dot1d1d) => Some(dot_1d_1d_complex64),
+        (DType::Complex128, DotKernelOp::Dot1d1d) => Some(dot_1d_1d_complex128),
+        (DType::Float32, DotKernelOp::MatMul2d2d) => Some(matmul_2d_2d_float32),
+        (DType::Float64, DotKernelOp::MatMul2d2d) => Some(matmul_2d_2d_float64),
+        (DType::Int32, DotKernelOp::MatMul2d2d) => Some(matmul_2d_2d_int32),
+        (DType::Int64, DotKernelOp::MatMul2d2d) => Some(matmul_2d_2d_int64),
+        (DType::Complex64, DotKernelOp::MatMul2d2d) => Some(matmul_2d_2d_complex64),
+        (DType::Complex128, DotKernelOp::MatMul2d2d) => Some(matmul_2d_2d_complex128),
+        (DType::Float32, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_float32),
+        (DType::Float64, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_float64),
+        (DType::Int32, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_int32),
+        (DType::Int64, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_int64),
+        (DType::Complex64, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_complex64),
+        (DType::Complex128, DotKernelOp::MatMul2d1d) => Some(matmul_2d_1d_complex128),
         _ => None,
     }
 }
@@ -226,6 +258,73 @@ simple_binary_kernel!(add_float32, Float32, +);
 simple_binary_kernel!(add_float64, Float64, +);
 simple_binary_kernel!(add_complex64, Complex64, +);
 simple_binary_kernel!(add_complex128, Complex128, +);
+
+macro_rules! dot_1d_1d_kernel {
+    ($name:ident, $variant:ident) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => {
+                    let s = a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum();
+                    Ok(ArrayData::$variant(
+                        ArrayD::from_elem(IxDyn(&[]), s).into_shared(),
+                    ))
+                }
+                _ => Err(NumpyError::TypeError("dot kernel dtype mismatch".into())),
+            }
+        }
+    };
+}
+
+macro_rules! matmul_2d_2d_kernel {
+    ($name:ident, $variant:ident) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => {
+                    let a2 = a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
+                    let b2 = b.view().into_dimensionality::<ndarray::Ix2>().unwrap();
+                    Ok(ArrayData::$variant(a2.dot(&b2).into_dyn().into_shared()))
+                }
+                _ => Err(NumpyError::TypeError("matmul kernel dtype mismatch".into())),
+            }
+        }
+    };
+}
+
+macro_rules! matmul_2d_1d_kernel {
+    ($name:ident, $variant:ident) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => {
+                    let a2 = a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
+                    let b1 = b.view().into_dimensionality::<ndarray::Ix1>().unwrap();
+                    Ok(ArrayData::$variant(a2.dot(&b1).into_dyn().into_shared()))
+                }
+                _ => Err(NumpyError::TypeError("matvec kernel dtype mismatch".into())),
+            }
+        }
+    };
+}
+
+dot_1d_1d_kernel!(dot_1d_1d_int32, Int32);
+dot_1d_1d_kernel!(dot_1d_1d_int64, Int64);
+dot_1d_1d_kernel!(dot_1d_1d_float32, Float32);
+dot_1d_1d_kernel!(dot_1d_1d_float64, Float64);
+dot_1d_1d_kernel!(dot_1d_1d_complex64, Complex64);
+dot_1d_1d_kernel!(dot_1d_1d_complex128, Complex128);
+
+matmul_2d_2d_kernel!(matmul_2d_2d_int32, Int32);
+matmul_2d_2d_kernel!(matmul_2d_2d_int64, Int64);
+matmul_2d_2d_kernel!(matmul_2d_2d_float32, Float32);
+matmul_2d_2d_kernel!(matmul_2d_2d_float64, Float64);
+matmul_2d_2d_kernel!(matmul_2d_2d_complex64, Complex64);
+matmul_2d_2d_kernel!(matmul_2d_2d_complex128, Complex128);
+
+matmul_2d_1d_kernel!(matmul_2d_1d_int32, Int32);
+matmul_2d_1d_kernel!(matmul_2d_1d_int64, Int64);
+matmul_2d_1d_kernel!(matmul_2d_1d_float32, Float32);
+matmul_2d_1d_kernel!(matmul_2d_1d_float64, Float64);
+matmul_2d_1d_kernel!(matmul_2d_1d_complex64, Complex64);
+matmul_2d_1d_kernel!(matmul_2d_1d_complex128, Complex128);
 
 pub(crate) fn complex_cmp<T: num_traits::Float>(
     a: &Complex<T>,
