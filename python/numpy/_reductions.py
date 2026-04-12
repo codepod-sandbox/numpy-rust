@@ -2020,25 +2020,25 @@ def _nanq_list_impl(a, q_arr, q_scale, axis, keepdims, out, _rdt):
     return result
 
 
+def _nan_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale):
+    rdt = _nanmedian_result_dtype(a)
+    if isinstance(q, (list, tuple, ndarray)):
+        q_arr, q_flat = _normalize_q_array(q, scale=q_scale)
+        q_scaled = asarray(q_flat, dtype='float64').reshape(q_arr.shape)
+        return _nanq_list_impl(a, q_arr, q_scaled, axis, keepdims, out, rdt)
+    return _nanq_impl(a, float(q) * q_scale, axis, keepdims, out, rdt)
+
+
 def nanpercentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     """Compute the qth percentile, ignoring NaNs."""
     a = asarray(a)
-    _rdt = _nanmedian_result_dtype(a)
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        q_scaled = q_arr / 100.0
-        return _nanq_list_impl(a, q_arr, q_scaled, axis, keepdims, out, _rdt)
-    return _nanq_impl(a, float(q) / 100.0, axis, keepdims, out, _rdt)
+    return _nan_quantile_dispatch(a, q, axis, out, keepdims, q_scale=0.01)
 
 
 def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     """Compute the qth quantile, ignoring NaNs."""
     a = asarray(a)
-    _rdt = _nanmedian_result_dtype(a)
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        return _nanq_list_impl(a, q_arr, q_arr, axis, keepdims, out, _rdt)
-    return _nanq_impl(a, float(q), axis, keepdims, out, _rdt)
+    return _nan_quantile_dispatch(a, q, axis, out, keepdims, q_scale=1.0)
 
 
 def ediff1d(ary, to_end=None, to_begin=None):
