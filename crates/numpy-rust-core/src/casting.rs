@@ -5,6 +5,10 @@ use crate::array_data::ArrayData;
 use crate::dtype::DType;
 use crate::resolver::{resolve_cast, CastPlan, CastingRule};
 
+trait CastScalar<T> {
+    fn cast_scalar(self) -> T;
+}
+
 /// Convert a float to a string matching Python's str(float) behavior.
 /// Python always includes a decimal point: str(0.0) == "0.0", str(1.0) == "1.0".
 fn float_to_str(x: f64) -> String {
@@ -24,6 +28,128 @@ fn float_to_str(x: f64) -> String {
         format!("{}.0", s)
     } else {
         s
+    }
+}
+
+fn complex_to_str<T>(value: Complex<T>) -> String
+where
+    T: std::fmt::Display + PartialOrd + From<f32> + Copy,
+{
+    if value.im >= T::from(0.0) {
+        format!("({}+{}j)", value.re, value.im)
+    } else {
+        format!("({}{}j)", value.re, value.im)
+    }
+}
+
+macro_rules! impl_cast_scalar {
+    ($src:ty => $dst:ty, |$value:ident| $body:expr) => {
+        impl CastScalar<$dst> for $src {
+            fn cast_scalar(self) -> $dst {
+                let $value = self;
+                $body
+            }
+        }
+    };
+}
+
+impl_cast_scalar!(bool => bool, |value| value);
+impl_cast_scalar!(i32 => bool, |value| value != 0);
+impl_cast_scalar!(i64 => bool, |value| value != 0);
+impl_cast_scalar!(f32 => bool, |value| value != 0.0);
+impl_cast_scalar!(f64 => bool, |value| value != 0.0);
+impl_cast_scalar!(Complex<f32> => bool, |value| value.re != 0.0 || value.im != 0.0);
+impl_cast_scalar!(Complex<f64> => bool, |value| value.re != 0.0 || value.im != 0.0);
+impl_cast_scalar!(String => bool, |value| !value.is_empty());
+
+impl_cast_scalar!(bool => i32, |value| value as i32);
+impl_cast_scalar!(i32 => i32, |value| value);
+impl_cast_scalar!(i64 => i32, |value| value as i32);
+impl_cast_scalar!(f32 => i32, |value| value as i32);
+impl_cast_scalar!(f64 => i32, |value| value as i32);
+impl_cast_scalar!(Complex<f32> => i32, |value| value.re as i32);
+impl_cast_scalar!(Complex<f64> => i32, |value| value.re as i32);
+impl_cast_scalar!(String => i32, |value| value.parse::<i32>().unwrap_or(0));
+
+impl_cast_scalar!(bool => i64, |value| value as i64);
+impl_cast_scalar!(i32 => i64, |value| value as i64);
+impl_cast_scalar!(i64 => i64, |value| value);
+impl_cast_scalar!(f32 => i64, |value| value as i64);
+impl_cast_scalar!(f64 => i64, |value| value as i64);
+impl_cast_scalar!(Complex<f32> => i64, |value| value.re as i64);
+impl_cast_scalar!(Complex<f64> => i64, |value| value.re as i64);
+impl_cast_scalar!(String => i64, |value| value.parse::<i64>().unwrap_or(0));
+
+impl_cast_scalar!(bool => f32, |value| if value { 1.0 } else { 0.0 });
+impl_cast_scalar!(i32 => f32, |value| value as f32);
+impl_cast_scalar!(i64 => f32, |value| value as f32);
+impl_cast_scalar!(f32 => f32, |value| value);
+impl_cast_scalar!(f64 => f32, |value| value as f32);
+impl_cast_scalar!(Complex<f32> => f32, |value| value.re);
+impl_cast_scalar!(Complex<f64> => f32, |value| value.re as f32);
+impl_cast_scalar!(String => f32, |value| value.parse::<f32>().unwrap_or(f32::NAN));
+
+impl_cast_scalar!(bool => f64, |value| if value { 1.0 } else { 0.0 });
+impl_cast_scalar!(i32 => f64, |value| value as f64);
+impl_cast_scalar!(i64 => f64, |value| value as f64);
+impl_cast_scalar!(f32 => f64, |value| value as f64);
+impl_cast_scalar!(f64 => f64, |value| value);
+impl_cast_scalar!(Complex<f32> => f64, |value| value.re as f64);
+impl_cast_scalar!(Complex<f64> => f64, |value| value.re);
+impl_cast_scalar!(String => f64, |value| value.parse::<f64>().unwrap_or(f64::NAN));
+
+impl_cast_scalar!(bool => Complex<f32>, |value| Complex::new(if value { 1.0 } else { 0.0 }, 0.0));
+impl_cast_scalar!(i32 => Complex<f32>, |value| Complex::new(value as f32, 0.0));
+impl_cast_scalar!(i64 => Complex<f32>, |value| Complex::new(value as f32, 0.0));
+impl_cast_scalar!(f32 => Complex<f32>, |value| Complex::new(value, 0.0));
+impl_cast_scalar!(f64 => Complex<f32>, |value| Complex::new(value as f32, 0.0));
+impl_cast_scalar!(Complex<f32> => Complex<f32>, |value| value);
+impl_cast_scalar!(Complex<f64> => Complex<f32>, |value| Complex::new(value.re as f32, value.im as f32));
+impl_cast_scalar!(String => Complex<f32>, |value| Complex::new(value.parse::<f32>().unwrap_or(f32::NAN), 0.0));
+
+impl_cast_scalar!(bool => Complex<f64>, |value| Complex::new(if value { 1.0 } else { 0.0 }, 0.0));
+impl_cast_scalar!(i32 => Complex<f64>, |value| Complex::new(value as f64, 0.0));
+impl_cast_scalar!(i64 => Complex<f64>, |value| Complex::new(value as f64, 0.0));
+impl_cast_scalar!(f32 => Complex<f64>, |value| Complex::new(value as f64, 0.0));
+impl_cast_scalar!(f64 => Complex<f64>, |value| Complex::new(value, 0.0));
+impl_cast_scalar!(Complex<f32> => Complex<f64>, |value| Complex::new(value.re as f64, value.im as f64));
+impl_cast_scalar!(Complex<f64> => Complex<f64>, |value| value);
+impl_cast_scalar!(String => Complex<f64>, |value| Complex::new(value.parse::<f64>().unwrap_or(f64::NAN), 0.0));
+
+impl_cast_scalar!(bool => String, |value| value.to_string());
+impl_cast_scalar!(i32 => String, |value| value.to_string());
+impl_cast_scalar!(i64 => String, |value| value.to_string());
+impl_cast_scalar!(f32 => String, |value| float_to_str(value as f64));
+impl_cast_scalar!(f64 => String, |value| float_to_str(value));
+impl_cast_scalar!(Complex<f32> => String, |value| complex_to_str(value));
+impl_cast_scalar!(Complex<f64> => String, |value| complex_to_str(value));
+impl_cast_scalar!(String => String, |value| value);
+
+fn cast_array_storage<T>(data: &ArrayData) -> ArrayD<T>
+where
+    bool: CastScalar<T>,
+    i32: CastScalar<T>,
+    i64: CastScalar<T>,
+    f32: CastScalar<T>,
+    f64: CastScalar<T>,
+    Complex<f32>: CastScalar<T>,
+    Complex<f64>: CastScalar<T>,
+    String: CastScalar<T>,
+    T: Clone,
+{
+    match data {
+        ArrayData::Bool(a) => a.mapv(<bool as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Int32(a) => a.mapv(<i32 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Int64(a) => a.mapv(<i64 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Float32(a) => a.mapv(<f32 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Float64(a) => a.mapv(<f64 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Complex64(a) => a
+            .mapv(<Complex<f32> as CastScalar<T>>::cast_scalar)
+            .into_shared(),
+        ArrayData::Complex128(a) => a
+            .mapv(<Complex<f64> as CastScalar<T>>::cast_scalar)
+            .into_shared(),
+        ArrayData::Str(a) => a.mapv(<String as CastScalar<T>>::cast_scalar).into_shared(),
     }
 }
 
@@ -64,157 +190,15 @@ pub fn cast_array_data(data: &ArrayData, target: DType) -> ArrayData {
 
 fn execute_cast_plan(data: &ArrayData, plan: CastPlan) -> ArrayData {
     match plan.target_storage_dtype() {
-        DType::Bool => ArrayData::Bool(cast_to_bool(data)),
-        DType::Int32 => ArrayData::Int32(cast_to_i32(data)),
-        DType::Int64 => ArrayData::Int64(cast_to_i64(data)),
-        DType::Float32 => ArrayData::Float32(cast_to_f32(data)),
-        DType::Float64 => ArrayData::Float64(cast_to_f64(data)),
-        DType::Complex64 => ArrayData::Complex64(cast_to_complex64(data)),
-        DType::Complex128 => ArrayData::Complex128(cast_to_complex128(data)),
-        DType::Str => ArrayData::Str(cast_to_str(data)),
+        DType::Bool => ArrayData::Bool(cast_array_storage::<bool>(data)),
+        DType::Int32 => ArrayData::Int32(cast_array_storage::<i32>(data)),
+        DType::Int64 => ArrayData::Int64(cast_array_storage::<i64>(data)),
+        DType::Float32 => ArrayData::Float32(cast_array_storage::<f32>(data)),
+        DType::Float64 => ArrayData::Float64(cast_array_storage::<f64>(data)),
+        DType::Complex64 => ArrayData::Complex64(cast_array_storage::<Complex<f32>>(data)),
+        DType::Complex128 => ArrayData::Complex128(cast_array_storage::<Complex<f64>>(data)),
+        DType::Str => ArrayData::Str(cast_array_storage::<String>(data)),
         _ => unreachable!("storage_dtype maps to canonical types"),
-    }
-}
-
-fn cast_to_bool(data: &ArrayData) -> ArrayD<bool> {
-    match data {
-        ArrayData::Bool(a) => a.clone(),
-        ArrayData::Int32(a) => a.mapv(|x| x != 0).into_shared(),
-        ArrayData::Int64(a) => a.mapv(|x| x != 0).into_shared(),
-        ArrayData::Float32(a) => a.mapv(|x| x != 0.0).into_shared(),
-        ArrayData::Float64(a) => a.mapv(|x| x != 0.0).into_shared(),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0).into_shared(),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0).into_shared(),
-        ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()).into_shared(),
-    }
-}
-
-fn cast_to_i32(data: &ArrayData) -> ArrayD<i32> {
-    match data {
-        ArrayData::Bool(a) => a.mapv(|x| x as i32).into_shared(),
-        ArrayData::Int32(a) => a.clone(),
-        ArrayData::Int64(a) => a.mapv(|x| x as i32).into_shared(),
-        ArrayData::Float32(a) => a.mapv(|x| x as i32).into_shared(),
-        ArrayData::Float64(a) => a.mapv(|x| x as i32).into_shared(),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re as i32).into_shared(),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re as i32).into_shared(),
-        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i32>().unwrap_or(0)).into_shared(),
-    }
-}
-
-fn cast_to_i64(data: &ArrayData) -> ArrayD<i64> {
-    match data {
-        ArrayData::Bool(a) => a.mapv(|x| x as i64).into_shared(),
-        ArrayData::Int32(a) => a.mapv(|x| x as i64).into_shared(),
-        ArrayData::Int64(a) => a.clone(),
-        ArrayData::Float32(a) => a.mapv(|x| x as i64).into_shared(),
-        ArrayData::Float64(a) => a.mapv(|x| x as i64).into_shared(),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re as i64).into_shared(),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re as i64).into_shared(),
-        ArrayData::Str(a) => a.mapv(|ref x| x.parse::<i64>().unwrap_or(0)).into_shared(),
-    }
-}
-
-fn cast_to_f32(data: &ArrayData) -> ArrayD<f32> {
-    match data {
-        ArrayData::Bool(a) => a.mapv(|x| if x { 1.0 } else { 0.0 }).into_shared(),
-        ArrayData::Int32(a) => a.mapv(|x| x as f32).into_shared(),
-        ArrayData::Int64(a) => a.mapv(|x| x as f32).into_shared(),
-        ArrayData::Float32(a) => a.clone(),
-        ArrayData::Float64(a) => a.mapv(|x| x as f32).into_shared(),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re).into_shared(),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re as f32).into_shared(),
-        ArrayData::Str(a) => a
-            .mapv(|ref x| x.parse::<f32>().unwrap_or(f32::NAN))
-            .into_shared(),
-    }
-}
-
-fn cast_to_f64(data: &ArrayData) -> ArrayD<f64> {
-    match data {
-        ArrayData::Bool(a) => a.mapv(|x| if x { 1.0 } else { 0.0 }).into_shared(),
-        ArrayData::Int32(a) => a.mapv(|x| x as f64).into_shared(),
-        ArrayData::Int64(a) => a.mapv(|x| x as f64).into_shared(),
-        ArrayData::Float32(a) => a.mapv(|x| x as f64).into_shared(),
-        ArrayData::Float64(a) => a.clone(),
-        ArrayData::Complex64(a) => a.mapv(|x| x.re as f64).into_shared(),
-        ArrayData::Complex128(a) => a.mapv(|x| x.re).into_shared(),
-        ArrayData::Str(a) => a
-            .mapv(|ref x| x.parse::<f64>().unwrap_or(f64::NAN))
-            .into_shared(),
-    }
-}
-
-fn cast_to_complex64(data: &ArrayData) -> ArrayD<Complex<f32>> {
-    match data {
-        ArrayData::Bool(a) => a
-            .mapv(|x| Complex::new(if x { 1.0f32 } else { 0.0 }, 0.0))
-            .into_shared(),
-        ArrayData::Int32(a) => a.mapv(|x| Complex::new(x as f32, 0.0)).into_shared(),
-        ArrayData::Int64(a) => a.mapv(|x| Complex::new(x as f32, 0.0)).into_shared(),
-        ArrayData::Float32(a) => a.mapv(|x| Complex::new(x, 0.0)).into_shared(),
-        ArrayData::Float64(a) => a.mapv(|x| Complex::new(x as f32, 0.0)).into_shared(),
-        ArrayData::Complex64(a) => a.clone(),
-        ArrayData::Complex128(a) => a
-            .mapv(|x| Complex::new(x.re as f32, x.im as f32))
-            .into_shared(),
-        ArrayData::Str(a) => a
-            .mapv(|ref x| {
-                let f = x.parse::<f32>().unwrap_or(f32::NAN);
-                Complex::new(f, 0.0)
-            })
-            .into_shared(),
-    }
-}
-
-fn cast_to_complex128(data: &ArrayData) -> ArrayD<Complex<f64>> {
-    match data {
-        ArrayData::Bool(a) => a
-            .mapv(|x| Complex::new(if x { 1.0f64 } else { 0.0 }, 0.0))
-            .into_shared(),
-        ArrayData::Int32(a) => a.mapv(|x| Complex::new(x as f64, 0.0)).into_shared(),
-        ArrayData::Int64(a) => a.mapv(|x| Complex::new(x as f64, 0.0)).into_shared(),
-        ArrayData::Float32(a) => a.mapv(|x| Complex::new(x as f64, 0.0)).into_shared(),
-        ArrayData::Float64(a) => a.mapv(|x| Complex::new(x, 0.0)).into_shared(),
-        ArrayData::Complex64(a) => a
-            .mapv(|x| Complex::new(x.re as f64, x.im as f64))
-            .into_shared(),
-        ArrayData::Complex128(a) => a.clone(),
-        ArrayData::Str(a) => a
-            .mapv(|ref x| {
-                let f = x.parse::<f64>().unwrap_or(f64::NAN);
-                Complex::new(f, 0.0)
-            })
-            .into_shared(),
-    }
-}
-
-fn cast_to_str(data: &ArrayData) -> ArrayD<String> {
-    match data {
-        ArrayData::Bool(a) => a.mapv(|x| x.to_string()).into_shared(),
-        ArrayData::Int32(a) => a.mapv(|x| x.to_string()).into_shared(),
-        ArrayData::Int64(a) => a.mapv(|x| x.to_string()).into_shared(),
-        ArrayData::Float32(a) => a.mapv(|x| float_to_str(x as f64)).into_shared(),
-        ArrayData::Float64(a) => a.mapv(float_to_str).into_shared(),
-        ArrayData::Complex64(a) => a
-            .mapv(|x| {
-                if x.im >= 0.0 {
-                    format!("({}+{}j)", x.re, x.im)
-                } else {
-                    format!("({}{}j)", x.re, x.im)
-                }
-            })
-            .into_shared(),
-        ArrayData::Complex128(a) => a
-            .mapv(|x| {
-                if x.im >= 0.0 {
-                    format!("({}+{}j)", x.re, x.im)
-                } else {
-                    format!("({}{}j)", x.re, x.im)
-                }
-            })
-            .into_shared(),
-        ArrayData::Str(a) => a.clone(),
     }
 }
 
