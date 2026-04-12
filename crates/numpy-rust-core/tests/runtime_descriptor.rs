@@ -26,6 +26,12 @@ fn binary_mul_resolution_promotes_bool_and_bool_to_int8() {
 }
 
 #[test]
+fn binary_remainder_resolution_promotes_bool_and_bool_to_int8() {
+    let plan = resolve_binary_op(BinaryOp::Remainder, DType::Bool, DType::Bool).unwrap();
+    assert_eq!(plan.output_dtype(), DType::Int8);
+}
+
+#[test]
 fn float64_descriptor_registers_dot_kernel() {
     let desc = descriptor_for_dtype(DType::Float64);
     assert!(desc.dot_kernel(DotKernelOp::Dot1d1d).is_some());
@@ -107,6 +113,8 @@ fn float64_descriptor_registers_basic_binary_kernels() {
     assert!(desc.binary_kernel(ArithmeticKernelOp::Sub).is_some());
     assert!(desc.binary_kernel(ArithmeticKernelOp::Mul).is_some());
     assert!(desc.binary_kernel(ArithmeticKernelOp::Div).is_some());
+    assert!(desc.binary_kernel(ArithmeticKernelOp::FloorDiv).is_some());
+    assert!(desc.binary_kernel(ArithmeticKernelOp::Remainder).is_some());
 }
 
 #[test]

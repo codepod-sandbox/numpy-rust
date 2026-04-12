@@ -217,6 +217,14 @@ pub fn binary_kernel_for_dtype(dtype: DType, op: ArithmeticKernelOp) -> Option<B
         (DType::Float64, ArithmeticKernelOp::Div) => Some(div_float64),
         (DType::Complex64, ArithmeticKernelOp::Div) => Some(div_complex64),
         (DType::Complex128, ArithmeticKernelOp::Div) => Some(div_complex128),
+        (DType::Int32, ArithmeticKernelOp::FloorDiv) => Some(floor_div_int32),
+        (DType::Int64, ArithmeticKernelOp::FloorDiv) => Some(floor_div_int64),
+        (DType::Float32, ArithmeticKernelOp::FloorDiv) => Some(floor_div_float32),
+        (DType::Float64, ArithmeticKernelOp::FloorDiv) => Some(floor_div_float64),
+        (DType::Int32, ArithmeticKernelOp::Remainder) => Some(remainder_int32),
+        (DType::Int64, ArithmeticKernelOp::Remainder) => Some(remainder_int64),
+        (DType::Float32, ArithmeticKernelOp::Remainder) => Some(remainder_float32),
+        (DType::Float64, ArithmeticKernelOp::Remainder) => Some(remainder_float64),
         _ => None,
     }
 }
@@ -782,6 +790,108 @@ simple_binary_kernel!(div_float32, Float32, /);
 simple_binary_kernel!(div_float64, Float64, /);
 simple_binary_kernel!(div_complex64, Complex64, /);
 simple_binary_kernel!(div_complex128, Complex128, /);
+
+macro_rules! float_floor_div_kernel {
+    ($name:ident, $variant:ident) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => {
+                    let mut out = a.clone();
+                    ndarray::Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                        *o = (*o / r).floor();
+                    });
+                    Ok(ArrayData::$variant(out))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "unsupported operand types for floor division".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! int_floor_div_kernel {
+    ($name:ident, $variant:ident, $ty:ty) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => {
+                    let mut out = a.clone();
+                    ndarray::Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                        if r == 0 {
+                            *o = 0;
+                        } else if *o == <$ty>::MIN && r == -1 {
+                            *o = <$ty>::MIN;
+                        } else {
+                            let d = *o / r;
+                            let rem = *o % r;
+                            *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
+                        }
+                    });
+                    Ok(ArrayData::$variant(out))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "unsupported operand types for floor division".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! float_remainder_kernel {
+    ($name:ident, $variant:ident) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => {
+                    let mut out = a.clone();
+                    ndarray::Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                        *o = *o - (*o / r).floor() * r;
+                    });
+                    Ok(ArrayData::$variant(out))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "unsupported operand types for remainder".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! int_remainder_kernel {
+    ($name:ident, $variant:ident, $ty:ty) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => {
+                    let mut out = a.clone();
+                    ndarray::Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                        if r == 0 || (*o == <$ty>::MIN && r == -1) {
+                            *o = 0;
+                        } else {
+                            let rem = *o % r;
+                            *o = if rem != 0 && (rem ^ r) < 0 {
+                                rem + r
+                            } else {
+                                rem
+                            };
+                        }
+                    });
+                    Ok(ArrayData::$variant(out))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "unsupported operand types for remainder".into(),
+                )),
+            }
+        }
+    };
+}
+
+float_floor_div_kernel!(floor_div_float32, Float32);
+float_floor_div_kernel!(floor_div_float64, Float64);
+int_floor_div_kernel!(floor_div_int32, Int32, i32);
+int_floor_div_kernel!(floor_div_int64, Int64, i64);
+float_remainder_kernel!(remainder_float32, Float32);
+float_remainder_kernel!(remainder_float64, Float64);
+int_remainder_kernel!(remainder_int32, Int32, i32);
+int_remainder_kernel!(remainder_int64, Int64, i64);
 
 macro_rules! dot_1d_1d_kernel {
     ($name:ident, $variant:ident) => {
