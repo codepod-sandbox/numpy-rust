@@ -8,6 +8,30 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
+fn prepare_float64_array(array: &NdArray) -> ArrayD<f64> {
+    let cast = array.astype(DType::Float64);
+    let ArrayData::Float64(arr) = cast.data() else {
+        unreachable!()
+    };
+    arr.clone()
+}
+
+fn prepare_float64_flat_vec(array: &NdArray) -> Vec<f64> {
+    prepare_float64_array(&array.flatten())
+        .iter()
+        .copied()
+        .collect()
+}
+
+fn prepare_int64_flat_array(array: &NdArray) -> ArrayD<i64> {
+    let cast = array.astype(DType::Int64);
+    let flat = cast.flatten();
+    let ArrayData::Int64(arr) = flat.data() else {
+        unreachable!()
+    };
+    arr.clone()
+}
+
 impl NdArray {
     /// Binary search in a sorted 1-D array. Returns Int64 array of insertion indices.
     /// side="left": leftmost insertion point. side="right": rightmost.
@@ -17,14 +41,8 @@ impl NdArray {
                 "searchsorted requires a 1-D sorted array".into(),
             ));
         }
-        let sorted = self.astype(DType::Float64);
-        let vals = values.astype(DType::Float64);
-        let ArrayData::Float64(sorted_arr) = sorted.data() else {
-            unreachable!()
-        };
-        let ArrayData::Float64(vals_arr) = vals.data() else {
-            unreachable!()
-        };
+        let sorted_arr = prepare_float64_array(self);
+        let vals_arr = prepare_float64_array(values);
         let sorted_slice: Vec<f64> = sorted_arr.iter().copied().collect();
         let left = match side {
             "left" => true,
@@ -91,11 +109,7 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
             "choose requires at least one choice array".into(),
         ));
     }
-    let idx = a.astype(DType::Int64);
-    let flat_idx = idx.flatten();
-    let ArrayData::Int64(idx_arr) = flat_idx.data() else {
-        unreachable!()
-    };
+    let idx_arr = prepare_int64_flat_array(a);
 
     let n_choices = choices.len();
     let target_shape = a.shape();
@@ -210,17 +224,11 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
 
 /// Return sorted unique values present in both arrays.
 pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_f = a.astype(DType::Float64).flatten();
-    let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = a_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(b_arr) = b_f.data() else {
-        unreachable!()
-    };
+    let a_values = prepare_float64_flat_vec(a);
+    let b_values = prepare_float64_flat_vec(b);
 
-    let b_set: HashSet<u64> = b_arr.iter().map(|v| v.to_bits()).collect();
-    let mut result: Vec<f64> = a_arr
+    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_values
         .iter()
         .copied()
         .filter(|v| b_set.contains(&v.to_bits()))
@@ -236,16 +244,10 @@ pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted unique values from either array.
 pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_f = a.astype(DType::Float64).flatten();
-    let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = a_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(b_arr) = b_f.data() else {
-        unreachable!()
-    };
+    let a_values = prepare_float64_flat_vec(a);
+    let b_values = prepare_float64_flat_vec(b);
 
-    let mut result: Vec<f64> = a_arr.iter().chain(b_arr.iter()).copied().collect();
+    let mut result: Vec<f64> = a_values.iter().chain(b_values.iter()).copied().collect();
     result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
     result.dedup();
 
@@ -256,17 +258,11 @@ pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted values in `a` that are NOT in `b`.
 pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_f = a.astype(DType::Float64).flatten();
-    let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = a_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(b_arr) = b_f.data() else {
-        unreachable!()
-    };
+    let a_values = prepare_float64_flat_vec(a);
+    let b_values = prepare_float64_flat_vec(b);
 
-    let b_set: HashSet<u64> = b_arr.iter().map(|v| v.to_bits()).collect();
-    let mut result: Vec<f64> = a_arr
+    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_values
         .iter()
         .copied()
         .filter(|v| !b_set.contains(&v.to_bits()))
@@ -281,14 +277,8 @@ pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return boolean array with same shape as `element`, true where value exists in `test_elements`.
 pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
-    let elem_f = element.astype(DType::Float64);
-    let test_f = test_elements.astype(DType::Float64).flatten();
-    let ArrayData::Float64(elem_arr) = elem_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(test_arr) = test_f.data() else {
-        unreachable!()
-    };
+    let elem_arr = prepare_float64_array(element);
+    let test_arr = prepare_float64_flat_vec(test_elements);
 
     let test_set: HashSet<u64> = test_arr.iter().map(|v| v.to_bits()).collect();
     let shape: Vec<usize> = element.shape().to_vec();
