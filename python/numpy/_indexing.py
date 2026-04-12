@@ -538,9 +538,67 @@ def digitize(x, bins, right=False):
         return n - result
 
 
-def unravel_index(indices, shape, order='C'):
+def _empty_int_sequence_type_error():
+    return TypeError(
+        "indices must be integral: the provided empty sequence was"
+        " inferred as float. Wrap it with np.intp for clarity."
+    )
+
+
+def _normalize_integral_index_array(indices):
+    """Normalize one index input to an int64 ndarray plus scalar metadata."""
     if isinstance(indices, float):
         raise TypeError("Expected type 'int' but 'float' found.")
+
+    scalar_input = isinstance(indices, int)
+    was_ndarray = isinstance(indices, ndarray)
+
+    if isinstance(indices, (list, tuple)) and len(indices) == 0:
+        raise _empty_int_sequence_type_error()
+
+    if was_ndarray:
+        arr = indices
+        dt = str(arr.dtype)
+        if dt.startswith('float'):
+            if arr.size == 0:
+                raise TypeError("only int indices permitted")
+        elif dt not in ('int64',):
+            arr = arr.astype('int64')
+    else:
+        arr = array([indices], dtype='int64') if scalar_input else array(indices, dtype='int64')
+
+    if arr.size == 0:
+        dt = str(arr.dtype)
+        if dt.startswith('float'):
+            raise TypeError("only int indices permitted")
+
+    return arr, scalar_input, was_ndarray
+
+
+def _normalize_multi_index_sequence(multi_index):
+    """Normalize multi_index to a tuple of coordinate arrays."""
+    if isinstance(multi_index, ndarray) and multi_index.ndim == 2:
+        return tuple(multi_index[i] for i in range(multi_index.shape[0])), False, True
+
+    arrays = []
+    all_scalar = True
+    for item in multi_index:
+        if isinstance(item, float):
+            raise TypeError("Expected type 'int' but 'float' found.")
+        if isinstance(item, (list, tuple)) and len(item) == 0:
+            raise _empty_int_sequence_type_error()
+        if isinstance(item, int):
+            arrays.append(array([item], dtype='int64'))
+        elif isinstance(item, ndarray):
+            arrays.append(item)
+            all_scalar = False
+        else:
+            arrays.append(array(item, dtype='int64'))
+            all_scalar = False
+    return tuple(arrays), all_scalar, False
+
+
+def unravel_index(indices, shape, order='C'):
     # Handle 0-d shape
     shape = tuple(int(s) for s in shape)
     if len(shape) == 0:
@@ -556,30 +614,8 @@ def unravel_index(indices, shape, order='C'):
                 raise ValueError(
                     "index {} is out of bounds for array with size 1".format(int(_v)))
         raise ValueError("multiple indices for 0d array")
-    # Validate: reject empty sequences
-    if isinstance(indices, (list, tuple)) and len(indices) == 0:
-        raise TypeError(
-            "indices must be integral: the provided empty sequence was"
-            " inferred as float. Wrap it with np.intp for clarity.")
-    _scalar_input = isinstance(indices, int)
-    _was_ndarray = isinstance(indices, ndarray)
-    if not _was_ndarray:
-        if isinstance(indices, int):
-            indices = array([indices], dtype='int64')
-        else:
-            indices = array(indices, dtype='int64')
-    else:
-        # Ensure int dtype
-        dt = str(indices.dtype)
-        if dt.startswith('float'):
-            if indices.size == 0:
-                raise TypeError("only int indices permitted")
-        elif dt not in ('int64',):
-            indices = indices.astype('int64')
+    indices, scalar_input, _was_ndarray = _normalize_integral_index_array(indices)
     if indices.size == 0:
-        _dt = str(indices.dtype)
-        if _dt.startswith('float'):
-            raise TypeError("only int indices permitted")
         return tuple([array([], dtype='int64') for _ in shape])
     # Validate bounds
     total_size = 1
@@ -618,34 +654,13 @@ def unravel_index(indices, shape, order='C'):
         result_cols = [r.reshape(list(orig_shape)) for r in result_cols]
     result = tuple(result_cols)
     # When scalar input, return tuple of int scalars (not arrays)
-    if _scalar_input:
+    if scalar_input:
         return tuple(int(r.tolist()[0]) if hasattr(r, 'tolist') else int(r) for r in result)
     return result
 
 
 def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
-    # Validate types - reject floats
-    for a in multi_index:
-        if isinstance(a, float):
-            raise TypeError("Expected type 'int' but 'float' found.")
-    # Determine if input came from a 2D array (each row = one axis)
-    _was_2d_array = isinstance(multi_index, ndarray) and multi_index.ndim == 2
-    if _was_2d_array:
-        arrays = tuple(multi_index[i] for i in range(multi_index.shape[0]))
-    else:
-        _all_scalar = all(isinstance(a, int) for a in multi_index)
-        arrays = tuple(
-            array([a], dtype='int64') if isinstance(a, int)
-            else (a if isinstance(a, ndarray) else array(a, dtype='int64'))
-            for a in multi_index
-        )
-        if not _was_2d_array:
-            # Check for empty list/tuple elements (non-ndarray)
-            for a in multi_index:
-                if isinstance(a, (list, tuple)) and len(a) == 0:
-                    raise TypeError(
-                        "indices must be integral: the provided empty sequence was"
-                        " inferred as float. Wrap it with np.intp for clarity.")
+    arrays, all_scalar_inputs, was_2d_array = _normalize_multi_index_sequence(multi_index)
     dims = tuple(int(d) for d in dims)
     if len(arrays) != len(dims):
         raise ValueError("parameter multi_index must be a sequence of length {}".format(len(dims)))
@@ -724,13 +739,8 @@ def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
             stride *= d
     result = array(result_vals, dtype='int64')
     # When all scalar inputs, return int scalar
-    if not _was_2d_array and 'all_scalar' in dir() and _all_scalar:
+    if not was_2d_array and all_scalar_inputs:
         return int(result_vals[0])
-    # Also check if we had all scalar inputs (non-2d case)
-    if not _was_2d_array:
-        all_scalar_inputs = all(isinstance(a, int) for a in multi_index)
-        if all_scalar_inputs:
-            return int(result_vals[0])
     return result
 
 

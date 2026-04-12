@@ -1566,6 +1566,10 @@ def test_ravel_multi_index_list_input():
     idx = np.ravel_multi_index([np.array([1.0]), np.array([1.0])], (3, 4))
     assert_eq(int(idx), 5)
 
+def test_ravel_multi_index_scalar_lists():
+    idx = np.ravel_multi_index(([1], [1]), (3, 4))
+    assert_eq(int(idx), 5)
+
 
 # --- Tier 9: Dtype correctness ---
 
