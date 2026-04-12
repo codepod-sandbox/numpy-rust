@@ -3,7 +3,7 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import _ObjectArray
 from ._creation import array, asarray
-from ._string_bridge import native_string_unary, python_string_map
+from ._string_bridge import native_string_unary, normalize_native_string_input
 
 __all__ = ['char']
 
@@ -44,17 +44,8 @@ def _to_str(v):
 
 
 def _coerce_native_string_array(a):
-    """Normalize string-op inputs to a native ndarray boundary once."""
-    if isinstance(a, chararray):
-        return a._arr, True
-    if isinstance(a, ndarray):
-        return a, False
-    if isinstance(a, _ObjectArray):
-        arr = asarray(a._data)
-        if getattr(a, 'shape', None) and tuple(arr.shape) != tuple(a.shape):
-            arr = arr.reshape(a.shape)
-        return arr, False
-    return asarray(a), False
+    """Delegate native string input normalization to the shared bridge."""
+    return normalize_native_string_input(a)[0], isinstance(a, chararray)
 
 
 def _native_string_output(a, native_op, *args):

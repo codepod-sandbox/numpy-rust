@@ -61,6 +61,34 @@ def test_np_char_upper_and_chararray_upper_share_path():
     assert carr_method_out.tolist() == expected
 
 
+@pytest.mark.parametrize(
+    ("method_name", "values", "expected"),
+    [
+        ("lower", [["AB", "CD"]], [["ab", "cd"]]),
+        ("capitalize", [["ab", "cD"]], [["Ab", "Cd"]]),
+    ],
+)
+def test_np_char_and_chararray_methods_keep_bridge_return_split(
+    method_name, values, expected
+):
+    arr = np.array(values)
+    carr = np.char.asarray(arr)
+    np_char = getattr(np.char, method_name)
+    arr_out = np_char(arr)
+    carr_np_out = np_char(carr)
+    carr_method_out = getattr(carr, method_name)()
+
+    assert type(arr_out) is np.ndarray
+    assert type(carr_np_out) is np.ndarray
+    assert isinstance(carr_method_out, type(carr))
+    assert arr_out.shape == arr.shape
+    assert carr_np_out.shape == arr.shape
+    assert carr_method_out.shape == arr.shape
+    assert arr_out.tolist() == expected
+    assert carr_np_out.tolist() == expected
+    assert carr_method_out.tolist() == expected
+
+
 def test_chararray_compare_keeps_trailing_whitespace_quirk():
     carr = np.char.asarray(["ab  ", "cd"])
     out = carr == np.array(["ab", "xx"])

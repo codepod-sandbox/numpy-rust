@@ -1,7 +1,6 @@
-import _numpy_native as _native
 from _numpy_native import ndarray
 
-from ._creation import array, asarray
+from ._creation import asarray
 from ._helpers import _ObjectArray
 
 
@@ -29,7 +28,7 @@ def _restore_shape(result, shape):
     return result
 
 
-def native_string_unary(value, native_op, *, wrap_chararray=False):
+def normalize_native_string_input(value):
     raw = _unwrap_chararray(value)
     shape = _shape_of(raw)
     if isinstance(raw, _ObjectArray):
@@ -37,24 +36,12 @@ def native_string_unary(value, native_op, *, wrap_chararray=False):
         arr = asarray(flat).reshape(shape or (len(flat),))
     else:
         arr = asarray(raw)
+    return arr, shape
+
+
+def native_string_unary(value, native_op, *, wrap_chararray=False):
+    arr, shape = normalize_native_string_input(value)
     out = _restore_shape(native_op(arr), shape)
-    if wrap_chararray:
-        from ._string_ops import chararray
-
-        return chararray._from_array(out)
-    return out
-
-
-def python_string_map(value, func, *, result_kind="string", wrap_chararray=False):
-    raw = _unwrap_chararray(value)
-    shape = _shape_of(raw)
-    arr = asarray(raw, dtype=object)
-    flat = [func(item) for item in arr.flatten().tolist()]
-    out = array(flat, dtype=object).reshape(shape or (len(flat),))
-    if result_kind == "bool":
-        out = out.astype("bool")
-    elif result_kind == "int":
-        out = out.astype("int64")
     if wrap_chararray:
         from ._string_ops import chararray
 
