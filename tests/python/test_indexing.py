@@ -234,6 +234,12 @@ def test_setitem_string_scalar():
     a[1] = "xyz"
     assert_eq(str(a[1]), "x")
 
+def test_setitem_string_scalar_array_value():
+    a = np.array(["a", "b", "c"])
+    value = np.array(["xyz"])[0]
+    a[1] = value
+    assert_eq(str(a[1]), "x")
+
 def test_setitem_string_slice_broadcast():
     a = np.array(["a", "b", "c"])
     a[1:] = "q"
