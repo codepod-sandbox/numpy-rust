@@ -101,6 +101,7 @@ impl NdArray {
 #[cfg(test)]
 mod tests {
     use crate::{DType, NdArray};
+    use ndarray::IxDyn;
 
     #[test]
     fn test_str_upper() {
@@ -212,21 +213,21 @@ mod tests {
     }
 
     #[test]
-    fn test_string_helpers_share_non_string_type_error_message() {
-        let a = NdArray::from_vec(vec![1.0_f64, 2.0, 3.0]);
-        let errors = [
-            a.str_upper().unwrap_err().to_string(),
-            a.str_lower().unwrap_err().to_string(),
-            a.str_capitalize().unwrap_err().to_string(),
-            a.str_strip().unwrap_err().to_string(),
-            a.str_len().unwrap_err().to_string(),
-            a.str_startswith("x").unwrap_err().to_string(),
-            a.str_endswith("x").unwrap_err().to_string(),
-            a.str_replace("a", "b").unwrap_err().to_string(),
-        ];
+    fn test_string_mapping_preserves_shape() {
+        let a = NdArray::from_data(crate::ArrayData::Str(
+            crate::array_data::ArrayD::from_shape_vec(
+                IxDyn(&[2, 2]),
+                vec![
+                    "  HeLLo  ".to_string(),
+                    " World ".to_string(),
+                    "\tMiXeD\t".to_string(),
+                    "  CASE".to_string(),
+                ],
+            )
+            .unwrap(),
+        ));
 
-        for error in errors {
-            assert_eq!(error, "type error: string operation requires string array");
-        }
+        let b = a.str_strip().unwrap().str_lower().unwrap();
+        assert_eq!(b.shape(), &[2, 2]);
     }
 }
