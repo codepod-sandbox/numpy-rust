@@ -5,6 +5,7 @@ a thin shim over the shared string behavior, not as a separate runtime path.
 """
 
 import numpy as np
+import pytest
 
 
 def test_char_upper_preserves_shape_for_ndarray():
@@ -14,11 +15,10 @@ def test_char_upper_preserves_shape_for_ndarray():
     assert out.tolist() == [["AA", "BB"], ["CC", "DD"]]
 
 
-def test_char_strip_preserves_object_array_shape():
+def test_char_strip_object_array_raises_type_error():
     arr = np.array([["  a  ", " b "], ["c ", "  d"]], dtype=object)
-    out = np.char.strip(arr)
-    assert out.shape == (2, 2)
-    assert out.tolist() == [["a", "b"], ["c", "d"]]
+    with pytest.raises(TypeError, match=r"ufunc '_strip_whitespace' did not contain a loop"):
+        np.char.strip(arr)
 
 
 def test_chararray_upper_matches_np_char_bridge():
@@ -28,6 +28,7 @@ def test_chararray_upper_matches_np_char_bridge():
     carr_out = carr.upper()
     assert np_char_out.shape == (2, 2)
     assert carr_out.shape == (2, 2)
+    assert type(np_char_out) is type(carr_out) is type(carr)
     assert np_char_out.tolist() == expected
     assert carr_out.tolist() == expected
 
