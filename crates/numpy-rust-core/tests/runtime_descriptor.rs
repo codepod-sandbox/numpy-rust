@@ -1,5 +1,5 @@
 use numpy_rust_core::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
-use numpy_rust_core::kernel::{MathBinaryKernelOp, MathUnaryKernelOp};
+use numpy_rust_core::kernel::{MathBinaryKernelOp, MathUnaryKernelOp, ValueUnaryKernelOp};
 use numpy_rust_core::{descriptor_for_dtype, resolve_binary_op, BinaryOp, DType};
 
 #[test]
@@ -62,4 +62,13 @@ fn float64_descriptor_registers_math_binary_kernels() {
     assert!(desc
         .math_binary_kernel(MathBinaryKernelOp::Maximum)
         .is_some());
+}
+
+#[test]
+fn float64_descriptor_registers_value_unary_kernels() {
+    let desc = descriptor_for_dtype(DType::Float64);
+    assert!(desc
+        .value_unary_kernel(ValueUnaryKernelOp::SignBit)
+        .is_some());
+    assert!(desc.value_unary_kernel(ValueUnaryKernelOp::Neg).is_some());
 }

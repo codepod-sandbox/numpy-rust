@@ -57,6 +57,13 @@ pub enum PredicatePresenceOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueUnaryKernelOp {
+    SignBit,
+    Sign,
+    Neg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathUnaryKernelOp {
     Sqrt,
     Exp,
@@ -407,6 +414,37 @@ pub fn math_unary_kernel_for_dtype(
         (DType::Float64, MathUnaryKernelOp::Y0) => Some(unary_y0_float64),
         (DType::Float32, MathUnaryKernelOp::Y1) => Some(unary_y1_float32),
         (DType::Float64, MathUnaryKernelOp::Y1) => Some(unary_y1_float64),
+        _ => None,
+    }
+}
+
+pub fn value_unary_kernel_for_dtype(
+    dtype: DType,
+    op: ValueUnaryKernelOp,
+) -> Option<UnaryArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, ValueUnaryKernelOp::SignBit) => Some(signbit_bool),
+        (DType::Int32, ValueUnaryKernelOp::SignBit) => Some(signbit_int32),
+        (DType::Int64, ValueUnaryKernelOp::SignBit) => Some(signbit_int64),
+        (DType::Float32, ValueUnaryKernelOp::SignBit) => Some(signbit_float32),
+        (DType::Float64, ValueUnaryKernelOp::SignBit) => Some(signbit_float64),
+        (DType::Complex64, ValueUnaryKernelOp::SignBit) => Some(signbit_complex64),
+        (DType::Complex128, ValueUnaryKernelOp::SignBit) => Some(signbit_complex128),
+        (DType::Str, ValueUnaryKernelOp::SignBit) => Some(signbit_str),
+        (DType::Bool, ValueUnaryKernelOp::Sign) => Some(sign_bool),
+        (DType::Int32, ValueUnaryKernelOp::Sign) => Some(sign_int32),
+        (DType::Int64, ValueUnaryKernelOp::Sign) => Some(sign_int64),
+        (DType::Float32, ValueUnaryKernelOp::Sign) => Some(sign_float32),
+        (DType::Float64, ValueUnaryKernelOp::Sign) => Some(sign_float64),
+        (DType::Complex64, ValueUnaryKernelOp::Sign) => Some(sign_complex64),
+        (DType::Complex128, ValueUnaryKernelOp::Sign) => Some(sign_complex128),
+        (DType::Bool, ValueUnaryKernelOp::Neg) => Some(neg_bool),
+        (DType::Int32, ValueUnaryKernelOp::Neg) => Some(neg_int32),
+        (DType::Int64, ValueUnaryKernelOp::Neg) => Some(neg_int64),
+        (DType::Float32, ValueUnaryKernelOp::Neg) => Some(neg_float32),
+        (DType::Float64, ValueUnaryKernelOp::Neg) => Some(neg_float64),
+        (DType::Complex64, ValueUnaryKernelOp::Neg) => Some(neg_complex64),
+        (DType::Complex128, ValueUnaryKernelOp::Neg) => Some(neg_complex128),
         _ => None,
     }
 }
@@ -770,6 +808,81 @@ iter_presence_kernel!(has_inf_complex128, Complex128, |x| x.re.is_infinite()
     || x.im.is_infinite());
 constant_presence_kernel!(has_nan_str, Str, false);
 constant_presence_kernel!(has_inf_str, Str, false);
+
+macro_rules! constant_bool_unary_kernel {
+    ($name:ident, $variant:ident, $value:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => Ok(ArrayData::Bool(
+                    ArrayD::from_elem(IxDyn(data.shape()), $value).into_shared(),
+                )),
+                _ => Err(NumpyError::TypeError(
+                    "value unary kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! map_unary_kernel {
+    ($name:ident, $variant:ident, $out_variant:ident, $op:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => {
+                    Ok(ArrayData::$out_variant(data.mapv($op).into_shared()))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "value unary kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+constant_bool_unary_kernel!(signbit_bool, Bool, false);
+map_unary_kernel!(signbit_int32, Int32, Bool, |x: i32| x < 0);
+map_unary_kernel!(signbit_int64, Int64, Bool, |x: i64| x < 0);
+map_unary_kernel!(signbit_float32, Float32, Bool, |x: f32| x
+    .is_sign_negative());
+map_unary_kernel!(signbit_float64, Float64, Bool, |x: f64| x
+    .is_sign_negative());
+constant_bool_unary_kernel!(signbit_complex64, Complex64, false);
+constant_bool_unary_kernel!(signbit_complex128, Complex128, false);
+constant_bool_unary_kernel!(signbit_str, Str, false);
+
+map_unary_kernel!(sign_bool, Bool, Int32, |x: bool| if x { 1 } else { 0 });
+map_unary_kernel!(sign_int32, Int32, Int32, |x: i32| x.signum());
+map_unary_kernel!(sign_int64, Int64, Int64, |x: i64| x.signum());
+map_unary_kernel!(sign_float32, Float32, Float32, |x: f32| {
+    if x.is_nan() {
+        x
+    } else if x == 0.0 {
+        0.0
+    } else {
+        x.signum()
+    }
+});
+map_unary_kernel!(sign_float64, Float64, Float64, |x: f64| {
+    if x.is_nan() {
+        x
+    } else if x == 0.0 {
+        0.0
+    } else {
+        x.signum()
+    }
+});
+map_unary_kernel!(sign_complex64, Complex64, Complex64, |x: Complex<f32>| x);
+map_unary_kernel!(sign_complex128, Complex128, Complex128, |x: Complex<
+    f64,
+>| x);
+
+map_unary_kernel!(neg_bool, Bool, Int32, |x: bool| if x { -1 } else { 0 });
+map_unary_kernel!(neg_int32, Int32, Int32, |x: i32| -x);
+map_unary_kernel!(neg_int64, Int64, Int64, |x: i64| -x);
+map_unary_kernel!(neg_float32, Float32, Float32, |x: f32| -x);
+map_unary_kernel!(neg_float64, Float64, Float64, |x: f64| -x);
+map_unary_kernel!(neg_complex64, Complex64, Complex64, |x: Complex<f32>| -x);
+map_unary_kernel!(neg_complex128, Complex128, Complex128, |x: Complex<f64>| -x);
 
 macro_rules! unary_math_kernel {
     ($name:ident, $variant:ident, $op:expr) => {

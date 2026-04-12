@@ -6,7 +6,7 @@ use crate::casting::cast_array_data;
 use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
-use crate::kernel::{MathBinaryKernelOp, MathUnaryKernelOp};
+use crate::kernel::{MathBinaryKernelOp, MathUnaryKernelOp, ValueUnaryKernelOp};
 use crate::NdArray;
 
 fn map_complex_data<R>(
@@ -102,6 +102,23 @@ fn execute_math_unary_on_data(data: ArrayData, op: MathUnaryKernelOp) -> NdArray
 
 fn execute_math_unary(input: &NdArray, op: MathUnaryKernelOp) -> NdArray {
     execute_math_unary_on_data(ensure_float(input.data()), op)
+}
+
+fn execute_value_unary(
+    input: &NdArray,
+    op: ValueUnaryKernelOp,
+    preserve_descriptor: bool,
+) -> NdArray {
+    let descriptor = input.descriptor();
+    let kernel = descriptor
+        .value_unary_kernel(op)
+        .unwrap_or_else(|| panic!("value unary kernel not registered for {}", input.dtype()));
+    let data = kernel(input.data().clone()).expect("value unary kernel dtype mismatch");
+    let mut result = NdArray::from_data(data);
+    if preserve_descriptor && input.dtype().storage_dtype() == result.data().dtype() {
+        result.preserve_descriptor_from(input);
+    }
+    result
 }
 
 fn execute_real_math_unary(
@@ -401,83 +418,17 @@ impl NdArray {
 
     /// Returns a Bool array: true where sign bit is set (negative).
     pub fn signbit(&self) -> NdArray {
-        let data = match self.data() {
-            ArrayData::Float32(a) => {
-                ArrayData::Bool(a.mapv(|x| x.is_sign_negative()).into_shared())
-            }
-            ArrayData::Float64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.is_sign_negative()).into_shared())
-            }
-            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x < 0).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x < 0).into_shared()),
-            _ => ArrayData::Bool(
-                ndarray::ArrayD::from_elem(ndarray::IxDyn(self.shape()), false).into_shared(),
-            ),
-        };
-        NdArray::from_data(data)
+        execute_value_unary(self, ValueUnaryKernelOp::SignBit, false)
     }
 
     /// Element-wise sign function. Returns -1, 0, or 1.
     pub fn sign(&self) -> NdArray {
-        let result = match self.data() {
-            ArrayData::Bool(a) => ArrayData::Int32(a.mapv(|x| if x { 1 } else { 0 }).into_shared()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.signum()).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.signum()).into_shared()),
-            ArrayData::Float32(a) => ArrayData::Float32(
-                a.mapv(|x| {
-                    if x.is_nan() {
-                        x
-                    } else if x == 0.0 {
-                        0.0
-                    } else {
-                        x.signum()
-                    }
-                })
-                .into_shared(),
-            ),
-            ArrayData::Float64(a) => ArrayData::Float64(
-                a.mapv(|x| {
-                    if x.is_nan() {
-                        x
-                    } else if x == 0.0 {
-                        0.0
-                    } else {
-                        x.signum()
-                    }
-                })
-                .into_shared(),
-            ),
-            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
-                // NumPy returns x/|x| for complex, but skip for now — return clone
-                return self.clone();
-            }
-            ArrayData::Str(_) => panic!("sign not supported for string arrays"),
-        };
-        NdArray::from_data(result)
+        execute_value_unary(self, ValueUnaryKernelOp::Sign, false)
     }
 
     /// Element-wise negation. Works on int and float types.
     pub fn neg(&self) -> NdArray {
-        let result = match self.data() {
-            ArrayData::Bool(_) => {
-                // NumPy: -True == -1, -False == 0 -> cast to i32 then negate
-                let cast = cast_array_data(self.data(), DType::Int32);
-                match cast {
-                    ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x).into_shared()),
-                    _ => unreachable!(),
-                }
-            }
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| -x).into_shared()),
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| -x).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| -x).into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv(|x| -x).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|x| -x).into_shared()),
-            ArrayData::Str(_) => panic!("negation not supported for string arrays"),
-        };
-        let mut r = NdArray::from_data(result);
-        r.preserve_descriptor_from(self);
-        r
+        execute_value_unary(self, ValueUnaryKernelOp::Neg, true)
     }
 }
 
