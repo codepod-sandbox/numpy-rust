@@ -2295,6 +2295,64 @@ def _gradient_scalar_spacing(sp):
     return float(sp)
 
 
+def _coerce_gradient_spacing(sp):
+    """Normalize one spacing argument to a float or 1-D ndarray."""
+    if isinstance(sp, ndarray):
+        arr = sp
+    elif isinstance(sp, (list, tuple)):
+        arr = asarray(sp)
+    else:
+        return float(sp)
+
+    if arr.ndim > 1:
+        raise ValueError("Spacing must be scalars or 1d, not {}d".format(arr.ndim))
+    if arr.size == 1:
+        return float(arr.flatten()[0])
+    return arr
+
+
+def _resolve_gradient_axes(axis, ndim):
+    """Normalize gradient axes and whether the result should stay scalar-axis shaped."""
+    if axis is None:
+        return list(_builtin_range(ndim)), False
+    if isinstance(axis, int):
+        return [_normalize_axis_arg(axis, ndim)], True
+    return _normalize_axes_tuple(axis, ndim), False
+
+
+def _resolve_gradient_spacings(varargs, axes, ndim_shape):
+    """Normalize gradient spacing arguments to the runtime shape expected by native code."""
+    len_axes = len(axes)
+
+    if len(varargs) == 0:
+        spacings = [1.0] * len_axes
+    elif len(varargs) == 1:
+        sp = _coerce_gradient_spacing(varargs[0])
+        is_non_scalar_spacing = isinstance(sp, ndarray)
+        if is_non_scalar_spacing and len_axes != 1:
+            raise TypeError(
+                "gradient() only takes 1 non-scalar spacing argument when "
+                "axis is not a single integer, but {} axes were specified".format(len_axes)
+            )
+        spacings = [sp] * len_axes
+    elif len(varargs) == len_axes:
+        spacings = [_coerce_gradient_spacing(sp) for sp in varargs]
+    else:
+        raise TypeError(
+            "gradient() takes from 1 to {} positional arguments but {} "
+            "were given".format(len(ndim_shape) + 1, len(varargs) + 1)
+        )
+
+    for i, sp in enumerate(spacings):
+        if isinstance(sp, ndarray) and sp.size != ndim_shape[axes[i]]:
+            raise ValueError(
+                "Spacing array has wrong size {} for axis {} with size {}".format(
+                    sp.size, axes[i], ndim_shape[axes[i]]
+                )
+            )
+    return spacings
+
+
 def _gradient_1d_nonuniform(f_1d, x, edge_order):
     """Compute 1-D gradient with non-uniform coordinate array x."""
     n = len(f_1d)
@@ -2421,75 +2479,15 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
 
 
 def gradient(f, *varargs, axis=None, edge_order=1):
-    from ._helpers import AxisError as _AxisError
-    if not isinstance(f, ndarray):
-        f = array(f)
+    f = array(f) if not isinstance(f, ndarray) else f
     if f.ndim == 0:
         raise ValueError("f must have at least 1 dimension")
     if edge_order not in (1, 2):
         raise ValueError("'edge_order' must be 1 or 2")
-    N = f.ndim
-    # Determine axes to compute gradient for
-    if axis is None:
-        axes = list(_builtin_range(N))
-        single_axis = False
-    elif isinstance(axis, int):
-        ax_norm = axis if axis >= 0 else axis + N
-        if ax_norm < 0 or ax_norm >= N:
-            raise _AxisError(axis, N)
-        axes = [ax_norm]
-        single_axis = True
-    else:
-        axes = []
-        for ax in axis:
-            ax_norm = ax if ax >= 0 else ax + N
-            if ax_norm < 0 or ax_norm >= N:
-                raise _AxisError(ax, N)
-            axes.append(ax_norm)
-        single_axis = False
-    len_axes = len(axes)
-    # Validate and resolve spacings
-    if len(varargs) == 0:
-        spacings = [1.0] * len_axes
-    elif len(varargs) == 1:
-        sp = varargs[0]
-        if isinstance(sp, ndarray) and sp.ndim > 1:
-            raise ValueError(
-                "Spacing must be scalars or 1d, not {}d".format(sp.ndim)
-            )
-        # Non-scalar array spacing is only valid for a single axis
-        is_array_sp = isinstance(sp, ndarray) and sp.size > 1
-        if is_array_sp and len_axes != 1:
-            raise TypeError(
-                "gradient() only takes 1 non-scalar spacing argument when "
-                "axis is not a single integer, but {} axes were specified".format(len_axes)
-            )
-        # One spacing for all axes
-        spacings = [sp] * len_axes
-    elif len(varargs) == len_axes:
-        spacings = list(varargs)
-    else:
-        raise TypeError(
-            "gradient() takes from 1 to {} positional arguments but {} "
-            "were given".format(N + 1, len(varargs) + 1)
-        )
-    # Validate spacings have correct sizes and dimensionality
-    for i, sp in enumerate(spacings):
-        if isinstance(sp, ndarray) and sp.ndim > 1:
-            raise ValueError(
-                "Spacing must be scalars or 1d, not {}d".format(sp.ndim)
-            )
-        if isinstance(sp, ndarray) and sp.ndim == 1 and sp.size != 1:
-            ax = axes[i]
-            if sp.size != f.shape[ax]:
-                raise ValueError(
-                    "Spacing array has wrong size {} for axis {} with size {}".format(
-                        sp.size, ax, f.shape[ax]
-                    )
-                )
-    # Delegate to Rust for the actual computation
+    axes, single_axis = _resolve_gradient_axes(axis, f.ndim)
+    spacings = _resolve_gradient_spacings(varargs, axes, f.shape)
     results = _native.gradient(f, spacings, edge_order, axes)
-    if single_axis or (axis is None and N == 1):
+    if single_axis or (axis is None and f.ndim == 1):
         return results[0]
     return tuple(results)
 

@@ -1724,6 +1724,13 @@ def test_gradient_spacing():
     assert_close(float(g[0]), 4.0)
     assert_close(float(g[1]), 4.0)
 
+def test_gradient_spacing_list():
+    f = np.array([0.0, 1.0, 3.0])
+    g = np.gradient(f, [0.0, 1.0, 3.0])
+    assert_close(float(g[0]), 1.0)
+    assert_close(float(g[1]), 1.0)
+    assert_close(float(g[2]), 1.0)
+
 
 # --- linalg.lstsq ---
 
