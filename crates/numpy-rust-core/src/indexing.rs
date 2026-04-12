@@ -184,7 +184,14 @@ impl NdArray {
         }
 
         let info: Vec<SliceInfoElem> = slice_elems;
-        Ok(NdArray::from_data(self.data().slice_view(info.as_slice())?))
+        let data = self.data().slice_view(info.as_slice())?;
+        Ok(NdArray::from_parts(
+            crate::storage::ArrayStorage::from_array_data_with_string_width(
+                data,
+                self.storage().string_width(),
+            ),
+            self.descriptor(),
+        ))
     }
 
     /// Select elements along an axis by integer indices.
@@ -207,7 +214,14 @@ impl NdArray {
             }
         }
 
-        Ok(NdArray::from_data(self.data().index_select(axis, indices)?))
+        let data = self.data().index_select(axis, indices)?;
+        Ok(NdArray::from_parts(
+            crate::storage::ArrayStorage::from_array_data_with_string_width(
+                data,
+                self.storage().string_width(),
+            ),
+            self.descriptor(),
+        ))
     }
 
     /// Set elements along an axis by integer indices from a values array.
@@ -383,7 +397,14 @@ impl NdArray {
 
         let flat_mask: Vec<bool> = bool_mask.iter().copied().collect();
 
-        Ok(NdArray::from_data(self.data().select_masked(&flat_mask)))
+        let data = self.data().select_masked(&flat_mask);
+        Ok(NdArray::from_parts(
+            crate::storage::ArrayStorage::from_array_data_with_string_width(
+                data,
+                self.storage().string_width(),
+            ),
+            self.descriptor(),
+        ))
     }
 }
 

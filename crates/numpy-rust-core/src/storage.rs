@@ -25,6 +25,13 @@ impl ArrayStorage {
 
     pub fn from_array_data(data: ArrayData) -> Self {
         let string_width = string_width_from_data(&data);
+        Self::from_array_data_with_string_width(data, string_width)
+    }
+
+    pub(crate) fn from_array_data_with_string_width(
+        data: ArrayData,
+        string_width: Option<usize>,
+    ) -> Self {
         Self {
             kind: StorageKind::Backend(data),
             string_width,

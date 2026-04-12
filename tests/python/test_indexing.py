@@ -252,6 +252,12 @@ def test_setitem_string_scalar_empty_width_preserved():
     a[0] = "xyz"
     assert_eq(str(a[0]), "x")
 
+def test_setitem_string_scalar_slice_preserves_width():
+    a = np.array(["abcd", "xy"])
+    b = a[1:]
+    b[0] = "wxyz"
+    assert_eq(str(b[0]), "wxyz")
+
 def test_setitem_string_slice_broadcast():
     a = np.array(["a", "b", "c"])
     a[1:] = "q"
