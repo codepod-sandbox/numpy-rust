@@ -3,7 +3,15 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import _ObjectArray
 from ._creation import array, asarray
-from ._string_bridge import native_string_unary, normalize_native_string_input
+from ._string_bridge import (
+    native_string_unary,
+    normalize_native_string_input,
+    python_string_broadcast,
+    python_string_items,
+    python_string_map,
+    python_string_predicate,
+    python_string_search,
+)
 
 __all__ = ['char']
 
@@ -61,6 +69,105 @@ def _native_bool_output(a, native_op, *args):
 def _native_int_output(a, native_op, *args):
     arr = _coerce_native_string_array(a)
     return native_op(arr, *args)
+
+
+def _python_string_strip(value, chars=None, *, method_name="strip", wrap_chararray=False):
+    if chars is None:
+        return python_string_map(
+            value,
+            lambda item: getattr(str(item), method_name)(),
+            wrap_chararray=wrap_chararray,
+        )
+    items, _ = python_string_items(value)
+    chars_values = python_string_broadcast(chars, len(items))
+    chars_iter = iter(chars_values)
+    return python_string_map(
+        value,
+        lambda item: getattr(str(item), method_name)(next(chars_iter)),
+        wrap_chararray=wrap_chararray,
+    )
+
+
+def _python_string_pad(value, width, method_name, fillchar=" ", *, wrap_chararray=False):
+    items, _ = python_string_items(value)
+    widths = python_string_broadcast(width, len(items))
+    width_iter = iter(widths)
+    fill = " " if fillchar is None else fillchar
+    return python_string_map(
+        value,
+        lambda item: getattr(str(item), method_name)(int(next(width_iter)), fill),
+        wrap_chararray=wrap_chararray,
+    )
+
+
+def _python_string_replace(value, old, new, count=None, *, wrap_chararray=False):
+    items, _ = python_string_items(value)
+    olds = python_string_broadcast(old, len(items))
+    news = python_string_broadcast(new, len(items))
+    old_iter = iter(olds)
+    new_iter = iter(news)
+    if count is None:
+        return python_string_map(
+            value,
+            lambda item: str(item).replace(next(old_iter), next(new_iter)),
+            wrap_chararray=wrap_chararray,
+        )
+    counts = python_string_broadcast(count, len(items))
+    count_iter = iter(counts)
+    return python_string_map(
+        value,
+        lambda item: str(item).replace(
+            next(old_iter),
+            next(new_iter),
+            int(next(count_iter)),
+        ),
+        wrap_chararray=wrap_chararray,
+    )
+
+
+def _python_string_split(value, sep=None, maxsplit=-1):
+    return python_string_map(
+        value,
+        lambda item: str(item).split(sep, maxsplit),
+        result_kind="object",
+    )
+
+
+def _python_string_rsplit(value, sep=None, maxsplit=-1):
+    return python_string_map(
+        value,
+        lambda item: str(item).rsplit(sep, maxsplit),
+        result_kind="object",
+    )
+
+
+def _python_string_splitlines(value):
+    return python_string_map(
+        value,
+        lambda item: str(item).splitlines(),
+        result_kind="object",
+    )
+
+
+def _python_string_partition(value, sep, *, method_name="partition", wrap_chararray=False):
+    items, _ = python_string_items(value)
+    seps = python_string_broadcast(sep, len(items))
+    sep_iter = iter(seps)
+    return python_string_map(
+        value,
+        lambda item: list(getattr(str(item), method_name)(next(sep_iter))),
+        result_kind="object",
+        wrap_chararray=wrap_chararray,
+        extra_shape=(3,),
+    )
+
+
+def _python_string_transform(value, method_name, *args, wrap_chararray=False):
+    return python_string_map(
+        value,
+        lambda item: getattr(str(item), method_name)(*args),
+        wrap_chararray=wrap_chararray,
+    )
 
 
 class chararray:
@@ -405,485 +512,189 @@ class chararray:
         return native_string_unary(self, _native.char_capitalize, wrap_chararray=True)
 
     def strip(self, chars=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        if chars is not None:
-            if isinstance(chars, (list, tuple)):
-                if len(chars) == 1:
-                    chars = chars * len(items)
-                result = []
-                for s, c in zip(items, chars):
-                    if isinstance(s, bytes):
-                        result.append(s.strip(c if isinstance(c, bytes) else c.encode('latin-1')))
-                    else:
-                        result.append(s.strip(c))
-            else:
-                result = []
-                for s in items:
-                    if isinstance(s, bytes):
-                        result.append(s.strip(chars if isinstance(chars, bytes) else chars.encode('latin-1')))
-                    else:
-                        result.append(s.strip(chars))
-        else:
-            result = [s.strip() if isinstance(s, (str, bytes)) else str(s).strip() for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_strip(self, chars, wrap_chararray=True)
 
     def lstrip(self, chars=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        if chars is not None:
-            if isinstance(chars, (list, tuple)):
-                if len(chars) == 1:
-                    chars = chars * len(items)
-                result = []
-                for s, c in zip(items, chars):
-                    if isinstance(s, bytes):
-                        result.append(s.lstrip(c if isinstance(c, bytes) else c.encode('latin-1')))
-                    else:
-                        result.append(s.lstrip(c))
-            else:
-                result = [s.lstrip(chars) for s in items]
-        else:
-            result = [s.lstrip() if isinstance(s, (str, bytes)) else str(s).lstrip() for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_strip(
+            self,
+            chars,
+            method_name="lstrip",
+            wrap_chararray=True,
+        )
 
     def rstrip(self, chars=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        if chars is not None:
-            if isinstance(chars, (list, tuple)):
-                if len(chars) == 1:
-                    chars = chars * len(items)
-                result = []
-                for s, c in zip(items, chars):
-                    if isinstance(s, bytes):
-                        result.append(s.rstrip(c if isinstance(c, bytes) else c.encode('latin-1')))
-                    else:
-                        result.append(s.rstrip(c))
-            else:
-                result = [s.rstrip(chars) for s in items]
-        else:
-            result = [s.rstrip() if isinstance(s, (str, bytes)) else str(s).rstrip() for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_strip(
+            self,
+            chars,
+            method_name="rstrip",
+            wrap_chararray=True,
+        )
 
     def title(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = [s.title() if isinstance(s, (str, bytes)) else str(s).title() for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_transform(self, "title", wrap_chararray=True)
 
     def swapcase(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = [s.swapcase() if isinstance(s, (str, bytes)) else str(s).swapcase() for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_transform(self, "swapcase", wrap_chararray=True)
 
     def center(self, width, fillchar=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        widths = width if isinstance(width, (list, tuple)) else [width]
-        if len(widths) == 1:
-            widths = widths * len(items)
-        result = []
-        for i, s in enumerate(items):
-            w = int(widths[i % len(widths)])
-            fc = fillchar if fillchar is not None else (b' ' if isinstance(s, bytes) else ' ')
-            if isinstance(s, bytes) and isinstance(fc, bytes):
-                result.append(s.center(w, fc))
-            else:
-                result.append(str(s).center(w, str(fc) if not isinstance(fc, str) else fc))
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_pad(
+            self,
+            width,
+            "center",
+            fillchar=fillchar,
+            wrap_chararray=True,
+        )
 
     def ljust(self, width, fillchar=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        widths = width if isinstance(width, (list, tuple)) else [width]
-        if len(widths) == 1:
-            widths = widths * len(items)
-        result = []
-        for i, s in enumerate(items):
-            w = int(widths[i % len(widths)])
-            fc = fillchar if fillchar is not None else (b' ' if isinstance(s, bytes) else ' ')
-            if isinstance(s, bytes) and isinstance(fc, bytes):
-                result.append(s.ljust(w, fc))
-            else:
-                result.append(str(s).ljust(w, str(fc) if not isinstance(fc, str) else fc))
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_pad(
+            self,
+            width,
+            "ljust",
+            fillchar=fillchar,
+            wrap_chararray=True,
+        )
 
     def rjust(self, width, fillchar=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        widths = width if isinstance(width, (list, tuple)) else [width]
-        if len(widths) == 1:
-            widths = widths * len(items)
-        result = []
-        for i, s in enumerate(items):
-            w = int(widths[i % len(widths)])
-            fc = fillchar if fillchar is not None else (b' ' if isinstance(s, bytes) else ' ')
-            if isinstance(s, bytes) and isinstance(fc, bytes):
-                result.append(s.rjust(w, fc))
-            else:
-                result.append(str(s).rjust(w, str(fc) if not isinstance(fc, str) else fc))
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_pad(
+            self,
+            width,
+            "rjust",
+            fillchar=fillchar,
+            wrap_chararray=True,
+        )
 
     def zfill(self, width):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = [s.zfill(int(width)) if isinstance(s, (str, bytes)) else str(s).zfill(int(width)) for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return python_string_map(
+            self,
+            lambda item: str(item).zfill(int(width)),
+            wrap_chararray=True,
+        )
 
     def replace(self, old, new, count=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        olds = old if isinstance(old, (list, tuple)) else [old]
-        news = new if isinstance(new, (list, tuple)) else [new]
-        counts = count if isinstance(count, (list, tuple)) else ([count] if count is not None else None)
-        if len(olds) == 1:
-            olds = olds * len(items)
-        if len(news) == 1:
-            news = news * len(items)
-        if counts is not None and len(counts) == 1:
-            counts = counts * len(items)
-        result = []
-        for i, s in enumerate(items):
-            o = olds[i % len(olds)]
-            n = news[i % len(news)]
-            if counts is not None:
-                c = int(counts[i % len(counts)])
-                result.append(s.replace(o, n, c))
-            else:
-                result.append(s.replace(o, n))
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_replace(
+            self,
+            old,
+            new,
+            count=count,
+            wrap_chararray=True,
+        )
 
     def startswith(self, prefix, start=0, end=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = []
-        for s in items:
-            if end is None:
-                result.append(s.startswith(prefix, start))
-            else:
-                result.append(s.startswith(prefix, start, end))
-        out = _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_search(self, prefix, "startswith", start=start, end=end).astype(
+            "bool"
+        )
 
     def endswith(self, suffix, start=0, end=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = []
-        for s in items:
-            if end is None:
-                result.append(s.endswith(suffix, start))
-            else:
-                result.append(s.endswith(suffix, start, end))
-        out = _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_search(self, suffix, "endswith", start=start, end=end).astype(
+            "bool"
+        )
 
     def find(self, sub, start=0, end=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        subs = sub if isinstance(sub, (list, tuple)) else [sub]
-        if len(subs) == 1:
-            subs = subs * len(items)
-        result = []
-        for i, s in enumerate(items):
-            sb = subs[i % len(subs)]
-            if end is None:
-                result.append(s.find(sb, start))
-            else:
-                result.append(s.find(sb, start, end))
-        out = _np.array(result)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_search(self, sub, "find", start=start, end=end)
 
     def rfind(self, sub, start=0, end=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        subs = sub if isinstance(sub, (list, tuple)) else [sub]
-        if len(subs) == 1:
-            subs = subs * len(items)
-        result = []
-        for i, s in enumerate(items):
-            sb = subs[i % len(subs)]
-            if end is None:
-                result.append(s.rfind(sb, start))
-            else:
-                result.append(s.rfind(sb, start, end))
-        out = _np.array(result)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_search(self, sub, "rfind", start=start, end=end)
 
     def index(self, sub, start=0, end=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = []
-        for s in items:
-            if end is None:
-                result.append(s.index(sub, start))
-            else:
-                result.append(s.index(sub, start, end))
-        out = _np.array(result)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_search(self, sub, "index", start=start, end=end)
 
     def rindex(self, sub, start=0, end=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = []
-        for s in items:
-            if end is None:
-                result.append(s.rindex(sub, start))
-            else:
-                result.append(s.rindex(sub, start, end))
-        out = _np.array(result)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_search(self, sub, "rindex", start=start, end=end)
 
     def count(self, sub, start=0, end=None):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = []
-        for s in items:
-            if end is None:
-                result.append(s.count(sub, start))
-            else:
-                result.append(s.count(sub, start, end))
-        out = _np.array(result)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_search(self, sub, "count", start=start, end=end)
 
     def expandtabs(self, tabsize=8):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = [s.expandtabs(tabsize) for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return _python_string_transform(
+            self,
+            "expandtabs",
+            tabsize,
+            wrap_chararray=True,
+        )
 
     def isalnum(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        out = _np.array([1.0 if s.isalnum() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.isalnum())
 
     def isalpha(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        out = _np.array([1.0 if s.isalpha() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.isalpha())
 
     def isdigit(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        out = _np.array([1.0 if s.isdigit() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.isdigit())
 
     def islower(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        out = _np.array([1.0 if s.islower() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.islower())
 
     def isupper(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        out = _np.array([1.0 if s.isupper() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.isupper())
 
     def isspace(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        out = _np.array([1.0 if s.isspace() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.isspace())
 
     def istitle(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        out = _np.array([1.0 if s.istitle() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.istitle())
 
     def isnumeric(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        # isnumeric only works on unicode, not bytes
-        for s in items:
-            if isinstance(s, bytes):
+        items, _ = python_string_items(self)
+        for item in items:
+            if isinstance(item, bytes):
                 raise TypeError("isnumeric is only available for unicode strings")
-        out = _np.array([1.0 if s.isnumeric() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.isnumeric())
 
     def isdecimal(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        for s in items:
-            if isinstance(s, bytes):
+        items, _ = python_string_items(self)
+        for item in items:
+            if isinstance(item, bytes):
                 raise TypeError("isdecimal is only available for unicode strings")
-        out = _np.array([1.0 if s.isdecimal() else 0.0 for s in items]).astype('bool')
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return python_string_predicate(self, lambda item: item.isdecimal())
 
     def split(self, sep=None, maxsplit=-1):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = [s.split(sep, maxsplit) for s in items]
-        out = _np.array(result, dtype=object)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return _python_string_split(self, sep=sep, maxsplit=maxsplit)
 
     def rsplit(self, sep=None, maxsplit=-1):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = [s.rsplit(sep, maxsplit) for s in items]
-        out = _np.array(result, dtype=object)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return _python_string_rsplit(self, sep=sep, maxsplit=maxsplit)
 
     def splitlines(self):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = [s.splitlines() for s in items]
-        out = _np.array(result, dtype=object)
-        if len(self._arr.shape) > 1:
-            out = out.reshape(self._arr.shape)
-        return out
+        return _python_string_splitlines(self)
 
     def partition(self, sep):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        seps = sep if isinstance(sep, (list, tuple)) else [sep]
-        if len(seps) == 1:
-            seps = seps * len(items)
-        result = []
-        for i, s in enumerate(items):
-            sp = seps[i % len(seps)]
-            result.append(s.partition(sp))
-        # Build array of tuples
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            new_shape = list(self._arr.shape) + [3]
-            arr = arr.reshape(new_shape)
-        return chararray._from_array(arr)
+        return _python_string_partition(self, sep, wrap_chararray=True)
 
     def rpartition(self, sep):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        seps = sep if isinstance(sep, (list, tuple)) else [sep]
-        if len(seps) == 1:
-            seps = seps * len(items)
-        result = []
-        for i, s in enumerate(items):
-            sp = seps[i % len(seps)]
-            result.append(s.rpartition(sp))
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            new_shape = list(self._arr.shape) + [3]
-            arr = arr.reshape(new_shape)
-        return chararray._from_array(arr)
+        return _python_string_partition(
+            self,
+            sep,
+            method_name="rpartition",
+            wrap_chararray=True,
+        )
 
     def encode(self, encoding='utf-8', errors='strict'):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = []
-        for s in items:
-            if isinstance(s, bytes):
-                result.append(s)
-            else:
-                result.append(s.encode(encoding, errors))
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return python_string_map(
+            self,
+            lambda item: item if isinstance(item, bytes) else str(item).encode(encoding, errors),
+            wrap_chararray=True,
+        )
 
     def decode(self, encoding='utf-8', errors='strict'):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
-        result = []
-        for s in items:
-            if isinstance(s, bytes):
-                result.append(s.decode(encoding, errors))
-            else:
-                result.append(s)
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return python_string_map(
+            self,
+            lambda item: item.decode(encoding, errors) if isinstance(item, bytes) else item,
+            wrap_chararray=True,
+        )
 
     def join(self, seq):
-        import numpy as _np
-        items = self._arr.flatten().tolist()
         seqs = _to_items(seq)
-        if len(items) == 1 and len(seqs) > 1:
-            items = items * len(seqs)
+        seps, shape = python_string_items(self)
+        if len(seps) == 1 and len(seqs) > 1:
+            seps = seps * len(seqs)
+            shape = (len(seqs),)
         result = []
-        for i, sep in enumerate(items):
-            s = seqs[i % len(seqs)] if i < len(seqs) else seqs[-1]
-            if isinstance(s, (list, tuple)):
-                result.append(sep.join(s))
+        for idx, sep in enumerate(seps):
+            current = seqs[idx] if idx < len(seqs) else seqs[-1]
+            if isinstance(current, (list, tuple)):
+                result.append(str(sep).join(str(part) for part in current))
             else:
-                result.append(sep.join(str(s)))
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+                result.append(str(sep).join(str(current)))
+        return chararray._from_array(array(result).reshape(shape))
 
 
 class _char_mod:
@@ -1029,9 +840,17 @@ class _char_mod:
 
     @staticmethod
     def strip(a, chars=None):
-        if chars is not None and isinstance(a, chararray):
-            return a.strip(chars)
-        return _native_string_output(a, _native.char_strip)
+        if (
+            chars is None
+            and isinstance(a, (ndarray, _ObjectArray))
+            and str(getattr(a, "dtype", "")) == "object"
+        ):
+            from ._core._exceptions import UFuncTypeError
+
+            raise UFuncTypeError("strip", "object arrays are not supported")
+        if chars is None and not isinstance(a, chararray):
+            return _native_string_output(a, _native.char_strip)
+        return _python_string_strip(a, chars)
 
     @staticmethod
     def str_len(a):
@@ -1039,172 +858,86 @@ class _char_mod:
 
     @staticmethod
     def startswith(a, prefix, start=0, end=None):
-        if (start != 0 or end is not None) and isinstance(a, chararray):
-            return a.startswith(prefix, start, end)
-        return _native_bool_output(a, _native.char_startswith, prefix)
+        if start == 0 and end is None and not isinstance(a, chararray):
+            return _native_bool_output(a, _native.char_startswith, prefix)
+        return python_string_map(
+            a,
+            lambda item: str(item).startswith(prefix, start)
+            if end is None
+            else str(item).startswith(prefix, start, end),
+            result_kind="bool",
+        )
 
     @staticmethod
     def endswith(a, suffix, start=0, end=None):
-        if (start != 0 or end is not None) and isinstance(a, chararray):
-            return a.endswith(suffix, start, end)
-        return _native_bool_output(a, _native.char_endswith, suffix)
+        if start == 0 and end is None and not isinstance(a, chararray):
+            return _native_bool_output(a, _native.char_endswith, suffix)
+        return python_string_map(
+            a,
+            lambda item: str(item).endswith(suffix, start)
+            if end is None
+            else str(item).endswith(suffix, start, end),
+            result_kind="bool",
+        )
 
     @staticmethod
     def replace(a, old, new, count=None):
-        if count is not None and isinstance(a, chararray):
-            return a.replace(old, new, count=count)
-        return _native_string_output(a, _native.char_replace, old, new)
+        if count is None and not isinstance(a, chararray):
+            return _native_string_output(a, _native.char_replace, old, new)
+        return _python_string_replace(a, old, new, count=count)
 
     @staticmethod
     def split(a, sep=None, maxsplit=-1):
         """Split each element in a around sep."""
-        if isinstance(a, chararray):
-            return a.split(sep, maxsplit)
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
-        result = []
-        for s in items:
-            result.append(str(s).split(sep, maxsplit))
-        if len(result) == 1:
-            return result[0]
-        return result
+        out = _python_string_split(a, sep=sep, maxsplit=maxsplit)
+        values = out.tolist()
+        return values[0] if len(values) == 1 else values
 
     @staticmethod
     def join(sep, a):
         """Join strings in a with separator sep, element-wise."""
-        if isinstance(a, chararray):
-            items_a = a._arr.flatten().tolist()
-        elif isinstance(a, ndarray):
-            items_a = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items_a = a._data
-        elif isinstance(a, (list, tuple)):
-            items_a = a
-        else:
-            items_a = [a]
-
-        seps = _to_items(sep)
-
-        # If single string, join each char
         if isinstance(a, (str, bytes)):
-            if len(seps) == 1:
-                return seps[0].join(a)
-            result = [s.join(a) for s in seps]
-            return array(result)
-
-        # If items is a list of lists, join each sublist
-        if len(items_a) > 0 and isinstance(items_a[0], (list, tuple)):
-            if len(seps) == 1:
-                seps = seps * len(items_a)
-            result = [str(seps[i]).join(str(x) for x in sub) for i, sub in enumerate(items_a)]
-            return array(result)
-        # Otherwise join all items into a single string
-        if len(seps) == 1:
-            return str(seps[0]).join(str(x) for x in items_a)
-        result = [str(s).join(str(x) for x in items_a) for s in seps]
-        return array(result)
+            return str(sep).join(str(a))
+        if isinstance(a, (list, tuple)) and a and not isinstance(a[0], (list, tuple)):
+            return str(sep).join(str(item) for item in a)
+        seps = python_string_broadcast(sep, len(python_string_items(a)[0]))
+        sep_iter = iter(seps)
+        return python_string_map(
+            a,
+            lambda item: str(next(sep_iter)).join(str(item)),
+        )
 
     @staticmethod
     def find(a, sub, start=0, end=None):
         """Find first occurrence of sub in each element of a."""
-        if isinstance(a, chararray):
-            return a.find(sub, start, end)
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
-        result = []
-        for s in items:
-            s = str(s)
-            if end is None:
-                result.append(s.find(sub, start))
-            else:
-                result.append(s.find(sub, start, end))
-        return array(result)
+        return python_string_search(a, sub, "find", start=start, end=end)
 
     @staticmethod
     def rfind(a, sub, start=0, end=None):
-        if isinstance(a, chararray):
-            return a.rfind(sub, start, end)
-        items = _to_items(a)
-        result = []
-        for s in items:
-            s = str(s)
-            if end is None:
-                result.append(s.rfind(sub, start))
-            else:
-                result.append(s.rfind(sub, start, end))
-        return array(result)
+        return python_string_search(a, sub, "rfind", start=start, end=end)
 
     @staticmethod
     def index(a, sub, start=0, end=None):
-        if isinstance(a, chararray):
-            return a.index(sub, start, end)
         if isinstance(a, (str, bytes)):
             import numpy as _np
             if end is None:
                 return _np.array(a.index(sub, start))
             return _np.array(a.index(sub, start, end))
-        items = _to_items(a)
-        result = []
-        for s in items:
-            s = str(s)
-            if end is None:
-                result.append(s.index(sub, start))
-            else:
-                result.append(s.index(sub, start, end))
-        return array(result)
+        return python_string_search(a, sub, "index", start=start, end=end)
 
     @staticmethod
     def rindex(a, sub, start=0, end=None):
-        if isinstance(a, chararray):
-            return a.rindex(sub, start, end)
         if isinstance(a, (str, bytes)):
             import numpy as _np
             if end is None:
                 return _np.array(a.rindex(sub, start))
             return _np.array(a.rindex(sub, start, end))
-        items = _to_items(a)
-        result = []
-        for s in items:
-            s = str(s)
-            if end is None:
-                result.append(s.rindex(sub, start))
-            else:
-                result.append(s.rindex(sub, start, end))
-        return array(result)
+        return python_string_search(a, sub, "rindex", start=start, end=end)
 
     @staticmethod
     def count(a, sub, start=0, end=None):
         """Count non-overlapping occurrences of sub in each element of a."""
-        if isinstance(a, chararray):
-            return a.count(sub, start, end)
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
-        result = []
-        for s in items:
-            s = str(s)
-            if end is None:
-                result.append(s.count(sub, start))
-            else:
-                result.append(s.count(sub, start, end))
-        return array(result)
+        return python_string_search(a, sub, "count", start=start, end=end)
 
     @staticmethod
     def add(a, b):
@@ -1304,202 +1037,107 @@ class _char_mod:
     @staticmethod
     def center(a, width, fillchar=' '):
         """Pad each string element in a to width, centering the string."""
-        if isinstance(a, chararray):
-            return a.center(width, fillchar)
-        import numpy as _np
-        items = _char_mod._to_str_list(a)
-        widths = width if isinstance(width, (list, tuple)) else [width]
-        if len(widths) == 1:
-            widths = widths * len(items)
-        result = []
-        for i, s in enumerate(items):
-            w = int(widths[i % len(widths)])
-            result.append(s.center(w, fillchar))
-        # For bytes input, return chararray; for plain list/str input, return _ObjectArray
-        if isinstance(a, (ndarray, chararray)):
-            arr = _np.array(result)
-            if isinstance(a, ndarray) and len(a.shape) > 1:
-                arr = arr.reshape(a.shape)
-            return chararray._from_array(arr)
-        return _ObjectArray(result)
+        return _python_string_pad(a, width, "center", fillchar=fillchar)
 
     @staticmethod
     def ljust(a, width, fillchar=' '):
         """Left-justify each string element in a to width."""
-        if isinstance(a, chararray):
-            return a.ljust(width, fillchar)
-        import numpy as _np
-        items = _char_mod._to_str_list(a)
-        widths = width if isinstance(width, (list, tuple)) else [width]
-        if len(widths) == 1:
-            widths = widths * len(items)
-        result = []
-        for i, s in enumerate(items):
-            w = int(widths[i % len(widths)])
-            result.append(s.ljust(w, fillchar))
-        if isinstance(a, (ndarray, chararray)):
-            arr = _np.array(result)
-            if isinstance(a, ndarray) and len(a.shape) > 1:
-                arr = arr.reshape(a.shape)
-            return chararray._from_array(arr)
-        return _ObjectArray(result)
+        return _python_string_pad(a, width, "ljust", fillchar=fillchar)
 
     @staticmethod
     def rjust(a, width, fillchar=' '):
         """Right-justify each string element in a to width."""
-        if isinstance(a, chararray):
-            return a.rjust(width, fillchar)
-        import numpy as _np
-        items = _char_mod._to_str_list(a)
-        widths = width if isinstance(width, (list, tuple)) else [width]
-        if len(widths) == 1:
-            widths = widths * len(items)
-        result = []
-        for i, s in enumerate(items):
-            w = int(widths[i % len(widths)])
-            result.append(s.rjust(w, fillchar))
-        if isinstance(a, (ndarray, chararray)):
-            arr = _np.array(result)
-            if isinstance(a, ndarray) and len(a.shape) > 1:
-                arr = arr.reshape(a.shape)
-            return chararray._from_array(arr)
-        return _ObjectArray(result)
+        return _python_string_pad(a, width, "rjust", fillchar=fillchar)
 
     @staticmethod
     def zfill(a, width):
-        if isinstance(a, chararray):
-            return a.zfill(width)
-        data = _char_mod._to_str_list(a)
-        return _ObjectArray([s.zfill(int(width)) for s in data])
+        return python_string_map(a, lambda item: str(item).zfill(int(width)))
 
     @staticmethod
     def title(a):
-        if isinstance(a, chararray):
-            return a.title()
-        data = _char_mod._to_str_list(a)
-        return _ObjectArray([s.title() for s in data])
+        return _python_string_transform(a, "title")
 
     @staticmethod
     def swapcase(a):
-        if isinstance(a, chararray):
-            return a.swapcase()
-        data = _char_mod._to_str_list(a)
-        return _ObjectArray([s.swapcase() for s in data])
+        return _python_string_transform(a, "swapcase")
 
     @staticmethod
     def isalpha(a):
-        if isinstance(a, chararray):
-            return a.isalpha()
-        data = _char_mod._to_str_list(a)
-        return array([1.0 if s.isalpha() else 0.0 for s in data]).astype("bool")
+        return python_string_predicate(a, lambda item: item.isalpha())
 
     @staticmethod
     def isdigit(a):
-        if isinstance(a, chararray):
-            return a.isdigit()
-        data = _char_mod._to_str_list(a)
-        return array([1.0 if s.isdigit() else 0.0 for s in data]).astype("bool")
+        return python_string_predicate(a, lambda item: item.isdigit())
 
     @staticmethod
     def isnumeric(a):
-        if isinstance(a, chararray):
-            return a.isnumeric()
-        data = _char_mod._to_str_list(a)
-        return array([1.0 if (s.isnumeric() if hasattr(s, 'isnumeric') else s.isdigit()) else 0.0 for s in data]).astype("bool")
+        items, _ = python_string_items(a)
+        for item in items:
+            if isinstance(item, bytes):
+                raise TypeError("isnumeric is only available for unicode strings")
+        return python_string_predicate(a, lambda item: item.isnumeric())
 
     @staticmethod
     def isupper(a):
-        if isinstance(a, chararray):
-            return a.isupper()
-        data = _char_mod._to_str_list(a)
-        return array([1.0 if s.isupper() else 0.0 for s in data]).astype("bool")
+        return python_string_predicate(a, lambda item: item.isupper())
 
     @staticmethod
     def islower(a):
-        if isinstance(a, chararray):
-            return a.islower()
-        data = _char_mod._to_str_list(a)
-        return array([1.0 if s.islower() else 0.0 for s in data]).astype("bool")
+        return python_string_predicate(a, lambda item: item.islower())
 
     @staticmethod
     def isspace(a):
-        if isinstance(a, chararray):
-            return a.isspace()
-        data = _char_mod._to_str_list(a)
-        return array([1.0 if s.isspace() else 0.0 for s in data]).astype("bool")
+        return python_string_predicate(a, lambda item: item.isspace())
 
     @staticmethod
     def isdecimal(a):
-        if isinstance(a, chararray):
-            return a.isdecimal()
-        a = asarray(a)
-        return array([1.0 if str(s).isdecimal() else 0.0 for s in a.flatten().tolist()]).reshape(a.shape).astype("bool")
+        items, _ = python_string_items(a)
+        for item in items:
+            if isinstance(item, bytes):
+                raise TypeError("isdecimal is only available for unicode strings")
+        return python_string_predicate(a, lambda item: item.isdecimal())
 
     @staticmethod
     def expandtabs(a, tabsize=8):
-        if isinstance(a, chararray):
-            return a.expandtabs(tabsize)
-        import numpy as _np
         if isinstance(a, (str, bytes)):
             return a.expandtabs(tabsize)
-        items = _to_items(a)
-        result = [s.expandtabs(tabsize) for s in items]
-        arr = _np.array(result)
-        return chararray._from_array(arr)
+        return _python_string_transform(a, "expandtabs", tabsize)
 
     @staticmethod
     def partition(a, sep):
-        if isinstance(a, chararray):
-            return a.partition(sep)
         if isinstance(a, (str, bytes)):
             return list(a.partition(sep))
-        items = _to_items(a)
-        result = [list(s.partition(sep)) for s in items]
-        return array(result)
+        return _python_string_partition(a, sep)
 
     @staticmethod
     def rpartition(a, sep):
-        if isinstance(a, chararray):
-            return a.rpartition(sep)
         if isinstance(a, (str, bytes)):
             return list(a.rpartition(sep))
-        items = _to_items(a)
-        result = [list(s.rpartition(sep)) for s in items]
-        return array(result)
+        return _python_string_partition(a, sep, method_name="rpartition")
 
     @staticmethod
     def encode(a, encoding='utf-8', errors='strict'):
         """Encode each string element to bytes."""
-        if isinstance(a, chararray):
-            return a.encode(encoding, errors)
         if isinstance(a, (str, bytes)):
             if isinstance(a, bytes):
                 return a
             return a.encode(encoding, errors)
-        data = _char_mod._to_str_list(a)
-        import numpy as _np
-        result = [s.encode(encoding, errors) for s in data]
-        arr = _np.array(result)
-        if isinstance(a, ndarray) and len(a.shape) > 1:
-            arr = arr.reshape(a.shape)
-        return chararray._from_array(arr)
+        return python_string_map(
+            a,
+            lambda item: item if isinstance(item, bytes) else str(item).encode(encoding, errors),
+        )
 
     @staticmethod
     def decode(a, encoding='utf-8', errors='strict'):
         """Decode each bytes element to string."""
-        if isinstance(a, chararray):
-            return a.decode(encoding, errors)
         if isinstance(a, (str, bytes)):
             if isinstance(a, bytes):
                 return a.decode(encoding, errors)
             return a
-        data = _char_mod._to_str_list(a)
-        import numpy as _np
-        result = [s.decode(encoding, errors) if isinstance(s, bytes) else s for s in data]
-        arr = _np.array(result)
-        if isinstance(a, ndarray) and len(a.shape) > 1:
-            arr = arr.reshape(a.shape)
-        return chararray._from_array(arr)
+        return python_string_map(
+            a,
+            lambda item: item.decode(encoding, errors) if isinstance(item, bytes) else item,
+        )
 
 
 char = _char_mod()

@@ -138,3 +138,20 @@ def test_char_join_preserves_shaped_inputs():
     out = np.char.join("-", arr)
     assert out.shape == (2, 2)
     assert out.tolist() == [["a-b", "c-d"], ["e-f", "g-h"]]
+
+
+def test_char_find_preserves_shape():
+    arr = np.array([["hello", "world"], ["color", "cold"]])
+    out = np.char.find(arr, "lo")
+    assert out.shape == (2, 2)
+    assert out.tolist() == [[3, -1], [2, -1]]
+
+
+def test_char_center_matches_chararray_method():
+    arr = np.array(["hi", "yo"])
+    assert np.char.center(arr, 4).tolist() == np.char.asarray(arr).center(4).tolist()
+
+
+def test_char_isalpha_matches_chararray_method():
+    arr = np.array([["abc", "123"], ["xy", "z9"]])
+    assert np.char.isalpha(arr).tolist() == np.char.asarray(arr).isalpha().tolist()
