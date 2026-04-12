@@ -9,8 +9,8 @@ def _unwrap_chararray(value):
     from ._string_ops import chararray
 
     if isinstance(value, chararray):
-        return value._arr, True
-    return value, False
+        return value._arr
+    return value
 
 
 def _shape_of(value):
@@ -30,7 +30,7 @@ def _restore_shape(result, shape):
 
 
 def native_string_unary(value, native_op, *, wrap_chararray=False):
-    raw, was_chararray = _unwrap_chararray(value)
+    raw = _unwrap_chararray(value)
     shape = _shape_of(raw)
     if isinstance(raw, _ObjectArray):
         flat = raw.tolist()
@@ -38,7 +38,7 @@ def native_string_unary(value, native_op, *, wrap_chararray=False):
     else:
         arr = asarray(raw)
     out = _restore_shape(native_op(arr), shape)
-    if wrap_chararray or was_chararray:
+    if wrap_chararray:
         from ._string_ops import chararray
 
         return chararray._from_array(out)
@@ -46,7 +46,7 @@ def native_string_unary(value, native_op, *, wrap_chararray=False):
 
 
 def python_string_map(value, func, *, result_kind="string", wrap_chararray=False):
-    raw, was_chararray = _unwrap_chararray(value)
+    raw = _unwrap_chararray(value)
     shape = _shape_of(raw)
     arr = asarray(raw, dtype=object)
     flat = [func(item) for item in arr.flatten().tolist()]
@@ -55,7 +55,7 @@ def python_string_map(value, func, *, result_kind="string", wrap_chararray=False
         out = out.astype("bool")
     elif result_kind == "int":
         out = out.astype("int64")
-    if wrap_chararray or was_chararray:
+    if wrap_chararray:
         from ._string_ops import chararray
 
         return chararray._from_array(out)
