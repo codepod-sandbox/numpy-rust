@@ -1,0 +1,42 @@
+"""Bridge regressions for string behavior.
+
+`chararray` remains a legacy compatibility surface. It should stay supported as
+a thin shim over the shared string behavior, not as a separate runtime path.
+"""
+
+import numpy as np
+
+
+def test_char_upper_preserves_shape_for_ndarray():
+    arr = np.array([["aa", "bb"], ["cc", "dd"]])
+    out = np.char.upper(arr)
+    assert out.shape == (2, 2)
+    assert out.tolist() == [["AA", "BB"], ["CC", "DD"]]
+
+
+def test_char_strip_preserves_object_array_shape():
+    arr = np.array([["  a  ", " b "], ["c ", "  d"]], dtype=object)
+    out = np.char.strip(arr)
+    assert out.shape == (2, 2)
+    assert out.tolist() == [["a", "b"], ["c", "d"]]
+
+
+def test_chararray_methods_match_np_char_bridge():
+    carr = np.char.asarray([["ab", "cd"], ["ef", "gh"]])
+    expected = np.char.upper(carr._arr)
+    actual = carr.upper()
+    assert actual.shape == (2, 2)
+    assert actual.tolist() == expected.tolist()
+
+
+def test_chararray_compare_keeps_trailing_whitespace_quirk():
+    carr = np.char.asarray(["ab  ", "cd"])
+    out = carr == np.array(["ab", "xx"])
+    assert out.tolist() == [True, False]
+
+
+def test_char_join_preserves_shaped_inputs():
+    arr = np.array([["ab", "cd"], ["ef", "gh"]])
+    out = np.char.join("-", arr)
+    assert out.shape == (2, 2)
+    assert out.tolist() == [["a-b", "c-d"], ["e-f", "g-h"]]
