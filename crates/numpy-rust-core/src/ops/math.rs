@@ -7,6 +7,76 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
+fn map_complex_data<R>(
+    data: &ArrayData,
+    on64: impl FnOnce(&ndarray::ArcArray<Complex<f32>, ndarray::IxDyn>) -> R,
+    on128: impl FnOnce(&ndarray::ArcArray<Complex<f64>, ndarray::IxDyn>) -> R,
+) -> Option<R> {
+    match data {
+        ArrayData::Complex64(a) => Some(on64(a)),
+        ArrayData::Complex128(a) => Some(on128(a)),
+        _ => None,
+    }
+}
+
+fn update_complex32_component(
+    current: &ndarray::ArcArray<Complex<f32>, ndarray::IxDyn>,
+    values: &NdArray,
+    update: impl Fn(Complex<f32>, f32) -> Complex<f32>,
+) -> Option<ArrayData> {
+    let values = values.astype(DType::Float32);
+    let ArrayData::Float32(values) = values.data() else {
+        return None;
+    };
+
+    let replacement_values: Vec<f32> = values.iter().copied().collect();
+    let new_data: Vec<_> = if replacement_values.len() == 1 {
+        current
+            .iter()
+            .map(|&c| update(c, replacement_values[0]))
+            .collect()
+    } else {
+        current
+            .iter()
+            .zip(replacement_values.iter())
+            .map(|(&c, &v)| update(c, v))
+            .collect()
+    };
+
+    ndarray::Array::from_shape_vec(ndarray::IxDyn(current.shape()), new_data)
+        .ok()
+        .map(|arr| ArrayData::Complex64(arr.into_shared()))
+}
+
+fn update_complex128_component(
+    current: &ndarray::ArcArray<Complex<f64>, ndarray::IxDyn>,
+    values: &NdArray,
+    update: impl Fn(Complex<f64>, f64) -> Complex<f64>,
+) -> Option<ArrayData> {
+    let values = values.astype(DType::Float64);
+    let ArrayData::Float64(values) = values.data() else {
+        return None;
+    };
+
+    let replacement_values: Vec<f64> = values.iter().copied().collect();
+    let new_data: Vec<_> = if replacement_values.len() == 1 {
+        current
+            .iter()
+            .map(|&c| update(c, replacement_values[0]))
+            .collect()
+    } else {
+        current
+            .iter()
+            .zip(replacement_values.iter())
+            .map(|(&c, &v)| update(c, v))
+            .collect()
+    };
+
+    ndarray::Array::from_shape_vec(ndarray::IxDyn(current.shape()), new_data)
+        .ok()
+        .map(|arr| ArrayData::Complex128(arr.into_shared()))
+}
+
 /// Helper: ensure array is floating-point (cast int/bool to f64, matching NumPy behavior).
 /// Complex types are kept as-is.
 fn ensure_float(data: &ArrayData) -> ArrayData {
@@ -376,79 +446,39 @@ impl NdArray {
 
     /// Return the real part of the array.
     pub fn real(&self) -> NdArray {
-        match self.data() {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.re).into_shared()))
-            }
-            // Real arrays are their own real part
-            _ => self.clone(),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re).into_shared())),
+            |a| NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.re).into_shared())),
+        )
+        .unwrap_or_else(|| self.clone())
     }
 
     /// Return the imaginary part of the array.
     pub fn imag(&self) -> NdArray {
-        match self.data() {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.im).into_shared()))
-            }
-            // Real arrays have zero imaginary part
-            _ => NdArray::zeros(self.shape(), self.dtype()),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im).into_shared())),
+            |a| NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.im).into_shared())),
+        )
+        .unwrap_or_else(|| NdArray::zeros(self.shape(), self.dtype()))
     }
 
     /// Set the real part of the array from `real_values` (in-place replacement).
     pub fn set_real(&mut self, real_values: &NdArray) {
         match self.data() {
             ArrayData::Complex64(a) => {
-                let re = real_values.astype(crate::DType::Float32);
-                if let ArrayData::Float32(re_arr) = re.data() {
-                    let re_vec: Vec<f32> = re_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if re_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(re_vec[0], c.im))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(re_vec.iter())
-                            .map(|(c, &r)| num_complex::Complex::new(r, c.im))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.replace_data_with_dtype(
-                            ArrayData::Complex64(new_arr.into_shared()),
-                            DType::Complex64,
-                        );
-                    }
+                if let Some(new_data) =
+                    update_complex32_component(a, real_values, |c, re| Complex::new(re, c.im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex64);
                 }
             }
             ArrayData::Complex128(a) => {
-                let re = real_values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(re_arr) = re.data() {
-                    let re_vec: Vec<f64> = re_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if re_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(re_vec[0], c.im))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(re_vec.iter())
-                            .map(|(c, &r)| num_complex::Complex::new(r, c.im))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.replace_data_with_dtype(
-                            ArrayData::Complex128(new_arr.into_shared()),
-                            DType::Complex128,
-                        );
-                    }
+                if let Some(new_data) =
+                    update_complex128_component(a, real_values, |c, re| Complex::new(re, c.im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex128);
                 }
             }
             _ => {
@@ -462,49 +492,17 @@ impl NdArray {
     pub fn set_imag(&mut self, imag_values: &NdArray) {
         match self.data() {
             ArrayData::Complex64(a) => {
-                let im = imag_values.astype(crate::DType::Float32);
-                if let ArrayData::Float32(im_arr) = im.data() {
-                    let im_vec: Vec<f32> = im_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if im_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(c.re, im_vec[0]))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(im_vec.iter())
-                            .map(|(c, &v)| num_complex::Complex::new(c.re, v))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.replace_data_with_dtype(
-                            ArrayData::Complex64(new_arr.into_shared()),
-                            DType::Complex64,
-                        );
-                    }
+                if let Some(new_data) =
+                    update_complex32_component(a, imag_values, |c, im| Complex::new(c.re, im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex64);
                 }
             }
             ArrayData::Complex128(a) => {
-                let im = imag_values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(im_arr) = im.data() {
-                    let im_vec: Vec<f64> = im_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if im_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(c.re, im_vec[0]))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(im_vec.iter())
-                            .map(|(c, &v)| num_complex::Complex::new(c.re, v))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.replace_data_with_dtype(
-                            ArrayData::Complex128(new_arr.into_shared()),
-                            DType::Complex128,
-                        );
-                    }
+                if let Some(new_data) =
+                    update_complex128_component(a, imag_values, |c, im| Complex::new(c.re, im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex128);
                 }
             }
             _ => {
@@ -515,30 +513,22 @@ impl NdArray {
 
     /// Return the complex conjugate.
     pub fn conj(&self) -> NdArray {
-        match self.data() {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj()).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Complex128(a.mapv(|c| c.conj()).into_shared()))
-            }
-            // Conjugate of real is self
-            _ => self.clone(),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj()).into_shared())),
+            |a| NdArray::from_data(ArrayData::Complex128(a.mapv(|c| c.conj()).into_shared())),
+        )
+        .unwrap_or_else(|| self.clone())
     }
 
     /// Return the angle (argument) of complex elements.
     pub fn angle(&self) -> NdArray {
-        match self.data() {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.arg()).into_shared()))
-            }
-            // Angle of positive real is 0
-            _ => NdArray::zeros(self.shape(), DType::Float64),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()).into_shared())),
+            |a| NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.arg()).into_shared())),
+        )
+        .unwrap_or_else(|| NdArray::zeros(self.shape(), DType::Float64))
     }
 
     /// Round to given number of decimal places.
@@ -1373,6 +1363,36 @@ mod tests {
         let r = a.real();
         assert_eq!(r.dtype(), DType::Float64);
         assert_eq!(r.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_set_real_complex_scalar_broadcast() {
+        let mut a =
+            NdArray::from_complex128_vec(vec![Complex::new(1.0, 2.0), Complex::new(3.0, 4.0)]);
+        a.set_real(&NdArray::from_vec(vec![9.0_f64]));
+
+        let ArrayData::Complex128(arr) = a.data() else {
+            panic!();
+        };
+        assert_eq!(arr[[0]].re, 9.0);
+        assert_eq!(arr[[0]].im, 2.0);
+        assert_eq!(arr[[1]].re, 9.0);
+        assert_eq!(arr[[1]].im, 4.0);
+    }
+
+    #[test]
+    fn test_set_imag_complex_elementwise() {
+        let mut a =
+            NdArray::from_complex64_vec(vec![Complex::new(1.0f32, 2.0), Complex::new(3.0, 4.0)]);
+        a.set_imag(&NdArray::from_vec(vec![7.0_f32, 8.0]));
+
+        let ArrayData::Complex64(arr) = a.data() else {
+            panic!();
+        };
+        assert_eq!(arr[[0]].re, 1.0);
+        assert_eq!(arr[[0]].im, 7.0);
+        assert_eq!(arr[[1]].re, 3.0);
+        assert_eq!(arr[[1]].im, 8.0);
     }
 
     #[test]
