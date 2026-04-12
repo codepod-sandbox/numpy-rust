@@ -4,6 +4,7 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
 use crate::resolver::resolve_assignment_cast;
+use crate::storage::{array_data_to_scalar, normalize_string_assignment, scalar_to_array_data};
 use crate::DType;
 use crate::NdArray;
 
@@ -50,67 +51,35 @@ impl Scalar {
     }
 }
 
-fn scalar_to_array_data(value: &Scalar) -> ArrayData {
-    match value {
-        Scalar::Bool(v) => {
-            ArrayData::Bool(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
-        }
-        Scalar::Int32(v) => {
-            ArrayData::Int32(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
-        }
-        Scalar::Int64(v) => {
-            ArrayData::Int64(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
-        }
-        Scalar::Float32(v) => {
-            ArrayData::Float32(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
-        }
-        Scalar::Float64(v) => {
-            ArrayData::Float64(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
-        }
-        Scalar::Complex64(v) => {
-            ArrayData::Complex64(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
-        }
-        Scalar::Complex128(v) => {
-            ArrayData::Complex128(ndarray::ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
-        }
-        Scalar::Str(v) => {
-            ArrayData::Str(ndarray::ArrayD::from_elem(IxDyn(&[]), v.clone()).into_shared())
-        }
-    }
-}
-
-fn array_data_to_scalar(data: &ArrayData) -> Scalar {
-    match data {
-        ArrayData::Bool(a) => Scalar::Bool(a[IxDyn(&[])]),
-        ArrayData::Int32(a) => Scalar::Int32(a[IxDyn(&[])]),
-        ArrayData::Int64(a) => Scalar::Int64(a[IxDyn(&[])]),
-        ArrayData::Float32(a) => Scalar::Float32(a[IxDyn(&[])]),
-        ArrayData::Float64(a) => Scalar::Float64(a[IxDyn(&[])]),
-        ArrayData::Complex64(a) => Scalar::Complex64(a[IxDyn(&[])]),
-        ArrayData::Complex128(a) => Scalar::Complex128(a[IxDyn(&[])]),
-        ArrayData::Str(a) => Scalar::Str(a[IxDyn(&[])].clone()),
-    }
-}
-
-fn coerce_scalar_for_assignment(value: Scalar, target: DType) -> Result<Scalar> {
-    let plan = resolve_assignment_cast(value.dtype(), target)?;
+fn coerce_scalar_for_assignment(
+    value: Scalar,
+    target: &ArrayData,
+    target_dtype: DType,
+) -> Result<Scalar> {
+    let plan = resolve_assignment_cast(value.dtype(), target_dtype)?;
     let mut data = crate::casting::cast_array_data(
         &scalar_to_array_data(&value),
         plan.execution_storage_dtype(),
     );
     if plan.requires_narrowing() {
-        data = crate::casting::narrow_truncate(data, target);
+        data = crate::casting::narrow_truncate(data, target_dtype);
     }
+    let data = normalize_string_assignment(target, data);
     Ok(array_data_to_scalar(&data))
 }
 
-fn coerce_array_for_assignment(values: &NdArray, target: DType) -> Result<NdArray> {
-    resolve_assignment_cast(values.dtype(), target)?;
-    Ok(if values.dtype() == target {
-        values.clone()
+fn coerce_array_for_assignment(
+    values: &NdArray,
+    target: &ArrayData,
+    target_dtype: DType,
+) -> Result<ArrayData> {
+    resolve_assignment_cast(values.dtype(), target_dtype)?;
+    let data = if values.dtype() == target_dtype {
+        values.data().clone()
     } else {
-        values.astype(target)
-    })
+        values.astype(target_dtype).data().clone()
+    };
+    Ok(normalize_string_assignment(target, data))
 }
 
 impl NdArray {
@@ -250,14 +219,14 @@ impl NdArray {
             });
         }
 
-        let cast_values = coerce_array_for_assignment(values, self.dtype())?;
-        self.mutate_data(|data| data.assign_indexed(axis, indices, cast_values.data()))
+        let cast_values = coerce_array_for_assignment(values, self.data(), self.dtype())?;
+        self.mutate_data(|data| data.assign_indexed(axis, indices, &cast_values))
     }
 
     /// Set a single element by multi-dimensional index.
     pub fn set(&mut self, index: &[usize], value: Scalar) -> Result<()> {
         let idx = IxDyn(index);
-        let value = coerce_scalar_for_assignment(value, self.dtype())?;
+        let value = coerce_scalar_for_assignment(value, self.data(), self.dtype())?;
         self.mutate_data(|data| match (data, value) {
             (ArrayData::Bool(a), Scalar::Bool(v)) => {
                 let elem = a
@@ -359,8 +328,8 @@ impl NdArray {
         }
 
         let info: Vec<SliceInfoElem> = slice_elems;
-        let cast_values = coerce_array_for_assignment(values, self.dtype())?;
-        self.mutate_data(|data| data.assign_slice(info.as_slice(), cast_values.data()))
+        let cast_values = coerce_array_for_assignment(values, self.data(), self.dtype())?;
+        self.mutate_data(|data| data.assign_slice(info.as_slice(), &cast_values))
     }
 
     /// Set elements where mask is true to the corresponding values.
@@ -389,8 +358,8 @@ impl NdArray {
             )));
         }
 
-        let cast_values = coerce_array_for_assignment(values, self.dtype())?;
-        self.mutate_data(|data| data.assign_masked(&flat_mask, cast_values.data()))
+        let cast_values = coerce_array_for_assignment(values, self.data(), self.dtype())?;
+        self.mutate_data(|data| data.assign_masked(&flat_mask, &cast_values))
     }
 
     /// Select elements where mask is true, returning a 1-D array.

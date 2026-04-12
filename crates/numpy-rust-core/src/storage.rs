@@ -102,6 +102,74 @@ pub(crate) fn mutate_storage_with_guard<R>(
     storage.with_data_mut(mutate)
 }
 
+pub(crate) fn scalar_to_array_data(value: &crate::indexing::Scalar) -> ArrayData {
+    match value {
+        crate::indexing::Scalar::Bool(v) => {
+            ArrayData::Bool(ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        crate::indexing::Scalar::Int32(v) => {
+            ArrayData::Int32(ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        crate::indexing::Scalar::Int64(v) => {
+            ArrayData::Int64(ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        crate::indexing::Scalar::Float32(v) => {
+            ArrayData::Float32(ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        crate::indexing::Scalar::Float64(v) => {
+            ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        crate::indexing::Scalar::Complex64(v) => {
+            ArrayData::Complex64(ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        crate::indexing::Scalar::Complex128(v) => {
+            ArrayData::Complex128(ArrayD::from_elem(IxDyn(&[]), *v).into_shared())
+        }
+        crate::indexing::Scalar::Str(v) => {
+            ArrayData::Str(ArrayD::from_elem(IxDyn(&[]), v.clone()).into_shared())
+        }
+    }
+}
+
+pub(crate) fn array_data_to_scalar(data: &ArrayData) -> crate::indexing::Scalar {
+    match data {
+        ArrayData::Bool(a) => crate::indexing::Scalar::Bool(a[IxDyn(&[])]),
+        ArrayData::Int32(a) => crate::indexing::Scalar::Int32(a[IxDyn(&[])]),
+        ArrayData::Int64(a) => crate::indexing::Scalar::Int64(a[IxDyn(&[])]),
+        ArrayData::Float32(a) => crate::indexing::Scalar::Float32(a[IxDyn(&[])]),
+        ArrayData::Float64(a) => crate::indexing::Scalar::Float64(a[IxDyn(&[])]),
+        ArrayData::Complex64(a) => crate::indexing::Scalar::Complex64(a[IxDyn(&[])]),
+        ArrayData::Complex128(a) => crate::indexing::Scalar::Complex128(a[IxDyn(&[])]),
+        ArrayData::Str(a) => crate::indexing::Scalar::Str(a[IxDyn(&[])].clone()),
+    }
+}
+
+pub(crate) fn normalize_string_assignment(target: &ArrayData, value: ArrayData) -> ArrayData {
+    let Some(width) = string_width(target) else {
+        return value;
+    };
+
+    match value {
+        ArrayData::Str(values) => ArrayData::Str(
+            values
+                .mapv(|s| truncate_string_to_width(s, width))
+                .into_shared(),
+        ),
+        other => other,
+    }
+}
+
+fn string_width(data: &ArrayData) -> Option<usize> {
+    match data {
+        ArrayData::Str(values) => values.iter().map(|s| s.chars().count()).max(),
+        _ => None,
+    }
+}
+
+fn truncate_string_to_width(value: String, width: usize) -> String {
+    value.chars().take(width).collect()
+}
+
 #[derive(Clone, Copy)]
 enum FillValue {
     Zero,
