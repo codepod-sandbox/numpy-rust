@@ -6,6 +6,76 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
+fn prepare_numeric_float64_input(
+    array: &NdArray,
+    axis: Option<usize>,
+    op_name: &str,
+) -> Result<ArrayD<f64>> {
+    if array.dtype().is_string() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for string arrays"
+        )));
+    }
+    if array.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+
+    let cast = array.astype(DType::Float64);
+    if let Some(ax) = axis {
+        if ax >= cast.ndim() {
+            return Err(NumpyError::InvalidAxis {
+                axis: ax,
+                ndim: cast.ndim(),
+            });
+        }
+    }
+
+    let ArrayData::Float64(arr) = cast.data() else {
+        unreachable!()
+    };
+    Ok(arr.clone())
+}
+
+fn prepare_int64_flat_input(array: &NdArray) -> Vec<i64> {
+    let cast = array.flatten().astype(DType::Int64);
+    let ArrayData::Int64(arr) = cast.data() else {
+        unreachable!()
+    };
+    arr.iter().copied().collect()
+}
+
+fn prepare_float64_flat_input(array: &NdArray) -> Vec<f64> {
+    let cast = array.flatten().astype(DType::Float64);
+    let ArrayData::Float64(arr) = cast.data() else {
+        unreachable!()
+    };
+    arr.iter().copied().collect()
+}
+
+fn execute_float64_axis_stat<FAll, FAxis>(
+    array: &NdArray,
+    axis: Option<usize>,
+    op_name: &str,
+    reduce_all: FAll,
+    reduce_axis: FAxis,
+) -> Result<NdArray>
+where
+    FAll: FnOnce(&ArrayD<f64>) -> Result<f64>,
+    FAxis: FnOnce(&ArrayD<f64>, usize) -> Result<ArrayD<f64>>,
+{
+    let arr = prepare_numeric_float64_input(array, axis, op_name)?;
+
+    Ok(match axis {
+        None => NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
+            IxDyn(&[]),
+            reduce_all(&arr)?,
+        ))),
+        Some(ax) => NdArray::from_data(ArrayData::Float64(reduce_axis(&arr, ax)?)),
+    })
+}
+
 impl NdArray {
     /// Compute the q-th quantile (0.0 to 1.0) using linear interpolation.
     /// axis=None: compute over flattened array.
@@ -16,42 +86,19 @@ impl NdArray {
                 q
             )));
         }
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "quantile not supported for string arrays".into(),
-            ));
-        }
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "quantile not supported for complex arrays".into(),
-            ));
-        }
-
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = f.data() else {
-            unreachable!()
-        };
-
-        match axis {
-            None => {
+        execute_float64_axis_stat(
+            self,
+            axis,
+            "quantile",
+            |arr| {
                 let mut flat: Vec<f64> = arr.iter().copied().collect();
                 if flat.is_empty() {
                     return Err(NumpyError::ValueError("empty array".into()));
                 }
                 flat.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                let val = interpolate_quantile(&flat, q);
-                Ok(NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
-                    IxDyn(&[]),
-                    val,
-                ))))
-            }
-            Some(ax) => {
-                if ax >= self.ndim() {
-                    return Err(NumpyError::InvalidAxis {
-                        axis: ax,
-                        ndim: self.ndim(),
-                    });
-                }
+                Ok(interpolate_quantile(&flat, q))
+            },
+            |arr, ax| {
                 let mut result_shape = arr.shape().to_vec();
                 result_shape.remove(ax);
                 let result_dim = if result_shape.is_empty() {
@@ -65,9 +112,9 @@ impl NdArray {
                     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     *result_elem = interpolate_quantile(&v, q);
                 }
-                Ok(NdArray::from_data(ArrayData::Float64(result)))
-            }
-        }
+                Ok(result)
+            },
+        )
     }
 
     /// Compute the q-th percentile (0 to 100).
@@ -87,13 +134,10 @@ impl NdArray {
             return Err(NumpyError::ValueError("bins must be > 0".into()));
         }
 
-        let f = self.flatten().astype(DType::Float64);
-        let ArrayData::Float64(arr) = f.data() else {
-            unreachable!()
-        };
-
-        // Collect non-NaN values
-        let values: Vec<f64> = arr.iter().copied().filter(|v| !v.is_nan()).collect();
+        let values: Vec<f64> = prepare_float64_flat_input(self)
+            .into_iter()
+            .filter(|v| !v.is_nan())
+            .collect();
 
         let (lo, hi) = match range {
             Some((l, h)) => (l, h),
@@ -142,12 +186,7 @@ impl NdArray {
     /// - Without weights, returns Int64.
     /// - `minlength` sets minimum output length.
     pub fn bincount(&self, weights: Option<&NdArray>, minlength: usize) -> Result<NdArray> {
-        let int_arr = self.flatten().astype(DType::Int64);
-        let ArrayData::Int64(arr) = int_arr.data() else {
-            unreachable!()
-        };
-
-        let flat: Vec<i64> = arr.iter().copied().collect();
+        let flat = prepare_int64_flat_input(self);
 
         // Validate non-negative
         for &v in &flat {
@@ -163,18 +202,15 @@ impl NdArray {
 
         match weights {
             Some(w) => {
-                let w_flat = w.flatten().astype(DType::Float64);
-                let ArrayData::Float64(w_arr) = w_flat.data() else {
-                    unreachable!()
-                };
-                if w_arr.len() != flat.len() {
+                let weights = prepare_float64_flat_input(w);
+                if weights.len() != flat.len() {
                     return Err(NumpyError::ValueError(
                         "bincount: weights must have the same length as input".into(),
                     ));
                 }
                 let mut result = vec![0.0f64; out_len];
                 for (i, &v) in flat.iter().enumerate() {
-                    result[v as usize] += w_arr[i];
+                    result[v as usize] += weights[i];
                 }
                 Ok(NdArray::from_vec(result))
             }
