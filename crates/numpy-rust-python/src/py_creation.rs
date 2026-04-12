@@ -3,6 +3,7 @@ use rustpython_vm as vm;
 use vm::builtins::{PyList, PyStr, PyTuple};
 use vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine};
 
+use numpy_rust_core::indexing::Scalar;
 use numpy_rust_core::{DType, NdArray};
 
 use crate::py_array::{extract_shape, parse_dtype, PyNdArray};
@@ -210,6 +211,30 @@ pub fn object_to_ndarray_weak(
     }
 
     object_to_ndarray(obj, vm)
+}
+
+pub fn object_to_scalar(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Scalar> {
+    if let Some(tuple) = obj.downcast_ref::<PyTuple>() {
+        let elems = tuple.as_slice();
+        if elems.len() == 2 {
+            let re = elems[0].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
+            let im = elems[1].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
+            return Ok(Scalar::Complex128(Complex::new(re, im)));
+        }
+    }
+
+    let arr = object_to_ndarray(obj, vm)?;
+    if arr.size() != 1 {
+        return Err(vm.new_type_error(format!(
+            "cannot convert value to array scalar (shape={:?}, size={})",
+            arr.shape(),
+            arr.size()
+        )));
+    }
+
+    let coord = vec![0; arr.ndim()];
+    arr.get(&coord)
+        .map_err(|e| vm.new_type_error(e.to_string()))
 }
 
 /// numpy.array(data) — convert a Python list to an NdArray.

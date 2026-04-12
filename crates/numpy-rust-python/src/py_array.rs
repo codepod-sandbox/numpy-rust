@@ -323,37 +323,7 @@ fn scalar_to_0d_ndarray(s: Scalar) -> NdArray {
 
 /// Convert a Python object to a generic core Scalar.
 pub(crate) fn py_obj_to_scalar(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Scalar> {
-    if obj.class().is(vm.ctx.types.bool_type) {
-        let b = obj.clone().try_into_value::<bool>(vm)?;
-        return Ok(Scalar::Bool(b));
-    }
-    if let Some(c) = obj.downcast_ref::<vm::builtins::PyComplex>() {
-        let cx = c.to_complex();
-        return Ok(Scalar::Complex128(num_complex::Complex::new(cx.re, cx.im)));
-    }
-    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
-        return Ok(Scalar::Str(s.as_str().to_owned()));
-    }
-    // Handle (re, im) tuples (our complex scalar representation)
-    if let Some(tup) = obj.downcast_ref::<vm::builtins::PyTuple>() {
-        let elems = tup.as_slice();
-        if elems.len() == 2 {
-            let re = elems[0].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
-            let im = elems[1].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
-            return Ok(Scalar::Complex128(num_complex::Complex::new(re, im)));
-        }
-    }
-    if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-        if let Ok(val) = i.try_to_primitive::<i64>(vm) {
-            return Ok(Scalar::Int64(val));
-        }
-        let f = obj.clone().try_into_value::<f64>(vm)?;
-        return Ok(Scalar::Float64(f));
-    }
-    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
-        return Ok(Scalar::Float64(f));
-    }
-    Err(vm.new_type_error("cannot convert value to array scalar".to_owned()))
+    crate::py_creation::object_to_scalar(obj, vm)
 }
 
 /// Convert a Python object (int, float, or complex) to f64.

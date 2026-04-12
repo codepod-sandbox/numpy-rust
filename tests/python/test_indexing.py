@@ -251,6 +251,17 @@ def test_setitem_2d_row_assignment_coerces_in_runtime():
     assert_eq(int(a[(0, 1)]), 20)
     assert_eq(int(a[(0, 2)]), 30)
 
+def test_setitem_scalar_accepts_size_one_array():
+    a = np.array([1, 2, 3], dtype="int32")
+    a[0] = np.array([9.75])
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[0]), 9)
+
+def test_setitem_complex_scalar_tuple():
+    a = np.zeros(1, dtype="complex128")
+    a[0] = (1.0, 2.0)
+    assert_eq(a.item(), (1.0, 2.0))
+
 
 # --- tolist ---
 
