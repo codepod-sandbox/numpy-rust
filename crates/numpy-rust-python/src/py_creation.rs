@@ -68,6 +68,16 @@ fn scalar_ndarray_with_dtype(
         }
     }
 
+    if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+        if let Ok(value) = i.try_to_primitive::<i64>(vm) {
+            let arr = NdArray::from_scalar(value as f64);
+            return Ok(match dtype {
+                Some(dt) => arr.astype(dt),
+                None => arr,
+            });
+        }
+    }
+
     if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
         let arr = NdArray::from_scalar(f);
         return Ok(match dtype {
@@ -152,7 +162,20 @@ fn build_sequence_array(
         SequenceKind::Floats => {
             let values = items
                 .iter()
-                .map(|item| item.clone().try_into_value::<f64>(vm))
+                .map(|item| object_to_scalar(item, vm))
+                .collect::<PyResult<Vec<_>>>()?
+                .into_iter()
+                .map(|scalar| match scalar {
+                    Scalar::Bool(value) => Ok(if value { 1.0 } else { 0.0 }),
+                    Scalar::Int32(value) => Ok(value as f64),
+                    Scalar::Int64(value) => Ok(value as f64),
+                    Scalar::Float32(value) => Ok(value as f64),
+                    Scalar::Float64(value) => Ok(value),
+                    Scalar::Complex64(_) | Scalar::Complex128(_) => {
+                        Err(vm.new_type_error("mixed types in sequence".to_owned()))
+                    }
+                    Scalar::Str(_) => Err(vm.new_type_error("mixed types in sequence".to_owned())),
+                })
                 .collect::<PyResult<Vec<_>>>()?;
             Ok(NdArray::from_vec(values))
         }

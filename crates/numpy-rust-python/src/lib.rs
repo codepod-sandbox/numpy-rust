@@ -99,14 +99,14 @@ pub mod _numpy_native {
         }
     }
 
-    fn extract_ndarray_sequence(
+    fn extract_core_array_sequence(
         obj: &PyObjectRef,
         vm: &VirtualMachine,
-    ) -> PyResult<Vec<vm::PyRef<PyNdArray>>> {
-        let items = py_sequence_items(obj, vm, "expected list or tuple of arrays")?;
+    ) -> PyResult<Vec<numpy_rust_core::NdArray>> {
+        let items = py_sequence_items(obj, vm, "expected list or tuple of array-like values")?;
         items
             .into_iter()
-            .map(|item| item.try_into_value::<vm::PyRef<PyNdArray>>(vm))
+            .map(|item| obj_to_ndarray(&item, vm))
             .collect::<PyResult<Vec<_>>>()
     }
 
@@ -1327,12 +1327,10 @@ pub mod _numpy_native {
         choices: PyObjectRef,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
-        let py_arrays = extract_ndarray_sequence(&choices, vm).map_err(|_| {
-            vm.new_type_error("choose requires a list or tuple of arrays".to_owned())
+        let arrays = extract_core_array_sequence(&choices, vm).map_err(|_| {
+            vm.new_type_error("choose requires a list or tuple of array-like values".to_owned())
         })?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            py_arrays.iter().map(|c| c.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let refs: Vec<&numpy_rust_core::NdArray> = arrays.iter().collect();
         numpy_rust_core::choose(&a.inner(), &refs)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1724,13 +1722,6 @@ pub mod _numpy_native {
 
     // --- Stacking helpers ---
 
-    fn extract_ndarray_list(
-        obj: &PyObjectRef,
-        vm: &VirtualMachine,
-    ) -> PyResult<Vec<vm::PyRef<PyNdArray>>> {
-        extract_ndarray_sequence(obj, vm)
-    }
-
     #[pyfunction]
     fn stack_native(
         arrays: PyObjectRef,
@@ -1738,10 +1729,8 @@ pub mod _numpy_native {
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         let ax = axis.unwrap_or(0);
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         numpy_rust_core::stack(&refs, ax)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1749,10 +1738,8 @@ pub mod _numpy_native {
 
     #[pyfunction]
     fn column_stack(arrays: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         numpy_rust_core::column_stack(&refs)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1760,10 +1747,8 @@ pub mod _numpy_native {
 
     #[pyfunction]
     fn dstack(arrays: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         numpy_rust_core::dstack(&refs)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1778,10 +1763,8 @@ pub mod _numpy_native {
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let idx = indexing.as_ref().map(|s| s.as_str()).unwrap_or("xy");
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         let result =
             numpy_rust_core::meshgrid(&refs, idx).map_err(|e| vm.new_value_error(e.to_string()))?;
         let py_arrays: Vec<PyObjectRef> = result
