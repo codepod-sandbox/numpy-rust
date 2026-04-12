@@ -95,6 +95,20 @@ pub enum MathUnaryKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathBinaryKernelOp {
+    CopySign,
+    Hypot,
+    FMod,
+    NextAfter,
+    LogAddExp,
+    LogAddExp2,
+    FMax,
+    FMin,
+    Maximum,
+    Minimum,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionKernelOp {
     Sum,
     Prod,
@@ -115,6 +129,7 @@ pub type WhereArrayKernel = fn(ArrayData, ArrayData, ArrayData) -> Result<ArrayD
 pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type PredicatePresenceKernel = fn(&ArrayData) -> Result<bool>;
 pub type UnaryArrayKernel = fn(ArrayData) -> Result<ArrayData>;
+pub type BinaryMathArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -392,6 +407,35 @@ pub fn math_unary_kernel_for_dtype(
         (DType::Float64, MathUnaryKernelOp::Y0) => Some(unary_y0_float64),
         (DType::Float32, MathUnaryKernelOp::Y1) => Some(unary_y1_float32),
         (DType::Float64, MathUnaryKernelOp::Y1) => Some(unary_y1_float64),
+        _ => None,
+    }
+}
+
+pub fn math_binary_kernel_for_dtype(
+    dtype: DType,
+    op: MathBinaryKernelOp,
+) -> Option<BinaryMathArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float32, MathBinaryKernelOp::CopySign) => Some(binary_copysign_float32),
+        (DType::Float64, MathBinaryKernelOp::CopySign) => Some(binary_copysign_float64),
+        (DType::Float32, MathBinaryKernelOp::Hypot) => Some(binary_hypot_float32),
+        (DType::Float64, MathBinaryKernelOp::Hypot) => Some(binary_hypot_float64),
+        (DType::Float32, MathBinaryKernelOp::FMod) => Some(binary_fmod_float32),
+        (DType::Float64, MathBinaryKernelOp::FMod) => Some(binary_fmod_float64),
+        (DType::Float32, MathBinaryKernelOp::NextAfter) => Some(binary_nextafter_float32),
+        (DType::Float64, MathBinaryKernelOp::NextAfter) => Some(binary_nextafter_float64),
+        (DType::Float32, MathBinaryKernelOp::LogAddExp) => Some(binary_logaddexp_float32),
+        (DType::Float64, MathBinaryKernelOp::LogAddExp) => Some(binary_logaddexp_float64),
+        (DType::Float32, MathBinaryKernelOp::LogAddExp2) => Some(binary_logaddexp2_float32),
+        (DType::Float64, MathBinaryKernelOp::LogAddExp2) => Some(binary_logaddexp2_float64),
+        (DType::Float32, MathBinaryKernelOp::FMax) => Some(binary_fmax_float32),
+        (DType::Float64, MathBinaryKernelOp::FMax) => Some(binary_fmax_float64),
+        (DType::Float32, MathBinaryKernelOp::FMin) => Some(binary_fmin_float32),
+        (DType::Float64, MathBinaryKernelOp::FMin) => Some(binary_fmin_float64),
+        (DType::Float32, MathBinaryKernelOp::Maximum) => Some(binary_maximum_float32),
+        (DType::Float64, MathBinaryKernelOp::Maximum) => Some(binary_maximum_float64),
+        (DType::Float32, MathBinaryKernelOp::Minimum) => Some(binary_minimum_float32),
+        (DType::Float64, MathBinaryKernelOp::Minimum) => Some(binary_minimum_float64),
         _ => None,
     }
 }
@@ -862,6 +906,97 @@ unary_math_kernel!(unary_y0_float32, Float32, libm::y0f);
 unary_math_kernel!(unary_y0_float64, Float64, libm::y0);
 unary_math_kernel!(unary_y1_float32, Float32, libm::y1f);
 unary_math_kernel!(unary_y1_float64, Float64, libm::y1);
+
+macro_rules! binary_math_kernel {
+    ($name:ident, $variant:ident, $op:expr) => {
+        fn $name(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+            match (lhs, rhs) {
+                (ArrayData::$variant(a), ArrayData::$variant(b)) => Ok(ArrayData::$variant(
+                    ndarray::Zip::from(&a)
+                        .and(&b)
+                        .map_collect(|&x, &y| $op(x, y))
+                        .into_shared(),
+                )),
+                _ => Err(NumpyError::TypeError(
+                    "binary math kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+binary_math_kernel!(binary_copysign_float32, Float32, libm::copysignf);
+binary_math_kernel!(binary_copysign_float64, Float64, libm::copysign);
+binary_math_kernel!(binary_hypot_float32, Float32, libm::hypotf);
+binary_math_kernel!(binary_hypot_float64, Float64, libm::hypot);
+binary_math_kernel!(binary_fmod_float32, Float32, libm::fmodf);
+binary_math_kernel!(binary_fmod_float64, Float64, libm::fmod);
+binary_math_kernel!(binary_nextafter_float32, Float32, libm::nextafterf);
+binary_math_kernel!(binary_nextafter_float64, Float64, libm::nextafter);
+binary_math_kernel!(binary_logaddexp_float32, Float32, |a: f32, b: f32| {
+    if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else {
+        let mx = a.max(b);
+        mx + (1.0_f32 + (-(a - b).abs()).exp()).ln()
+    }
+});
+binary_math_kernel!(binary_logaddexp_float64, Float64, |a: f64, b: f64| {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        let mx = a.max(b);
+        mx + (1.0_f64 + (-(a - b).abs()).exp()).ln()
+    }
+});
+binary_math_kernel!(binary_logaddexp2_float32, Float32, |a: f32, b: f32| {
+    if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else {
+        let mx = a.max(b);
+        mx + (1.0_f32 + (-(a - b).abs()).exp2()).log2()
+    }
+});
+binary_math_kernel!(binary_logaddexp2_float64, Float64, |a: f64, b: f64| {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        let mx = a.max(b);
+        mx + (1.0_f64 + (-(a - b).abs()).exp2()).log2()
+    }
+});
+binary_math_kernel!(binary_fmax_float32, Float32, f32::max);
+binary_math_kernel!(binary_fmax_float64, Float64, f64::max);
+binary_math_kernel!(binary_fmin_float32, Float32, f32::min);
+binary_math_kernel!(binary_fmin_float64, Float64, f64::min);
+binary_math_kernel!(binary_maximum_float32, Float32, |a: f32, b: f32| {
+    if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else {
+        a.max(b)
+    }
+});
+binary_math_kernel!(binary_maximum_float64, Float64, |a: f64, b: f64| {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+});
+binary_math_kernel!(binary_minimum_float32, Float32, |a: f32, b: f32| {
+    if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else {
+        a.min(b)
+    }
+});
+binary_math_kernel!(binary_minimum_float64, Float64, |a: f64, b: f64| {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
+});
 
 pub(crate) fn complex_cmp<T: num_traits::Float>(
     a: &Complex<T>,

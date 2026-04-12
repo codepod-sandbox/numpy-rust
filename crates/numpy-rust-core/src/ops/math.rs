@@ -6,7 +6,7 @@ use crate::casting::cast_array_data;
 use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
-use crate::kernel::MathUnaryKernelOp;
+use crate::kernel::{MathBinaryKernelOp, MathUnaryKernelOp};
 use crate::NdArray;
 
 fn map_complex_data<R>(
@@ -117,6 +117,39 @@ fn execute_real_math_unary(
     Ok(execute_math_unary(input, op))
 }
 
+fn execute_real_math_binary(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: MathBinaryKernelOp,
+    op_name: &'static str,
+) -> Result<NdArray> {
+    if lhs.dtype().is_complex() || rhs.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+
+    let lhs_data = ensure_float(lhs.data());
+    let rhs_data = ensure_float(rhs.data());
+    let execution_dtype = match (&lhs_data, &rhs_data) {
+        (ArrayData::Float32(_), ArrayData::Float32(_)) => DType::Float32,
+        _ => DType::Float64,
+    };
+    let lhs_data = cast_array_data(&lhs_data, execution_dtype);
+    let rhs_data = cast_array_data(&rhs_data, execution_dtype);
+    let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
+    let lhs_data = broadcast_array_data(&lhs_data, &out_shape);
+    let rhs_data = broadcast_array_data(&rhs_data, &out_shape);
+
+    let descriptor = descriptor_for_dtype(execution_dtype);
+    let kernel = descriptor
+        .math_binary_kernel(op)
+        .unwrap_or_else(|| panic!("math binary kernel not registered for {execution_dtype}"));
+    Ok(NdArray::from_data(
+        kernel(lhs_data, rhs_data).expect("math binary kernel dtype mismatch"),
+    ))
+}
+
 /// Apply a float unary op (works on Float32, Float64, Complex64, Complex128).
 macro_rules! float_unary {
     ($name:ident, $op:expr) => {
@@ -184,115 +217,25 @@ float_only_unary!(y1, MathUnaryKernelOp::Y1);
 
 // --- Binary float math macro ---
 macro_rules! math_binary {
-    ($name:ident, $f32_fn:expr, $f64_fn:expr) => {
+    ($name:ident, $op:expr) => {
         impl NdArray {
             pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
-                if self.dtype().is_complex() || other.dtype().is_complex() {
-                    return Err(NumpyError::TypeError(
-                        concat!(stringify!($name), " not supported for complex arrays").into(),
-                    ));
-                }
-                let data_a = ensure_float(self.data());
-                let data_b = ensure_float(other.data());
-                // Unify dtypes: Float32 only if BOTH inputs are Float32; otherwise Float64.
-                let out_dtype = match (&data_a, &data_b) {
-                    (ArrayData::Float32(_), ArrayData::Float32(_)) => DType::Float32,
-                    _ => DType::Float64,
-                };
-                let data_a = cast_array_data(&data_a, out_dtype);
-                let data_b = cast_array_data(&data_b, out_dtype);
-                let out_shape = broadcast_shape(self.shape(), other.shape())?;
-                let data_a = broadcast_array_data(&data_a, &out_shape);
-                let data_b = broadcast_array_data(&data_b, &out_shape);
-                let result = match (data_a, data_b) {
-                    (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(
-                        ndarray::Zip::from(&a)
-                            .and(&b)
-                            .map_collect(|&x, &y| $f32_fn(x, y))
-                            .into_shared(),
-                    ),
-                    (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(
-                        ndarray::Zip::from(&a)
-                            .and(&b)
-                            .map_collect(|&x, &y| $f64_fn(x, y))
-                            .into_shared(),
-                    ),
-                    _ => unreachable!(),
-                };
-                Ok(NdArray::from_data(result))
+                execute_real_math_binary(self, other, $op, stringify!($name))
             }
         }
     };
 }
 
-math_binary!(copysign, libm::copysignf, libm::copysign);
-math_binary!(hypot, libm::hypotf, libm::hypot);
-math_binary!(fmod, libm::fmodf, libm::fmod);
-math_binary!(nextafter, libm::nextafterf, libm::nextafter);
-math_binary!(
-    logaddexp,
-    |a: f32, b: f32| {
-        if a.is_nan() || b.is_nan() {
-            return f32::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f32 + (-(a - b).abs()).exp()).ln()
-    },
-    |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            return f64::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f64 + (-(a - b).abs()).exp()).ln()
-    }
-);
-math_binary!(
-    logaddexp2,
-    |a: f32, b: f32| {
-        if a.is_nan() || b.is_nan() {
-            return f32::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f32 + (-(a - b).abs()).exp2()).log2()
-    },
-    |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            return f64::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f64 + (-(a - b).abs()).exp2()).log2()
-    }
-);
-// fmax/fmin: NaN-ignoring (f32::max / f64::max returns non-NaN operand)
-math_binary!(fmax, f32::max, f64::max);
-math_binary!(fmin, f32::min, f64::min);
-// maximum/minimum: NaN-propagating
-math_binary!(
-    maximum,
-    |a: f32, b: f32| if a.is_nan() || b.is_nan() {
-        f32::NAN
-    } else {
-        a.max(b)
-    },
-    |a: f64, b: f64| if a.is_nan() || b.is_nan() {
-        f64::NAN
-    } else {
-        a.max(b)
-    }
-);
-math_binary!(
-    minimum,
-    |a: f32, b: f32| if a.is_nan() || b.is_nan() {
-        f32::NAN
-    } else {
-        a.min(b)
-    },
-    |a: f64, b: f64| if a.is_nan() || b.is_nan() {
-        f64::NAN
-    } else {
-        a.min(b)
-    }
-);
+math_binary!(copysign, MathBinaryKernelOp::CopySign);
+math_binary!(hypot, MathBinaryKernelOp::Hypot);
+math_binary!(fmod, MathBinaryKernelOp::FMod);
+math_binary!(nextafter, MathBinaryKernelOp::NextAfter);
+math_binary!(logaddexp, MathBinaryKernelOp::LogAddExp);
+math_binary!(logaddexp2, MathBinaryKernelOp::LogAddExp2);
+math_binary!(fmax, MathBinaryKernelOp::FMax);
+math_binary!(fmin, MathBinaryKernelOp::FMin);
+math_binary!(maximum, MathBinaryKernelOp::Maximum);
+math_binary!(minimum, MathBinaryKernelOp::Minimum);
 
 impl NdArray {
     /// ldexp(x, n) = x * 2^n, element-wise. n is cast to Int32.

@@ -1,13 +1,14 @@
 use crate::kernel::{
     arg_reduction_all_kernel_for_dtype, arg_reduction_axis_kernel_for_dtype,
     binary_kernel_for_dtype, comparison_kernel_for_dtype, dot_kernel_for_dtype,
-    math_unary_kernel_for_dtype, predicate_kernel_for_dtype, predicate_presence_kernel_for_dtype,
-    reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype, where_kernel_for_dtype,
-    ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp, ArithmeticKernelOp,
-    BinaryArrayKernel, ComparisonArrayKernel, ComparisonKernelOp, DotArrayKernel, DotKernelOp,
-    MathUnaryKernelOp, PredicateArrayKernel, PredicateKernelOp, PredicatePresenceKernel,
-    PredicatePresenceOp, ReduceAllArrayKernel, ReduceAxisArrayKernel, ReductionKernelOp,
-    UnaryArrayKernel, WhereArrayKernel, WhereKernelOp,
+    math_binary_kernel_for_dtype, math_unary_kernel_for_dtype, predicate_kernel_for_dtype,
+    predicate_presence_kernel_for_dtype, reduction_all_kernel_for_dtype,
+    reduction_axis_kernel_for_dtype, where_kernel_for_dtype, ArgReduceAllKernel,
+    ArgReduceAxisKernel, ArgReductionKernelOp, ArithmeticKernelOp, BinaryArrayKernel,
+    BinaryMathArrayKernel, ComparisonArrayKernel, ComparisonKernelOp, DotArrayKernel, DotKernelOp,
+    MathBinaryKernelOp, MathUnaryKernelOp, PredicateArrayKernel, PredicateKernelOp,
+    PredicatePresenceKernel, PredicatePresenceOp, ReduceAllArrayKernel, ReduceAxisArrayKernel,
+    ReductionKernelOp, UnaryArrayKernel, WhereArrayKernel, WhereKernelOp,
 };
 use crate::resolver::{resolve_reduction_op, ReductionOp, ReductionPlan};
 use crate::DType;
@@ -72,6 +73,10 @@ impl DTypeDescriptor {
 
     pub fn math_unary_kernel(&self, op: MathUnaryKernelOp) -> Option<UnaryArrayKernel> {
         math_unary_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn math_binary_kernel(&self, op: MathBinaryKernelOp) -> Option<BinaryMathArrayKernel> {
+        math_binary_kernel_for_dtype(self.id, op)
     }
 
     pub fn reduction_all_kernel(&self, op: ReductionKernelOp) -> Option<ReduceAllArrayKernel> {
