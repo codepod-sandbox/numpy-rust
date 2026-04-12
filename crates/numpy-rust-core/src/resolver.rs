@@ -21,6 +21,7 @@ pub enum ComparisonOp {
 #[derive(Debug, Clone, Copy)]
 pub enum ReductionOp {
     Sum,
+    Prod,
     Min,
     Max,
     ArgMin,
@@ -213,6 +214,7 @@ pub fn resolve_comparison_op(
 pub fn resolve_reduction_op(op: ReductionOp, input: DType) -> Result<ReductionPlan> {
     match op {
         ReductionOp::Sum => resolve_sum_reduction(input),
+        ReductionOp::Prod => resolve_prod_reduction(input),
         ReductionOp::Min | ReductionOp::Max => resolve_extrema_reduction(input),
         ReductionOp::ArgMin | ReductionOp::ArgMax => resolve_arg_reduction(input),
     }
@@ -238,6 +240,19 @@ fn resolve_sum_reduction(input: DType) -> Result<ReductionPlan> {
     Ok(ReductionPlan {
         input_cast,
         result_dtype,
+    })
+}
+
+fn resolve_prod_reduction(input: DType) -> Result<ReductionPlan> {
+    if input.is_string() {
+        return Err(NumpyError::TypeError(
+            "prod not supported for string arrays".into(),
+        ));
+    }
+
+    Ok(ReductionPlan {
+        input_cast: resolve_cast(input, DType::Float64, CastingRule::Unsafe)?,
+        result_dtype: DType::Float64,
     })
 }
 

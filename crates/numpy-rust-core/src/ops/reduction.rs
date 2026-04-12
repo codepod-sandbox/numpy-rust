@@ -1,5 +1,5 @@
 use crate::array_data::ArrayD;
-use ndarray::{Axis, IxDyn};
+use ndarray::IxDyn;
 
 use crate::array_data::ArrayData;
 use crate::descriptor::descriptor_for_dtype;
@@ -103,29 +103,10 @@ impl NdArray {
 
     /// Product of array elements over a given axis, or all elements if axis is None.
     pub fn prod(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "prod not supported for string arrays".into(),
-            ));
-        }
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = f.data() else {
-            unreachable!()
-        };
-
         let result = match axis {
-            None => {
-                let p: f64 = arr.iter().product();
-                NdArray::from_data(ArrayData::Float64(
-                    ArrayD::from_elem(IxDyn(&[]), p).into_shared(),
-                ))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let prod_arr = arr.fold_axis(Axis(ax), 1.0, |&acc, &x| acc * x);
-                NdArray::from_data(ArrayData::Float64(prod_arr.into_shared()))
-            }
-        };
+            None => self.reduce_all_prod(),
+            Some(ax) => self.reduce_axis_prod(ax),
+        }?;
         Ok(maybe_keepdims(result, axis, keepdims, self.ndim()))
     }
 
@@ -286,6 +267,33 @@ impl NdArray {
         let kernel = descriptor
             .reduction_axis_kernel(ReductionKernelOp::Sum)
             .ok_or_else(|| NumpyError::TypeError("sum kernel not registered".into()))?;
+        Ok(NdArray::from_data(kernel(data, axis)?))
+    }
+
+    fn prepare_prod_reduction(&self) -> Result<(ArrayData, DType)> {
+        let plan = self.descriptor().reduction_plan(ReductionOp::Prod)?;
+        Ok((
+            self.cast_for_execution(plan.input_cast()),
+            plan.result_dtype(),
+        ))
+    }
+
+    fn reduce_all_prod(&self) -> Result<NdArray> {
+        let (data, result_dtype) = self.prepare_prod_reduction()?;
+        let descriptor = descriptor_for_dtype(result_dtype);
+        let kernel = descriptor
+            .reduction_all_kernel(ReductionKernelOp::Prod)
+            .ok_or_else(|| NumpyError::TypeError("prod kernel not registered".into()))?;
+        Ok(NdArray::from_data(kernel(data)?))
+    }
+
+    fn reduce_axis_prod(&self, axis: usize) -> Result<NdArray> {
+        validate_axis(axis, self.ndim())?;
+        let (data, result_dtype) = self.prepare_prod_reduction()?;
+        let descriptor = descriptor_for_dtype(result_dtype);
+        let kernel = descriptor
+            .reduction_axis_kernel(ReductionKernelOp::Prod)
+            .ok_or_else(|| NumpyError::TypeError("prod kernel not registered".into()))?;
         Ok(NdArray::from_data(kernel(data, axis)?))
     }
 

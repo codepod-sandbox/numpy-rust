@@ -34,6 +34,7 @@ pub enum ComparisonKernelOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionKernelOp {
     Sum,
+    Prod,
     Min,
     Max,
 }
@@ -120,30 +121,6 @@ pub fn comparison_kernel_for_dtype(
     }
 }
 
-pub fn sum_all_kernel_for_dtype(dtype: DType) -> Option<ReduceAllArrayKernel> {
-    match dtype.storage_dtype() {
-        DType::Int32 => Some(sum_all_int32),
-        DType::Int64 => Some(sum_all_int64),
-        DType::Float32 => Some(sum_all_float32),
-        DType::Float64 => Some(sum_all_float64),
-        DType::Complex64 => Some(sum_all_complex64),
-        DType::Complex128 => Some(sum_all_complex128),
-        _ => None,
-    }
-}
-
-pub fn sum_axis_kernel_for_dtype(dtype: DType) -> Option<ReduceAxisArrayKernel> {
-    match dtype.storage_dtype() {
-        DType::Int32 => Some(sum_axis_int32),
-        DType::Int64 => Some(sum_axis_int64),
-        DType::Float32 => Some(sum_axis_float32),
-        DType::Float64 => Some(sum_axis_float64),
-        DType::Complex64 => Some(sum_axis_complex64),
-        DType::Complex128 => Some(sum_axis_complex128),
-        _ => None,
-    }
-}
-
 pub fn reduction_all_kernel_for_dtype(
     dtype: DType,
     op: ReductionKernelOp,
@@ -155,6 +132,7 @@ pub fn reduction_all_kernel_for_dtype(
         (DType::Float64, ReductionKernelOp::Sum) => Some(sum_all_float64),
         (DType::Complex64, ReductionKernelOp::Sum) => Some(sum_all_complex64),
         (DType::Complex128, ReductionKernelOp::Sum) => Some(sum_all_complex128),
+        (DType::Float64, ReductionKernelOp::Prod) => Some(prod_all_float64),
         (DType::Bool, ReductionKernelOp::Min) => Some(min_all_bool),
         (DType::Bool, ReductionKernelOp::Max) => Some(max_all_bool),
         (DType::Int32, ReductionKernelOp::Min) => Some(min_all_int32),
@@ -186,6 +164,7 @@ pub fn reduction_axis_kernel_for_dtype(
         (DType::Float64, ReductionKernelOp::Sum) => Some(sum_axis_float64),
         (DType::Complex64, ReductionKernelOp::Sum) => Some(sum_axis_complex64),
         (DType::Complex128, ReductionKernelOp::Sum) => Some(sum_axis_complex128),
+        (DType::Float64, ReductionKernelOp::Prod) => Some(prod_axis_float64),
         (DType::Bool, ReductionKernelOp::Min) => Some(min_axis_bool),
         (DType::Bool, ReductionKernelOp::Max) => Some(max_axis_bool),
         (DType::Int32, ReductionKernelOp::Min) => Some(min_axis_int32),
@@ -416,6 +395,29 @@ sum_axis_kernel!(sum_axis_float32, Float32);
 sum_axis_kernel!(sum_axis_float64, Float64);
 sum_axis_kernel!(sum_axis_complex64, Complex64);
 sum_axis_kernel!(sum_axis_complex128, Complex128);
+
+fn prod_all_float64(data: ArrayData) -> Result<ArrayData> {
+    match data {
+        ArrayData::Float64(a) => Ok(ArrayData::Float64(
+            ArrayD::from_elem(IxDyn(&[]), a.iter().product()).into_shared(),
+        )),
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn prod_axis_float64(data: ArrayData, axis: usize) -> Result<ArrayData> {
+    match data {
+        ArrayData::Float64(a) => Ok(ArrayData::Float64(
+            a.fold_axis(Axis(axis), 1.0, |&acc, &x| acc * x)
+                .into_shared(),
+        )),
+        _ => Err(NumpyError::TypeError(
+            "reduction kernel dtype mismatch".into(),
+        )),
+    }
+}
 
 macro_rules! scalar_all_ord_kernel {
     ($name:ident, $variant:ident, $expr:expr) => {
