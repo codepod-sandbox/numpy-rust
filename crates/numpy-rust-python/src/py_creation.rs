@@ -8,6 +8,13 @@ use numpy_rust_core::{DType, NdArray};
 
 use crate::py_array::{extract_shape, parse_dtype, PyNdArray};
 
+enum SequenceKind {
+    Strings,
+    Bools,
+    Floats,
+    Complexes,
+}
+
 fn scalar_ndarray_with_dtype(
     obj: &vm::PyObject,
     dtype: Option<DType>,
@@ -43,18 +50,22 @@ fn scalar_ndarray_with_dtype(
         });
     }
 
-    if let Ok(c) = obj
-        .to_owned()
-        .try_into_value::<vm::function::ArgIntoComplex>(vm)
-    {
-        let value = c.into_complex();
-        let arr = NdArray::from_complex128_vec(vec![Complex::new(value.re, value.im)])
-            .reshape(&[])
-            .map_err(|e| vm.new_type_error(e.to_string()))?;
-        return Ok(match dtype {
-            Some(dt) => arr.astype(dt),
-            None => arr,
-        });
+    let wants_complex = matches!(dtype, Some(dt) if dt.is_complex())
+        || obj.downcast_ref::<vm::builtins::PyComplex>().is_some();
+    if wants_complex {
+        if let Ok(c) = obj
+            .to_owned()
+            .try_into_value::<vm::function::ArgIntoComplex>(vm)
+        {
+            let value = c.into_complex();
+            let arr = NdArray::from_complex128_vec(vec![Complex::new(value.re, value.im)])
+                .reshape(&[])
+                .map_err(|e| vm.new_type_error(e.to_string()))?;
+            return Ok(match dtype {
+                Some(dt) => arr.astype(dt),
+                None => arr,
+            });
+        }
     }
 
     if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
@@ -68,56 +79,114 @@ fn scalar_ndarray_with_dtype(
     Err(vm.new_type_error(format!("cannot convert {} to array", obj.class().name())))
 }
 
-fn flat_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
+fn classify_sequence(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<SequenceKind> {
     if items.is_empty() {
-        return Ok(NdArray::from_vec(Vec::<f64>::new()));
+        return Ok(SequenceKind::Floats);
     }
 
-    if items[0].downcast_ref::<PyStr>().is_some() {
-        let mut strings = Vec::with_capacity(items.len());
-        for item in items {
-            let s = item
-                .downcast_ref::<PyStr>()
-                .ok_or_else(|| vm.new_type_error("mixed types in sequence".to_owned()))?;
-            strings.push(s.as_str().to_owned());
+    let has_string = items
+        .iter()
+        .any(|item| item.downcast_ref::<PyStr>().is_some());
+    if has_string {
+        if items
+            .iter()
+            .all(|item| item.downcast_ref::<PyStr>().is_some())
+        {
+            return Ok(SequenceKind::Strings);
         }
-        return Ok(NdArray::from_vec(strings));
+        return Err(vm.new_type_error("mixed types in sequence".to_owned()));
     }
 
-    if items[0].class().is(vm.ctx.types.bool_type) {
-        let values = items
-            .iter()
-            .map(|item| item.clone().try_into_value::<bool>(vm))
-            .collect::<PyResult<Vec<_>>>()?;
-        return Ok(NdArray::from_vec(values));
-    }
-
-    let any_complex = items
+    let scalars = items
         .iter()
-        .any(|item| item.downcast_ref::<vm::builtins::PyComplex>().is_some());
-    if any_complex {
-        let values = items
-            .iter()
-            .map(|item| {
-                item.clone()
-                    .try_into_value::<vm::function::ArgIntoComplex>(vm)
-                    .map(|c| {
-                        let value = c.into_complex();
-                        Complex::new(value.re, value.im)
-                    })
-            })
-            .collect::<PyResult<Vec<_>>>()?;
-        return Ok(NdArray::from_complex128_vec(values));
-    }
-
-    let values = items
-        .iter()
-        .map(|item| item.clone().try_into_value::<f64>(vm))
+        .map(|item| object_to_scalar(item, vm))
         .collect::<PyResult<Vec<_>>>()?;
-    Ok(NdArray::from_vec(values))
+
+    if scalars
+        .iter()
+        .all(|scalar| matches!(scalar, Scalar::Bool(_)))
+    {
+        return Ok(SequenceKind::Bools);
+    }
+
+    if scalars
+        .iter()
+        .any(|scalar| matches!(scalar, Scalar::Complex64(_) | Scalar::Complex128(_)))
+    {
+        return Ok(SequenceKind::Complexes);
+    }
+
+    Ok(SequenceKind::Floats)
 }
 
-fn nested_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
+fn build_sequence_array(
+    items: &[PyObjectRef],
+    kind: SequenceKind,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    match kind {
+        SequenceKind::Strings => {
+            let values = items
+                .iter()
+                .map(|item| {
+                    item.downcast_ref::<PyStr>()
+                        .map(|s| s.as_str().to_owned())
+                        .ok_or_else(|| vm.new_type_error("mixed types in sequence".to_owned()))
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(NdArray::from_vec(values))
+        }
+        SequenceKind::Bools => {
+            let values = items
+                .iter()
+                .map(|item| object_to_scalar(item, vm))
+                .collect::<PyResult<Vec<_>>>()?
+                .into_iter()
+                .map(|scalar| match scalar {
+                    Scalar::Bool(value) => Ok(value),
+                    _ => Err(vm.new_type_error("mixed types in sequence".to_owned())),
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(NdArray::from_vec(values))
+        }
+        SequenceKind::Floats => {
+            let values = items
+                .iter()
+                .map(|item| item.clone().try_into_value::<f64>(vm))
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(NdArray::from_vec(values))
+        }
+        SequenceKind::Complexes => {
+            let values = items
+                .iter()
+                .map(|item| object_to_scalar(item, vm))
+                .collect::<PyResult<Vec<_>>>()?
+                .into_iter()
+                .map(|scalar| match scalar {
+                    Scalar::Bool(value) => Ok(Complex::new(if value { 1.0 } else { 0.0 }, 0.0)),
+                    Scalar::Int32(value) => Ok(Complex::new(value as f64, 0.0)),
+                    Scalar::Int64(value) => Ok(Complex::new(value as f64, 0.0)),
+                    Scalar::Float32(value) => Ok(Complex::new(value as f64, 0.0)),
+                    Scalar::Float64(value) => Ok(Complex::new(value, 0.0)),
+                    Scalar::Complex64(value) => Ok(Complex::new(value.re as f64, value.im as f64)),
+                    Scalar::Complex128(value) => Ok(value),
+                    Scalar::Str(_) => Err(vm.new_type_error("mixed types in sequence".to_owned())),
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(NdArray::from_complex128_vec(values))
+        }
+    }
+}
+
+fn flat_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
+    let kind = classify_sequence(items, vm)?;
+    build_sequence_array(items, kind, vm)
+}
+
+fn flatten_nested_sequence(
+    items: &[PyObjectRef],
+    vm: &VirtualMachine,
+) -> PyResult<(Vec<PyObjectRef>, usize, usize)> {
     let nrows = items.len();
     let mut flat = Vec::new();
     let mut ncols = None;
@@ -144,8 +213,13 @@ fn nested_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyR
         }
     }
 
-    let ncols = ncols.unwrap_or(0);
-    flat_sequence_to_ndarray(&flat, vm)?
+    Ok((flat, nrows, ncols.unwrap_or(0)))
+}
+
+fn nested_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
+    let (flat, nrows, ncols) = flatten_nested_sequence(items, vm)?;
+    let kind = classify_sequence(&flat, vm)?;
+    build_sequence_array(&flat, kind, vm)?
         .reshape(&[nrows, ncols])
         .map_err(|e| vm.new_value_error(e.to_string()))
 }
