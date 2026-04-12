@@ -21,7 +21,7 @@ def test_char_strip_preserves_object_array_shape():
     assert out.tolist() == [["a", "b"], ["c", "d"]]
 
 
-def test_chararray_methods_match_np_char_bridge():
+def test_chararray_upper_matches_np_char_bridge():
     carr = np.char.asarray([["ab", "cd"], ["ef", "gh"]])
     expected = np.char.upper(carr)
     actual = carr.upper()
