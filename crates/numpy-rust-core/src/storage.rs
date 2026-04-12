@@ -15,6 +15,7 @@ pub enum StorageKind {
 #[derive(Debug, Clone)]
 pub struct ArrayStorage {
     kind: StorageKind,
+    string_width: Option<usize>,
 }
 
 impl ArrayStorage {
@@ -23,8 +24,10 @@ impl ArrayStorage {
     }
 
     pub fn from_array_data(data: ArrayData) -> Self {
+        let string_width = string_width_from_data(&data);
         Self {
             kind: StorageKind::Backend(data),
+            string_width,
         }
     }
 
@@ -38,6 +41,10 @@ impl ArrayStorage {
         match &self.kind {
             StorageKind::Backend(data) => data,
         }
+    }
+
+    pub(crate) fn string_width(&self) -> Option<usize> {
+        self.string_width
     }
 
     fn with_data_mut<R>(&mut self, mutate: impl FnOnce(&mut ArrayData) -> R) -> R {
@@ -144,8 +151,8 @@ pub(crate) fn array_data_to_scalar(data: &ArrayData) -> crate::indexing::Scalar 
     }
 }
 
-pub(crate) fn normalize_string_assignment(target: &ArrayData, value: ArrayData) -> ArrayData {
-    let Some(width) = string_width(target) else {
+pub(crate) fn normalize_string_assignment(target: &ArrayStorage, value: ArrayData) -> ArrayData {
+    let Some(width) = target.string_width() else {
         return value;
     };
 
@@ -159,9 +166,9 @@ pub(crate) fn normalize_string_assignment(target: &ArrayData, value: ArrayData) 
     }
 }
 
-fn string_width(data: &ArrayData) -> Option<usize> {
+fn string_width_from_data(data: &ArrayData) -> Option<usize> {
     match data {
-        ArrayData::Str(values) => values.iter().map(|s| s.chars().count()).max(),
+        ArrayData::Str(values) => Some(values.iter().map(|s| s.chars().count()).max().unwrap_or(0)),
         _ => None,
     }
 }

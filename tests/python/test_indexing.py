@@ -240,6 +240,13 @@ def test_setitem_string_scalar_array_value():
     a[1] = value
     assert_eq(str(a[1]), "x")
 
+def test_setitem_string_scalar_capacity_preserved():
+    a = np.array(["ab", "cd"])
+    a[0] = "x"
+    a[1] = "y"
+    a[0] = "wxyz"
+    assert_eq(str(a[0]), "wx")
+
 def test_setitem_string_slice_broadcast():
     a = np.array(["a", "b", "c"])
     a[1:] = "q"

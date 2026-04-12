@@ -4,6 +4,7 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
 use crate::resolver::resolve_assignment_cast;
+use crate::storage::ArrayStorage;
 use crate::storage::{array_data_to_scalar, normalize_string_assignment, scalar_to_array_data};
 use crate::DType;
 use crate::NdArray;
@@ -53,7 +54,7 @@ impl Scalar {
 
 fn coerce_scalar_for_assignment(
     value: Scalar,
-    target: &ArrayData,
+    target: &ArrayStorage,
     target_dtype: DType,
 ) -> Result<Scalar> {
     let plan = resolve_assignment_cast(value.dtype(), target_dtype)?;
@@ -70,7 +71,7 @@ fn coerce_scalar_for_assignment(
 
 fn coerce_array_for_assignment(
     values: &NdArray,
-    target: &ArrayData,
+    target: &ArrayStorage,
     target_dtype: DType,
 ) -> Result<ArrayData> {
     resolve_assignment_cast(values.dtype(), target_dtype)?;
@@ -219,14 +220,14 @@ impl NdArray {
             });
         }
 
-        let cast_values = coerce_array_for_assignment(values, self.data(), self.dtype())?;
+        let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
         self.mutate_data(|data| data.assign_indexed(axis, indices, &cast_values))
     }
 
     /// Set a single element by multi-dimensional index.
     pub fn set(&mut self, index: &[usize], value: Scalar) -> Result<()> {
         let idx = IxDyn(index);
-        let value = coerce_scalar_for_assignment(value, self.data(), self.dtype())?;
+        let value = coerce_scalar_for_assignment(value, self.storage(), self.dtype())?;
         self.mutate_data(|data| match (data, value) {
             (ArrayData::Bool(a), Scalar::Bool(v)) => {
                 let elem = a
@@ -328,7 +329,7 @@ impl NdArray {
         }
 
         let info: Vec<SliceInfoElem> = slice_elems;
-        let cast_values = coerce_array_for_assignment(values, self.data(), self.dtype())?;
+        let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
         self.mutate_data(|data| data.assign_slice(info.as_slice(), &cast_values))
     }
 
@@ -358,7 +359,7 @@ impl NdArray {
             )));
         }
 
-        let cast_values = coerce_array_for_assignment(values, self.data(), self.dtype())?;
+        let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
         self.mutate_data(|data| data.assign_masked(&flat_mask, &cast_values))
     }
 
