@@ -115,6 +115,7 @@ fn float64_descriptor_registers_math_binary_kernels() {
 #[test]
 fn float64_descriptor_registers_basic_binary_kernels() {
     let desc = descriptor_for_dtype(DType::Float64);
+    assert!(desc.cast_kernel().is_some());
     assert!(desc.binary_kernel(ArithmeticKernelOp::Add).is_some());
     assert!(desc.binary_kernel(ArithmeticKernelOp::Sub).is_some());
     assert!(desc.binary_kernel(ArithmeticKernelOp::Mul).is_some());
@@ -153,4 +154,10 @@ fn float64_descriptor_registers_decompose_kernels() {
     assert!(desc
         .decompose_unary_kernel(DecomposeUnaryKernelOp::Modf)
         .is_some());
+}
+
+#[test]
+fn int8_descriptor_registers_narrow_finalize_kernel() {
+    let desc = descriptor_for_dtype(DType::Int8);
+    assert!(desc.narrow_finalize_kernel().is_some());
 }

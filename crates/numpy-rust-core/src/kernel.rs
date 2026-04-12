@@ -175,6 +175,7 @@ pub enum ArgReductionKernelOp {
 
 pub type BinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ComparisonArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
+pub type CastArrayKernel = fn(&ArrayData) -> ArrayData;
 pub type DotArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type WhereArrayKernel = fn(ArrayData, ArrayData, ArrayData) -> Result<ArrayData>;
 pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
@@ -191,6 +192,237 @@ pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
 pub type ArgReduceAxisKernel = fn(ArrayData, usize) -> Result<ArrayData>;
+pub type NarrowFinalizeKernel = fn(ArrayData) -> ArrayData;
+
+trait CastScalar<T> {
+    fn cast_scalar(self) -> T;
+}
+
+fn float_to_str(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 {
+            "inf".to_string()
+        } else {
+            "-inf".to_string()
+        };
+    }
+    let s = format!("{}", x);
+    if !s.contains('.') && !s.contains('e') && !s.contains('E') {
+        format!("{}.0", s)
+    } else {
+        s
+    }
+}
+
+fn complex_to_str<T>(value: Complex<T>) -> String
+where
+    T: std::fmt::Display + PartialOrd + From<f32> + Copy,
+{
+    if value.im >= T::from(0.0) {
+        format!("({}+{}j)", value.re, value.im)
+    } else {
+        format!("({}{}j)", value.re, value.im)
+    }
+}
+
+macro_rules! impl_cast_scalar {
+    ($src:ty => $dst:ty, |$value:ident| $body:expr) => {
+        impl CastScalar<$dst> for $src {
+            fn cast_scalar(self) -> $dst {
+                let $value = self;
+                $body
+            }
+        }
+    };
+}
+
+impl_cast_scalar!(bool => bool, |value| value);
+impl_cast_scalar!(i32 => bool, |value| value != 0);
+impl_cast_scalar!(i64 => bool, |value| value != 0);
+impl_cast_scalar!(f32 => bool, |value| value != 0.0);
+impl_cast_scalar!(f64 => bool, |value| value != 0.0);
+impl_cast_scalar!(Complex<f32> => bool, |value| value.re != 0.0 || value.im != 0.0);
+impl_cast_scalar!(Complex<f64> => bool, |value| value.re != 0.0 || value.im != 0.0);
+impl_cast_scalar!(String => bool, |value| !value.is_empty());
+
+impl_cast_scalar!(bool => i32, |value| value as i32);
+impl_cast_scalar!(i32 => i32, |value| value);
+impl_cast_scalar!(i64 => i32, |value| value as i32);
+impl_cast_scalar!(f32 => i32, |value| value as i32);
+impl_cast_scalar!(f64 => i32, |value| value as i32);
+impl_cast_scalar!(Complex<f32> => i32, |value| value.re as i32);
+impl_cast_scalar!(Complex<f64> => i32, |value| value.re as i32);
+impl_cast_scalar!(String => i32, |value| value.parse::<i32>().unwrap_or(0));
+
+impl_cast_scalar!(bool => i64, |value| value as i64);
+impl_cast_scalar!(i32 => i64, |value| value as i64);
+impl_cast_scalar!(i64 => i64, |value| value);
+impl_cast_scalar!(f32 => i64, |value| value as i64);
+impl_cast_scalar!(f64 => i64, |value| value as i64);
+impl_cast_scalar!(Complex<f32> => i64, |value| value.re as i64);
+impl_cast_scalar!(Complex<f64> => i64, |value| value.re as i64);
+impl_cast_scalar!(String => i64, |value| value.parse::<i64>().unwrap_or(0));
+
+impl_cast_scalar!(bool => f32, |value| if value { 1.0 } else { 0.0 });
+impl_cast_scalar!(i32 => f32, |value| value as f32);
+impl_cast_scalar!(i64 => f32, |value| value as f32);
+impl_cast_scalar!(f32 => f32, |value| value);
+impl_cast_scalar!(f64 => f32, |value| value as f32);
+impl_cast_scalar!(Complex<f32> => f32, |value| value.re);
+impl_cast_scalar!(Complex<f64> => f32, |value| value.re as f32);
+impl_cast_scalar!(String => f32, |value| value.parse::<f32>().unwrap_or(f32::NAN));
+
+impl_cast_scalar!(bool => f64, |value| if value { 1.0 } else { 0.0 });
+impl_cast_scalar!(i32 => f64, |value| value as f64);
+impl_cast_scalar!(i64 => f64, |value| value as f64);
+impl_cast_scalar!(f32 => f64, |value| value as f64);
+impl_cast_scalar!(f64 => f64, |value| value);
+impl_cast_scalar!(Complex<f32> => f64, |value| value.re as f64);
+impl_cast_scalar!(Complex<f64> => f64, |value| value.re);
+impl_cast_scalar!(String => f64, |value| value.parse::<f64>().unwrap_or(f64::NAN));
+
+impl_cast_scalar!(bool => Complex<f32>, |value| Complex::new(if value { 1.0 } else { 0.0 }, 0.0));
+impl_cast_scalar!(i32 => Complex<f32>, |value| Complex::new(value as f32, 0.0));
+impl_cast_scalar!(i64 => Complex<f32>, |value| Complex::new(value as f32, 0.0));
+impl_cast_scalar!(f32 => Complex<f32>, |value| Complex::new(value, 0.0));
+impl_cast_scalar!(f64 => Complex<f32>, |value| Complex::new(value as f32, 0.0));
+impl_cast_scalar!(Complex<f32> => Complex<f32>, |value| value);
+impl_cast_scalar!(Complex<f64> => Complex<f32>, |value| Complex::new(value.re as f32, value.im as f32));
+impl_cast_scalar!(String => Complex<f32>, |value| Complex::new(value.parse::<f32>().unwrap_or(f32::NAN), 0.0));
+
+impl_cast_scalar!(bool => Complex<f64>, |value| Complex::new(if value { 1.0 } else { 0.0 }, 0.0));
+impl_cast_scalar!(i32 => Complex<f64>, |value| Complex::new(value as f64, 0.0));
+impl_cast_scalar!(i64 => Complex<f64>, |value| Complex::new(value as f64, 0.0));
+impl_cast_scalar!(f32 => Complex<f64>, |value| Complex::new(value as f64, 0.0));
+impl_cast_scalar!(f64 => Complex<f64>, |value| Complex::new(value, 0.0));
+impl_cast_scalar!(Complex<f32> => Complex<f64>, |value| Complex::new(value.re as f64, value.im as f64));
+impl_cast_scalar!(Complex<f64> => Complex<f64>, |value| value);
+impl_cast_scalar!(String => Complex<f64>, |value| Complex::new(value.parse::<f64>().unwrap_or(f64::NAN), 0.0));
+
+impl_cast_scalar!(bool => String, |value| value.to_string());
+impl_cast_scalar!(i32 => String, |value| value.to_string());
+impl_cast_scalar!(i64 => String, |value| value.to_string());
+impl_cast_scalar!(f32 => String, |value| float_to_str(value as f64));
+impl_cast_scalar!(f64 => String, |value| float_to_str(value));
+impl_cast_scalar!(Complex<f32> => String, |value| complex_to_str(value));
+impl_cast_scalar!(Complex<f64> => String, |value| complex_to_str(value));
+impl_cast_scalar!(String => String, |value| value);
+
+fn cast_array_storage<T>(data: &ArrayData) -> ArrayD<T>
+where
+    bool: CastScalar<T>,
+    i32: CastScalar<T>,
+    i64: CastScalar<T>,
+    f32: CastScalar<T>,
+    f64: CastScalar<T>,
+    Complex<f32>: CastScalar<T>,
+    Complex<f64>: CastScalar<T>,
+    String: CastScalar<T>,
+    T: Clone,
+{
+    match data {
+        ArrayData::Bool(a) => a.mapv(<bool as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Int32(a) => a.mapv(<i32 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Int64(a) => a.mapv(<i64 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Float32(a) => a.mapv(<f32 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Float64(a) => a.mapv(<f64 as CastScalar<T>>::cast_scalar).into_shared(),
+        ArrayData::Complex64(a) => a
+            .mapv(<Complex<f32> as CastScalar<T>>::cast_scalar)
+            .into_shared(),
+        ArrayData::Complex128(a) => a
+            .mapv(<Complex<f64> as CastScalar<T>>::cast_scalar)
+            .into_shared(),
+        ArrayData::Str(a) => a.mapv(<String as CastScalar<T>>::cast_scalar).into_shared(),
+    }
+}
+
+macro_rules! cast_storage_kernel {
+    ($name:ident, $variant:ident, $ty:ty) => {
+        fn $name(data: &ArrayData) -> ArrayData {
+            ArrayData::$variant(cast_array_storage::<$ty>(data))
+        }
+    };
+}
+
+cast_storage_kernel!(cast_to_bool, Bool, bool);
+cast_storage_kernel!(cast_to_int32, Int32, i32);
+cast_storage_kernel!(cast_to_int64, Int64, i64);
+cast_storage_kernel!(cast_to_float32, Float32, f32);
+cast_storage_kernel!(cast_to_float64, Float64, f64);
+cast_storage_kernel!(cast_to_complex64, Complex64, Complex<f32>);
+cast_storage_kernel!(cast_to_complex128, Complex128, Complex<f64>);
+cast_storage_kernel!(cast_to_str, Str, String);
+
+fn finalize_int8(data: ArrayData) -> ArrayData {
+    match data {
+        ArrayData::Int32(arr) => ArrayData::Int32(arr.mapv(|x| x as i8 as i32).into_shared()),
+        other => other,
+    }
+}
+
+fn finalize_uint8(data: ArrayData) -> ArrayData {
+    match data {
+        ArrayData::Int32(arr) => ArrayData::Int32(arr.mapv(|x| x as u8 as i32).into_shared()),
+        other => other,
+    }
+}
+
+fn finalize_int16(data: ArrayData) -> ArrayData {
+    match data {
+        ArrayData::Int32(arr) => ArrayData::Int32(arr.mapv(|x| x as i16 as i32).into_shared()),
+        other => other,
+    }
+}
+
+fn finalize_uint16(data: ArrayData) -> ArrayData {
+    match data {
+        ArrayData::Int32(arr) => ArrayData::Int32(arr.mapv(|x| x as u16 as i32).into_shared()),
+        other => other,
+    }
+}
+
+fn finalize_uint32(data: ArrayData) -> ArrayData {
+    match data {
+        ArrayData::Int64(arr) => ArrayData::Int64(arr.mapv(|x| x as u32 as i64).into_shared()),
+        other => other,
+    }
+}
+
+fn finalize_uint64(data: ArrayData) -> ArrayData {
+    match data {
+        ArrayData::Int64(arr) => ArrayData::Int64(arr.mapv(|x| x as u64 as i64).into_shared()),
+        other => other,
+    }
+}
+
+pub fn cast_kernel_for_dtype(dtype: DType) -> Option<CastArrayKernel> {
+    match dtype.storage_dtype() {
+        DType::Bool => Some(cast_to_bool),
+        DType::Int32 => Some(cast_to_int32),
+        DType::Int64 => Some(cast_to_int64),
+        DType::Float32 => Some(cast_to_float32),
+        DType::Float64 => Some(cast_to_float64),
+        DType::Complex64 => Some(cast_to_complex64),
+        DType::Complex128 => Some(cast_to_complex128),
+        DType::Str => Some(cast_to_str),
+        _ => None,
+    }
+}
+
+pub fn narrow_finalize_kernel_for_dtype(dtype: DType) -> Option<NarrowFinalizeKernel> {
+    match dtype {
+        DType::Int8 => Some(finalize_int8),
+        DType::UInt8 => Some(finalize_uint8),
+        DType::Int16 => Some(finalize_int16),
+        DType::UInt16 => Some(finalize_uint16),
+        DType::UInt32 => Some(finalize_uint32),
+        DType::UInt64 => Some(finalize_uint64),
+        _ => None,
+    }
+}
 
 pub fn binary_kernel_for_dtype(dtype: DType, op: ArithmeticKernelOp) -> Option<BinaryArrayKernel> {
     match (dtype.storage_dtype(), op) {

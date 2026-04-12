@@ -1,20 +1,21 @@
 use crate::kernel::{
     arg_reduction_all_kernel_for_dtype, arg_reduction_axis_kernel_for_dtype,
     binary_kernel_for_dtype, bitwise_binary_kernel_for_dtype, bitwise_unary_kernel_for_dtype,
-    comparison_kernel_for_dtype, decompose_unary_kernel_for_dtype, dot_kernel_for_dtype,
-    math_binary_kernel_for_dtype, math_unary_kernel_for_dtype, predicate_kernel_for_dtype,
+    cast_kernel_for_dtype, comparison_kernel_for_dtype, decompose_unary_kernel_for_dtype,
+    dot_kernel_for_dtype, math_binary_kernel_for_dtype, math_unary_kernel_for_dtype,
+    narrow_finalize_kernel_for_dtype, predicate_kernel_for_dtype,
     predicate_presence_kernel_for_dtype, real_binary_kernel_for_dtype, real_unary_kernel_for_dtype,
     reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype, truth_kernel_for_dtype,
     truth_reduce_kernel_for_dtype, value_unary_kernel_for_dtype, where_kernel_for_dtype,
     ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp, ArithmeticKernelOp,
     BinaryArrayKernel, BinaryMathArrayKernel, BitwiseBinaryArrayKernel, BitwiseBinaryKernelOp,
-    BitwiseUnaryArrayKernel, BitwiseUnaryKernelOp, ComparisonArrayKernel, ComparisonKernelOp,
-    DecomposeUnaryArrayKernel, DecomposeUnaryKernelOp, DotArrayKernel, DotKernelOp,
-    MathBinaryKernelOp, MathUnaryKernelOp, PredicateArrayKernel, PredicateKernelOp,
-    PredicatePresenceKernel, PredicatePresenceOp, RealBinaryArrayKernel, RealBinaryKernelOp,
-    RealUnaryKernelOp, ReduceAllArrayKernel, ReduceAxisArrayKernel, ReductionKernelOp,
-    TruthArrayKernel, TruthKernelOp, TruthReduceKernel, TruthReduceKernelOp, UnaryArrayKernel,
-    ValueUnaryKernelOp, WhereArrayKernel, WhereKernelOp,
+    BitwiseUnaryArrayKernel, BitwiseUnaryKernelOp, CastArrayKernel, ComparisonArrayKernel,
+    ComparisonKernelOp, DecomposeUnaryArrayKernel, DecomposeUnaryKernelOp, DotArrayKernel,
+    DotKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, NarrowFinalizeKernel, PredicateArrayKernel,
+    PredicateKernelOp, PredicatePresenceKernel, PredicatePresenceOp, RealBinaryArrayKernel,
+    RealBinaryKernelOp, RealUnaryKernelOp, ReduceAllArrayKernel, ReduceAxisArrayKernel,
+    ReductionKernelOp, TruthArrayKernel, TruthKernelOp, TruthReduceKernel, TruthReduceKernelOp,
+    UnaryArrayKernel, ValueUnaryKernelOp, WhereArrayKernel, WhereKernelOp,
 };
 use crate::resolver::{resolve_reduction_op, ReductionOp, ReductionPlan};
 use crate::DType;
@@ -54,8 +55,16 @@ impl DTypeDescriptor {
         binary_kernel_for_dtype(self.id, op)
     }
 
+    pub fn cast_kernel(&self) -> Option<CastArrayKernel> {
+        cast_kernel_for_dtype(self.id)
+    }
+
     pub fn comparison_kernel(&self, op: ComparisonKernelOp) -> Option<ComparisonArrayKernel> {
         comparison_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn narrow_finalize_kernel(&self) -> Option<NarrowFinalizeKernel> {
+        narrow_finalize_kernel_for_dtype(self.id)
     }
 
     pub fn dot_kernel(&self, op: DotKernelOp) -> Option<DotArrayKernel> {
