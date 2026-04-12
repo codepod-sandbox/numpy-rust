@@ -23,7 +23,7 @@ def test_char_strip_preserves_object_array_shape():
 
 def test_chararray_methods_match_np_char_bridge():
     carr = np.char.asarray([["ab", "cd"], ["ef", "gh"]])
-    expected = np.char.upper(carr._arr)
+    expected = np.char.upper(carr)
     actual = carr.upper()
     assert actual.shape == (2, 2)
     assert actual.tolist() == expected.tolist()
