@@ -1,11 +1,13 @@
 use crate::kernel::{
     arg_reduction_all_kernel_for_dtype, arg_reduction_axis_kernel_for_dtype,
     binary_kernel_for_dtype, comparison_kernel_for_dtype, dot_kernel_for_dtype,
-    predicate_kernel_for_dtype, reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype,
-    where_kernel_for_dtype, ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp,
-    ArithmeticKernelOp, BinaryArrayKernel, ComparisonArrayKernel, ComparisonKernelOp,
-    DotArrayKernel, DotKernelOp, PredicateArrayKernel, PredicateKernelOp, ReduceAllArrayKernel,
-    ReduceAxisArrayKernel, ReductionKernelOp, WhereArrayKernel, WhereKernelOp,
+    predicate_kernel_for_dtype, predicate_presence_kernel_for_dtype,
+    reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype, where_kernel_for_dtype,
+    ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp, ArithmeticKernelOp,
+    BinaryArrayKernel, ComparisonArrayKernel, ComparisonKernelOp, DotArrayKernel, DotKernelOp,
+    PredicateArrayKernel, PredicateKernelOp, PredicatePresenceKernel, PredicatePresenceOp,
+    ReduceAllArrayKernel, ReduceAxisArrayKernel, ReductionKernelOp, WhereArrayKernel,
+    WhereKernelOp,
 };
 use crate::resolver::{resolve_reduction_op, ReductionOp, ReductionPlan};
 use crate::DType;
@@ -59,6 +61,13 @@ impl DTypeDescriptor {
 
     pub fn predicate_kernel(&self, op: PredicateKernelOp) -> Option<PredicateArrayKernel> {
         predicate_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn predicate_presence_kernel(
+        &self,
+        op: PredicatePresenceOp,
+    ) -> Option<PredicatePresenceKernel> {
+        predicate_presence_kernel_for_dtype(self.id, op)
     }
 
     pub fn reduction_all_kernel(&self, op: ReductionKernelOp) -> Option<ReduceAllArrayKernel> {

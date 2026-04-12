@@ -51,6 +51,12 @@ pub enum PredicateKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredicatePresenceOp {
+    HasNaN,
+    HasInf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionKernelOp {
     Sum,
     Prod,
@@ -69,6 +75,7 @@ pub type ComparisonArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type DotArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type WhereArrayKernel = fn(ArrayData, ArrayData, ArrayData) -> Result<ArrayData>;
 pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
+pub type PredicatePresenceKernel = fn(&ArrayData) -> Result<bool>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -210,6 +217,31 @@ pub fn predicate_kernel_for_dtype(
         (DType::Str, PredicateKernelOp::IsNaN) => Some(isnan_str),
         (DType::Str, PredicateKernelOp::IsFinite) => Some(isfinite_str),
         (DType::Str, PredicateKernelOp::IsInf) => Some(isinf_str),
+        _ => None,
+    }
+}
+
+pub fn predicate_presence_kernel_for_dtype(
+    dtype: DType,
+    op: PredicatePresenceOp,
+) -> Option<PredicatePresenceKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, PredicatePresenceOp::HasNaN) => Some(has_nan_bool),
+        (DType::Bool, PredicatePresenceOp::HasInf) => Some(has_inf_bool),
+        (DType::Int32, PredicatePresenceOp::HasNaN) => Some(has_nan_int32),
+        (DType::Int32, PredicatePresenceOp::HasInf) => Some(has_inf_int32),
+        (DType::Int64, PredicatePresenceOp::HasNaN) => Some(has_nan_int64),
+        (DType::Int64, PredicatePresenceOp::HasInf) => Some(has_inf_int64),
+        (DType::Float32, PredicatePresenceOp::HasNaN) => Some(has_nan_float32),
+        (DType::Float32, PredicatePresenceOp::HasInf) => Some(has_inf_float32),
+        (DType::Float64, PredicatePresenceOp::HasNaN) => Some(has_nan_float64),
+        (DType::Float64, PredicatePresenceOp::HasInf) => Some(has_inf_float64),
+        (DType::Complex64, PredicatePresenceOp::HasNaN) => Some(has_nan_complex64),
+        (DType::Complex64, PredicatePresenceOp::HasInf) => Some(has_inf_complex64),
+        (DType::Complex128, PredicatePresenceOp::HasNaN) => Some(has_nan_complex128),
+        (DType::Complex128, PredicatePresenceOp::HasInf) => Some(has_inf_complex128),
+        (DType::Str, PredicatePresenceOp::HasNaN) => Some(has_nan_str),
+        (DType::Str, PredicatePresenceOp::HasInf) => Some(has_inf_str),
         _ => None,
     }
 }
@@ -497,6 +529,53 @@ simple_predicate_kernel!(isinf_complex128, Complex128, |x: Complex<f64>| x
 constant_predicate_kernel!(isnan_str, Str, false);
 constant_predicate_kernel!(isfinite_str, Str, true);
 constant_predicate_kernel!(isinf_str, Str, false);
+
+macro_rules! constant_presence_kernel {
+    ($name:ident, $variant:ident, $value:expr) => {
+        fn $name(input: &ArrayData) -> Result<bool> {
+            match input {
+                ArrayData::$variant(_) => Ok($value),
+                _ => Err(NumpyError::TypeError(
+                    "predicate presence kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! iter_presence_kernel {
+    ($name:ident, $variant:ident, |$x:ident| $body:expr) => {
+        fn $name(input: &ArrayData) -> Result<bool> {
+            match input {
+                ArrayData::$variant(data) => Ok(data.iter().any(|$x| $body)),
+                _ => Err(NumpyError::TypeError(
+                    "predicate presence kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+constant_presence_kernel!(has_nan_bool, Bool, false);
+constant_presence_kernel!(has_inf_bool, Bool, false);
+constant_presence_kernel!(has_nan_int32, Int32, false);
+constant_presence_kernel!(has_inf_int32, Int32, false);
+constant_presence_kernel!(has_nan_int64, Int64, false);
+constant_presence_kernel!(has_inf_int64, Int64, false);
+iter_presence_kernel!(has_nan_float32, Float32, |x| x.is_nan());
+iter_presence_kernel!(has_inf_float32, Float32, |x| x.is_infinite());
+iter_presence_kernel!(has_nan_float64, Float64, |x| x.is_nan());
+iter_presence_kernel!(has_inf_float64, Float64, |x| x.is_infinite());
+iter_presence_kernel!(has_nan_complex64, Complex64, |x| x.re.is_nan()
+    || x.im.is_nan());
+iter_presence_kernel!(has_inf_complex64, Complex64, |x| x.re.is_infinite()
+    || x.im.is_infinite());
+iter_presence_kernel!(has_nan_complex128, Complex128, |x| x.re.is_nan()
+    || x.im.is_nan());
+iter_presence_kernel!(has_inf_complex128, Complex128, |x| x.re.is_infinite()
+    || x.im.is_infinite());
+constant_presence_kernel!(has_nan_str, Str, false);
+constant_presence_kernel!(has_inf_str, Str, false);
 
 pub(crate) fn complex_cmp<T: num_traits::Float>(
     a: &Complex<T>,

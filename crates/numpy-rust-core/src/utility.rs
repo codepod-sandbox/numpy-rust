@@ -5,7 +5,7 @@ use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
-use crate::kernel::{DotKernelOp, PredicateKernelOp, WhereKernelOp};
+use crate::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
 use crate::resolver::{resolve_dot_op, resolve_where_op, DotOp, DotOpPlan, WhereOp, WhereOpPlan};
 use crate::{DType, NdArray};
 
@@ -251,23 +251,11 @@ impl NdArray {
 
     /// Check if any element is infinite.
     pub fn has_inf(&self) -> bool {
-        match self.data() {
-            ArrayData::Float32(a) => a.iter().any(|x| x.is_infinite()),
-            ArrayData::Float64(a) => a.iter().any(|x| x.is_infinite()),
-            ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_infinite() || x.im.is_infinite()),
-            ArrayData::Complex128(a) => a.iter().any(|x| x.re.is_infinite() || x.im.is_infinite()),
-            _ => false,
-        }
+        execute_predicate_presence(self, PredicatePresenceOp::HasInf)
     }
 
     pub fn has_nan(&self) -> bool {
-        match self.data() {
-            ArrayData::Float32(a) => a.iter().any(|x| x.is_nan()),
-            ArrayData::Float64(a) => a.iter().any(|x| x.is_nan()),
-            ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_nan() || x.im.is_nan()),
-            ArrayData::Complex128(a) => a.iter().any(|x| x.re.is_nan() || x.im.is_nan()),
-            _ => false,
-        }
+        execute_predicate_presence(self, PredicatePresenceOp::HasNaN)
     }
 
     /// Deep copy of the array.
@@ -287,6 +275,17 @@ fn execute_predicate(input: &NdArray, op: PredicateKernelOp) -> NdArray {
         .predicate_kernel(op)
         .unwrap_or_else(|| panic!("predicate kernel not registered for {}", input.dtype()));
     NdArray::from_data(kernel(input.data().clone()).expect("predicate kernel dtype mismatch"))
+}
+
+fn execute_predicate_presence(input: &NdArray, op: PredicatePresenceOp) -> bool {
+    let descriptor = descriptor_for_dtype(input.dtype());
+    let kernel = descriptor.predicate_presence_kernel(op).unwrap_or_else(|| {
+        panic!(
+            "predicate presence kernel not registered for {}",
+            input.dtype()
+        )
+    });
+    kernel(input.data()).expect("predicate presence kernel dtype mismatch")
 }
 
 /// Return the indices of non-zero elements as an (N, ndim) Int64 array.

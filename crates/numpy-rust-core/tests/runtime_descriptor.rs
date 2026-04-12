@@ -1,4 +1,4 @@
-use numpy_rust_core::kernel::{DotKernelOp, PredicateKernelOp, WhereKernelOp};
+use numpy_rust_core::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
 use numpy_rust_core::{descriptor_for_dtype, resolve_binary_op, BinaryOp, DType};
 
 #[test]
@@ -34,4 +34,15 @@ fn float64_descriptor_registers_predicate_kernels() {
     assert!(desc.predicate_kernel(PredicateKernelOp::IsNaN).is_some());
     assert!(desc.predicate_kernel(PredicateKernelOp::IsFinite).is_some());
     assert!(desc.predicate_kernel(PredicateKernelOp::IsInf).is_some());
+}
+
+#[test]
+fn float64_descriptor_registers_predicate_presence_kernels() {
+    let desc = descriptor_for_dtype(DType::Float64);
+    assert!(desc
+        .predicate_presence_kernel(PredicatePresenceOp::HasNaN)
+        .is_some());
+    assert!(desc
+        .predicate_presence_kernel(PredicatePresenceOp::HasInf)
+        .is_some());
 }
