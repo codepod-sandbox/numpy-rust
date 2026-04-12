@@ -3,6 +3,7 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import _ObjectArray
 from ._creation import array, asarray
+from ._string_bridge import native_string_unary, python_string_map
 
 __all__ = ['char']
 
@@ -407,13 +408,13 @@ class chararray:
 
     # --- String methods ---
     def upper(self):
-        return chararray._from_array(_native.char_upper(self._arr))
+        return native_string_unary(self, _native.char_upper, wrap_chararray=True)
 
     def lower(self):
-        return chararray._from_array(_native.char_lower(self._arr))
+        return native_string_unary(self, _native.char_lower, wrap_chararray=True)
 
     def capitalize(self):
-        return chararray._from_array(_native.char_capitalize(self._arr))
+        return native_string_unary(self, _native.char_capitalize, wrap_chararray=True)
 
     def strip(self, chars=None):
         import numpy as _np
@@ -1028,17 +1029,15 @@ class _char_mod:
 
     @staticmethod
     def upper(a):
-        return _native_string_output(a, _native.char_upper)
+        return native_string_unary(a, _native.char_upper)
 
     @staticmethod
     def lower(a):
-        return _native_string_output(a, _native.char_lower)
+        return native_string_unary(a, _native.char_lower)
 
     @staticmethod
     def capitalize(a):
-        if isinstance(a, chararray):
-            return a.capitalize()
-        return _native.char_capitalize(a)
+        return native_string_unary(a, _native.char_capitalize)
 
     @staticmethod
     def strip(a, chars=None):

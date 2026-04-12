@@ -45,6 +45,13 @@ def test_chararray_upper_matches_np_char_bridge():
     assert carr_out.tolist() == expected
 
 
+def test_np_char_upper_and_chararray_upper_share_path():
+    arr = np.array([["ab", "cd"]])
+    out1 = np.char.upper(arr)
+    out2 = np.char.asarray(arr).upper()
+    assert out1.tolist() == out2.tolist()
+
+
 def test_chararray_compare_keeps_trailing_whitespace_quirk():
     carr = np.char.asarray(["ab  ", "cd"])
     out = carr == np.array(["ab", "xx"])
