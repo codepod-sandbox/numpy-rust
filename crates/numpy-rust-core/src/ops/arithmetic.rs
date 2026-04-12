@@ -1,12 +1,8 @@
 use std::ops;
 
-use ndarray::Zip;
-
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
-use crate::casting::cast_array_data;
 use crate::descriptor::descriptor_for_dtype;
-use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::kernel::ArithmeticKernelOp;
 use crate::resolver::{resolve_binary_op, BinaryOp, BinaryOpPlan};
@@ -16,27 +12,6 @@ struct PreparedBinaryExecution {
     lhs: ArrayData,
     rhs: ArrayData,
     plan: BinaryOpPlan,
-}
-
-/// Prepare two NdArrays for a binary operation using the existing per-op dtype policy.
-/// Returns `(lhs_data, rhs_data, logical_result_dtype)`.
-fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData, DType)> {
-    if lhs.dtype().is_string() || rhs.dtype().is_string() {
-        return Err(crate::error::NumpyError::TypeError(
-            "arithmetic not supported for string arrays".into(),
-        ));
-    }
-    let logical_dtype = lhs.dtype().promote(rhs.dtype());
-    let storage_dtype = logical_dtype.storage_dtype();
-    let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
-
-    let a = cast_array_data(lhs.data(), storage_dtype);
-    let b = cast_array_data(rhs.data(), storage_dtype);
-
-    let a = broadcast_array_data(&a, &out_shape);
-    let b = broadcast_array_data(&b, &out_shape);
-
-    Ok((a, b, logical_dtype))
 }
 
 fn prepare_binary_execution(
@@ -61,6 +36,7 @@ fn arithmetic_kernel_op(op: BinaryOp) -> ArithmeticKernelOp {
         BinaryOp::Div => ArithmeticKernelOp::Div,
         BinaryOp::FloorDiv => ArithmeticKernelOp::FloorDiv,
         BinaryOp::Remainder => ArithmeticKernelOp::Remainder,
+        BinaryOp::Pow => ArithmeticKernelOp::Pow,
     }
 }
 
@@ -114,44 +90,13 @@ impl ops::Div<&NdArray> for &NdArray {
 
 impl NdArray {
     /// Element-wise power: self ** rhs.
-    /// Integer types are cast to Float64 first (matching NumPy behavior).
-    /// Complex types use Complex::powc.
     pub fn pow(&self, rhs: &NdArray) -> Result<NdArray> {
-        if self.dtype().is_string() || rhs.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "power not supported for string arrays".into(),
-            ));
-        }
-        // If either is complex, work in complex domain
-        if self.dtype().is_complex() || rhs.dtype().is_complex() {
-            let lhs_c = self.astype(DType::Complex128);
-            let rhs_c = rhs.astype(DType::Complex128);
-            let (a, b, _) = prepare_binary(&lhs_c, &rhs_c)?;
-            return match (a, b) {
-                (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
-                    let mut out = a.clone();
-                    Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                        *o = o.powc(r);
-                    });
-                    Ok(NdArray::from_data(ArrayData::Complex128(out)))
-                }
-                _ => unreachable!("both cast to Complex128"),
-            };
-        }
-        // Cast both to Float64 for uniform powf handling
-        let lhs_f = self.astype(DType::Float64);
-        let rhs_f = rhs.astype(DType::Float64);
-        let (a, b, _) = prepare_binary(&lhs_f, &rhs_f)?;
-        match (a, b) {
-            (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    *o = o.powf(r);
-                });
-                Ok(NdArray::from_data(ArrayData::Float64(out)))
+        execute_resolved_binary(BinaryOp::Pow, self, rhs).map_err(|err| match err {
+            NumpyError::TypeError(_) if self.dtype().is_string() || rhs.dtype().is_string() => {
+                NumpyError::TypeError("power not supported for string arrays".into())
             }
-            _ => unreachable!("both cast to Float64"),
-        }
+            other => other,
+        })
     }
 
     /// Element-wise floor division: self // rhs (toward -inf, matching NumPy).

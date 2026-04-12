@@ -32,6 +32,12 @@ fn binary_remainder_resolution_promotes_bool_and_bool_to_int8() {
 }
 
 #[test]
+fn binary_pow_resolution_uses_complex128_for_complex_inputs() {
+    let plan = resolve_binary_op(BinaryOp::Pow, DType::Float64, DType::Complex64).unwrap();
+    assert_eq!(plan.output_dtype(), DType::Complex128);
+}
+
+#[test]
 fn float64_descriptor_registers_dot_kernel() {
     let desc = descriptor_for_dtype(DType::Float64);
     assert!(desc.dot_kernel(DotKernelOp::Dot1d1d).is_some());
@@ -115,6 +121,7 @@ fn float64_descriptor_registers_basic_binary_kernels() {
     assert!(desc.binary_kernel(ArithmeticKernelOp::Div).is_some());
     assert!(desc.binary_kernel(ArithmeticKernelOp::FloorDiv).is_some());
     assert!(desc.binary_kernel(ArithmeticKernelOp::Remainder).is_some());
+    assert!(desc.binary_kernel(ArithmeticKernelOp::Pow).is_some());
 }
 
 #[test]

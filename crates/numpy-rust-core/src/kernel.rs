@@ -19,6 +19,7 @@ pub enum ArithmeticKernelOp {
     Div,
     FloorDiv,
     Remainder,
+    Pow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +226,8 @@ pub fn binary_kernel_for_dtype(dtype: DType, op: ArithmeticKernelOp) -> Option<B
         (DType::Int64, ArithmeticKernelOp::Remainder) => Some(remainder_int64),
         (DType::Float32, ArithmeticKernelOp::Remainder) => Some(remainder_float32),
         (DType::Float64, ArithmeticKernelOp::Remainder) => Some(remainder_float64),
+        (DType::Float64, ArithmeticKernelOp::Pow) => Some(pow_float64),
+        (DType::Complex128, ArithmeticKernelOp::Pow) => Some(pow_complex128),
         _ => None,
     }
 }
@@ -892,6 +895,36 @@ float_remainder_kernel!(remainder_float32, Float32);
 float_remainder_kernel!(remainder_float64, Float64);
 int_remainder_kernel!(remainder_int32, Int32, i32);
 int_remainder_kernel!(remainder_int64, Int64, i64);
+
+fn pow_float64(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+    match (lhs, rhs) {
+        (ArrayData::Float64(a), ArrayData::Float64(b)) => {
+            let mut out = a.clone();
+            ndarray::Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                *o = o.powf(r);
+            });
+            Ok(ArrayData::Float64(out))
+        }
+        _ => Err(NumpyError::TypeError(
+            "unsupported operand types for power".into(),
+        )),
+    }
+}
+
+fn pow_complex128(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+    match (lhs, rhs) {
+        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
+            let mut out = a.clone();
+            ndarray::Zip::from(&mut out).and(&b).for_each(|o, &r| {
+                *o = o.powc(r);
+            });
+            Ok(ArrayData::Complex128(out))
+        }
+        _ => Err(NumpyError::TypeError(
+            "unsupported operand types for power".into(),
+        )),
+    }
+}
 
 macro_rules! dot_1d_1d_kernel {
     ($name:ident, $variant:ident) => {
