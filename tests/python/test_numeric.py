@@ -2235,6 +2235,12 @@ def test_ix_():
     assert_close(b[0][0], 2.0)
     assert_close(b[0][2], 4.0)
 
+def test_ix_bool_input():
+    a, b = np.ix_([True, False, True], [1, 3])
+    assert_eq(a.shape, (2, 1))
+    assert_eq(b.shape, (1, 2))
+    assert_eq(a.tolist(), [[0], [2]])
+
 def test_equal():
     a = np.array([1.0, 2.0, 3.0])
     b = np.array([1.0, 9.0, 3.0])

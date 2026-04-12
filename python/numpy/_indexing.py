@@ -956,6 +956,42 @@ def advanced_fancy_index(arr, indices):
 
 # --- mgrid / ogrid / ix_ ----------------------------------------------------
 
+def _normalize_grid_key(key):
+    if not isinstance(key, tuple):
+        key = (key,)
+    return key
+
+
+def _coerce_grid_item(item):
+    if isinstance(item, slice):
+        grid, _ = _grid_slice(item)
+        return grid
+    return array([float(item)])
+
+
+def _coerce_ix_arg(arg):
+    """Normalize one ix_ input to a 1-D ndarray with index semantics."""
+    is_int_input = isinstance(arg, range) or (
+        isinstance(arg, (list, tuple)) and len(arg) > 0 and
+        all(isinstance(x, int) and not isinstance(x, bool) for x in arg)
+    )
+    if isinstance(arg, ndarray):
+        arr = arg
+    elif isinstance(arg, range):
+        arr = array(list(arg)).astype('int64')
+    elif is_int_input:
+        arr = array(arg).astype('int64')
+    else:
+        arr = asarray(arg)
+    if arr.ndim != 1:
+        raise ValueError("Cross index must be 1 dimensional")
+    if str(arr.dtype) == 'bool':
+        arr = array([j for j in _builtin_range(arr.size) if arr[j]]).astype('int64')
+    if arr.size == 0 and str(arr.dtype) == 'float64':
+        arr = arr.astype('int64')
+    return arr
+
+
 def _grid_slice(s):
     """Process a single slice for mgrid/ogrid. Returns (array, is_complex_step)."""
     start = s.start if s.start is not None else 0
@@ -980,16 +1016,9 @@ def _grid_slice(s):
 class _MGrid:
     """Return dense multi-dimensional 'meshgrid' arrays via slice notation."""
     def __getitem__(self, key):
-        if not isinstance(key, tuple):
-            key = (key,)
+        key = _normalize_grid_key(key)
         ndim = len(key)
-        arrays = []
-        for s in key:
-            if isinstance(s, slice):
-                grid, _ = _grid_slice(s)
-                arrays.append(grid)
-            else:
-                arrays.append(array([float(s)]))
+        arrays = [_coerce_grid_item(item) for item in key]
 
         if ndim == 1:
             return arrays[0]
@@ -1012,16 +1041,9 @@ mgrid = _MGrid()
 class _OGrid:
     """Return open (sparse) multi-dimensional 'meshgrid' arrays via slice notation."""
     def __getitem__(self, key):
-        if not isinstance(key, tuple):
-            key = (key,)
+        key = _normalize_grid_key(key)
         ndim = len(key)
-        arrays = []
-        for s in key:
-            if isinstance(s, slice):
-                grid, _ = _grid_slice(s)
-                arrays.append(grid)
-            else:
-                arrays.append(array([float(s)]))
+        arrays = [_coerce_grid_item(item) for item in key]
 
         if ndim == 1:
             return arrays[0]
@@ -1039,31 +1061,10 @@ ogrid = _OGrid()
 
 def ix_(*args):
     """Construct an open mesh from multiple sequences for cross-indexing."""
-    import numpy as np
     ndim = len(args)
     result = []
     for i, arg in enumerate(args):
-        # Check if input is integer-like before converting (exclude booleans)
-        _is_int_input = isinstance(arg, range) or (
-            isinstance(arg, (list, tuple)) and len(arg) > 0 and
-            all(isinstance(x, int) and not isinstance(x, bool) for x in arg)
-        )
-        if isinstance(arg, ndarray):
-            arr = arg
-        elif isinstance(arg, range):
-            arr = array(list(arg)).astype('int64')
-        elif _is_int_input:
-            arr = array(arg).astype('int64')
-        else:
-            arr = asarray(arg)
-        if arr.ndim != 1:
-            raise ValueError("Cross index must be 1 dimensional")
-        # Boolean arrays: convert to integer index via nonzero/where
-        if str(arr.dtype) == 'bool':
-            arr = array([j for j in _builtin_range(arr.size) if arr[j]]).astype('int64')
-        # Empty untyped inputs should use indexing type (intp = int64)
-        if arr.size == 0 and str(arr.dtype) == 'float64':
-            arr = arr.astype('int64')
+        arr = _coerce_ix_arg(arg)
         shape = [1] * ndim
         shape[i] = arr.size
         result.append(arr.reshape(shape))
