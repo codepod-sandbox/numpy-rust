@@ -2,12 +2,13 @@ use crate::kernel::{
     arg_reduction_all_kernel_for_dtype, arg_reduction_axis_kernel_for_dtype,
     binary_kernel_for_dtype, comparison_kernel_for_dtype, dot_kernel_for_dtype,
     math_binary_kernel_for_dtype, math_unary_kernel_for_dtype, predicate_kernel_for_dtype,
-    predicate_presence_kernel_for_dtype, reduction_all_kernel_for_dtype,
-    reduction_axis_kernel_for_dtype, value_unary_kernel_for_dtype, where_kernel_for_dtype,
-    ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp, ArithmeticKernelOp,
-    BinaryArrayKernel, BinaryMathArrayKernel, ComparisonArrayKernel, ComparisonKernelOp,
-    DotArrayKernel, DotKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, PredicateArrayKernel,
-    PredicateKernelOp, PredicatePresenceKernel, PredicatePresenceOp, ReduceAllArrayKernel,
+    predicate_presence_kernel_for_dtype, real_binary_kernel_for_dtype, real_unary_kernel_for_dtype,
+    reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype, value_unary_kernel_for_dtype,
+    where_kernel_for_dtype, ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp,
+    ArithmeticKernelOp, BinaryArrayKernel, BinaryMathArrayKernel, ComparisonArrayKernel,
+    ComparisonKernelOp, DotArrayKernel, DotKernelOp, MathBinaryKernelOp, MathUnaryKernelOp,
+    PredicateArrayKernel, PredicateKernelOp, PredicatePresenceKernel, PredicatePresenceOp,
+    RealBinaryArrayKernel, RealBinaryKernelOp, RealUnaryKernelOp, ReduceAllArrayKernel,
     ReduceAxisArrayKernel, ReductionKernelOp, UnaryArrayKernel, ValueUnaryKernelOp,
     WhereArrayKernel, WhereKernelOp,
 };
@@ -78,6 +79,14 @@ impl DTypeDescriptor {
 
     pub fn value_unary_kernel(&self, op: ValueUnaryKernelOp) -> Option<UnaryArrayKernel> {
         value_unary_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn real_unary_kernel(&self, op: RealUnaryKernelOp) -> Option<UnaryArrayKernel> {
+        real_unary_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn real_binary_kernel(&self, op: RealBinaryKernelOp) -> Option<RealBinaryArrayKernel> {
+        real_binary_kernel_for_dtype(self.id, op)
     }
 
     pub fn math_binary_kernel(&self, op: MathBinaryKernelOp) -> Option<BinaryMathArrayKernel> {

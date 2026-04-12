@@ -64,6 +64,18 @@ pub enum ValueUnaryKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealUnaryKernelOp {
+    Spacing,
+    I0,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealBinaryKernelOp {
+    ArcTan2,
+    LDExp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathUnaryKernelOp {
     Sqrt,
     Exp,
@@ -137,6 +149,7 @@ pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type PredicatePresenceKernel = fn(&ArrayData) -> Result<bool>;
 pub type UnaryArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type BinaryMathArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
+pub type RealBinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -445,6 +458,32 @@ pub fn value_unary_kernel_for_dtype(
         (DType::Float64, ValueUnaryKernelOp::Neg) => Some(neg_float64),
         (DType::Complex64, ValueUnaryKernelOp::Neg) => Some(neg_complex64),
         (DType::Complex128, ValueUnaryKernelOp::Neg) => Some(neg_complex128),
+        _ => None,
+    }
+}
+
+pub fn real_unary_kernel_for_dtype(
+    dtype: DType,
+    op: RealUnaryKernelOp,
+) -> Option<UnaryArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float32, RealUnaryKernelOp::Spacing) => Some(real_spacing_float32),
+        (DType::Float64, RealUnaryKernelOp::Spacing) => Some(real_spacing_float64),
+        (DType::Float32, RealUnaryKernelOp::I0) => Some(real_i0_float32),
+        (DType::Float64, RealUnaryKernelOp::I0) => Some(real_i0_float64),
+        _ => None,
+    }
+}
+
+pub fn real_binary_kernel_for_dtype(
+    dtype: DType,
+    op: RealBinaryKernelOp,
+) -> Option<RealBinaryArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float32, RealBinaryKernelOp::ArcTan2) => Some(real_arctan2_float32),
+        (DType::Float64, RealBinaryKernelOp::ArcTan2) => Some(real_arctan2_float64),
+        (DType::Float32, RealBinaryKernelOp::LDExp) => Some(real_ldexp_float32),
+        (DType::Float64, RealBinaryKernelOp::LDExp) => Some(real_ldexp_float64),
         _ => None,
     }
 }
@@ -883,6 +922,112 @@ map_unary_kernel!(neg_float32, Float32, Float32, |x: f32| -x);
 map_unary_kernel!(neg_float64, Float64, Float64, |x: f64| -x);
 map_unary_kernel!(neg_complex64, Complex64, Complex64, |x: Complex<f32>| -x);
 map_unary_kernel!(neg_complex128, Complex128, Complex128, |x: Complex<f64>| -x);
+
+macro_rules! real_unary_kernel {
+    ($name:ident, $variant:ident, $op:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => Ok(ArrayData::$variant(data.mapv($op).into_shared())),
+                _ => Err(NumpyError::TypeError(
+                    "real unary kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+real_unary_kernel!(real_spacing_float32, Float32, |x: f32| {
+    let ax = x.abs();
+    libm::nextafterf(ax, f32::INFINITY) - ax
+});
+real_unary_kernel!(real_spacing_float64, Float64, |x: f64| {
+    let ax = x.abs();
+    libm::nextafter(ax, f64::INFINITY) - ax
+});
+real_unary_kernel!(real_i0_float64, Float64, |x: f64| {
+    let mut val = 1.0_f64;
+    let mut term = 1.0_f64;
+    let h = x * 0.5;
+    for k in 1_u32..30 {
+        term *= (h * h) / (k * k) as f64;
+        val += term;
+        if term.abs() < 1e-15 * val.abs() {
+            break;
+        }
+    }
+    val
+});
+real_unary_kernel!(real_i0_float32, Float32, |x: f32| {
+    let mut val = 1.0_f32;
+    let mut term = 1.0_f32;
+    let h = x * 0.5;
+    for k in 1_u32..25 {
+        term *= (h * h) / (k * k) as f32;
+        val += term;
+        if term.abs() < 1e-7_f32 * val.abs() {
+            break;
+        }
+    }
+    val
+});
+
+fn real_arctan2_float32(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+    match (lhs, rhs) {
+        (ArrayData::Float32(y), ArrayData::Float32(x)) => {
+            let mut out = y.clone();
+            ndarray::Zip::from(&mut out)
+                .and(&x)
+                .for_each(|o, &xi| *o = o.atan2(xi));
+            Ok(ArrayData::Float32(out))
+        }
+        _ => Err(NumpyError::TypeError(
+            "real binary kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn real_arctan2_float64(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+    match (lhs, rhs) {
+        (ArrayData::Float64(y), ArrayData::Float64(x)) => {
+            let mut out = y.clone();
+            ndarray::Zip::from(&mut out)
+                .and(&x)
+                .for_each(|o, &xi| *o = o.atan2(xi));
+            Ok(ArrayData::Float64(out))
+        }
+        _ => Err(NumpyError::TypeError(
+            "real binary kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn real_ldexp_float32(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+    match (lhs, rhs) {
+        (ArrayData::Float32(a), ArrayData::Int32(e)) => Ok(ArrayData::Float32(
+            ndarray::Zip::from(&a)
+                .and(&e)
+                .map_collect(|&x, &n| libm::ldexpf(x, n))
+                .into_shared(),
+        )),
+        _ => Err(NumpyError::TypeError(
+            "real binary kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn real_ldexp_float64(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
+    match (lhs, rhs) {
+        (ArrayData::Float64(a), ArrayData::Int32(e)) => Ok(ArrayData::Float64(
+            ndarray::Zip::from(&a)
+                .and(&e)
+                .map_collect(|&x, &n| libm::ldexp(x, n))
+                .into_shared(),
+        )),
+        _ => Err(NumpyError::TypeError(
+            "real binary kernel dtype mismatch".into(),
+        )),
+    }
+}
 
 macro_rules! unary_math_kernel {
     ($name:ident, $variant:ident, $op:expr) => {
