@@ -45,24 +45,21 @@ def _to_str(v):
 
 def _coerce_native_string_array(a):
     """Delegate native string input normalization to the shared bridge."""
-    return normalize_native_string_input(a)[0], isinstance(a, chararray)
+    return normalize_native_string_input(a)[0]
 
 
 def _native_string_output(a, native_op, *args):
-    arr, wrap_chararray = _coerce_native_string_array(a)
-    result = native_op(arr, *args)
-    if wrap_chararray:
-        return chararray._from_array(result)
-    return result
+    arr = _coerce_native_string_array(a)
+    return native_op(arr, *args)
 
 
 def _native_bool_output(a, native_op, *args):
-    arr, _ = _coerce_native_string_array(a)
+    arr = _coerce_native_string_array(a)
     return native_op(arr, *args)
 
 
 def _native_int_output(a, native_op, *args):
-    arr, _ = _coerce_native_string_array(a)
+    arr = _coerce_native_string_array(a)
     return native_op(arr, *args)
 
 

@@ -95,6 +95,44 @@ def test_chararray_compare_keeps_trailing_whitespace_quirk():
     assert out.tolist() == [True, False]
 
 
+def test_replace_shared_normalization_keeps_shape_and_return_split():
+    arr = np.array([["alpha", "beta"]])
+    carr = np.char.asarray(arr)
+    arr_out = np.char.replace(arr, "a", "A")
+    carr_np_out = np.char.replace(carr, "a", "A")
+    carr_method_out = carr.replace("a", "A")
+    expected = [["AlphA", "betA"]]
+
+    assert type(arr_out) is np.ndarray
+    assert type(carr_np_out) is np.ndarray
+    assert isinstance(carr_method_out, type(carr))
+    assert arr_out.shape == arr.shape
+    assert carr_np_out.shape == arr.shape
+    assert carr_method_out.shape == arr.shape
+    assert arr_out.tolist() == expected
+    assert carr_np_out.tolist() == expected
+    assert carr_method_out.tolist() == expected
+
+
+def test_startswith_shared_normalization_keeps_shape_and_return_kind():
+    arr = np.array([["hello", "world"]])
+    carr = np.char.asarray(arr)
+    arr_out = np.char.startswith(arr, "he")
+    carr_np_out = np.char.startswith(carr, "he")
+    carr_method_out = carr.startswith("he")
+    expected = [[True, False]]
+
+    assert type(arr_out) is np.ndarray
+    assert type(carr_np_out) is np.ndarray
+    assert type(carr_method_out) is np.ndarray
+    assert arr_out.shape == arr.shape
+    assert carr_np_out.shape == arr.shape
+    assert carr_method_out.shape == arr.shape
+    assert arr_out.tolist() == expected
+    assert carr_np_out.tolist() == expected
+    assert carr_method_out.tolist() == expected
+
+
 def test_char_join_preserves_shaped_inputs():
     arr = np.array([["ab", "cd"], ["ef", "gh"]])
     out = np.char.join("-", arr)
