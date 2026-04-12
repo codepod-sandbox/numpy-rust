@@ -1361,10 +1361,66 @@ def _validate_q_range(q, is_percentile=False):
         _check(q)
 
 
+def _normalize_quantile_axis(axis, ndim):
+    orig_axis = axis
+    if isinstance(axis, (list, tuple)):
+        axis = _normalize_axes_tuple(axis, ndim)
+    elif axis is not None:
+        axis = _normalize_axis_arg(axis, ndim)
+    return axis, orig_axis
+
+
+def _normalize_q_array(q, *, scale=1.0):
+    q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
+    q_flat = [float(qi) * scale for qi in q_arr.flatten().tolist()]
+    return q_arr, q_flat
+
+
+def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dtype):
+    import numpy as _np
+
+    results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
+    if keepdims:
+        results = [_apply_keepdims(r, a, orig_axis) for r in results]
+
+    stacked = _np.stack(results)
+    try:
+        stacked = stacked.astype(target_dtype)
+    except Exception:
+        pass
+    if q_arr.ndim > 1:
+        stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
+    return stacked
+
+
+def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dtype):
+    axis, orig_axis = _normalize_quantile_axis(axis, a.ndim)
+
+    if isinstance(q, (list, tuple, ndarray)):
+        q_arr, q_flat = _normalize_q_array(q, scale=q_scale)
+        results = [_quantile_core(a, qi, axis, method, keepdims=False) for qi in q_flat]
+        stacked = _stack_quantile_results(
+            a, q_arr, results, keepdims=keepdims, orig_axis=orig_axis, target_dtype=result_dtype
+        )
+        if out is not None:
+            out[...] = stacked
+            return out
+        return stacked
+
+    result = _quantile_core(
+        a, float(q) * q_scale, axis, method, keepdims=keepdims, orig_axis_for_keepdims=orig_axis
+    )
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a, _mean_result_dtype(a))
+    if out is not None:
+        out[...] = result
+        return out
+    return result
+
+
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
-    import numpy as _np
 
     # Validate method
     if method not in _VALID_QUANTILE_METHODS:
@@ -1377,49 +1433,16 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
-
-    # Normalize and validate axis
-    orig_axis = axis
-    if isinstance(axis, (list, tuple)):
-        axis = _normalize_axes_tuple(axis, a.ndim)  # returns list
-    elif axis is not None:
-        axis = _normalize_axis_arg(axis, a.ndim)
-
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        q_flat = q_arr.flatten().tolist()
-        results = [_quantile_core(a, float(qi), axis, method, keepdims=False) for qi in q_flat]
-        results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
-        if keepdims:
-            results = [_apply_keepdims(r, a, orig_axis) for r in results]
-        stacked = _np.stack(results)
-        # Preserve result dtype
-        _tdtype = _get_quantile_result_dtype(a, method)
-        try:
-            stacked = stacked.astype(_tdtype)
-        except Exception:
-            pass
-        if q_arr.ndim > 1:
-            stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
-        if out is not None:
-            out[...] = stacked
-            return out
-        return stacked
-
-    result = _quantile_core(a, float(q), axis, method, keepdims=keepdims,
-                            orig_axis_for_keepdims=orig_axis)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a, _mean_result_dtype(a))
-    if out is not None:
-        out[...] = result
-        return out
-    return result
+    return _quantile_dispatch(
+        a, q, axis, out, method, keepdims,
+        q_scale=1.0,
+        result_dtype=_get_quantile_result_dtype(a, method),
+    )
 
 
 def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
-    import numpy as _np
 
     # Validate method
     if method not in _VALID_QUANTILE_METHODS:
@@ -1432,44 +1455,11 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
-
-    # Normalize and validate axis
-    orig_axis = axis
-    if isinstance(axis, (list, tuple)):
-        axis = _normalize_axes_tuple(axis, a.ndim)
-    elif axis is not None:
-        axis = _normalize_axis_arg(axis, a.ndim)
-
-    # Convert percentile to quantile
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        q_flat = [float(qi) / 100.0 for qi in q_arr.flatten().tolist()]
-        results = [_quantile_core(a, qi, axis, method, keepdims=False) for qi in q_flat]
-        results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
-        if keepdims:
-            results = [_apply_keepdims(r, a, orig_axis) for r in results]
-        stacked = _np.stack(results)
-        _tdtype = _get_quantile_result_dtype(a, method)
-        try:
-            stacked = stacked.astype(_tdtype)
-        except Exception:
-            pass
-        if q_arr.ndim > 1:
-            stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
-        if out is not None:
-            out[...] = stacked
-            return out
-        return stacked
-
-    q_val = float(q) / 100.0
-    result = _quantile_core(a, q_val, axis, method, keepdims=keepdims,
-                            orig_axis_for_keepdims=orig_axis)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a, _mean_result_dtype(a))
-    if out is not None:
-        out[...] = result
-        return out
-    return result
+    return _quantile_dispatch(
+        a, q, axis, out, method, keepdims,
+        q_scale=0.01,
+        result_dtype=_get_quantile_result_dtype(a, method),
+    )
 
 
 def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
