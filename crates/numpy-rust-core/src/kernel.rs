@@ -199,6 +199,24 @@ pub fn binary_kernel_for_dtype(dtype: DType, op: ArithmeticKernelOp) -> Option<B
         (DType::Float64, ArithmeticKernelOp::Add) => Some(add_float64),
         (DType::Complex64, ArithmeticKernelOp::Add) => Some(add_complex64),
         (DType::Complex128, ArithmeticKernelOp::Add) => Some(add_complex128),
+        (DType::Int32, ArithmeticKernelOp::Sub) => Some(sub_int32),
+        (DType::Int64, ArithmeticKernelOp::Sub) => Some(sub_int64),
+        (DType::Float32, ArithmeticKernelOp::Sub) => Some(sub_float32),
+        (DType::Float64, ArithmeticKernelOp::Sub) => Some(sub_float64),
+        (DType::Complex64, ArithmeticKernelOp::Sub) => Some(sub_complex64),
+        (DType::Complex128, ArithmeticKernelOp::Sub) => Some(sub_complex128),
+        (DType::Int32, ArithmeticKernelOp::Mul) => Some(mul_int32),
+        (DType::Int64, ArithmeticKernelOp::Mul) => Some(mul_int64),
+        (DType::Float32, ArithmeticKernelOp::Mul) => Some(mul_float32),
+        (DType::Float64, ArithmeticKernelOp::Mul) => Some(mul_float64),
+        (DType::Complex64, ArithmeticKernelOp::Mul) => Some(mul_complex64),
+        (DType::Complex128, ArithmeticKernelOp::Mul) => Some(mul_complex128),
+        (DType::Int32, ArithmeticKernelOp::Div) => Some(div_int32),
+        (DType::Int64, ArithmeticKernelOp::Div) => Some(div_int64),
+        (DType::Float32, ArithmeticKernelOp::Div) => Some(div_float32),
+        (DType::Float64, ArithmeticKernelOp::Div) => Some(div_float64),
+        (DType::Complex64, ArithmeticKernelOp::Div) => Some(div_complex64),
+        (DType::Complex128, ArithmeticKernelOp::Div) => Some(div_complex128),
         _ => None,
     }
 }
@@ -746,6 +764,24 @@ simple_binary_kernel!(add_float32, Float32, +);
 simple_binary_kernel!(add_float64, Float64, +);
 simple_binary_kernel!(add_complex64, Complex64, +);
 simple_binary_kernel!(add_complex128, Complex128, +);
+simple_binary_kernel!(sub_int32, Int32, -);
+simple_binary_kernel!(sub_int64, Int64, -);
+simple_binary_kernel!(sub_float32, Float32, -);
+simple_binary_kernel!(sub_float64, Float64, -);
+simple_binary_kernel!(sub_complex64, Complex64, -);
+simple_binary_kernel!(sub_complex128, Complex128, -);
+simple_binary_kernel!(mul_int32, Int32, *);
+simple_binary_kernel!(mul_int64, Int64, *);
+simple_binary_kernel!(mul_float32, Float32, *);
+simple_binary_kernel!(mul_float64, Float64, *);
+simple_binary_kernel!(mul_complex64, Complex64, *);
+simple_binary_kernel!(mul_complex128, Complex128, *);
+simple_binary_kernel!(div_int32, Int32, /);
+simple_binary_kernel!(div_int64, Int64, /);
+simple_binary_kernel!(div_float32, Float32, /);
+simple_binary_kernel!(div_float64, Float64, /);
+simple_binary_kernel!(div_complex64, Complex64, /);
+simple_binary_kernel!(div_complex128, Complex128, /);
 
 macro_rules! dot_1d_1d_kernel {
     ($name:ident, $variant:ident) => {

@@ -6,6 +6,9 @@ use crate::{DType, NumpyError, Result};
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
     Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -309,7 +312,9 @@ pub fn resolve_reduction_op(op: ReductionOp, input: DType) -> Result<ReductionPl
 
 pub fn resolve_binary_op(op: BinaryOp, lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
     match op {
-        BinaryOp::Add => resolve_add(lhs, rhs),
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+            resolve_basic_arithmetic(lhs, rhs)
+        }
     }
 }
 
@@ -368,14 +373,14 @@ fn resolve_arg_reduction(input: DType) -> Result<ReductionPlan> {
     })
 }
 
-fn resolve_add(lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
+fn resolve_basic_arithmetic(lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
     if lhs.is_string() || rhs.is_string() {
         return Err(NumpyError::TypeError(
             "arithmetic not supported for string arrays".into(),
         ));
     }
 
-    let logical_output_dtype = resolve_add_output_dtype(lhs, rhs);
+    let logical_output_dtype = resolve_basic_arithmetic_output_dtype(lhs, rhs);
     let lhs_cast = resolve_cast(lhs, logical_output_dtype, CastingRule::Unsafe)?;
     let rhs_cast = resolve_cast(rhs, logical_output_dtype, CastingRule::Unsafe)?;
     let result_storage_dtype = logical_output_dtype.storage_dtype();
@@ -395,7 +400,7 @@ fn resolve_add(lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
     })
 }
 
-fn resolve_add_output_dtype(lhs: DType, rhs: DType) -> DType {
+fn resolve_basic_arithmetic_output_dtype(lhs: DType, rhs: DType) -> DType {
     if lhs.is_bool() && rhs.is_bool() {
         DType::Int8
     } else {

@@ -12,7 +12,7 @@ use crate::kernel::ArithmeticKernelOp;
 use crate::resolver::{resolve_binary_op, BinaryOp, BinaryOpPlan};
 use crate::NdArray;
 
-struct PreparedAddExecution {
+struct PreparedBinaryExecution {
     lhs: ArrayData,
     rhs: ArrayData,
     plan: BinaryOpPlan,
@@ -39,21 +39,34 @@ fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData,
     Ok((a, b, logical_dtype))
 }
 
-fn prepare_add_execution(lhs: &NdArray, rhs: &NdArray) -> Result<PreparedAddExecution> {
-    let plan = resolve_binary_op(BinaryOp::Add, lhs.dtype(), rhs.dtype())?;
+fn prepare_binary_execution(
+    op: BinaryOp,
+    lhs: &NdArray,
+    rhs: &NdArray,
+) -> Result<PreparedBinaryExecution> {
+    let plan = resolve_binary_op(op, lhs.dtype(), rhs.dtype())?;
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
     let lhs = broadcast_array_data(&lhs.cast_for_execution(plan.lhs_cast()), &out_shape);
     let rhs = broadcast_array_data(&rhs.cast_for_execution(plan.rhs_cast()), &out_shape);
 
-    Ok(PreparedAddExecution { lhs, rhs, plan })
+    Ok(PreparedBinaryExecution { lhs, rhs, plan })
 }
 
-fn execute_resolved_add(lhs: &NdArray, rhs: &NdArray) -> Result<NdArray> {
-    let prepared = prepare_add_execution(lhs, rhs)?;
+fn arithmetic_kernel_op(op: BinaryOp) -> ArithmeticKernelOp {
+    match op {
+        BinaryOp::Add => ArithmeticKernelOp::Add,
+        BinaryOp::Sub => ArithmeticKernelOp::Sub,
+        BinaryOp::Mul => ArithmeticKernelOp::Mul,
+        BinaryOp::Div => ArithmeticKernelOp::Div,
+    }
+}
+
+fn execute_resolved_binary(op: BinaryOp, lhs: &NdArray, rhs: &NdArray) -> Result<NdArray> {
+    let prepared = prepare_binary_execution(op, lhs, rhs)?;
     let descriptor = descriptor_for_dtype(prepared.plan.result_storage_dtype());
     let kernel = descriptor
-        .binary_kernel(ArithmeticKernelOp::Add)
+        .binary_kernel(arithmetic_kernel_op(op))
         .ok_or_else(|| {
             NumpyError::TypeError("unsupported operand types for binary operation".into())
         })?;
@@ -61,83 +74,37 @@ fn execute_resolved_add(lhs: &NdArray, rhs: &NdArray) -> Result<NdArray> {
     Ok(NdArray::from_binary_plan_result(data, prepared.plan))
 }
 
-macro_rules! impl_binary_op {
-    ($trait:ident, $method:ident, $op:tt) => {
-        impl ops::$trait<&NdArray> for &NdArray {
-            type Output = Result<NdArray>;
-
-            fn $method(self, rhs: &NdArray) -> Result<NdArray> {
-                let logical_dtype = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
-                    DType::Int8
-                } else {
-                    self.dtype().promote(rhs.dtype())
-                };
-
-                let (lhs_ref, rhs_ref);
-                let (lhs_tmp, rhs_tmp);
-                let storage = logical_dtype.storage_dtype();
-                if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
-                    lhs_tmp = if self.dtype() == DType::Bool {
-                        self.astype(storage)
-                    } else {
-                        self.clone()
-                    };
-                    rhs_tmp = if rhs.dtype() == DType::Bool {
-                        rhs.astype(storage)
-                    } else {
-                        rhs.clone()
-                    };
-                    lhs_ref = &lhs_tmp;
-                    rhs_ref = &rhs_tmp;
-                } else {
-                    lhs_ref = self;
-                    rhs_ref = rhs;
-                }
-
-                let (a, b, _) = prepare_binary(lhs_ref, rhs_ref)?;
-                let data = match (a, b) {
-                    (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
-                    (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
-                    (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(a $op b),
-                    (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(a $op b),
-                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => {
-                        ArrayData::Complex64(a $op b)
-                    }
-                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
-                        ArrayData::Complex128(a $op b)
-                    }
-                    _ => {
-                        return Err(NumpyError::TypeError(
-                            "unsupported operand types for binary operation".into(),
-                        ));
-                    }
-                };
-                let data = if logical_dtype.is_narrow() {
-                    crate::casting::narrow_truncate(data, logical_dtype)
-                } else {
-                    data
-                };
-                let mut result = NdArray::from_data(data);
-                if logical_dtype.is_narrow() {
-                    result.set_declared_dtype(logical_dtype);
-                }
-                Ok(result)
-            }
-        }
-    };
-}
-
 impl ops::Add<&NdArray> for &NdArray {
     type Output = Result<NdArray>;
 
     fn add(self, rhs: &NdArray) -> Result<NdArray> {
-        execute_resolved_add(self, rhs)
+        execute_resolved_binary(BinaryOp::Add, self, rhs)
     }
 }
 
-impl_binary_op!(Sub, sub, -);
-impl_binary_op!(Mul, mul, *);
-impl_binary_op!(Div, div, /);
+impl ops::Sub<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn sub(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_binary(BinaryOp::Sub, self, rhs)
+    }
+}
+
+impl ops::Mul<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn mul(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_binary(BinaryOp::Mul, self, rhs)
+    }
+}
+
+impl ops::Div<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn div(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_binary(BinaryOp::Div, self, rhs)
+    }
+}
 
 impl NdArray {
     /// Element-wise power: self ** rhs.

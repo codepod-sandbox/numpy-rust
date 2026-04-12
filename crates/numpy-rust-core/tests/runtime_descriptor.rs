@@ -1,7 +1,7 @@
 use numpy_rust_core::kernel::{
-    BitwiseBinaryKernelOp, BitwiseUnaryKernelOp, DecomposeUnaryKernelOp, MathBinaryKernelOp,
-    MathUnaryKernelOp, RealBinaryKernelOp, RealUnaryKernelOp, TruthKernelOp, TruthReduceKernelOp,
-    ValueUnaryKernelOp,
+    ArithmeticKernelOp, BitwiseBinaryKernelOp, BitwiseUnaryKernelOp, DecomposeUnaryKernelOp,
+    MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp, RealUnaryKernelOp, TruthKernelOp,
+    TruthReduceKernelOp, ValueUnaryKernelOp,
 };
 use numpy_rust_core::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
 use numpy_rust_core::{descriptor_for_dtype, resolve_binary_op, BinaryOp, DType};
@@ -17,6 +17,12 @@ fn descriptor_lookup_returns_expected_metadata() {
 fn binary_add_resolution_promotes_int32_and_float64_to_float64() {
     let plan = resolve_binary_op(BinaryOp::Add, DType::Int32, DType::Float64).unwrap();
     assert_eq!(plan.output_dtype(), DType::Float64);
+}
+
+#[test]
+fn binary_mul_resolution_promotes_bool_and_bool_to_int8() {
+    let plan = resolve_binary_op(BinaryOp::Mul, DType::Bool, DType::Bool).unwrap();
+    assert_eq!(plan.output_dtype(), DType::Int8);
 }
 
 #[test]
@@ -92,6 +98,15 @@ fn float64_descriptor_registers_math_binary_kernels() {
     assert!(desc
         .math_binary_kernel(MathBinaryKernelOp::Maximum)
         .is_some());
+}
+
+#[test]
+fn float64_descriptor_registers_basic_binary_kernels() {
+    let desc = descriptor_for_dtype(DType::Float64);
+    assert!(desc.binary_kernel(ArithmeticKernelOp::Add).is_some());
+    assert!(desc.binary_kernel(ArithmeticKernelOp::Sub).is_some());
+    assert!(desc.binary_kernel(ArithmeticKernelOp::Mul).is_some());
+    assert!(desc.binary_kernel(ArithmeticKernelOp::Div).is_some());
 }
 
 #[test]
