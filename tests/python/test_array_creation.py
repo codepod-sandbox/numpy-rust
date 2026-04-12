@@ -69,6 +69,23 @@ def test_array_values():
     assert_close(a[1], 20.0)
     assert_close(a[2], 30.0)
 
+def test_array_from_tuple():
+    a = np.array((1.0, 2.0, 3.0))
+    assert_eq(a.shape, (3,))
+    assert_eq(a.tolist(), [1.0, 2.0, 3.0])
+
+def test_array_scalar_preserves_bool():
+    a = np.array(True)
+    assert_eq(a.shape, ())
+    assert_eq(a.dtype, "bool")
+    assert_eq(bool(a), True)
+
+def test_array_complex_scalar():
+    a = np.array(1 + 2j)
+    assert_eq(a.shape, ())
+    assert_eq(a.dtype, "complex128")
+    assert_eq(a.item(), (1.0, 2.0))
+
 
 # --- np.arange ---
 

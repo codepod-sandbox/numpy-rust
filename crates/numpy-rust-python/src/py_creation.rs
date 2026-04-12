@@ -1,76 +1,187 @@
+use num_complex::Complex;
 use rustpython_vm as vm;
-use vm::builtins::{PyList, PyStr};
-use vm::{PyObjectRef, PyRef, PyResult, VirtualMachine};
+use vm::builtins::{PyList, PyStr, PyTuple};
+use vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::{DType, NdArray};
 
-use crate::py_array::{extract_shape, PyNdArray};
+use crate::py_array::{extract_shape, parse_dtype, PyNdArray};
 
-/// numpy.array(data) — convert a Python list to an NdArray.
-pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-    if let Some(list) = data.downcast_ref::<PyList>() {
-        let items = list.borrow_vec();
-        if items.is_empty() {
-            return Ok(PyNdArray::from_core(NdArray::from_vec(Vec::<f64>::new())));
-        }
-
-        // Check if first element is a list (nested)
-        if items[0].downcast_ref::<PyList>().is_some() {
-            return parse_nested_list(&items, vm);
-        }
-
-        // Check if first element is a string → string array
-        if items[0].downcast_ref::<PyStr>().is_some() {
-            let mut strings = Vec::with_capacity(items.len());
-            for item in items.iter() {
-                let s = item
-                    .downcast_ref::<PyStr>()
-                    .ok_or_else(|| vm.new_type_error("mixed types in list".to_owned()))?;
-                strings.push(s.as_str().to_owned());
-            }
-            return Ok(PyNdArray::from_core(NdArray::from_vec(strings)));
-        }
-
-        // Flat list — try to extract as floats
-        let mut floats = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            let f: f64 = item.clone().try_into_value(vm)?;
-            floats.push(f);
-        }
-        Ok(PyNdArray::from_core(NdArray::from_vec(floats)))
+fn scalar_ndarray_with_dtype(
+    obj: &vm::PyObject,
+    dtype: Option<DType>,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    let dtype = if let Some(dtype) = dtype {
+        Some(dtype)
+    } else if let Ok(dtype_name_obj) = obj.get_attr("_numpy_dtype_name", vm) {
+        let dtype_name = dtype_name_obj.try_into_value::<String>(vm)?;
+        Some(parse_dtype(dtype_name.as_str(), vm)?)
     } else {
-        Err(vm.new_type_error("array() requires a list".to_owned()))
+        None
+    };
+
+    if obj.class().is(vm.ctx.types.bool_type) {
+        let value = obj.to_owned().try_into_value::<bool>(vm)?;
+        let arr = NdArray::from_vec(vec![value])
+            .reshape(&[])
+            .map_err(|e| vm.new_type_error(e.to_string()))?;
+        return Ok(match dtype {
+            Some(dt) if dt != DType::Bool => arr.astype(dt),
+            _ => arr,
+        });
     }
+
+    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
+        let arr = NdArray::from_vec(vec![s.as_str().to_owned()])
+            .reshape(&[])
+            .map_err(|e| vm.new_type_error(e.to_string()))?;
+        return Ok(match dtype {
+            Some(dt) => arr.astype(dt),
+            None => arr,
+        });
+    }
+
+    if let Ok(c) = obj
+        .to_owned()
+        .try_into_value::<vm::function::ArgIntoComplex>(vm)
+    {
+        let value = c.into_complex();
+        let arr = NdArray::from_complex128_vec(vec![Complex::new(value.re, value.im)])
+            .reshape(&[])
+            .map_err(|e| vm.new_type_error(e.to_string()))?;
+        return Ok(match dtype {
+            Some(dt) => arr.astype(dt),
+            None => arr,
+        });
+    }
+
+    if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
+        let arr = NdArray::from_scalar(f);
+        return Ok(match dtype {
+            Some(dt) => arr.astype(dt),
+            None => arr,
+        });
+    }
+
+    Err(vm.new_type_error(format!("cannot convert {} to array", obj.class().name())))
 }
 
-fn parse_nested_list(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<PyNdArray> {
+fn flat_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
+    if items.is_empty() {
+        return Ok(NdArray::from_vec(Vec::<f64>::new()));
+    }
+
+    if items[0].downcast_ref::<PyStr>().is_some() {
+        let mut strings = Vec::with_capacity(items.len());
+        for item in items {
+            let s = item
+                .downcast_ref::<PyStr>()
+                .ok_or_else(|| vm.new_type_error("mixed types in sequence".to_owned()))?;
+            strings.push(s.as_str().to_owned());
+        }
+        return Ok(NdArray::from_vec(strings));
+    }
+
+    if items[0].class().is(vm.ctx.types.bool_type) {
+        let values = items
+            .iter()
+            .map(|item| item.clone().try_into_value::<bool>(vm))
+            .collect::<PyResult<Vec<_>>>()?;
+        return Ok(NdArray::from_vec(values));
+    }
+
+    let any_complex = items
+        .iter()
+        .any(|item| item.downcast_ref::<vm::builtins::PyComplex>().is_some());
+    if any_complex {
+        let values = items
+            .iter()
+            .map(|item| {
+                item.clone()
+                    .try_into_value::<vm::function::ArgIntoComplex>(vm)
+                    .map(|c| {
+                        let value = c.into_complex();
+                        Complex::new(value.re, value.im)
+                    })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        return Ok(NdArray::from_complex128_vec(values));
+    }
+
+    let values = items
+        .iter()
+        .map(|item| item.clone().try_into_value::<f64>(vm))
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(NdArray::from_vec(values))
+}
+
+fn nested_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
     let nrows = items.len();
     let mut flat = Vec::new();
     let mut ncols = None;
 
     for item in items {
-        let row = item
-            .downcast_ref::<PyList>()
-            .ok_or_else(|| vm.new_type_error("expected list of lists".to_owned()))?;
-        let row_items = row.borrow_vec();
+        let row = if let Some(list) = item.downcast_ref::<PyList>() {
+            list.borrow_vec().to_vec()
+        } else if let Some(tuple) = item.downcast_ref::<PyTuple>() {
+            tuple.as_slice().to_vec()
+        } else {
+            return Err(vm.new_type_error("expected sequence of sequences".to_owned()));
+        };
+
         match ncols {
-            None => ncols = Some(row_items.len()),
-            Some(c) if c != row_items.len() => {
+            None => ncols = Some(row.len()),
+            Some(c) if c != row.len() => {
                 return Err(vm.new_value_error("inconsistent row lengths".to_owned()));
             }
             _ => {}
         }
-        for elem in row_items.iter() {
-            let f: f64 = elem.clone().try_into_value(vm)?;
-            flat.push(f);
+
+        for elem in row {
+            flat.push(elem);
         }
     }
 
     let ncols = ncols.unwrap_or(0);
-    let arr = NdArray::from_vec(flat)
+    flat_sequence_to_ndarray(&flat, vm)?
         .reshape(&[nrows, ncols])
-        .map_err(|e| vm.new_value_error(e.to_string()))?;
-    Ok(PyNdArray::from_core(arr))
+        .map_err(|e| vm.new_value_error(e.to_string()))
+}
+
+pub fn object_to_ndarray(data: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
+    if let Some(arr) = data.downcast_ref::<PyNdArray>() {
+        return Ok(arr.inner().clone());
+    }
+
+    if let Some(list) = data.downcast_ref::<PyList>() {
+        let items = list.borrow_vec();
+        if !items.is_empty()
+            && (items[0].downcast_ref::<PyList>().is_some()
+                || items[0].downcast_ref::<PyTuple>().is_some())
+        {
+            return nested_sequence_to_ndarray(&items, vm);
+        }
+        return flat_sequence_to_ndarray(&items, vm);
+    }
+
+    if let Some(tuple) = data.downcast_ref::<PyTuple>() {
+        let items = tuple.as_slice();
+        if !items.is_empty()
+            && (items[0].downcast_ref::<PyList>().is_some()
+                || items[0].downcast_ref::<PyTuple>().is_some())
+        {
+            return nested_sequence_to_ndarray(items, vm);
+        }
+        return flat_sequence_to_ndarray(items, vm);
+    }
+
+    scalar_ndarray_with_dtype(data, None, vm)
+}
+
+/// numpy.array(data) — convert a Python list to an NdArray.
+pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    object_to_ndarray(&data, vm).map(PyNdArray::from_core)
 }
 
 /// numpy.zeros(shape, dtype)
