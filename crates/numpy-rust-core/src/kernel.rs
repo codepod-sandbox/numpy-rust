@@ -76,6 +76,12 @@ pub enum RealBinaryKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecomposeUnaryKernelOp {
+    Frexp,
+    Modf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathUnaryKernelOp {
     Sqrt,
     Exp,
@@ -150,6 +156,7 @@ pub type PredicatePresenceKernel = fn(&ArrayData) -> Result<bool>;
 pub type UnaryArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type BinaryMathArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type RealBinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
+pub type DecomposeUnaryArrayKernel = fn(ArrayData) -> Result<(ArrayData, ArrayData)>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -484,6 +491,19 @@ pub fn real_binary_kernel_for_dtype(
         (DType::Float64, RealBinaryKernelOp::ArcTan2) => Some(real_arctan2_float64),
         (DType::Float32, RealBinaryKernelOp::LDExp) => Some(real_ldexp_float32),
         (DType::Float64, RealBinaryKernelOp::LDExp) => Some(real_ldexp_float64),
+        _ => None,
+    }
+}
+
+pub fn decompose_unary_kernel_for_dtype(
+    dtype: DType,
+    op: DecomposeUnaryKernelOp,
+) -> Option<DecomposeUnaryArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Float32, DecomposeUnaryKernelOp::Frexp) => Some(decompose_frexp_float32),
+        (DType::Float64, DecomposeUnaryKernelOp::Frexp) => Some(decompose_frexp_float64),
+        (DType::Float32, DecomposeUnaryKernelOp::Modf) => Some(decompose_modf_float32),
+        (DType::Float64, DecomposeUnaryKernelOp::Modf) => Some(decompose_modf_float64),
         _ => None,
     }
 }
@@ -1025,6 +1045,106 @@ fn real_ldexp_float64(lhs: ArrayData, rhs: ArrayData) -> Result<ArrayData> {
         )),
         _ => Err(NumpyError::TypeError(
             "real binary kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn decompose_frexp_float64(input: ArrayData) -> Result<(ArrayData, ArrayData)> {
+    match input {
+        ArrayData::Float64(a) => {
+            let shape = a.shape().to_vec();
+            let mut mantissas = Vec::with_capacity(a.len());
+            let mut exponents = Vec::with_capacity(a.len());
+            for &x in a.iter() {
+                let (m, e) = libm::frexp(x);
+                mantissas.push(m);
+                exponents.push(e);
+            }
+            let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
+                .unwrap()
+                .into_shared();
+            let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
+                .unwrap()
+                .into_shared();
+            Ok((ArrayData::Float64(m), ArrayData::Int32(e)))
+        }
+        _ => Err(NumpyError::TypeError(
+            "decompose unary kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn decompose_frexp_float32(input: ArrayData) -> Result<(ArrayData, ArrayData)> {
+    match input {
+        ArrayData::Float32(a) => {
+            let shape = a.shape().to_vec();
+            let mut mantissas = Vec::with_capacity(a.len());
+            let mut exponents = Vec::with_capacity(a.len());
+            for &x in a.iter() {
+                let (m, e) = libm::frexpf(x);
+                mantissas.push(m);
+                exponents.push(e);
+            }
+            let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
+                .unwrap()
+                .into_shared();
+            let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
+                .unwrap()
+                .into_shared();
+            Ok((ArrayData::Float32(m), ArrayData::Int32(e)))
+        }
+        _ => Err(NumpyError::TypeError(
+            "decompose unary kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn decompose_modf_float64(input: ArrayData) -> Result<(ArrayData, ArrayData)> {
+    match input {
+        ArrayData::Float64(a) => {
+            let shape = a.shape().to_vec();
+            let mut fracs = Vec::with_capacity(a.len());
+            let mut ints = Vec::with_capacity(a.len());
+            for &x in a.iter() {
+                let (frac, int_part) = libm::modf(x);
+                fracs.push(frac);
+                ints.push(int_part);
+            }
+            let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
+                .unwrap()
+                .into_shared();
+            let i = ndarray::ArrayD::from_shape_vec(shape, ints)
+                .unwrap()
+                .into_shared();
+            Ok((ArrayData::Float64(f), ArrayData::Float64(i)))
+        }
+        _ => Err(NumpyError::TypeError(
+            "decompose unary kernel dtype mismatch".into(),
+        )),
+    }
+}
+
+fn decompose_modf_float32(input: ArrayData) -> Result<(ArrayData, ArrayData)> {
+    match input {
+        ArrayData::Float32(a) => {
+            let shape = a.shape().to_vec();
+            let mut fracs = Vec::with_capacity(a.len());
+            let mut ints = Vec::with_capacity(a.len());
+            for &x in a.iter() {
+                let (frac, int_part) = libm::modff(x);
+                fracs.push(frac);
+                ints.push(int_part);
+            }
+            let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
+                .unwrap()
+                .into_shared();
+            let i = ndarray::ArrayD::from_shape_vec(shape, ints)
+                .unwrap()
+                .into_shared();
+            Ok((ArrayData::Float32(f), ArrayData::Float32(i)))
+        }
+        _ => Err(NumpyError::TypeError(
+            "decompose unary kernel dtype mismatch".into(),
         )),
     }
 }

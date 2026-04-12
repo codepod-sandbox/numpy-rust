@@ -1,8 +1,8 @@
-use numpy_rust_core::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
 use numpy_rust_core::kernel::{
-    MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp, RealUnaryKernelOp,
-    ValueUnaryKernelOp,
+    DecomposeUnaryKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp,
+    RealUnaryKernelOp, ValueUnaryKernelOp,
 };
+use numpy_rust_core::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
 use numpy_rust_core::{descriptor_for_dtype, resolve_binary_op, BinaryOp, DType};
 
 #[test]
@@ -85,4 +85,15 @@ fn float64_descriptor_registers_real_special_kernels() {
         .real_binary_kernel(RealBinaryKernelOp::ArcTan2)
         .is_some());
     assert!(desc.real_binary_kernel(RealBinaryKernelOp::LDExp).is_some());
+}
+
+#[test]
+fn float64_descriptor_registers_decompose_kernels() {
+    let desc = descriptor_for_dtype(DType::Float64);
+    assert!(desc
+        .decompose_unary_kernel(DecomposeUnaryKernelOp::Frexp)
+        .is_some());
+    assert!(desc
+        .decompose_unary_kernel(DecomposeUnaryKernelOp::Modf)
+        .is_some());
 }

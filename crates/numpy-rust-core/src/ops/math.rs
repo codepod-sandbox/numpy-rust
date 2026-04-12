@@ -7,8 +7,8 @@ use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::kernel::{
-    MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp, RealUnaryKernelOp,
-    ValueUnaryKernelOp,
+    DecomposeUnaryKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp,
+    RealUnaryKernelOp, ValueUnaryKernelOp,
 };
 use crate::NdArray;
 
@@ -236,6 +236,25 @@ fn execute_real_binary(
     Ok(NdArray::from_data(
         kernel(lhs_data, rhs_data).expect("real binary kernel dtype mismatch"),
     ))
+}
+
+fn execute_real_decompose(
+    input: &NdArray,
+    op: DecomposeUnaryKernelOp,
+    op_name: &'static str,
+) -> Result<(NdArray, NdArray)> {
+    if input.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+    let data = ensure_float(input.data());
+    let descriptor = descriptor_for_dtype(data.dtype());
+    let kernel = descriptor
+        .decompose_unary_kernel(op)
+        .unwrap_or_else(|| panic!("decompose unary kernel not registered for {}", data.dtype()));
+    let (first, second) = kernel(data).expect("decompose unary kernel dtype mismatch");
+    Ok((NdArray::from_data(first), NdArray::from_data(second)))
 }
 
 /// Apply a float unary op (works on Float32, Float64, Complex64, Complex128).
@@ -697,107 +716,13 @@ impl NdArray {
     /// Decomposes each element into mantissa and base-2 exponent.
     /// Returns (mantissa: Float64, exponent: Int32), both same shape as input.
     pub fn frexp(&self) -> Result<(NdArray, NdArray)> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "frexp not supported for complex arrays".into(),
-            ));
-        }
-        let data = ensure_float(self.data());
-        let shape: Vec<usize> = self.shape().to_vec();
-        match data {
-            ArrayData::Float64(a) => {
-                let mut mantissas = Vec::with_capacity(a.len());
-                let mut exponents = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (m, e) = libm::frexp(x);
-                    mantissas.push(m);
-                    exponents.push(e);
-                }
-                let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
-                    .unwrap()
-                    .into_shared();
-                let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float64(m)),
-                    NdArray::from_data(ArrayData::Int32(e)),
-                ))
-            }
-            ArrayData::Float32(a) => {
-                let mut mantissas = Vec::with_capacity(a.len());
-                let mut exponents = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (m, e) = libm::frexpf(x);
-                    mantissas.push(m);
-                    exponents.push(e);
-                }
-                let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
-                    .unwrap()
-                    .into_shared();
-                let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float32(m)),
-                    NdArray::from_data(ArrayData::Int32(e)),
-                ))
-            }
-            _ => unreachable!(),
-        }
+        execute_real_decompose(self, DecomposeUnaryKernelOp::Frexp, "frexp")
     }
 
     /// Splits each element into fractional and integer parts.
     /// Returns (fractional, integer), both same dtype as input (float).
     pub fn modf(&self) -> Result<(NdArray, NdArray)> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "modf not supported for complex arrays".into(),
-            ));
-        }
-        let data = ensure_float(self.data());
-        let shape: Vec<usize> = self.shape().to_vec();
-        match data {
-            ArrayData::Float64(a) => {
-                let mut fracs = Vec::with_capacity(a.len());
-                let mut ints = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (frac, int_part) = libm::modf(x);
-                    fracs.push(frac);
-                    ints.push(int_part);
-                }
-                let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
-                    .unwrap()
-                    .into_shared();
-                let i = ndarray::ArrayD::from_shape_vec(shape, ints)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float64(f)),
-                    NdArray::from_data(ArrayData::Float64(i)),
-                ))
-            }
-            ArrayData::Float32(a) => {
-                let mut fracs = Vec::with_capacity(a.len());
-                let mut ints = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (frac, int_part) = libm::modff(x);
-                    fracs.push(frac);
-                    ints.push(int_part);
-                }
-                let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
-                    .unwrap()
-                    .into_shared();
-                let i = ndarray::ArrayD::from_shape_vec(shape, ints)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float32(f)),
-                    NdArray::from_data(ArrayData::Float32(i)),
-                ))
-            }
-            _ => unreachable!(),
-        }
+        execute_real_decompose(self, DecomposeUnaryKernelOp::Modf, "modf")
     }
 }
 
