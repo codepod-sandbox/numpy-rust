@@ -140,54 +140,73 @@ def _dtype_cast(result, dtype):
     return result
 
 
+def _ensure_reduction_array(a, fallback_builtin=None):
+    """Normalize reduction input to ndarray when appropriate."""
+    if isinstance(a, ndarray):
+        return a
+    if fallback_builtin is not None and not isinstance(a, (list, tuple)):
+        return fallback_builtin(a)
+    return asarray(a)
+
+
+def _copy_reduction_out(out, result):
+    if out is not None and isinstance(out, ndarray):
+        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
+        return out
+    return None
+
+
+def _preserve_inexact_result_dtype(result, input_arr):
+    input_dt = str(input_arr.dtype)
+    if not isinstance(result, ndarray):
+        return _scalar_result(result, input_arr)
+    if input_dt.startswith(('float', 'complex')) and str(result.dtype) != input_dt:
+        try:
+            return result.astype(input_dt)
+        except Exception:
+            return result
+    return result
+
+
+def _apply_where_mask(a, where, *, false_fill=None, true_identity=False):
+    if where is True:
+        return a
+    w = asarray(where).astype("bool")
+    if false_fill is None:
+        mask_f = w.astype("float64")
+        return a * mask_f + ((1.0 - mask_f) if true_identity else 0.0)
+    flat_a = a.flatten().tolist()
+    flat_w = w.flatten().tolist()
+    masked = [v if m else false_fill for v, m in zip(flat_a, flat_w)]
+    return array(masked).reshape(a.shape)
+
+
 def sum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
+    a = _ensure_reduction_array(a, fallback_builtin=_builtin_sum)
     if not isinstance(a, ndarray):
-        # For plain lists/tuples, convert to array; for other iterables use builtin sum
-        if isinstance(a, (list, tuple)):
-            a = asarray(a)
-        else:
-            return _builtin_sum(a)
-    if where is not True:
-        w = asarray(where).astype("bool").astype("float64")
-        a = a * w
+        return a
+    a = _apply_where_mask(a, where)
     if axis is not None:
         result = a.sum(axis, keepdims)
     else:
         result = a.sum(None, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
-    elif not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray):
-        _in_dt = str(a.dtype)
-        if _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
-            try:
-                result = result.astype(_in_dt)
-            except Exception:
-                pass
+    else:
+        result = _preserve_inexact_result_dtype(result, a)
     if initial is not None:
         result = result + initial
     return result
 
 
 def prod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    if where is not True:
-        w = asarray(where).astype("bool").astype("float64")
-        a = a * w + (1.0 - w)
-    _in_dt = str(a.dtype)
+    a = _ensure_reduction_array(a)
+    a = _apply_where_mask(a, where, true_identity=True)
     result = a.prod(axis, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
-    elif not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray):
-        if _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
-            try:
-                result = result.astype(_in_dt)
-            except Exception:
-                pass
+    else:
+        result = _preserve_inexact_result_dtype(result, a)
     if initial is not None:
         result = result * initial
     return result
@@ -2071,38 +2090,30 @@ def ediff1d(ary, to_end=None, to_begin=None):
 
 
 def max(a, axis=None, out=None, keepdims=False, initial=None, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    _in_dt = str(a.dtype)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        fill_val = float('-inf')
-        flat_a = a.flatten().tolist()
-        flat_w = w.flatten().tolist()
-        masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
-        a = array(masked).reshape(a.shape)
+    a = _ensure_reduction_array(a)
+    input_dt = str(a.dtype)
+    a = _apply_where_mask(a, where, false_fill=float('-inf'))
     if axis is not None:
         result = a.max(axis, keepdims)
     else:
         result = a.max(None, keepdims)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+    result = _scalar_result(result, a) if not isinstance(result, ndarray) else result
+    if isinstance(result, ndarray) and str(result.dtype) != input_dt:
         try:
-            result = result.astype(_in_dt)
+            result = result.astype(input_dt)
         except Exception:
             pass
     if initial is not None:
         import numpy as _np
         result = _np.maximum(result, initial)
-        if isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+        if isinstance(result, ndarray) and str(result.dtype) != input_dt:
             try:
-                result = result.astype(_in_dt)
+                result = result.astype(input_dt)
             except Exception:
                 pass
-    if out is not None and isinstance(out, ndarray):
-        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
-        return out
+    copied = _copy_reduction_out(out, result)
+    if copied is not None:
+        return copied
     return result
 
 
@@ -2110,38 +2121,30 @@ amax = max
 
 
 def min(a, axis=None, out=None, keepdims=False, initial=None, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    _in_dt = str(a.dtype)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        fill_val = float('inf')
-        flat_a = a.flatten().tolist()
-        flat_w = w.flatten().tolist()
-        masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
-        a = array(masked).reshape(a.shape)
+    a = _ensure_reduction_array(a)
+    input_dt = str(a.dtype)
+    a = _apply_where_mask(a, where, false_fill=float('inf'))
     if axis is not None:
         result = a.min(axis, keepdims)
     else:
         result = a.min(None, keepdims)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+    result = _scalar_result(result, a) if not isinstance(result, ndarray) else result
+    if isinstance(result, ndarray) and str(result.dtype) != input_dt:
         try:
-            result = result.astype(_in_dt)
+            result = result.astype(input_dt)
         except Exception:
             pass
     if initial is not None:
         import numpy as _np
         result = _np.minimum(result, initial)
-        if isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+        if isinstance(result, ndarray) and str(result.dtype) != input_dt:
             try:
-                result = result.astype(_in_dt)
+                result = result.astype(input_dt)
             except Exception:
                 pass
-    if out is not None and isinstance(out, ndarray):
-        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
-        return out
+    copied = _copy_reduction_out(out, result)
+    if copied is not None:
+        return copied
     return result
 
 
@@ -2713,13 +2716,8 @@ def in1d(ar1, ar2, assume_unique=False, invert=False):
 
 
 def all(a, axis=None, out=None, keepdims=False, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        # Masked elements become True (identity for AND)
-        mask_f = w.astype("float64")
-        a = a * mask_f + (1.0 - mask_f)
+    a = _ensure_reduction_array(a)
+    a = _apply_where_mask(a, where, true_identity=True)
     if axis is None:
         return a.all()
     # Reduce along specific axis: all elements nonzero iff min != 0
@@ -2732,13 +2730,8 @@ def all(a, axis=None, out=None, keepdims=False, where=True):
 
 
 def any(a, axis=None, out=None, keepdims=False, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        # Masked elements become False (identity for OR / 0.0)
-        mask_f = w.astype("float64")
-        a = a * mask_f
+    a = _ensure_reduction_array(a)
+    a = _apply_where_mask(a, where)
     if axis is None:
         return a.any()
     # Reduce along specific axis: any element nonzero iff max != 0
