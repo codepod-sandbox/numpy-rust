@@ -1,4 +1,4 @@
-use ndarray::{ArcArray, Dimension, IxDyn};
+use ndarray::{ArcArray, Dimension, IxDyn, SliceInfoElem};
 use num_complex::Complex;
 
 use crate::dtype::DType;
@@ -286,6 +286,229 @@ impl ArrayData {
             ArrayData::Str(a) => {
                 ArrayData::Str(a.broadcast(target).unwrap().to_owned().into_shared())
             }
+        }
+    }
+
+    pub fn slice_view(&self, info: &[SliceInfoElem]) -> Result<Self> {
+        macro_rules! do_slice {
+            ($arr:expr, $variant:ident) => {{
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    $arr.clone().slice_move(info)
+                }));
+                match result {
+                    Ok(v) => ArrayData::$variant(v),
+                    Err(panic_info) => {
+                        let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else {
+                            "internal error during slicing".to_string()
+                        };
+                        return Err(NumpyError::ValueError(msg));
+                    }
+                }
+            }};
+        }
+
+        Ok(match self {
+            ArrayData::Bool(a) => do_slice!(a, Bool),
+            ArrayData::Int32(a) => do_slice!(a, Int32),
+            ArrayData::Int64(a) => do_slice!(a, Int64),
+            ArrayData::Float32(a) => do_slice!(a, Float32),
+            ArrayData::Float64(a) => do_slice!(a, Float64),
+            ArrayData::Complex64(a) => do_slice!(a, Complex64),
+            ArrayData::Complex128(a) => do_slice!(a, Complex128),
+            ArrayData::Str(a) => do_slice!(a, Str),
+        })
+    }
+
+    pub fn index_select(&self, axis: usize, indices: &[usize]) -> Result<Self> {
+        macro_rules! do_select {
+            ($arr:expr, $variant:ident) => {{
+                let views: Vec<_> = indices
+                    .iter()
+                    .map(|&i| $arr.index_axis(ndarray::Axis(axis), i))
+                    .collect();
+                let view_refs: Vec<_> = views.iter().map(|v| v.view()).collect();
+                ArrayData::$variant(
+                    ndarray::stack(ndarray::Axis(axis), &view_refs)
+                        .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?
+                        .into_shared(),
+                )
+            }};
+        }
+
+        Ok(match self {
+            ArrayData::Bool(a) => do_select!(a, Bool),
+            ArrayData::Int32(a) => do_select!(a, Int32),
+            ArrayData::Int64(a) => do_select!(a, Int64),
+            ArrayData::Float32(a) => do_select!(a, Float32),
+            ArrayData::Float64(a) => do_select!(a, Float64),
+            ArrayData::Complex64(a) => do_select!(a, Complex64),
+            ArrayData::Complex128(a) => do_select!(a, Complex128),
+            ArrayData::Str(a) => do_select!(a, Str),
+        })
+    }
+
+    pub fn assign_indexed(
+        &mut self,
+        axis: usize,
+        indices: &[usize],
+        values: &ArrayData,
+    ) -> Result<()> {
+        macro_rules! do_set {
+            ($dst:expr, $src:expr) => {{
+                if $src.len() == 1 {
+                    let val = $src.iter().next().unwrap().clone();
+                    for &idx in indices {
+                        let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
+                        dst_view.fill(val.clone());
+                    }
+                } else {
+                    for (pos, &idx) in indices.iter().enumerate() {
+                        let src_view = $src.index_axis(ndarray::Axis(axis), pos);
+                        let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
+                        dst_view.assign(&src_view);
+                    }
+                }
+                Ok(())
+            }};
+        }
+
+        match (self, values) {
+            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_set!(dst, src),
+            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_set!(dst, src),
+            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_set!(dst, src),
+            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_set!(dst, src),
+            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_set!(dst, src),
+            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_set!(dst, src),
+            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_set!(dst, src),
+            (ArrayData::Str(dst), ArrayData::Str(src)) => do_set!(dst, src),
+            _ => Err(NumpyError::TypeError(
+                "cannot assign array of incompatible dtype".into(),
+            )),
+        }
+    }
+
+    pub fn assign_slice(&mut self, info: &[SliceInfoElem], values: &ArrayData) -> Result<()> {
+        macro_rules! do_set_slice {
+            ($dst:expr, $src:expr) => {{
+                let mut view = $dst.slice_mut(info);
+                if view.shape() == $src.shape() {
+                    view.assign($src);
+                } else if $src.len() == 1 {
+                    let val = $src.iter().next().unwrap().clone();
+                    view.fill(val);
+                } else {
+                    return Err(NumpyError::ShapeMismatch(format!(
+                        "could not broadcast input array from shape {:?} into shape {:?}",
+                        $src.shape(),
+                        view.shape()
+                    )));
+                }
+                Ok(())
+            }};
+        }
+
+        match (self, values) {
+            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_set_slice!(dst, src),
+            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_set_slice!(dst, src),
+            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_set_slice!(dst, src),
+            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_set_slice!(dst, src),
+            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_set_slice!(dst, src),
+            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_set_slice!(dst, src),
+            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_set_slice!(dst, src),
+            (ArrayData::Str(dst), ArrayData::Str(src)) => do_set_slice!(dst, src),
+            _ => Err(NumpyError::TypeError(
+                "cannot assign array of incompatible dtype".into(),
+            )),
+        }
+    }
+
+    pub fn assign_masked(&mut self, flat_mask: &[bool], values: &ArrayData) -> Result<()> {
+        macro_rules! do_mask_set {
+            ($dst:expr, $src:expr) => {{
+                let mut val_idx = 0;
+                let src_flat: Vec<_> = $src.iter().cloned().collect();
+                if let Some(flat) = $dst.as_slice_mut() {
+                    for (i, &m) in flat_mask.iter().enumerate() {
+                        if m {
+                            flat[i] = if src_flat.len() == 1 {
+                                src_flat[0].clone()
+                            } else {
+                                src_flat[val_idx].clone()
+                            };
+                            val_idx += 1;
+                        }
+                    }
+                } else {
+                    let shape = $dst.shape().to_vec();
+                    for (i, &m) in flat_mask.iter().enumerate() {
+                        if m {
+                            let mut rem = i;
+                            let mut coord = vec![0usize; shape.len()];
+                            for d in (0..shape.len()).rev() {
+                                coord[d] = rem % shape[d];
+                                rem /= shape[d];
+                            }
+                            let val = if src_flat.len() == 1 {
+                                src_flat[0].clone()
+                            } else {
+                                src_flat[val_idx].clone()
+                            };
+                            $dst[ndarray::IxDyn(&coord)] = val;
+                            val_idx += 1;
+                        }
+                    }
+                }
+                Ok(())
+            }};
+        }
+
+        match (self, values) {
+            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_mask_set!(dst, src),
+            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_mask_set!(dst, src),
+            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_mask_set!(dst, src),
+            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_mask_set!(dst, src),
+            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_mask_set!(dst, src),
+            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_mask_set!(dst, src),
+            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_mask_set!(dst, src),
+            (ArrayData::Str(dst), ArrayData::Str(src)) => do_mask_set!(dst, src),
+            _ => Err(NumpyError::TypeError(
+                "cannot assign values of incompatible dtype".into(),
+            )),
+        }
+    }
+
+    pub fn select_masked(&self, flat_mask: &[bool]) -> Self {
+        macro_rules! do_mask {
+            ($arr:expr, $variant:ident) => {{
+                let flat: Vec<_> = $arr.iter().cloned().collect();
+                let selected: Vec<_> = flat
+                    .into_iter()
+                    .zip(flat_mask.iter())
+                    .filter(|(_, &m)| m)
+                    .map(|(v, _)| v)
+                    .collect();
+                let len = selected.len();
+                ArrayData::$variant(
+                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected)
+                        .unwrap()
+                        .into_shared(),
+                )
+            }};
+        }
+
+        match self {
+            ArrayData::Bool(a) => do_mask!(a, Bool),
+            ArrayData::Int32(a) => do_mask!(a, Int32),
+            ArrayData::Int64(a) => do_mask!(a, Int64),
+            ArrayData::Float32(a) => do_mask!(a, Float32),
+            ArrayData::Float64(a) => do_mask!(a, Float64),
+            ArrayData::Complex64(a) => do_mask!(a, Complex64),
+            ArrayData::Complex128(a) => do_mask!(a, Complex128),
+            ArrayData::Str(a) => do_mask!(a, Str),
         }
     }
 }
