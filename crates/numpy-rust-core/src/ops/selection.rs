@@ -9,28 +9,39 @@ use crate::error::{NumpyError, Result};
 use crate::NdArray;
 use num_complex::Complex;
 
-fn prepare_float64_array(array: &NdArray) -> ArrayD<f64> {
+fn to_float64(array: &NdArray) -> ArrayD<f64> {
     let cast = array.astype(DType::Float64);
     let ArrayData::Float64(arr) = cast.data() else {
-        unreachable!()
+        unreachable!("float64 cast must produce float64 storage")
     };
     arr.clone()
 }
 
-fn prepare_float64_flat_vec(array: &NdArray) -> Vec<f64> {
-    prepare_float64_array(&array.flatten())
-        .iter()
-        .copied()
-        .collect()
+fn flatten_to_float64_vec(array: &NdArray) -> Vec<f64> {
+    to_float64(&array.flatten()).iter().copied().collect()
 }
 
-fn prepare_int64_flat_array(array: &NdArray) -> ArrayD<i64> {
+fn flatten_to_int64(array: &NdArray) -> ArrayD<i64> {
     let cast = array.astype(DType::Int64);
     let flat = cast.flatten();
     let ArrayData::Int64(arr) = flat.data() else {
-        unreachable!()
+        unreachable!("int64 cast must produce int64 storage")
     };
     arr.clone()
+}
+
+fn flatten_to_float64_choice_vec(choice: &NdArray, target_shape: &[usize]) -> Vec<f64> {
+    let prepared = prepare_choice_array(choice, DType::Float64, target_shape);
+    to_float64(&prepared.flatten()).iter().copied().collect()
+}
+
+fn flatten_to_complex128_choice_vec(choice: &NdArray, target_shape: &[usize]) -> Vec<Complex<f64>> {
+    let prepared = prepare_choice_array(choice, DType::Complex128, target_shape);
+    let flattened = prepared.flatten().astype(DType::Complex128);
+    let ArrayData::Complex128(arr) = flattened.data() else {
+        unreachable!("complex128 cast must produce complex128 storage")
+    };
+    arr.iter().copied().collect()
 }
 
 fn prepare_choice_array(choice: &NdArray, dtype: DType, target_shape: &[usize]) -> NdArray {
@@ -87,14 +98,7 @@ fn choose_from_flat_choices<T: Copy>(
 fn prepare_float64_choice_vecs(choices: &[&NdArray], target_shape: &[usize]) -> Vec<Vec<f64>> {
     choices
         .iter()
-        .map(|choice| {
-            let prepared = prepare_choice_array(choice, DType::Float64, target_shape);
-            let flattened = prepared.flatten();
-            let ArrayData::Float64(arr) = flattened.data() else {
-                unreachable!()
-            };
-            arr.iter().copied().collect()
-        })
+        .map(|choice| flatten_to_float64_choice_vec(choice, target_shape))
         .collect()
 }
 
@@ -104,14 +108,7 @@ fn prepare_complex128_choice_vecs(
 ) -> Vec<Vec<Complex<f64>>> {
     choices
         .iter()
-        .map(|choice| {
-            let prepared = prepare_choice_array(choice, DType::Complex128, target_shape);
-            let flattened = prepared.flatten();
-            let ArrayData::Complex128(arr) = flattened.data() else {
-                unreachable!()
-            };
-            arr.iter().copied().collect()
-        })
+        .map(|choice| flatten_to_complex128_choice_vec(choice, target_shape))
         .collect()
 }
 
@@ -124,8 +121,8 @@ impl NdArray {
                 "searchsorted requires a 1-D sorted array".into(),
             ));
         }
-        let sorted_arr = prepare_float64_array(self);
-        let vals_arr = prepare_float64_array(values);
+        let sorted_arr = to_float64(self);
+        let vals_arr = to_float64(values);
         let sorted_slice: Vec<f64> = sorted_arr.iter().copied().collect();
         let left = match side {
             "left" => true,
@@ -192,7 +189,7 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
             "choose requires at least one choice array".into(),
         ));
     }
-    let idx_arr = prepare_int64_flat_array(a);
+    let idx_arr = flatten_to_int64(a);
 
     let n_choices = choices.len();
     let target_shape = a.shape();
@@ -217,8 +214,8 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
 
 /// Return sorted unique values present in both arrays.
 pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_values = prepare_float64_flat_vec(a);
-    let b_values = prepare_float64_flat_vec(b);
+    let a_values = flatten_to_float64_vec(a);
+    let b_values = flatten_to_float64_vec(b);
 
     let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
     let mut result: Vec<f64> = a_values
@@ -237,8 +234,8 @@ pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted unique values from either array.
 pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_values = prepare_float64_flat_vec(a);
-    let b_values = prepare_float64_flat_vec(b);
+    let a_values = flatten_to_float64_vec(a);
+    let b_values = flatten_to_float64_vec(b);
 
     let mut result: Vec<f64> = a_values.iter().chain(b_values.iter()).copied().collect();
     result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
@@ -251,8 +248,8 @@ pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted values in `a` that are NOT in `b`.
 pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_values = prepare_float64_flat_vec(a);
-    let b_values = prepare_float64_flat_vec(b);
+    let a_values = flatten_to_float64_vec(a);
+    let b_values = flatten_to_float64_vec(b);
 
     let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
     let mut result: Vec<f64> = a_values
@@ -270,8 +267,8 @@ pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return boolean array with same shape as `element`, true where value exists in `test_elements`.
 pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
-    let elem_arr = prepare_float64_array(element);
-    let test_arr = prepare_float64_flat_vec(test_elements);
+    let elem_arr = to_float64(element);
+    let test_arr = flatten_to_float64_vec(test_elements);
 
     let test_set: HashSet<u64> = test_arr.iter().map(|v| v.to_bits()).collect();
     let shape: Vec<usize> = element.shape().to_vec();
