@@ -6,6 +6,26 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
+fn to_float64(array: &NdArray) -> ArrayD<f64> {
+    let cast = array.astype(DType::Float64);
+    let ArrayData::Float64(arr) = cast.data() else {
+        unreachable!("float64 cast must produce float64 storage")
+    };
+    arr.clone()
+}
+
+fn flatten_to_float64_vec(array: &NdArray) -> Vec<f64> {
+    to_float64(&array.flatten()).iter().copied().collect()
+}
+
+fn flatten_to_int64_vec(array: &NdArray) -> Vec<i64> {
+    let cast = array.flatten().astype(DType::Int64);
+    let ArrayData::Int64(arr) = cast.data() else {
+        unreachable!("int64 cast must produce int64 storage")
+    };
+    arr.iter().copied().collect()
+}
+
 fn prepare_numeric_float64_input(
     array: &NdArray,
     axis: Option<usize>,
@@ -22,7 +42,7 @@ fn prepare_numeric_float64_input(
         )));
     }
 
-    let cast = array.astype(DType::Float64);
+    let cast = to_float64(array);
     if let Some(ax) = axis {
         if ax >= cast.ndim() {
             return Err(NumpyError::InvalidAxis {
@@ -32,26 +52,7 @@ fn prepare_numeric_float64_input(
         }
     }
 
-    let ArrayData::Float64(arr) = cast.data() else {
-        unreachable!()
-    };
-    Ok(arr.clone())
-}
-
-fn prepare_int64_flat_input(array: &NdArray) -> Vec<i64> {
-    let cast = array.flatten().astype(DType::Int64);
-    let ArrayData::Int64(arr) = cast.data() else {
-        unreachable!()
-    };
-    arr.iter().copied().collect()
-}
-
-fn prepare_float64_flat_input(array: &NdArray) -> Vec<f64> {
-    let cast = array.flatten().astype(DType::Float64);
-    let ArrayData::Float64(arr) = cast.data() else {
-        unreachable!()
-    };
-    arr.iter().copied().collect()
+    Ok(cast)
 }
 
 fn execute_float64_axis_stat<FAll, FAxis>(
@@ -134,7 +135,7 @@ impl NdArray {
             return Err(NumpyError::ValueError("bins must be > 0".into()));
         }
 
-        let values: Vec<f64> = prepare_float64_flat_input(self)
+        let values: Vec<f64> = flatten_to_float64_vec(self)
             .into_iter()
             .filter(|v| !v.is_nan())
             .collect();
@@ -186,7 +187,7 @@ impl NdArray {
     /// - Without weights, returns Int64.
     /// - `minlength` sets minimum output length.
     pub fn bincount(&self, weights: Option<&NdArray>, minlength: usize) -> Result<NdArray> {
-        let flat = prepare_int64_flat_input(self);
+        let flat = flatten_to_int64_vec(self);
 
         // Validate non-negative
         for &v in &flat {
@@ -202,7 +203,7 @@ impl NdArray {
 
         match weights {
             Some(w) => {
-                let weights = prepare_float64_flat_input(w);
+                let weights = flatten_to_float64_vec(w);
                 if weights.len() != flat.len() {
                     return Err(NumpyError::ValueError(
                         "bincount: weights must have the same length as input".into(),
