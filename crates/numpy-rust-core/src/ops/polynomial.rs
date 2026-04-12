@@ -2,25 +2,24 @@ use crate::array_data::ArrayData;
 use crate::dtype::DType;
 use crate::NdArray;
 
+fn flatten_to_float64_vec(array: &NdArray) -> Vec<f64> {
+    let cast = array.astype(DType::Float64).flatten();
+    let ArrayData::Float64(arr) = cast.data() else {
+        unreachable!("float64 cast must produce float64 storage")
+    };
+    arr.iter().copied().collect()
+}
+
 /// Evaluate polynomial with coefficients `p` at points `x` using Horner's method.
 ///
 /// `p` is ordered highest-degree first: `p[0]*x^(n-1) + p[1]*x^(n-2) + ... + p[n-1]`.
 pub fn polyval(p: &NdArray, x: &NdArray) -> NdArray {
-    let p_f = p.astype(DType::Float64).flatten();
-    let x_f = x.astype(DType::Float64).flatten();
-
-    let ArrayData::Float64(p_arr) = p_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(x_arr) = x_f.data() else {
-        unreachable!()
-    };
-
-    let coeffs: Vec<f64> = p_arr.iter().copied().collect();
+    let coeffs = flatten_to_float64_vec(p);
+    let x_vals = flatten_to_float64_vec(x);
     let n = coeffs.len();
 
-    let mut result = Vec::with_capacity(x_arr.len());
-    for &xi in x_arr.iter() {
+    let mut result = Vec::with_capacity(x_vals.len());
+    for &xi in &x_vals {
         if n == 0 {
             result.push(0.0);
         } else {
@@ -46,15 +45,8 @@ pub fn polyfit(x: &NdArray, y: &NdArray, deg: usize) -> crate::error::Result<NdA
     use crate::error::NumpyError;
     use nalgebra::DMatrix;
 
-    let x_f = x.astype(DType::Float64).flatten();
-    let y_f = y.astype(DType::Float64).flatten();
-
-    let ArrayData::Float64(x_arr) = x_f.data() else {
-        unreachable!()
-    };
-    let ArrayData::Float64(y_arr) = y_f.data() else {
-        unreachable!()
-    };
+    let x_arr = flatten_to_float64_vec(x);
+    let y_arr = flatten_to_float64_vec(y);
 
     let m = x_arr.len();
     if m != y_arr.len() {
