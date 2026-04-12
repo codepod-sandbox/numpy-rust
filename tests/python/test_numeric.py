@@ -5123,6 +5123,15 @@ def test_char_native_string_wrappers_coerce_sequence_inputs():
     replaced = np.char.replace(("alpha", "beta"), "a", "A")
     assert_eq(replaced.tolist(), ["AlphA", "betA"])
 
+def test_char_strip_preserves_object_array_shape_through_shared_coercion():
+    from numpy._helpers import _ObjectArray
+
+    a = _ObjectArray(["  hi  ", " there ", "x ", " y"], "str", shape=(2, 2))
+    r = np.char.strip(a)
+
+    assert_eq(r.shape, (2, 2))
+    assert_eq(r.tolist(), [["hi", "there"], ["x", "y"]])
+
 def test_char_rjust():
     r = np.char.rjust(["hi"], 10)
     assert str(r[0]).endswith("hi")

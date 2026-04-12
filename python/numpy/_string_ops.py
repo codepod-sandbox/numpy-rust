@@ -49,7 +49,10 @@ def _coerce_native_string_array(a):
     if isinstance(a, ndarray):
         return a, False
     if isinstance(a, _ObjectArray):
-        return asarray(a._data), False
+        arr = asarray(a._data)
+        if getattr(a, 'shape', None) and tuple(arr.shape) != tuple(a.shape):
+            arr = arr.reshape(a.shape)
+        return arr, False
     return asarray(a), False
 
 
