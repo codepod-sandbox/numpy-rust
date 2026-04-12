@@ -76,7 +76,7 @@ impl NdArray {
         Self::from_parts(ArrayStorage::from_array_data(data), descriptor)
     }
 
-    fn from_parts(storage: ArrayStorage, descriptor: &'static DTypeDescriptor) -> Self {
+    pub(crate) fn from_parts(storage: ArrayStorage, descriptor: &'static DTypeDescriptor) -> Self {
         let runtime = ValidatedRuntimeState::new(&storage, descriptor);
         Self {
             descriptor: runtime.descriptor,
