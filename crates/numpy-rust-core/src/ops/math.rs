@@ -741,95 +741,43 @@ fn maybe_complex(data: &ArrayData, is_out_of_domain: impl Fn(f64) -> bool) -> Ar
     }
 }
 
+fn execute_scimath_unary(
+    input: &NdArray,
+    op: MathUnaryKernelOp,
+    is_out_of_domain: impl Fn(f64) -> bool,
+) -> NdArray {
+    let data = ensure_float(input.data());
+    let data = maybe_complex(&data, is_out_of_domain);
+    execute_math_unary_on_data(data, op)
+}
+
 impl NdArray {
     pub fn scimath_sqrt(&self) -> NdArray {
-        let data = ensure_float(self.data());
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.sqrt()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.sqrt()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.sqrt()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Sqrt, |x| x < 0.0)
     }
 
     pub fn scimath_log(&self) -> NdArray {
-        let data = ensure_float(self.data());
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.ln()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.ln()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.ln()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Log, |x| x < 0.0)
     }
 
     pub fn scimath_log2(&self) -> NdArray {
-        let data = ensure_float(self.data());
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let ln2 = std::f64::consts::LN_2;
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.log2()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.log2()).into_shared()),
-            ArrayData::Complex128(a) => {
-                ArrayData::Complex128(a.mapv(|z| z.ln() / Complex::new(ln2, 0.0)).into_shared())
-            }
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Log2, |x| x < 0.0)
     }
 
     pub fn scimath_log10(&self) -> NdArray {
-        let data = ensure_float(self.data());
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let ln10 = std::f64::consts::LN_10;
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.log10()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.log10()).into_shared()),
-            ArrayData::Complex128(a) => {
-                ArrayData::Complex128(a.mapv(|z| z.ln() / Complex::new(ln10, 0.0)).into_shared())
-            }
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Log10, |x| x < 0.0)
     }
 
     pub fn scimath_arcsin(&self) -> NdArray {
-        let data = ensure_float(self.data());
-        let data = maybe_complex(&data, |x| x.abs() > 1.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.asin()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.asin()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.asin()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::ArcSin, |x| x.abs() > 1.0)
     }
 
     pub fn scimath_arccos(&self) -> NdArray {
-        let data = ensure_float(self.data());
-        let data = maybe_complex(&data, |x| x.abs() > 1.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.acos()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.acos()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.acos()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::ArcCos, |x| x.abs() > 1.0)
     }
 
     pub fn scimath_arctanh(&self) -> NdArray {
-        let data = ensure_float(self.data());
-        let data = maybe_complex(&data, |x| x.abs() > 1.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.atanh()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.atanh()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.atanh()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::ArcTanh, |x| x.abs() > 1.0)
     }
 
     /// Complex-safe power: negative base → complex via powc.
@@ -1411,6 +1359,19 @@ mod tests {
             let v = arr.iter().next().unwrap();
             assert!((v.re - 0.0).abs() < 1e-10);
             assert!((v.im - std::f64::consts::PI).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_scimath_power_negative_base_promotes_to_complex() {
+        let a = arr(vec![-4.0]);
+        let e = arr(vec![0.5]);
+        let r = a.scimath_power(&e).unwrap();
+        assert!(matches!(r.data(), ArrayData::Complex128(_)));
+        if let ArrayData::Complex128(arr) = r.data() {
+            let v = arr.iter().next().unwrap();
+            assert!(v.re.abs() < 1e-10);
+            assert!((v.im - 2.0).abs() < 1e-10);
         }
     }
 }
