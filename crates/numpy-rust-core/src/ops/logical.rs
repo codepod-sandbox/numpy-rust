@@ -1,8 +1,10 @@
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
+use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::kernel::TruthKernelOp;
 use crate::NdArray;
 
 /// Prepare two NdArrays for bitwise ops: promote types and broadcast shapes.
@@ -44,6 +46,14 @@ fn prepare_logical(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
     let a = broadcast_array_data(lhs.data(), &out_shape);
     let b = broadcast_array_data(rhs.data(), &out_shape);
     Ok((a, b))
+}
+
+fn truth_array(data: ArrayData) -> ArrayData {
+    let descriptor = descriptor_for_dtype(data.dtype());
+    let kernel = descriptor
+        .truth_kernel(TruthKernelOp::ToBool)
+        .unwrap_or_else(|| panic!("truth kernel not registered for {}", data.dtype()));
+    kernel(data).expect("truth kernel dtype mismatch")
 }
 
 impl NdArray {
@@ -260,40 +270,21 @@ impl NdArray {
 
     /// Element-wise logical NOT. Returns Bool array (true where element is falsy).
     pub fn logical_not(&self) -> NdArray {
-        let data = match self.data() {
-            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x).into_shared()),
-            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x == 0.0).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x == 0.0).into_shared()),
-            ArrayData::Complex64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0).into_shared())
-            }
-            ArrayData::Complex128(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0).into_shared())
-            }
-            ArrayData::Str(a) => ArrayData::Bool(a.mapv(|ref x| x.is_empty()).into_shared()),
+        let ArrayData::Bool(data) = truth_array(self.data().clone()) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        NdArray::from_data(data)
+        NdArray::from_data(ArrayData::Bool(data.mapv(|x| !x).into_shared()))
     }
 
     /// Element-wise logical AND. Returns Bool array. Works on all dtypes (truthy check).
     pub fn logical_and(&self, other: &NdArray) -> Result<NdArray> {
         let (a, b) = prepare_logical(self, other)?;
-        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
-            match data {
-                ArrayData::Bool(a) => a.mapv(|x| x),
-                ArrayData::Int32(a) => a.mapv(|x| x != 0),
-                ArrayData::Int64(a) => a.mapv(|x| x != 0),
-                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
-            }
+        let ArrayData::Bool(ba) = truth_array(a) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        let ba = to_bool(&a);
-        let bb = to_bool(&b);
+        let ArrayData::Bool(bb) = truth_array(b) else {
+            unreachable!("truth kernel must produce bool arrays")
+        };
         let result = ndarray::Zip::from(&ba)
             .and(&bb)
             .map_collect(|&x, &y| x && y)
@@ -304,20 +295,12 @@ impl NdArray {
     /// Element-wise logical OR. Returns Bool array. Works on all dtypes (truthy check).
     pub fn logical_or(&self, other: &NdArray) -> Result<NdArray> {
         let (a, b) = prepare_logical(self, other)?;
-        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
-            match data {
-                ArrayData::Bool(a) => a.mapv(|x| x),
-                ArrayData::Int32(a) => a.mapv(|x| x != 0),
-                ArrayData::Int64(a) => a.mapv(|x| x != 0),
-                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
-            }
+        let ArrayData::Bool(ba) = truth_array(a) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        let ba = to_bool(&a);
-        let bb = to_bool(&b);
+        let ArrayData::Bool(bb) = truth_array(b) else {
+            unreachable!("truth kernel must produce bool arrays")
+        };
         let result = ndarray::Zip::from(&ba)
             .and(&bb)
             .map_collect(|&x, &y| x || y)
@@ -328,20 +311,12 @@ impl NdArray {
     /// Element-wise logical XOR. Returns Bool array. Works on all dtypes (truthy check).
     pub fn logical_xor(&self, other: &NdArray) -> Result<NdArray> {
         let (a, b) = prepare_logical(self, other)?;
-        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
-            match data {
-                ArrayData::Bool(a) => a.mapv(|x| x),
-                ArrayData::Int32(a) => a.mapv(|x| x != 0),
-                ArrayData::Int64(a) => a.mapv(|x| x != 0),
-                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
-            }
+        let ArrayData::Bool(ba) = truth_array(a) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        let ba = to_bool(&a);
-        let bb = to_bool(&b);
+        let ArrayData::Bool(bb) = truth_array(b) else {
+            unreachable!("truth kernel must produce bool arrays")
+        };
         let result = ndarray::Zip::from(&ba)
             .and(&bb)
             .map_collect(|&x, &y| x ^ y)

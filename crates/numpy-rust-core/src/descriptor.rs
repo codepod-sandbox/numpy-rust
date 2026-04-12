@@ -4,13 +4,15 @@ use crate::kernel::{
     dot_kernel_for_dtype, math_binary_kernel_for_dtype, math_unary_kernel_for_dtype,
     predicate_kernel_for_dtype, predicate_presence_kernel_for_dtype, real_binary_kernel_for_dtype,
     real_unary_kernel_for_dtype, reduction_all_kernel_for_dtype, reduction_axis_kernel_for_dtype,
-    value_unary_kernel_for_dtype, where_kernel_for_dtype, ArgReduceAllKernel, ArgReduceAxisKernel,
-    ArgReductionKernelOp, ArithmeticKernelOp, BinaryArrayKernel, BinaryMathArrayKernel,
-    ComparisonArrayKernel, ComparisonKernelOp, DecomposeUnaryArrayKernel, DecomposeUnaryKernelOp,
-    DotArrayKernel, DotKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, PredicateArrayKernel,
-    PredicateKernelOp, PredicatePresenceKernel, PredicatePresenceOp, RealBinaryArrayKernel,
-    RealBinaryKernelOp, RealUnaryKernelOp, ReduceAllArrayKernel, ReduceAxisArrayKernel,
-    ReductionKernelOp, UnaryArrayKernel, ValueUnaryKernelOp, WhereArrayKernel, WhereKernelOp,
+    truth_kernel_for_dtype, truth_reduce_kernel_for_dtype, value_unary_kernel_for_dtype,
+    where_kernel_for_dtype, ArgReduceAllKernel, ArgReduceAxisKernel, ArgReductionKernelOp,
+    ArithmeticKernelOp, BinaryArrayKernel, BinaryMathArrayKernel, ComparisonArrayKernel,
+    ComparisonKernelOp, DecomposeUnaryArrayKernel, DecomposeUnaryKernelOp, DotArrayKernel,
+    DotKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, PredicateArrayKernel, PredicateKernelOp,
+    PredicatePresenceKernel, PredicatePresenceOp, RealBinaryArrayKernel, RealBinaryKernelOp,
+    RealUnaryKernelOp, ReduceAllArrayKernel, ReduceAxisArrayKernel, ReductionKernelOp,
+    TruthArrayKernel, TruthKernelOp, TruthReduceKernel, TruthReduceKernelOp, UnaryArrayKernel,
+    ValueUnaryKernelOp, WhereArrayKernel, WhereKernelOp,
 };
 use crate::resolver::{resolve_reduction_op, ReductionOp, ReductionPlan};
 use crate::DType;
@@ -71,6 +73,14 @@ impl DTypeDescriptor {
         op: PredicatePresenceOp,
     ) -> Option<PredicatePresenceKernel> {
         predicate_presence_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn truth_kernel(&self, op: TruthKernelOp) -> Option<TruthArrayKernel> {
+        truth_kernel_for_dtype(self.id, op)
+    }
+
+    pub fn truth_reduce_kernel(&self, op: TruthReduceKernelOp) -> Option<TruthReduceKernel> {
+        truth_reduce_kernel_for_dtype(self.id, op)
     }
 
     pub fn math_unary_kernel(&self, op: MathUnaryKernelOp) -> Option<UnaryArrayKernel> {

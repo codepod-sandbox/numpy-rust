@@ -5,7 +5,7 @@ use crate::array_data::ArrayData;
 use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
-use crate::kernel::{ArgReductionKernelOp, ReductionKernelOp};
+use crate::kernel::{ArgReductionKernelOp, ReductionKernelOp, TruthReduceKernelOp};
 use crate::resolver::ReductionOp;
 use crate::NdArray;
 
@@ -215,30 +215,24 @@ impl NdArray {
 
     /// True if all elements are truthy.
     pub fn all(&self) -> bool {
-        match self.data() {
-            ArrayData::Bool(a) => a.iter().all(|&x| x),
-            ArrayData::Int32(a) => a.iter().all(|&x| x != 0),
-            ArrayData::Int64(a) => a.iter().all(|&x| x != 0),
-            ArrayData::Float32(a) => a.iter().all(|&x| x != 0.0),
-            ArrayData::Float64(a) => a.iter().all(|&x| x != 0.0),
-            ArrayData::Complex64(a) => a.iter().all(|x| x.re != 0.0 || x.im != 0.0),
-            ArrayData::Complex128(a) => a.iter().all(|x| x.re != 0.0 || x.im != 0.0),
-            ArrayData::Str(a) => a.iter().all(|x| !x.is_empty()),
-        }
+        let descriptor = descriptor_for_dtype(self.dtype());
+        let kernel = descriptor
+            .truth_reduce_kernel(TruthReduceKernelOp::AllTruthy)
+            .unwrap_or_else(|| {
+                panic!("truth reduction kernel not registered for {}", self.dtype())
+            });
+        kernel(self.data()).expect("truth reduction kernel dtype mismatch")
     }
 
     /// True if any element is truthy.
     pub fn any(&self) -> bool {
-        match self.data() {
-            ArrayData::Bool(a) => a.iter().any(|&x| x),
-            ArrayData::Int32(a) => a.iter().any(|&x| x != 0),
-            ArrayData::Int64(a) => a.iter().any(|&x| x != 0),
-            ArrayData::Float32(a) => a.iter().any(|&x| x != 0.0),
-            ArrayData::Float64(a) => a.iter().any(|&x| x != 0.0),
-            ArrayData::Complex64(a) => a.iter().any(|x| x.re != 0.0 || x.im != 0.0),
-            ArrayData::Complex128(a) => a.iter().any(|x| x.re != 0.0 || x.im != 0.0),
-            ArrayData::Str(a) => a.iter().any(|x| !x.is_empty()),
-        }
+        let descriptor = descriptor_for_dtype(self.dtype());
+        let kernel = descriptor
+            .truth_reduce_kernel(TruthReduceKernelOp::AnyTruthy)
+            .unwrap_or_else(|| {
+                panic!("truth reduction kernel not registered for {}", self.dtype())
+            });
+        kernel(self.data()).expect("truth reduction kernel dtype mismatch")
     }
 
     // --- Internal helpers ---

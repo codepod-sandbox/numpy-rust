@@ -57,6 +57,17 @@ pub enum PredicatePresenceOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruthKernelOp {
+    ToBool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruthReduceKernelOp {
+    AllTruthy,
+    AnyTruthy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueUnaryKernelOp {
     SignBit,
     Sign,
@@ -153,6 +164,8 @@ pub type DotArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type WhereArrayKernel = fn(ArrayData, ArrayData, ArrayData) -> Result<ArrayData>;
 pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type PredicatePresenceKernel = fn(&ArrayData) -> Result<bool>;
+pub type TruthArrayKernel = fn(ArrayData) -> Result<ArrayData>;
+pub type TruthReduceKernel = fn(&ArrayData) -> Result<bool>;
 pub type UnaryArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type BinaryMathArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type RealBinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
@@ -323,6 +336,45 @@ pub fn predicate_presence_kernel_for_dtype(
         (DType::Complex128, PredicatePresenceOp::HasInf) => Some(has_inf_complex128),
         (DType::Str, PredicatePresenceOp::HasNaN) => Some(has_nan_str),
         (DType::Str, PredicatePresenceOp::HasInf) => Some(has_inf_str),
+        _ => None,
+    }
+}
+
+pub fn truth_kernel_for_dtype(dtype: DType, op: TruthKernelOp) -> Option<TruthArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, TruthKernelOp::ToBool) => Some(truth_bool),
+        (DType::Int32, TruthKernelOp::ToBool) => Some(truth_int32),
+        (DType::Int64, TruthKernelOp::ToBool) => Some(truth_int64),
+        (DType::Float32, TruthKernelOp::ToBool) => Some(truth_float32),
+        (DType::Float64, TruthKernelOp::ToBool) => Some(truth_float64),
+        (DType::Complex64, TruthKernelOp::ToBool) => Some(truth_complex64),
+        (DType::Complex128, TruthKernelOp::ToBool) => Some(truth_complex128),
+        (DType::Str, TruthKernelOp::ToBool) => Some(truth_str),
+        _ => None,
+    }
+}
+
+pub fn truth_reduce_kernel_for_dtype(
+    dtype: DType,
+    op: TruthReduceKernelOp,
+) -> Option<TruthReduceKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_bool),
+        (DType::Bool, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_bool),
+        (DType::Int32, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_int32),
+        (DType::Int32, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_int32),
+        (DType::Int64, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_int64),
+        (DType::Int64, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_int64),
+        (DType::Float32, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_float32),
+        (DType::Float32, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_float32),
+        (DType::Float64, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_float64),
+        (DType::Float64, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_float64),
+        (DType::Complex64, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_complex64),
+        (DType::Complex64, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_complex64),
+        (DType::Complex128, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_complex128),
+        (DType::Complex128, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_complex128),
+        (DType::Str, TruthReduceKernelOp::AllTruthy) => Some(all_truthy_str),
+        (DType::Str, TruthReduceKernelOp::AnyTruthy) => Some(any_truthy_str),
         _ => None,
     }
 }
@@ -867,6 +919,64 @@ iter_presence_kernel!(has_inf_complex128, Complex128, |x| x.re.is_infinite()
     || x.im.is_infinite());
 constant_presence_kernel!(has_nan_str, Str, false);
 constant_presence_kernel!(has_inf_str, Str, false);
+
+macro_rules! truth_kernel {
+    ($name:ident, $variant:ident, $predicate:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => {
+                    Ok(ArrayData::Bool(data.mapv($predicate).into_shared()))
+                }
+                _ => Err(NumpyError::TypeError("truth kernel dtype mismatch".into())),
+            }
+        }
+    };
+}
+
+macro_rules! truth_reduce_kernel {
+    ($name:ident, $variant:ident, $method:ident, |$x:ident| $body:expr) => {
+        fn $name(input: &ArrayData) -> Result<bool> {
+            match input {
+                ArrayData::$variant(data) => Ok(data.iter().$method(|$x| $body)),
+                _ => Err(NumpyError::TypeError(
+                    "truth reduction kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+truth_kernel!(truth_bool, Bool, |x: bool| x);
+truth_kernel!(truth_int32, Int32, |x: i32| x != 0);
+truth_kernel!(truth_int64, Int64, |x: i64| x != 0);
+truth_kernel!(truth_float32, Float32, |x: f32| x != 0.0);
+truth_kernel!(truth_float64, Float64, |x: f64| x != 0.0);
+truth_kernel!(truth_complex64, Complex64, |x: Complex<f32>| x.re != 0.0
+    || x.im != 0.0);
+truth_kernel!(truth_complex128, Complex128, |x: Complex<f64>| x.re != 0.0
+    || x.im != 0.0);
+truth_kernel!(truth_str, Str, |ref x: String| !x.is_empty());
+
+truth_reduce_kernel!(all_truthy_bool, Bool, all, |x| *x);
+truth_reduce_kernel!(any_truthy_bool, Bool, any, |x| *x);
+truth_reduce_kernel!(all_truthy_int32, Int32, all, |x| *x != 0);
+truth_reduce_kernel!(any_truthy_int32, Int32, any, |x| *x != 0);
+truth_reduce_kernel!(all_truthy_int64, Int64, all, |x| *x != 0);
+truth_reduce_kernel!(any_truthy_int64, Int64, any, |x| *x != 0);
+truth_reduce_kernel!(all_truthy_float32, Float32, all, |x| *x != 0.0);
+truth_reduce_kernel!(any_truthy_float32, Float32, any, |x| *x != 0.0);
+truth_reduce_kernel!(all_truthy_float64, Float64, all, |x| *x != 0.0);
+truth_reduce_kernel!(any_truthy_float64, Float64, any, |x| *x != 0.0);
+truth_reduce_kernel!(all_truthy_complex64, Complex64, all, |x| x.re != 0.0
+    || x.im != 0.0);
+truth_reduce_kernel!(any_truthy_complex64, Complex64, any, |x| x.re != 0.0
+    || x.im != 0.0);
+truth_reduce_kernel!(all_truthy_complex128, Complex128, all, |x| x.re != 0.0
+    || x.im != 0.0);
+truth_reduce_kernel!(any_truthy_complex128, Complex128, any, |x| x.re != 0.0
+    || x.im != 0.0);
+truth_reduce_kernel!(all_truthy_str, Str, all, |x| !x.is_empty());
+truth_reduce_kernel!(any_truthy_str, Str, any, |x| !x.is_empty());
 
 macro_rules! constant_bool_unary_kernel {
     ($name:ident, $variant:ident, $value:expr) => {
