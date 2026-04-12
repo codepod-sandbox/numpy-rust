@@ -5083,6 +5083,27 @@ def test_char_ljust():
     assert str(r[0]).startswith("hi")
     assert len(str(r[0])) == 10
 
+def test_char_replace_scalar_array_mix():
+    a = np.array(["alpha", "beta", "gamma"])
+    r = np.char.replace(a, "a", "A")
+    assert_eq(str(r[0]), "AlphA")
+    assert_eq(str(r[1]), "betA")
+    assert_eq(str(r[2]), "gAmmA")
+
+def test_char_startswith_scalar_broadcast():
+    a = np.array(["hello", "world", "he"])
+    r = np.char.startswith(a, "he")
+    assert_eq(bool(r[0]), True)
+    assert_eq(bool(r[1]), False)
+    assert_eq(bool(r[2]), True)
+
+def test_char_strip_preserves_shape():
+    a = np.array([["  hi  ", " there "], ["x ", " y"]])
+    r = np.char.strip(a)
+    assert_eq(r.shape, (2, 2))
+    assert_eq(str(r[0, 0]), "hi")
+    assert_eq(str(r[1, 1]), "y")
+
 def test_char_rjust():
     r = np.char.rjust(["hi"], 10)
     assert str(r[0]).endswith("hi")

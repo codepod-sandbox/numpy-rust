@@ -229,6 +229,18 @@ def test_setitem_slice():
     assert_close(a[2], 77.0)
     assert_close(a[3], 4.0)
 
+def test_setitem_string_scalar():
+    a = np.array(["a", "b", "c"])
+    a[1] = "xyz"
+    assert_eq(str(a[1]), "xyz")
+
+def test_setitem_string_slice_broadcast():
+    a = np.array(["a", "b", "c"])
+    a[1:] = "q"
+    assert_eq(str(a[0]), "a")
+    assert_eq(str(a[1]), "q")
+    assert_eq(str(a[2]), "q")
+
 def test_setitem_2d_scalar():
     a = np.array([[1.0, 2.0], [3.0, 4.0]])
     a[(0, 1)] = 99.0

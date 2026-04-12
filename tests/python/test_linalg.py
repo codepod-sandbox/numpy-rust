@@ -75,6 +75,19 @@ def test_linalg_cholesky():
     l = np.linalg.cholesky(a)
     assert_eq(l.shape, (3, 3))
 
+def test_lstsq_vector_rhs_shape():
+    a = np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
+    b = np.array([1.0, 2.0, 0.0])
+    x, residuals, rank, s = np.linalg.lstsq(a, b, rcond=None)
+    assert_eq(x.shape, (2, 1))
+    assert_eq(rank, 2)
+    assert_eq(s.shape, (2,))
+
+def test_eig_identity_sorted_real_output():
+    vals, vecs = np.linalg.eig(np.eye(3))
+    assert_eq(vals.shape, (3,))
+    assert_eq(vecs.shape, (3, 3))
+    assert_close(float(vals[0]), 1.0)
 
 # --- np.fft ---
 
