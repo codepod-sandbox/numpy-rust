@@ -7,6 +7,70 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
+fn to_float64(array: &NdArray) -> Result<ArrayD<f64>> {
+    let cast = array.astype(DType::Float64);
+    let ArrayData::Float64(arr) = cast.data() else {
+        return Err(NumpyError::TypeError("cov requires numeric input".into()));
+    };
+    Ok(arr.clone())
+}
+
+fn to_complex128(array: &NdArray) -> ArrayD<Complex<f64>> {
+    let cast = array.astype(DType::Complex128);
+    let ArrayData::Complex128(arr) = cast.data() else {
+        unreachable!("complex128 cast must produce complex128 storage");
+    };
+    arr.clone()
+}
+
+fn normalize_matrix_f64(array: &NdArray, rowvar: bool) -> Result<ArrayD<f64>> {
+    let arr = to_float64(array)?;
+    match arr.ndim() {
+        0 => Err(NumpyError::ValueError(
+            "cov requires at least a 1-D array".into(),
+        )),
+        1 => {
+            let n = arr.len();
+            arr.into_shape_with_order(IxDyn(&[1, n]))
+                .map_err(|e| NumpyError::ValueError(e.to_string()))
+        }
+        2 => {
+            if rowvar {
+                Ok(arr)
+            } else {
+                Ok(arr.t().to_owned().into())
+            }
+        }
+        _ => Err(NumpyError::ValueError(
+            "cov requires a 1-D or 2-D array".into(),
+        )),
+    }
+}
+
+fn normalize_matrix_complex128(array: &NdArray, rowvar: bool) -> Result<ArrayD<Complex<f64>>> {
+    let arr = to_complex128(array);
+    match arr.ndim() {
+        0 => Err(NumpyError::ValueError(
+            "cov requires at least a 1-D array".into(),
+        )),
+        1 => {
+            let n = arr.len();
+            arr.into_shape_with_order(IxDyn(&[1, n]))
+                .map_err(|e| NumpyError::ValueError(e.to_string()))
+        }
+        2 => {
+            if rowvar {
+                Ok(arr)
+            } else {
+                Ok(arr.t().to_owned().into())
+            }
+        }
+        _ => Err(NumpyError::ValueError(
+            "cov requires a 1-D or 2-D array".into(),
+        )),
+    }
+}
+
 impl NdArray {
     /// Compute the covariance matrix.
     ///
@@ -23,44 +87,7 @@ impl NdArray {
             return self.cov_complex(rowvar, ddof);
         }
 
-        // Cast to Float64
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = f.data() else {
-            return Err(NumpyError::TypeError("cov requires numeric input".into()));
-        };
-
-        // Determine the 2-D observation matrix (variables × observations).
-        let mat = match arr.ndim() {
-            0 => {
-                return Err(NumpyError::ValueError(
-                    "cov requires at least a 1-D array".into(),
-                ));
-            }
-            1 => {
-                // Treat as a single variable (1 × N).
-                let n = arr.len();
-                arr.clone()
-                    .into_shape_with_order(IxDyn(&[1, n]))
-                    .map_err(|e| NumpyError::ValueError(e.to_string()))?
-            }
-            2 => {
-                if rowvar {
-                    arr.clone()
-                } else {
-                    // columns = variables → transpose so rows = variables
-                    arr.t()
-                        .to_owned()
-                        .into_dimensionality()
-                        .unwrap()
-                        .into_shared()
-                }
-            }
-            _ => {
-                return Err(NumpyError::ValueError(
-                    "cov requires a 1-D or 2-D array".into(),
-                ));
-            }
-        };
+        let mat = normalize_matrix_f64(self, rowvar)?;
 
         let num_vars = mat.shape()[0]; // number of variables
         let num_obs = mat.shape()[1]; // number of observations
@@ -122,35 +149,7 @@ impl NdArray {
     }
 
     fn cov_complex(&self, rowvar: bool, ddof: i64) -> Result<NdArray> {
-        let f = self.astype(DType::Complex128);
-        let ArrayData::Complex128(arr) = f.data() else {
-            unreachable!();
-        };
-
-        let mat = match arr.ndim() {
-            1 => {
-                let n = arr.len();
-                arr.clone()
-                    .into_shape_with_order(IxDyn(&[1, n]))
-                    .map_err(|e| NumpyError::ValueError(e.to_string()))?
-            }
-            2 => {
-                if rowvar {
-                    arr.clone()
-                } else {
-                    arr.t()
-                        .to_owned()
-                        .into_dimensionality()
-                        .unwrap()
-                        .into_shared()
-                }
-            }
-            _ => {
-                return Err(NumpyError::ValueError(
-                    "cov requires a 1-D or 2-D array".into(),
-                ));
-            }
-        };
+        let mat = normalize_matrix_complex128(self, rowvar)?;
 
         let num_vars = mat.shape()[0];
         let num_obs = mat.shape()[1];
