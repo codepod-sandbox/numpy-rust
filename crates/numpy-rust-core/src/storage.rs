@@ -168,7 +168,14 @@ pub(crate) fn normalize_string_assignment(target: &ArrayStorage, value: ArrayDat
 
 fn string_width_from_data(data: &ArrayData) -> Option<usize> {
     match data {
-        ArrayData::Str(values) => Some(values.iter().map(|s| s.chars().count()).max().unwrap_or(0)),
+        ArrayData::Str(values) => Some(
+            values
+                .iter()
+                .map(|s| s.chars().count())
+                .max()
+                .unwrap_or(0)
+                .max(1),
+        ),
         _ => None,
     }
 }
