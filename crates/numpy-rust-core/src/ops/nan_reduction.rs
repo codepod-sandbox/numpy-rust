@@ -48,27 +48,49 @@ fn as_f64(arr: &NdArray) -> &ArrayD<f64> {
     }
 }
 
+fn execute_nan_float64_reduction<FAll, FAxis>(
+    array: &NdArray,
+    axis: Option<usize>,
+    keepdims: bool,
+    reduce_all: FAll,
+    reduce_axis: FAxis,
+) -> Result<NdArray>
+where
+    FAll: FnOnce(&ArrayD<f64>) -> f64,
+    FAxis: FnOnce(&ArrayD<f64>, usize) -> ArrayD<f64>,
+{
+    let cast = array.astype(DType::Float64);
+    let arr = as_f64(&cast);
+    let original_ndim = array.ndim();
+
+    let result = match axis {
+        None => NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
+            IxDyn(&[]),
+            reduce_all(arr),
+        ))),
+        Some(ax) => {
+            validate_axis(ax, array.ndim())?;
+            NdArray::from_data(ArrayData::Float64(reduce_axis(arr, ax)))
+        }
+    };
+
+    Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+}
+
 impl NdArray {
     /// Sum of array elements, ignoring NaN values.
     /// NaN values are treated as zero.
     pub fn nansum(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let s: f64 = arr.iter().filter(|x| !x.is_nan()).sum();
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), s)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr =
-                    arr.map_axis(Axis(ax), |lane| lane.iter().filter(|x| !x.is_nan()).sum());
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| arr.iter().filter(|x| !x.is_nan()).sum(),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| lane.iter().filter(|x| !x.is_nan()).sum())
+                    .into_shared()
+            },
+        )
     }
 
     /// Mean of array elements, ignoring NaN values.
@@ -392,29 +414,24 @@ impl NdArray {
     /// Product of array elements, ignoring NaN values.
     /// NaN values are treated as 1.
     pub fn nanprod(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let p: f64 = arr
-                    .iter()
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| {
+                arr.iter()
                     .map(|&x| if x.is_nan() { 1.0 } else { x })
-                    .product();
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), p)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr = arr.map_axis(Axis(ax), |lane| {
+                    .product()
+            },
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| {
                     lane.iter()
                         .map(|&x| if x.is_nan() { 1.0 } else { x })
                         .product()
-                });
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+                })
+                .into_shared()
+            },
+        )
     }
 }
 
