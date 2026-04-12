@@ -110,6 +110,17 @@ pub mod _numpy_native {
             .collect::<PyResult<Vec<_>>>()
     }
 
+    fn parse_index_array_sequence(
+        obj: &PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<numpy_rust_core::NdArray>> {
+        let items = py_sequence_items(obj, vm, "multi_index must be a list or tuple")?;
+        items
+            .into_iter()
+            .map(|item| obj_to_ndarray(&item, vm))
+            .collect::<PyResult<Vec<_>>>()
+    }
+
     fn parse_usize_pair(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<(usize, usize)> {
         let items = py_sequence_items(obj, vm, "expected pair of integers")?;
         if items.len() != 2 {
@@ -1704,15 +1715,7 @@ pub mod _numpy_native {
         dims: PyObjectRef,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        // Parse multi_index: tuple of arrays/ints
-        let tuple = multi_index
-            .downcast_ref::<vm::builtins::PyTuple>()
-            .ok_or_else(|| vm.new_type_error("multi_index must be a tuple".to_owned()))?;
-        let arrs: Vec<numpy_rust_core::NdArray> = tuple
-            .as_slice()
-            .iter()
-            .map(|item| obj_to_ndarray(item, vm))
-            .collect::<PyResult<Vec<_>>>()?;
+        let arrs = parse_index_array_sequence(&multi_index, vm)?;
         let refs: Vec<&numpy_rust_core::NdArray> = arrs.iter().collect();
         let dims_vec = parse_shape_tuple(&dims, vm)?;
         numpy_rust_core::indexing::ravel_multi_index(&refs, &dims_vec)
