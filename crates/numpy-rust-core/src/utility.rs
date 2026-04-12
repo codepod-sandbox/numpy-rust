@@ -288,28 +288,47 @@ fn execute_predicate_presence(input: &NdArray, op: PredicatePresenceOp) -> bool 
     kernel(input.data()).expect("predicate presence kernel dtype mismatch")
 }
 
+fn flattened_float64(array: &NdArray) -> ArrayD<f64> {
+    array.flatten().to_float64_data()
+}
+
+fn nonzero_linear_indices(array: &NdArray) -> Vec<usize> {
+    flattened_float64(array)
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &val)| (val != 0.0).then_some(idx))
+        .collect()
+}
+
+fn linear_index_to_coords(
+    mut linear_idx: usize,
+    shape: &[usize],
+    ndim: usize,
+    at_least_1d: bool,
+) -> Vec<i64> {
+    let coord_ndim = if at_least_1d { ndim.max(1) } else { ndim };
+    let mut coord = vec![0i64; coord_ndim];
+    for d in (0..coord_ndim).rev() {
+        let dim_size = if d < shape.len() { shape[d] } else { 1 };
+        coord[d] = (linear_idx % dim_size) as i64;
+        linear_idx /= dim_size;
+    }
+    coord
+}
+
 /// Return the indices of non-zero elements as an (N, ndim) Int64 array.
 pub fn argwhere(a: &NdArray) -> NdArray {
     let shape = a.shape().to_vec();
     let ndim = a.ndim();
-    let arr = a.to_float64_data();
-
     let mut coords: Vec<i64> = Vec::new();
-    let mut count = 0usize;
+    let indices = nonzero_linear_indices(a);
 
-    for (linear_idx, &val) in arr.iter().enumerate() {
-        if val != 0.0 {
-            let mut remaining = linear_idx;
-            let mut coord = vec![0i64; ndim];
-            for d in (0..ndim).rev() {
-                coord[d] = (remaining % shape[d]) as i64;
-                remaining /= shape[d];
-            }
-            coords.extend_from_slice(&coord);
-            count += 1;
-        }
+    for linear_idx in &indices {
+        let coord = linear_index_to_coords(*linear_idx, &shape, ndim, false);
+        coords.extend_from_slice(&coord);
     }
 
+    let count = indices.len();
     let result_shape = if ndim == 0 {
         vec![count, 0]
     } else {
@@ -327,17 +346,13 @@ pub fn argwhere(a: &NdArray) -> NdArray {
 pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
     let shape = a.shape().to_vec();
     let ndim = a.ndim().max(1); // at least 1-D
-    let arr = a.to_float64_data();
-
     let mut indices: Vec<Vec<i64>> = vec![Vec::new(); ndim];
-    for (linear_idx, &val) in arr.iter().enumerate() {
-        if val != 0.0 {
-            let mut remaining = linear_idx;
-            for d in (0..ndim).rev() {
-                let dim_size = if d < shape.len() { shape[d] } else { 1 };
-                indices[d].push((remaining % dim_size) as i64);
-                remaining /= dim_size;
-            }
+    for linear_idx in nonzero_linear_indices(a) {
+        for (d, value) in linear_index_to_coords(linear_idx, &shape, ndim, true)
+            .into_iter()
+            .enumerate()
+        {
+            indices[d].push(value);
         }
     }
 
@@ -355,8 +370,7 @@ pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
 
 /// Count the number of non-zero elements.
 pub fn count_nonzero(a: &NdArray) -> usize {
-    let arr = a.to_float64_data();
-    arr.iter().filter(|&&x| x != 0.0).count()
+    nonzero_linear_indices(a).len()
 }
 
 /// Dot product of two arrays.
@@ -447,8 +461,8 @@ pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
 
 /// Compute outer product of two arrays (flattened).
 pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
-    let aa = a.flatten().to_float64_data();
-    let bb = b.flatten().to_float64_data();
+    let aa = flattened_float64(a);
+    let bb = flattened_float64(b);
 
     let m = aa.len();
     let n = bb.len();
