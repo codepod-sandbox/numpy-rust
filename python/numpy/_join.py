@@ -17,17 +17,35 @@ __all__ = [
 ]
 
 
+def _require_array_sequence(arrays):
+    """Require a concrete list/tuple of array-like values."""
+    if hasattr(arrays, '__next__'):
+        raise TypeError("arrays to stack must be passed as a list or tuple, not a generator")
+    if not isinstance(arrays, (list, tuple)):
+        raise TypeError("arrays to stack must be passed as a list or tuple, not " + type(arrays).__name__)
+    return arrays
+
+
+def _coerce_array_sequence(arrays, transform=None):
+    """Coerce a stack-like input sequence through one shared array boundary."""
+    seq = _require_array_sequence(arrays)
+    coerced = []
+    for arr in seq:
+        value = asarray(arr)
+        if transform is not None:
+            value = transform(value)
+        coerced.append(value)
+    return coerced
+
+
 def stack(arrays, axis=0, out=None, *, dtype=None, casting='same_kind'):
     from ._helpers import _ObjectArray
     from ._core_types import can_cast
-    from ._shape import expand_dims, atleast_1d
-    if hasattr(arrays, '__next__'):
-        raise TypeError("arrays to stack must be passed as a list or tuple, "
-                        "not a generator")
+    from ._shape import expand_dims
     # Cannot specify both out and dtype
     if out is not None and dtype is not None:
         raise TypeError("stack() does not support 'out' and 'dtype' together")
-    arrays = [asarray(a) for a in arrays]
+    arrays = _coerce_array_sequence(arrays)
     if not arrays:
         raise ValueError("need at least one array to stack")
     # Validate all arrays have the same shape
@@ -79,9 +97,7 @@ def stack(arrays, axis=0, out=None, *, dtype=None, casting='same_kind'):
 
 def vstack(tup, *, dtype=None, casting='same_kind'):
     from ._shape import atleast_2d
-    if not isinstance(tup, (list, tuple)):
-        raise TypeError("arrays to stack must be passed as a list or tuple, not " + type(tup).__name__)
-    arrs = [atleast_2d(asarray(a)) for a in tup]
+    arrs = _coerce_array_sequence(tup, atleast_2d)
     if len(arrs) == 0:
         raise ValueError("need at least one array to concatenate")
     return concatenate(arrs, 0, dtype=dtype, casting=casting)
@@ -89,9 +105,7 @@ def vstack(tup, *, dtype=None, casting='same_kind'):
 
 def hstack(tup, *, dtype=None, casting='same_kind'):
     from ._shape import atleast_1d
-    if not isinstance(tup, (list, tuple)):
-        raise TypeError("arrays to stack must be passed as a list or tuple, not " + type(tup).__name__)
-    arrs = [atleast_1d(asarray(a)) for a in tup]
+    arrs = _coerce_array_sequence(tup, atleast_1d)
     if len(arrs) == 0:
         raise ValueError("need at least one array to concatenate")
     if arrs[0].ndim > 1:
@@ -102,8 +116,7 @@ def hstack(tup, *, dtype=None, casting='same_kind'):
 def column_stack(tup):
     """Stack 1-D arrays as columns into a 2-D array."""
     arrays = []
-    for a in tup:
-        a = asarray(a)
+    for a in _coerce_array_sequence(tup):
         if a.ndim == 1:
             a = a.reshape((a.size, 1))  # Make column vector
         arrays.append(a)
@@ -111,7 +124,7 @@ def column_stack(tup):
 
 
 def dstack(tup):
-    return _native.dstack(list(tup))
+    return _native.dstack(_coerce_array_sequence(tup))
 
 
 row_stack = vstack
