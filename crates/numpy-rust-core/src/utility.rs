@@ -5,7 +5,7 @@ use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
-use crate::kernel::{DotKernelOp, WhereKernelOp};
+use crate::kernel::{DotKernelOp, PredicateKernelOp, WhereKernelOp};
 use crate::resolver::{resolve_dot_op, resolve_where_op, DotOp, DotOpPlan, WhereOp, WhereOpPlan};
 use crate::{DType, NdArray};
 
@@ -123,57 +123,20 @@ impl NdArray {
     /// For integer/bool types, always returns all-false.
     /// For complex types, true if either component is NaN.
     pub fn isnan(&self) -> NdArray {
-        let data = match self.data() {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
-            ArrayData::Complex64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan()).into_shared())
-            }
-            ArrayData::Complex128(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan()).into_shared())
-            }
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false).into_shared()),
-        };
-        NdArray::from_data(data)
+        execute_predicate(self, PredicateKernelOp::IsNaN)
     }
 
     /// Returns a Bool array: true where elements are finite (not NaN or Inf).
     /// For integer/bool types, always returns all-true.
     /// For complex types, true if both components are finite.
     pub fn isfinite(&self) -> NdArray {
-        let data = match self.data() {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_finite() && x.im.is_finite())
-                    .into_shared(),
-            ),
-            ArrayData::Complex128(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_finite() && x.im.is_finite())
-                    .into_shared(),
-            ),
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), true).into_shared()),
-        };
-        NdArray::from_data(data)
+        execute_predicate(self, PredicateKernelOp::IsFinite)
     }
 
     /// Returns a Bool array: true where elements are infinite.
     /// For integer/bool types, always returns all-false.
     pub fn isinf(&self) -> NdArray {
-        let data = match self.data() {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_infinite() || x.im.is_infinite())
-                    .into_shared(),
-            ),
-            ArrayData::Complex128(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_infinite() || x.im.is_infinite())
-                    .into_shared(),
-            ),
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false).into_shared()),
-        };
-        NdArray::from_data(data)
+        execute_predicate(self, PredicateKernelOp::IsInf)
     }
 
     /// Reinterpret the raw data as a different dtype (view).
@@ -316,6 +279,14 @@ impl NdArray {
     pub fn shares_memory_with(&self, other: &NdArray) -> bool {
         self.storage().overlaps(other.storage())
     }
+}
+
+fn execute_predicate(input: &NdArray, op: PredicateKernelOp) -> NdArray {
+    let descriptor = descriptor_for_dtype(input.dtype());
+    let kernel = descriptor
+        .predicate_kernel(op)
+        .unwrap_or_else(|| panic!("predicate kernel not registered for {}", input.dtype()));
+    NdArray::from_data(kernel(input.data().clone()).expect("predicate kernel dtype mismatch"))
 }
 
 /// Return the indices of non-zero elements as an (N, ndim) Int64 array.

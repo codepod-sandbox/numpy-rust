@@ -44,6 +44,13 @@ pub enum WhereKernelOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredicateKernelOp {
+    IsNaN,
+    IsFinite,
+    IsInf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionKernelOp {
     Sum,
     Prod,
@@ -61,6 +68,7 @@ pub type BinaryArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type ComparisonArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type DotArrayKernel = fn(ArrayData, ArrayData) -> Result<ArrayData>;
 pub type WhereArrayKernel = fn(ArrayData, ArrayData, ArrayData) -> Result<ArrayData>;
+pub type PredicateArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAllArrayKernel = fn(ArrayData) -> Result<ArrayData>;
 pub type ReduceAxisArrayKernel = fn(ArrayData, usize) -> Result<ArrayData>;
 pub type ArgReduceAllKernel = fn(ArrayData) -> Result<usize>;
@@ -169,6 +177,39 @@ pub fn where_kernel_for_dtype(dtype: DType, op: WhereKernelOp) -> Option<WhereAr
         (DType::Complex64, WhereKernelOp::Select) => Some(where_select_complex64),
         (DType::Complex128, WhereKernelOp::Select) => Some(where_select_complex128),
         (DType::Str, WhereKernelOp::Select) => Some(where_select_str),
+        _ => None,
+    }
+}
+
+pub fn predicate_kernel_for_dtype(
+    dtype: DType,
+    op: PredicateKernelOp,
+) -> Option<PredicateArrayKernel> {
+    match (dtype.storage_dtype(), op) {
+        (DType::Bool, PredicateKernelOp::IsNaN) => Some(isnan_bool),
+        (DType::Bool, PredicateKernelOp::IsFinite) => Some(isfinite_bool),
+        (DType::Bool, PredicateKernelOp::IsInf) => Some(isinf_bool),
+        (DType::Int32, PredicateKernelOp::IsNaN) => Some(isnan_int32),
+        (DType::Int32, PredicateKernelOp::IsFinite) => Some(isfinite_int32),
+        (DType::Int32, PredicateKernelOp::IsInf) => Some(isinf_int32),
+        (DType::Int64, PredicateKernelOp::IsNaN) => Some(isnan_int64),
+        (DType::Int64, PredicateKernelOp::IsFinite) => Some(isfinite_int64),
+        (DType::Int64, PredicateKernelOp::IsInf) => Some(isinf_int64),
+        (DType::Float32, PredicateKernelOp::IsNaN) => Some(isnan_float32),
+        (DType::Float32, PredicateKernelOp::IsFinite) => Some(isfinite_float32),
+        (DType::Float32, PredicateKernelOp::IsInf) => Some(isinf_float32),
+        (DType::Float64, PredicateKernelOp::IsNaN) => Some(isnan_float64),
+        (DType::Float64, PredicateKernelOp::IsFinite) => Some(isfinite_float64),
+        (DType::Float64, PredicateKernelOp::IsInf) => Some(isinf_float64),
+        (DType::Complex64, PredicateKernelOp::IsNaN) => Some(isnan_complex64),
+        (DType::Complex64, PredicateKernelOp::IsFinite) => Some(isfinite_complex64),
+        (DType::Complex64, PredicateKernelOp::IsInf) => Some(isinf_complex64),
+        (DType::Complex128, PredicateKernelOp::IsNaN) => Some(isnan_complex128),
+        (DType::Complex128, PredicateKernelOp::IsFinite) => Some(isfinite_complex128),
+        (DType::Complex128, PredicateKernelOp::IsInf) => Some(isinf_complex128),
+        (DType::Str, PredicateKernelOp::IsNaN) => Some(isnan_str),
+        (DType::Str, PredicateKernelOp::IsFinite) => Some(isfinite_str),
+        (DType::Str, PredicateKernelOp::IsInf) => Some(isinf_str),
         _ => None,
     }
 }
@@ -385,6 +426,77 @@ primitive_where_kernel!(where_select_float32, Float32);
 primitive_where_kernel!(where_select_float64, Float64);
 primitive_where_kernel!(where_select_complex64, Complex64);
 primitive_where_kernel!(where_select_complex128, Complex128);
+
+macro_rules! simple_predicate_kernel {
+    ($name:ident, $variant:ident, $predicate:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => {
+                    Ok(ArrayData::Bool(data.mapv($predicate).into_shared()))
+                }
+                _ => Err(NumpyError::TypeError(
+                    "predicate kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+macro_rules! constant_predicate_kernel {
+    ($name:ident, $variant:ident, $value:expr) => {
+        fn $name(input: ArrayData) -> Result<ArrayData> {
+            match input {
+                ArrayData::$variant(data) => Ok(ArrayData::Bool(
+                    ArrayD::from_elem(IxDyn(data.shape()), $value).into_shared(),
+                )),
+                _ => Err(NumpyError::TypeError(
+                    "predicate kernel dtype mismatch".into(),
+                )),
+            }
+        }
+    };
+}
+
+constant_predicate_kernel!(isnan_bool, Bool, false);
+constant_predicate_kernel!(isfinite_bool, Bool, true);
+constant_predicate_kernel!(isinf_bool, Bool, false);
+constant_predicate_kernel!(isnan_int32, Int32, false);
+constant_predicate_kernel!(isfinite_int32, Int32, true);
+constant_predicate_kernel!(isinf_int32, Int32, false);
+constant_predicate_kernel!(isnan_int64, Int64, false);
+constant_predicate_kernel!(isfinite_int64, Int64, true);
+constant_predicate_kernel!(isinf_int64, Int64, false);
+simple_predicate_kernel!(isnan_float32, Float32, |x: f32| x.is_nan());
+simple_predicate_kernel!(isfinite_float32, Float32, |x: f32| x.is_finite());
+simple_predicate_kernel!(isinf_float32, Float32, |x: f32| x.is_infinite());
+simple_predicate_kernel!(isnan_float64, Float64, |x: f64| x.is_nan());
+simple_predicate_kernel!(isfinite_float64, Float64, |x: f64| x.is_finite());
+simple_predicate_kernel!(isinf_float64, Float64, |x: f64| x.is_infinite());
+simple_predicate_kernel!(isnan_complex64, Complex64, |x: Complex<f32>| x.re.is_nan()
+    || x.im.is_nan());
+simple_predicate_kernel!(isfinite_complex64, Complex64, |x: Complex<f32>| x
+    .re
+    .is_finite()
+    && x.im.is_finite());
+simple_predicate_kernel!(isinf_complex64, Complex64, |x: Complex<f32>| x
+    .re
+    .is_infinite()
+    || x.im.is_infinite());
+simple_predicate_kernel!(isnan_complex128, Complex128, |x: Complex<f64>| x
+    .re
+    .is_nan()
+    || x.im.is_nan());
+simple_predicate_kernel!(isfinite_complex128, Complex128, |x: Complex<f64>| x
+    .re
+    .is_finite()
+    && x.im.is_finite());
+simple_predicate_kernel!(isinf_complex128, Complex128, |x: Complex<f64>| x
+    .re
+    .is_infinite()
+    || x.im.is_infinite());
+constant_predicate_kernel!(isnan_str, Str, false);
+constant_predicate_kernel!(isfinite_str, Str, true);
+constant_predicate_kernel!(isinf_str, Str, false);
 
 pub(crate) fn complex_cmp<T: num_traits::Float>(
     a: &Complex<T>,
