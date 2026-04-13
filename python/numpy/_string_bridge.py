@@ -32,8 +32,12 @@ def normalize_native_string_input(value):
     raw = _unwrap_chararray(value)
     shape = _shape_of(raw)
     if isinstance(raw, _ObjectArray):
-        flat = raw.tolist()
-        arr = asarray(flat).reshape(shape or (len(flat),))
+        flat = list(raw._data)
+        arr = asarray(flat)
+        if shape == ():
+            arr = arr.reshape(())
+        else:
+            arr = arr.reshape(shape or (len(flat),))
     else:
         arr = asarray(raw)
     return arr, shape

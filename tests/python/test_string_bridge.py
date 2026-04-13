@@ -26,6 +26,14 @@ def test_char_upper_preserves_shape_for_object_array_bridge():
     assert out.tolist() == [["AB", "CD"], ["EF", "GH"]]
 
 
+def test_char_upper_handles_0d_object_array_bridge_input():
+    arr = _ObjectArray(["abc"], "object", shape=())
+    out = np.char.upper(arr)
+    assert isinstance(out, np.ndarray)
+    assert out.shape == ()
+    assert out.tolist() == "ABC"
+
+
 def test_char_strip_object_array_raises_type_error():
     arr = np.array([["  a  ", " b "], ["c ", "  d"]], dtype=object)
     with pytest.raises(UFuncTypeError):
@@ -298,6 +306,26 @@ def test_partition_scalar_and_0d_preserve_numpy_shape_and_type():
     assert scalar_out.tolist() == ["a", "-", "b"]
     assert zero_d_out.tolist() == ["a", "-", "b"]
     assert zero_d_chararray_out.tolist() == ["a", "-", "b"]
+
+
+def test_bytes_partition_scalar_and_0d_preserve_public_shape():
+    scalar_partition = np.char.partition(b"ab", b"a")
+    zero_d_bytes = np.array([b"ab"], dtype="|S2").reshape(())
+    zero_d_partition = np.char.partition(zero_d_bytes, b"a")
+    scalar_rpartition = np.char.rpartition(b"ab", b"a")
+    zero_d_rpartition = np.char.rpartition(zero_d_bytes, b"a")
+    zero_d_chararray_partition = np.char.asarray(zero_d_bytes).partition(b"a")
+
+    assert scalar_partition.shape == (3,)
+    assert zero_d_partition.shape == (3,)
+    assert scalar_rpartition.shape == (3,)
+    assert zero_d_rpartition.shape == (3,)
+    assert zero_d_chararray_partition.shape == (3,)
+    assert scalar_partition.tolist() == [b"", b"a", b"b"]
+    assert zero_d_partition.tolist() == [b"", b"a", b"b"]
+    assert scalar_rpartition.tolist() == [b"", b"a", b"b"]
+    assert zero_d_rpartition.tolist() == [b"", b"a", b"b"]
+    assert zero_d_chararray_partition.tolist() == [b"", b"a", b"b"]
 
 
 def test_encode_decode_share_bridge_behavior_and_public_return_kind():
