@@ -315,9 +315,9 @@ mod tests {
     }
 
     #[test]
-    fn test_float64_descriptor_does_not_register_sub_kernel_yet() {
+    fn test_float64_descriptor_registers_sub_kernel() {
         assert!(descriptor_for_dtype(DType::Float64)
             .binary_kernel(ArithmeticKernelOp::Sub)
-            .is_none());
+            .is_some());
     }
 }
