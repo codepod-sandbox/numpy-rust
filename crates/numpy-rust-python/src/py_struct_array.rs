@@ -7,12 +7,12 @@ use vm::types::AsMapping;
 use vm::{atomic_func, AsObject, PyObjectRef, PyPayload, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::SliceArg;
-use numpy_rust_core::{FieldSpec, NdArray, StructArrayData};
+use numpy_rust_core::{FieldSpec, StructArrayData};
 
 use crate::py_array::{numpy_err, py_slice_to_slice_arg, scalar_to_py, PyNdArray};
 
 /// Python-visible structured array class backed by columnar Rust storage.
-/// Each field is stored as a separate ArrayData column.
+/// Each field is stored as a separate NdArray column.
 /// Constructor: _native.StructuredArray(fields, shape, dtype_json)
 ///   fields: list of [name_str, PyNdArray]
 ///   shape: list of int
@@ -83,19 +83,18 @@ impl PyStructuredArray {
             let py_arr = tup[1].downcast_ref::<PyNdArray>().ok_or_else(|| {
                 vm.new_type_error(format!("field '{}': value must be ndarray", name))
             })?;
-            // O(1) clone: increments Arc refcount only
-            let array_data = py_arr.inner().data().clone();
-            if array_data.shape() != shape.as_slice() {
+            let field_array = py_arr.inner().clone();
+            if field_array.shape() != shape.as_slice() {
                 return Err(vm.new_value_error(format!(
                     "field '{}' has shape {:?}, expected {:?}",
                     name,
-                    array_data.shape(),
+                    field_array.shape(),
                     shape
                 )));
             }
             fields.push(FieldSpec {
                 name,
-                data: array_data,
+                data: field_array,
             });
         }
         if shape.iter().product::<usize>() > 0 && fields.is_empty() {
@@ -159,8 +158,7 @@ impl PyStructuredArray {
                     .ok_or_else(|| vm.new_key_error(vm.ctx.new_str(name).into()))?
                     .clone()
             }; // lock dropped here
-            let nd = NdArray::from_data(col_data);
-            return Ok(PyNdArray::from_core(nd).to_py(vm));
+            return Ok(PyNdArray::from_core(col_data).to_py(vm));
         }
 
         // List of strings → new PyStructuredArray with subset of fields
@@ -268,9 +266,9 @@ impl PyStructuredArray {
             let py_arr = value.downcast_ref::<PyNdArray>().ok_or_else(|| {
                 vm.new_type_error("field assignment value must be ndarray".to_owned())
             })?;
-            let array_data = py_arr.inner().data().clone();
+            let field_array = py_arr.inner().clone();
             inner
-                .set_field(name, array_data)
+                .set_field(name, field_array)
                 .map_err(|e| numpy_err(e, vm))?;
             return Ok(());
         }

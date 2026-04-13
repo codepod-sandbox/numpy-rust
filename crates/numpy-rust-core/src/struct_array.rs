@@ -1,5 +1,4 @@
 use crate::array::NdArray;
-use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
 use crate::indexing::Scalar;
 
@@ -7,7 +6,7 @@ use crate::indexing::Scalar;
 #[derive(Debug)]
 pub struct FieldSpec {
     pub name: String,
-    pub data: ArrayData,
+    pub data: NdArray,
 }
 
 /// Columnar structured array: each field is a separate homogeneous column.
@@ -23,13 +22,13 @@ impl StructArrayData {
         Self { fields, shape }
     }
 
-    /// Get a column's ArrayData by field name.
-    pub fn field(&self, name: &str) -> Option<&ArrayData> {
+    /// Get a column by field name.
+    pub fn field(&self, name: &str) -> Option<&NdArray> {
         self.fields.iter().find(|f| f.name == name).map(|f| &f.data)
     }
 
-    /// Get a mutable reference to a column's ArrayData by field name.
-    pub fn field_mut(&mut self, name: &str) -> Option<&mut ArrayData> {
+    /// Get a mutable reference to a column by field name.
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut NdArray> {
         self.fields
             .iter_mut()
             .find(|f| f.name == name)
@@ -81,7 +80,7 @@ impl StructArrayData {
         };
         let mut row = Vec::with_capacity(self.fields.len());
         for field in &self.fields {
-            let scalar = NdArray::from_data(field.data.clone()).get(&[actual_idx])?;
+            let scalar = field.data.get(&[actual_idx])?;
             row.push(scalar);
         }
         Ok(row)
@@ -107,15 +106,14 @@ impl StructArrayData {
             .fields
             .iter()
             .map(|f| {
-                let nd = NdArray::from_data(f.data.clone());
-                let sliced = nd.slice(&[SliceArg::Range {
+                let sliced = f.data.slice(&[SliceArg::Range {
                     start: Some(start as isize),
                     stop: Some(end as isize),
                     step: 1,
                 }])?;
                 Ok(FieldSpec {
                     name: f.name.clone(),
-                    data: sliced.data().clone(),
+                    data: sliced,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -123,7 +121,7 @@ impl StructArrayData {
     }
 
     /// Replace a column. New data must have the same shape as `self.shape`.
-    pub fn set_field(&mut self, name: &str, data: ArrayData) -> Result<()> {
+    pub fn set_field(&mut self, name: &str, data: NdArray) -> Result<()> {
         if data.shape() != self.shape.as_slice() {
             return Err(NumpyError::ValueError(format!(
                 "shape mismatch: field data has shape {:?}, expected {:?}",
@@ -144,23 +142,12 @@ impl StructArrayData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array_data::ArrayD;
-    use ndarray::IxDyn;
-
-    fn make_int_col(vals: Vec<i64>) -> ArrayData {
-        let n = vals.len();
-        let arr = ArrayD::from_shape_vec(IxDyn(&[n]), vals)
-            .unwrap()
-            .into_shared();
-        ArrayData::Int64(arr)
+    fn make_int_col(vals: Vec<i64>) -> NdArray {
+        NdArray::from_vec(vals)
     }
 
-    fn make_float_col(vals: Vec<f64>) -> ArrayData {
-        let n = vals.len();
-        let arr = ArrayD::from_shape_vec(IxDyn(&[n]), vals)
-            .unwrap()
-            .into_shared();
-        ArrayData::Float64(arr)
+    fn make_float_col(vals: Vec<f64>) -> NdArray {
+        NdArray::from_vec(vals)
     }
 
     #[test]
