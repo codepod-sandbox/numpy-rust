@@ -9,7 +9,7 @@ use vm::types::{AsMapping, AsNumber, AsSequence, IterNext, Iterable, Representab
 use vm::{AsObject, Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
-use numpy_rust_core::{DType, NdArray};
+use numpy_rust_core::{DType, LogicalScalar, NdArray};
 
 /// Python-visible ndarray class wrapping the core NdArray.
 /// Uses `RwLock` for interior mutability so `__setitem__` can work
@@ -268,43 +268,34 @@ pub(crate) fn numpy_err(
 
 /// Convert a Scalar to a Python object.
 pub(crate) fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
-    scalar_to_py_typed(s, None, vm)
+    match s {
+        Scalar::Bool(v) => logical_scalar_to_py(LogicalScalar::Bool(v), vm),
+        Scalar::Int32(v) => logical_scalar_to_py(LogicalScalar::Int(v as i64), vm),
+        Scalar::Int64(v) => logical_scalar_to_py(LogicalScalar::Int(v), vm),
+        Scalar::Float32(v) => logical_scalar_to_py(LogicalScalar::Float(v as f64), vm),
+        Scalar::Float64(v) => logical_scalar_to_py(LogicalScalar::Float(v), vm),
+        Scalar::Complex64(v) => {
+            logical_scalar_to_py(LogicalScalar::Complex(v.re as f64, v.im as f64), vm)
+        }
+        Scalar::Complex128(v) => logical_scalar_to_py(LogicalScalar::Complex(v.re, v.im), vm),
+        Scalar::Str(v) => logical_scalar_to_py(LogicalScalar::Str(v), vm),
+    }
 }
 
-/// Like scalar_to_py but interprets Int64 values as u64 when declared_dtype is UInt64.
-pub(crate) fn scalar_to_py_typed(
-    s: Scalar,
-    declared_dtype: Option<DType>,
-    vm: &VirtualMachine,
-) -> PyObjectRef {
+pub(crate) fn logical_scalar_to_py(s: LogicalScalar, vm: &VirtualMachine) -> PyObjectRef {
     match s {
-        Scalar::Bool(v) => vm.ctx.new_bool(v).into(),
-        Scalar::Int32(v) => vm.ctx.new_int(v).into(),
-        Scalar::Int64(v) => {
-            // UInt64 is stored as Int64; reinterpret negative values as large positive u64
-            if declared_dtype == Some(DType::UInt64) {
-                vm.ctx.new_int(v as u64).into()
-            } else {
-                vm.ctx.new_int(v).into()
-            }
-        }
-        Scalar::Float32(v) => vm.ctx.new_float(v as f64).into(),
-        Scalar::Float64(v) => vm.ctx.new_float(v).into(),
-        Scalar::Complex64(v) => {
+        LogicalScalar::Bool(v) => vm.ctx.new_bool(v).into(),
+        LogicalScalar::Int(v) => vm.ctx.new_int(v).into(),
+        LogicalScalar::UInt(v) => vm.ctx.new_int(v).into(),
+        LogicalScalar::Float(v) => vm.ctx.new_float(v).into(),
+        LogicalScalar::Complex(re, im) => {
             let tup = vm.ctx.new_tuple(vec![
-                vm.ctx.new_float(v.re as f64).into(),
-                vm.ctx.new_float(v.im as f64).into(),
+                vm.ctx.new_float(re).into(),
+                vm.ctx.new_float(im).into(),
             ]);
             tup.into()
         }
-        Scalar::Complex128(v) => {
-            let tup = vm.ctx.new_tuple(vec![
-                vm.ctx.new_float(v.re).into(),
-                vm.ctx.new_float(v.im).into(),
-            ]);
-            tup.into()
-        }
-        Scalar::Str(v) => vm.ctx.new_str(v).into(),
+        LogicalScalar::Str(v) => vm.ctx.new_str(v).into(),
     }
 }
 
@@ -345,9 +336,8 @@ fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
 /// Convert an NdArray result to PyObjectRef, returning a scalar for 0-D arrays.
 pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
     if arr.ndim() == 0 {
-        let declared = arr.declared_dtype();
-        let s = arr.get(&[]).unwrap();
-        scalar_to_py_typed(s, declared, vm)
+        let s = arr.get_logical(&[]).unwrap();
+        logical_scalar_to_py(s, vm)
     } else {
         PyNdArray::from_core(arr).into_pyobject(vm)
     }
@@ -1683,8 +1673,10 @@ impl PyNdArray {
             };
 
             if data.ndim() == 1 {
-                let s = data.get(&[resolved]).map_err(|e| numpy_err(e, vm))?;
-                return Ok(scalar_to_py_typed(s, data.declared_dtype(), vm));
+                let s = data
+                    .get_logical(&[resolved])
+                    .map_err(|e| numpy_err(e, vm))?;
+                return Ok(logical_scalar_to_py(s, vm));
             } else {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
@@ -1872,7 +1864,10 @@ impl PyNdArray {
                     let result = scalar_to_0d_ndarray(s);
                     return Ok(PyNdArray::from_core(result).to_py(vm));
                 }
-                return Ok(scalar_to_py_typed(s, data.declared_dtype(), vm));
+                let logical = data
+                    .get_logical(&usize_indices)
+                    .map_err(|e| numpy_err(e, vm))?;
+                return Ok(logical_scalar_to_py(logical, vm));
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
@@ -2080,10 +2075,10 @@ impl PyNdArray {
                     "can only convert an array of size 1 to a Python scalar".to_owned(),
                 ));
             }
-            let s = data
-                .get(&vec![0; data.ndim()])
+            let logical = data
+                .get_logical(&vec![0; data.ndim()])
                 .map_err(|e| numpy_err(e, vm))?;
-            return Ok(scalar_to_py_typed(s, data.declared_dtype(), vm));
+            return Ok(logical_scalar_to_py(logical, vm));
         }
         let mut indices: Vec<usize> = Vec::new();
         if args.args.len() == 1 {
@@ -2146,8 +2141,8 @@ impl PyNdArray {
                 indices.push(r as usize);
             }
         }
-        let s = data.get(&indices).map_err(|e| numpy_err(e, vm))?;
-        Ok(scalar_to_py_typed(s, data.declared_dtype(), vm))
+        let logical = data.get_logical(&indices).map_err(|e| numpy_err(e, vm))?;
+        Ok(logical_scalar_to_py(logical, vm))
     }
 
     /// as_integer_ratio() for 0-d float arrays.

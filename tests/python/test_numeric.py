@@ -7073,6 +7073,12 @@ def test_t33_zeros_uint64():
     a = np.zeros(3, dtype="uint64")
     assert_eq(str(a.dtype), "uint64")
 
+def test_t33_uint64_scalar_access_uses_logical_dtype():
+    import numpy as np
+    a = np.array([-1]).astype("uint64")
+    assert_eq(int(a[0]), 2**64 - 1)
+    assert_eq(int(a.item()), 2**64 - 1)
+
 def test_t33_zeros_float16():
     import numpy as np
     a = np.zeros(3, dtype="float16")

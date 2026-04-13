@@ -25,7 +25,7 @@ pub use creation::{arange, eye, full, linspace, linspace_with_step, ones_like, z
 pub use descriptor::{descriptor_for_dtype, DTypeDescriptor};
 pub use dtype::DType;
 pub use error::{validate_shape, NumpyError, Result};
-pub use indexing::{ravel_multi_index, unravel_index};
+pub use indexing::{ravel_multi_index, unravel_index, LogicalScalar};
 pub use manipulation::{
     column_stack, concatenate, dstack, hsplit, hstack, meshgrid, pad_constant, split, stack,
     unique, vsplit, vstack, SplitSpec,

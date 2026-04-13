@@ -37,6 +37,17 @@ pub enum Scalar {
     Str(String),
 }
 
+/// A scalar expressed in the array's logical dtype rather than its storage dtype.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LogicalScalar {
+    Bool(bool),
+    Int(i64),
+    UInt(u64),
+    Float(f64),
+    Complex(f64, f64),
+    Str(String),
+}
+
 impl Scalar {
     fn dtype(&self) -> DType {
         match self {
@@ -49,6 +60,50 @@ impl Scalar {
             Scalar::Complex128(_) => DType::Complex128,
             Scalar::Str(_) => DType::Str,
         }
+    }
+}
+
+fn logical_scalar_from_storage(value: Scalar, dtype: DType) -> LogicalScalar {
+    match dtype {
+        DType::Bool => match value {
+            Scalar::Bool(v) => LogicalScalar::Bool(v),
+            other => unreachable!("bool dtype must yield bool scalar, got {other:?}"),
+        },
+        DType::Int8 | DType::Int16 | DType::Int32 | DType::Int64 => match value {
+            Scalar::Int32(v) => LogicalScalar::Int(v as i64),
+            Scalar::Int64(v) => LogicalScalar::Int(v),
+            other => unreachable!("signed integer dtype must yield int scalar, got {other:?}"),
+        },
+        DType::UInt8 | DType::UInt16 => match value {
+            Scalar::Int32(v) => LogicalScalar::UInt(v as u32 as u64),
+            other => unreachable!("small unsigned dtype must yield Int32 storage, got {other:?}"),
+        },
+        DType::UInt32 | DType::UInt64 => match value {
+            Scalar::Int64(v) => LogicalScalar::UInt(v as u64),
+            other => unreachable!("wide unsigned dtype must yield Int64 storage, got {other:?}"),
+        },
+        DType::Float16 | DType::Float32 => match value {
+            Scalar::Float32(v) => LogicalScalar::Float(v as f64),
+            other => unreachable!("float32-backed dtype must yield Float32 storage, got {other:?}"),
+        },
+        DType::Float64 => match value {
+            Scalar::Float64(v) => LogicalScalar::Float(v),
+            other => unreachable!("float64 dtype must yield Float64 storage, got {other:?}"),
+        },
+        DType::Complex64 => match value {
+            Scalar::Complex64(v) => LogicalScalar::Complex(v.re as f64, v.im as f64),
+            other => unreachable!("complex64 dtype must yield Complex64 storage, got {other:?}"),
+        },
+        DType::Complex128 => match value {
+            Scalar::Complex128(v) => LogicalScalar::Complex(v.re, v.im),
+            other => {
+                unreachable!("complex128 dtype must yield Complex128 storage, got {other:?}")
+            }
+        },
+        DType::Str => match value {
+            Scalar::Str(v) => LogicalScalar::Str(v),
+            other => unreachable!("string dtype must yield string scalar, got {other:?}"),
+        },
     }
 }
 
@@ -121,6 +176,11 @@ impl NdArray {
                 .map(|v| Scalar::Str(v.clone()))
                 .ok_or_else(|| NumpyError::ValueError("index out of bounds".into())),
         }
+    }
+
+    pub fn get_logical(&self, index: &[usize]) -> Result<LogicalScalar> {
+        self.get(index)
+            .map(|value| logical_scalar_from_storage(value, self.dtype()))
     }
 
     /// Slice the array using SliceArg descriptors for each axis.
@@ -708,6 +768,18 @@ mod tests {
         assert_eq!(a.get(&[1]).unwrap(), Scalar::Float64(88.0));
         assert_eq!(a.get(&[2]).unwrap(), Scalar::Float64(77.0));
         assert_eq!(a.get(&[0]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_get_logical_reinterprets_uint64_storage() {
+        let a = NdArray::from_vec(vec![-1_i64]).with_declared_dtype(DType::UInt64);
+        assert_eq!(a.get_logical(&[0]).unwrap(), LogicalScalar::UInt(u64::MAX));
+    }
+
+    #[test]
+    fn test_get_logical_reinterprets_float16_storage() {
+        let a = NdArray::from_vec(vec![1.5_f32]).with_declared_dtype(DType::Float16);
+        assert_eq!(a.get_logical(&[0]).unwrap(), LogicalScalar::Float(1.5));
     }
 
     #[test]
