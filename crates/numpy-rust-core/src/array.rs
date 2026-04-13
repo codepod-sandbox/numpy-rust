@@ -171,6 +171,10 @@ impl NdArray {
             _ => unreachable!("astype(Float64) must produce Float64 storage"),
         }
     }
+
+    pub fn debug_storage_repr(&self) -> String {
+        format!("{:?}", self.data())
+    }
 }
 
 // --- Attributes ---
@@ -554,6 +558,12 @@ mod tests {
     fn test_to_bytes_le_rejects_string_storage() {
         let a = NdArray::from_vec(vec!["a".to_owned(), "b".to_owned()]);
         assert!(matches!(a.to_bytes_le(), Err(NumpyError::TypeError(_))));
+    }
+
+    #[test]
+    fn test_debug_storage_repr_mentions_storage_variant() {
+        let a = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        assert!(a.debug_storage_repr().contains("Float64"));
     }
 
     #[test]

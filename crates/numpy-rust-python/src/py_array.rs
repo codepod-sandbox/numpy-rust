@@ -2416,7 +2416,7 @@ impl PyNdArray {
         let inner = self.data.read().unwrap();
         let itemsize = inner.dtype().itemsize();
         // Return actual strides (element strides * itemsize = byte strides)
-        let elem_strides = inner.data().strides();
+        let elem_strides = inner.strides();
         let py_strides: Vec<PyObjectRef> = elem_strides
             .iter()
             .map(|&s| vm.ctx.new_int(s * itemsize as isize).into())
@@ -2675,11 +2675,12 @@ impl PyNdArray {
         let data = self.data.read().unwrap();
         let marked_fortran = self.is_fortran.load(Ordering::Relaxed);
         let ndim = data.ndim();
+        let runtime_flags = data.flags();
         let (is_c, is_f) = if marked_fortran && ndim > 1 {
             // Array was marked Fortran-order at creation
             (false, true)
         } else {
-            (data.data().is_c_contiguous(), data.data().is_f_contiguous())
+            (runtime_flags.c_contiguous, runtime_flags.f_contiguous)
         };
         drop(data);
         let is_aligned = self.is_aligned.load(Ordering::Relaxed);
@@ -2792,7 +2793,7 @@ impl PyNdArray {
     fn dumps(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         // Return a string representation of the data
         let inner = self.data.read().unwrap();
-        let s = format!("{:?}", inner.data());
+        let s = inner.debug_storage_repr();
         Ok(vm.ctx.new_str(s).into())
     }
 
