@@ -4,6 +4,8 @@ from _numpy_native import ndarray
 from ._helpers import _ObjectArray
 from ._creation import array, asarray
 from ._string_bridge import (
+    python_string_add,
+    python_string_compare,
     native_string_unary,
     normalize_native_string_input,
     python_string_join,
@@ -20,6 +22,8 @@ from ._string_bridge import (
     python_string_split,
     python_string_splitlines,
     python_string_strip,
+    python_string_mod,
+    python_string_repeat,
     python_string_transform,
     python_string_unicode_predicate,
     python_string_zfill,
@@ -187,87 +191,7 @@ class chararray:
 
     # --- Comparison operators (strip trailing whitespace) ---
     def _compare(self, other, op):
-        import numpy as _np
-
-        def _flat_items(x):
-            """Recursively flatten to a list of scalar items."""
-            if isinstance(x, chararray):
-                return _flat_items(x._arr)
-            if isinstance(x, _ObjectArray):
-                result = []
-                for item in x._data:
-                    if isinstance(item, (list, tuple)):
-                        result.extend(item)
-                    else:
-                        result.append(item)
-                return result
-            if isinstance(x, ndarray):
-                raw = x.flatten().tolist()
-                out = []
-                for item in raw:
-                    if isinstance(item, (list, tuple)):
-                        out.extend(item)
-                    else:
-                        out.append(item)
-                return out
-            if isinstance(x, (list, tuple)):
-                out = []
-                for item in x:
-                    if isinstance(item, (list, tuple)):
-                        out.extend(item)
-                    else:
-                        out.append(item)
-                return out
-            return [x]
-
-        items_a = _flat_items(self)
-        if isinstance(other, (str, bytes)):
-            items_b = [other] * len(items_a)
-        else:
-            items_b = _flat_items(other)
-        # Handle broadcasting: if sizes don't match, broadcast
-        if len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        elif len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        # Determine output shape from broadcasting
-        shape_a = self._arr.shape if hasattr(self._arr, 'shape') else (len(items_a),)
-        if isinstance(other, chararray):
-            shape_b = other._arr.shape if hasattr(other._arr, 'shape') else (len(items_b),)
-        elif isinstance(other, ndarray):
-            shape_b = other.shape
-        elif isinstance(other, _ObjectArray):
-            shape_b = other.shape
-        else:
-            shape_b = shape_a
-        result = []
-        for a, b in zip(items_a, items_b):
-            sa = _strip_whitespace(a) if isinstance(a, (str, bytes)) else a
-            sb = _strip_whitespace(b) if isinstance(b, (str, bytes)) else b
-            # Convert between bytes/str for comparison
-            if isinstance(sa, bytes) and isinstance(sb, str):
-                try:
-                    sa = sa.decode('latin-1')
-                except Exception:
-                    pass
-            elif isinstance(sa, str) and isinstance(sb, bytes):
-                try:
-                    sb = sb.decode('latin-1')
-                except Exception:
-                    pass
-            result.append(op(sa, sb))
-        out = _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
-        # Use the larger shape for output
-        out_shape = shape_a if len(shape_a) >= len(shape_b) else shape_b
-        if len(out_shape) > 1 and out.size == 1:
-            # scalar result broadcasted
-            pass
-        elif len(out_shape) > 1:
-            try:
-                out = out.reshape(out_shape)
-            except Exception:
-                pass
-        return out
+        return python_string_compare(self, other, op, strip=True)
 
     def __eq__(self, other):
         return self._compare(other, lambda a, b: a == b)
@@ -289,87 +213,19 @@ class chararray:
 
     # --- Arithmetic ---
     def __add__(self, other):
-        import numpy as _np
-        items_a = _to_items(self)
-        items_b = _to_items(other)
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = []
-        for a, b in zip(items_a, items_b):
-            if isinstance(a, bytes) and not isinstance(b, bytes):
-                b = str(b).encode('latin-1')
-            elif isinstance(b, bytes) and not isinstance(a, bytes):
-                a = str(a).encode('latin-1')
-            result.append(a + b)
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return python_string_add(self, other, wrap_chararray=True)
 
     def __radd__(self, other):
-        import numpy as _np
-        items_a = _to_items(self)
-        if isinstance(other, (str, bytes)):
-            items_b = [other] * len(items_a)
-        else:
-            items_b = _to_items(other)
-        if len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = []
-        for b, a in zip(items_b, items_a):
-            if isinstance(a, bytes) and not isinstance(b, bytes):
-                b = str(b).encode('latin-1')
-            elif isinstance(b, bytes) and not isinstance(a, bytes):
-                a = str(a).encode('latin-1')
-            result.append(b + a)
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return python_string_add(other, self, wrap_chararray=True)
 
     def __mul__(self, other):
-        import numpy as _np
-        if isinstance(other, (str,)):
-            raise ValueError("Can only multiply by integers")
-        if not isinstance(other, int):
-            if hasattr(other, '__index__'):
-                other = other.__index__()
-            else:
-                raise ValueError("Can only multiply by integers")
-        items = _to_items(self)
-        result = [s * other for s in items]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return python_string_repeat(self, other, wrap_chararray=True)
 
     def __rmul__(self, other):
         return self.__mul__(other)
 
     def __mod__(self, other):
-        import numpy as _np
-        items = _to_items(self)
-        if isinstance(other, ndarray):
-            other_items = other.flatten().tolist()
-        elif isinstance(other, (list, tuple)):
-            # Flatten nested
-            other_items = []
-            for item in other:
-                if isinstance(item, (list, tuple)):
-                    other_items.extend(item)
-                else:
-                    other_items.append(item)
-        else:
-            other_items = [other] * len(items)
-        if len(other_items) == 1 and len(items) > 1:
-            other_items = other_items * len(items)
-        result = [str(s) % v for s, v in zip(items, other_items)]
-        arr = _np.array(result)
-        if len(self._arr.shape) > 1:
-            arr = arr.reshape(self._arr.shape)
-        return chararray._from_array(arr)
+        return python_string_mod(self, other, wrap_chararray=True)
 
     def __rmod__(self, other):
         raise TypeError("unsupported operand type(s) for %: '{}' and 'chararray'".format(
@@ -632,102 +488,38 @@ class _char_mod:
     @staticmethod
     def compare_chararrays(a1, a2, cmp, rstrip):
         """Compare two string arrays element-wise using the given comparison operator."""
-        import numpy as _np
         ops = {'<': lambda x, y: x < y, '<=': lambda x, y: x <= y,
                '==': lambda x, y: x == y, '>=': lambda x, y: x >= y,
                '>': lambda x, y: x > y, '!=': lambda x, y: x != y}
         op = ops.get(cmp)
         if op is None:
             raise ValueError(f"Invalid comparison: {cmp!r}")
-        def _norm(s):
-            if rstrip:
-                if isinstance(s, bytes):
-                    return s.rstrip()
-                return s.rstrip()
-            return s
-        a1_items = _to_items(a1)
-        a2_items = _to_items(a2)
-        result = [op(_norm(x), _norm(y)) for x, y in zip(a1_items, a2_items)]
-        return _np.array(result, dtype=bool)
+        return python_string_compare(a1, a2, op, strip=rstrip)
 
     @staticmethod
     def equal(a, b):
         """Element-wise comparison for equality, stripping trailing whitespace."""
-        import numpy as _np
-        if isinstance(a, (str, bytes)) and isinstance(b, (str, bytes)):
-            result = _strip_whitespace(a) == _strip_whitespace(b)
-            return _np.array(result)
-        items_a = _to_items(a)
-        items_b = _to_items(b)
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = [_strip_whitespace(x) == _strip_whitespace(y) for x, y in zip(items_a, items_b)]
-        return _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
+        return python_string_compare(a, b, lambda x, y: x == y, strip=True)
 
     @staticmethod
     def not_equal(a, b):
-        import numpy as _np
-        if isinstance(a, (str, bytes)) and isinstance(b, (str, bytes)):
-            result = _strip_whitespace(a) != _strip_whitespace(b)
-            return _np.array(result)
-        items_a = _to_items(a)
-        items_b = _to_items(b)
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = [_strip_whitespace(x) != _strip_whitespace(y) for x, y in zip(items_a, items_b)]
-        return _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
+        return python_string_compare(a, b, lambda x, y: x != y, strip=True)
 
     @staticmethod
     def greater(a, b):
-        import numpy as _np
-        items_a = _to_items(a)
-        items_b = _to_items(b)
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = [_strip_whitespace(x) > _strip_whitespace(y) for x, y in zip(items_a, items_b)]
-        return _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
+        return python_string_compare(a, b, lambda x, y: x > y, strip=True)
 
     @staticmethod
     def greater_equal(a, b):
-        import numpy as _np
-        items_a = _to_items(a)
-        items_b = _to_items(b)
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = [_strip_whitespace(x) >= _strip_whitespace(y) for x, y in zip(items_a, items_b)]
-        return _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
+        return python_string_compare(a, b, lambda x, y: x >= y, strip=True)
 
     @staticmethod
     def less(a, b):
-        import numpy as _np
-        items_a = _to_items(a)
-        items_b = _to_items(b)
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = [_strip_whitespace(x) < _strip_whitespace(y) for x, y in zip(items_a, items_b)]
-        return _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
+        return python_string_compare(a, b, lambda x, y: x < y, strip=True)
 
     @staticmethod
     def less_equal(a, b):
-        import numpy as _np
-        items_a = _to_items(a)
-        items_b = _to_items(b)
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = [_strip_whitespace(x) <= _strip_whitespace(y) for x, y in zip(items_a, items_b)]
-        return _np.array([1.0 if x else 0.0 for x in result]).astype('bool')
+        return python_string_compare(a, b, lambda x, y: x <= y, strip=True)
 
     @staticmethod
     def upper(a):
@@ -842,46 +634,14 @@ class _char_mod:
             if not isinstance(a, chararray):
                 a = _char_mod.array(a)
             return a + b
-        if isinstance(a, ndarray):
-            items_a = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items_a = a._data
-        elif isinstance(a, str):
-            items_a = [a]
-        else:
-            items_a = list(a)
-        if isinstance(b, ndarray):
-            items_b = b.tolist()
-        elif isinstance(b, _ObjectArray):
-            items_b = b._data
-        elif isinstance(b, str):
-            items_b = [b]
-        else:
-            items_b = list(b)
-        # Broadcast if lengths differ
-        if len(items_a) == 1 and len(items_b) > 1:
-            items_a = items_a * len(items_b)
-        elif len(items_b) == 1 and len(items_a) > 1:
-            items_b = items_b * len(items_a)
-        result = [str(x) + str(y) for x, y in zip(items_a, items_b)]
-        return array(result)
+        return python_string_add(a, b)
 
     @staticmethod
     def multiply(a, i):
         """Element-wise string repetition."""
         if isinstance(a, chararray):
             return a * i
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
-        i = int(i)
-        result = [str(s) * i for s in items]
-        return array(result)
+        return python_string_repeat(a, i)
 
     @staticmethod
     def mod(format_str, values):
@@ -898,7 +658,7 @@ class _char_mod:
                     out = out.reshape(values.shape)
                 return chararray._from_array(out)
             return format_str % values
-        return format_str % values
+        return python_string_mod(format_str, values)
 
     @staticmethod
     def _to_str_list(a):

@@ -79,6 +79,19 @@ def python_string_broadcast(value, size):
     return values
 
 
+def _broadcast_pair(left, right):
+    left_items, left_shape = python_string_items(left)
+    right_items, right_shape = python_string_items(right)
+    if len(left_items) == 1 and len(right_items) > 1:
+        left_items = left_items * len(right_items)
+    elif len(right_items) == 1 and len(left_items) > 1:
+        right_items = right_items * len(left_items)
+    out_shape = left_shape if len(left_shape) >= len(right_shape) else right_shape
+    if not out_shape and max(len(left_items), len(right_items)) > 1:
+        out_shape = (max(len(left_items), len(right_items)),)
+    return left_items, right_items, out_shape
+
+
 def _string_method_target(item):
     if isinstance(item, (str, bytes)):
         return item
@@ -117,6 +130,28 @@ def _result_contains_bytes(result):
     if isinstance(result, (list, tuple)):
         return any(_result_contains_bytes(item) for item in result)
     return False
+
+
+def _string_array_result(result, shape, *, wrap_chararray=False):
+    if _result_contains_bytes(result):
+        flat = list(result)
+        out = _object_result(
+            flat,
+            shape,
+            dtype="bytes",
+            itemsize=max(len(item) for item in flat) if flat else None,
+        )
+    else:
+        out = array(result)
+        if shape == ():
+            out = out.reshape(())
+        elif shape:
+            out = out.reshape(shape)
+    if wrap_chararray:
+        from ._string_ops import chararray
+
+        return chararray._from_array(out)
+    return out
 
 
 def python_string_map(
@@ -393,6 +428,67 @@ def python_string_join(seq, sep, *, wrap_chararray=False):
         ),
         wrap_chararray=wrap_chararray,
     ).reshape(shape or (len(items),))
+
+
+def python_string_compare(left, right, comparator, *, strip=False):
+    if strip:
+        from ._string_ops import _strip_whitespace
+
+    left_items, right_items, out_shape = _broadcast_pair(left, right)
+    result = []
+    for left_item, right_item in zip(left_items, right_items):
+        if strip:
+            left_item = _strip_whitespace(left_item) if isinstance(left_item, (str, bytes)) else left_item
+            right_item = _strip_whitespace(right_item) if isinstance(right_item, (str, bytes)) else right_item
+        if isinstance(left_item, bytes) and isinstance(right_item, str):
+            try:
+                left_item = left_item.decode("latin-1")
+            except Exception:
+                pass
+        elif isinstance(left_item, str) and isinstance(right_item, bytes):
+            try:
+                right_item = right_item.decode("latin-1")
+            except Exception:
+                pass
+        result.append(comparator(left_item, right_item))
+    out = array([1.0 if item else 0.0 for item in result]).astype("bool")
+    if out_shape == ():
+        return out.reshape(())
+    if out_shape:
+        return out.reshape(out_shape)
+    return out
+
+
+def python_string_add(left, right, *, wrap_chararray=False):
+    left_items, right_items, out_shape = _broadcast_pair(left, right)
+    result = []
+    for left_item, right_item in zip(left_items, right_items):
+        if isinstance(left_item, bytes) != isinstance(right_item, bytes):
+            raise TypeError("np.char.add cannot mix bytes and unicode strings")
+        result.append(left_item + right_item)
+    return _string_array_result(result, out_shape, wrap_chararray=wrap_chararray)
+
+
+def python_string_repeat(value, count, *, wrap_chararray=False):
+    if isinstance(count, str):
+        raise ValueError("Can only multiply by integers")
+    if not isinstance(count, int):
+        if hasattr(count, "__index__"):
+            count = count.__index__()
+        else:
+            raise ValueError("Can only multiply by integers")
+    items, shape = python_string_items(value)
+    result = [item * count for item in items]
+    return _string_array_result(result, shape, wrap_chararray=wrap_chararray)
+
+
+def python_string_mod(format_str, values, *, wrap_chararray=False):
+    format_items, format_shape = python_string_items(format_str)
+    value_items, _ = python_string_items(values)
+    if len(value_items) == 1 and len(format_items) > 1:
+        value_items = value_items * len(format_items)
+    result = [fmt % value for fmt, value in zip(format_items, value_items)]
+    return _string_array_result(result, format_shape, wrap_chararray=wrap_chararray)
 
 
 def python_string_unicode_predicate(value, predicate):

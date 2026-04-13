@@ -103,6 +103,23 @@ def test_chararray_compare_keeps_trailing_whitespace_quirk():
     assert out.tolist() == [True, False]
 
 
+def test_compare_chararrays_and_chararray_comparisons_share_whitespace_policy():
+    arr = np.array([["ab  ", "cd"], ["ef ", "gh"]])
+    carr = np.char.asarray(arr)
+    other = np.array([["ab", "xx"], ["ef", "gh"]])
+
+    np_out = np.char.equal(arr, other)
+    cmp_out = np.char.compare_chararrays(arr, other, "==", True)
+    carr_out = carr == other
+
+    assert np_out.shape == arr.shape
+    assert cmp_out.shape == arr.shape
+    assert carr_out.shape == arr.shape
+    assert np_out.tolist() == [[True, False], [True, True]]
+    assert cmp_out.tolist() == [[True, False], [True, True]]
+    assert carr_out.tolist() == [[True, False], [True, True]]
+
+
 def test_replace_shared_normalization_keeps_shape_and_return_split():
     arr = np.array([["alpha", "beta"]])
     carr = np.char.asarray(arr)
@@ -148,6 +165,25 @@ def test_zfill_shared_bridge_preserves_bytes_semantics():
     assert getattr(carr_out.dtype, "str", None) == "|S4"
     assert arr_out.tolist() == [b"0042", b"-007"]
     assert carr_out.tolist() == [b"0042", b"-007"]
+
+
+def test_add_and_multiply_share_bytes_preserving_operator_path():
+    arr = np.array([b"ab", b"cd"], dtype="|S2")
+    carr = np.char.asarray(arr)
+
+    added = np.char.add(arr, np.array([b"!", b"?"], dtype="|S1"))
+    added_carr = carr + np.array([b"!", b"?"], dtype="|S1")
+    repeated = np.char.multiply(arr, 2)
+    repeated_carr = carr * 2
+
+    assert getattr(added.dtype, "str", None) == "|S3"
+    assert getattr(added_carr.dtype, "str", None) == "|S3"
+    assert getattr(repeated.dtype, "str", None) == "|S4"
+    assert getattr(repeated_carr.dtype, "str", None) == "|S4"
+    assert added.tolist() == [b"ab!", b"cd?"]
+    assert added_carr.tolist() == [b"ab!", b"cd?"]
+    assert repeated.tolist() == [b"abab", b"cdcd"]
+    assert repeated_carr.tolist() == [b"abab", b"cdcd"]
 
 
 def test_startswith_shared_normalization_keeps_shape_and_return_kind():
