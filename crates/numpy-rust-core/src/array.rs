@@ -5,6 +5,7 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::descriptor::{descriptor_for_dtype, DTypeDescriptor};
 use crate::dtype::DType;
+use crate::error::{NumpyError, Result};
 use crate::resolver::{BinaryOpPlan, CastPlan};
 use crate::storage::ArrayStorage;
 
@@ -135,6 +136,39 @@ impl NdArray {
         match cast.data() {
             ArrayData::Float64(data) => data.clone(),
             _ => unreachable!("astype(float64) must produce float64 storage"),
+        }
+    }
+
+    pub fn to_bytes_le(&self) -> Result<Vec<u8>> {
+        let flat = self.flatten();
+        Ok(match flat.data() {
+            ArrayData::Float64(arr) => collect_le_bytes(arr.iter().copied()),
+            ArrayData::Int64(arr) => collect_le_bytes(arr.iter().copied()),
+            ArrayData::Int32(arr) => collect_le_bytes(arr.iter().copied()),
+            ArrayData::Float32(arr) => collect_le_bytes(arr.iter().copied()),
+            ArrayData::Bool(arr) => arr.iter().map(|&b| u8::from(b)).collect(),
+            _ => {
+                return Err(NumpyError::TypeError(format!(
+                    "tobytes not supported for dtype {}",
+                    self.dtype()
+                )))
+            }
+        })
+    }
+
+    pub fn to_flat_i64_vec(&self) -> Vec<i64> {
+        let cast = self.astype(DType::Int64).flatten();
+        match cast.data() {
+            ArrayData::Int64(data) => data.iter().copied().collect(),
+            _ => unreachable!("astype(Int64) must produce Int64 storage"),
+        }
+    }
+
+    pub fn to_flat_f64_vec(&self) -> Vec<f64> {
+        let cast = self.astype(DType::Float64).flatten();
+        match cast.data() {
+            ArrayData::Float64(data) => data.iter().copied().collect(),
+            _ => unreachable!("astype(Float64) must produce Float64 storage"),
         }
     }
 }
@@ -283,6 +317,51 @@ impl NdArray {
 
 fn logical_dtype_override(dtype: DType) -> Option<DType> {
     (dtype.storage_dtype() != dtype).then_some(dtype)
+}
+
+trait ToLeBytes {
+    const BYTE_WIDTH: usize;
+    fn append_le_bytes(self, bytes: &mut Vec<u8>);
+}
+
+impl ToLeBytes for f32 {
+    const BYTE_WIDTH: usize = std::mem::size_of::<Self>();
+
+    fn append_le_bytes(self, bytes: &mut Vec<u8>) {
+        bytes.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+impl ToLeBytes for f64 {
+    const BYTE_WIDTH: usize = std::mem::size_of::<Self>();
+
+    fn append_le_bytes(self, bytes: &mut Vec<u8>) {
+        bytes.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+impl ToLeBytes for i32 {
+    const BYTE_WIDTH: usize = std::mem::size_of::<Self>();
+
+    fn append_le_bytes(self, bytes: &mut Vec<u8>) {
+        bytes.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+impl ToLeBytes for i64 {
+    const BYTE_WIDTH: usize = std::mem::size_of::<Self>();
+
+    fn append_le_bytes(self, bytes: &mut Vec<u8>) {
+        bytes.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+fn collect_le_bytes<T: ToLeBytes>(values: impl ExactSizeIterator<Item = T>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * T::BYTE_WIDTH);
+    for value in values {
+        value.append_le_bytes(&mut bytes);
+    }
+    bytes
 }
 
 // --- Trait for converting Vec<T> to ArrayData ---
@@ -451,6 +530,30 @@ mod tests {
         assert_eq!(a.strides(), &[1]);
         assert!(a.flags().c_contiguous);
         assert!(a.flags().f_contiguous);
+    }
+
+    #[test]
+    fn test_to_flat_i64_vec_uses_core_cast_path() {
+        let a = NdArray::from_vec(vec![1.9_f64, 2.1, 3.8]);
+        assert_eq!(a.to_flat_i64_vec(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_to_flat_f64_vec_uses_core_cast_path() {
+        let a = NdArray::from_vec(vec![1_i32, 2, 3]);
+        assert_eq!(a.to_flat_f64_vec(), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_to_bytes_le_for_bool_storage() {
+        let a = NdArray::from_vec(vec![true, false, true]);
+        assert_eq!(a.to_bytes_le().unwrap(), vec![1, 0, 1]);
+    }
+
+    #[test]
+    fn test_to_bytes_le_rejects_string_storage() {
+        let a = NdArray::from_vec(vec!["a".to_owned(), "b".to_owned()]);
+        assert!(matches!(a.to_bytes_le(), Err(NumpyError::TypeError(_))));
     }
 
     #[test]

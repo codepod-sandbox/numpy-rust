@@ -89,11 +89,11 @@ pub mod _numpy_native {
     fn parse_indices_arg(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
         if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
             let inner = arr.inner();
-            let flat = inner.flatten().astype(numpy_rust_core::DType::Int64);
-            let numpy_rust_core::ArrayData::Int64(data) = flat.data() else {
-                return Err(vm.new_type_error("indices must be integer type".to_owned()));
-            };
-            Ok(data.iter().map(|&v| v as usize).collect())
+            Ok(inner
+                .to_flat_i64_vec()
+                .into_iter()
+                .map(|v| v as usize)
+                .collect())
         } else {
             parse_usize_values(obj, vm, "indices must be list, tuple, ndarray, or int")
         }
@@ -155,18 +155,13 @@ pub mod _numpy_native {
             .map(|obj| {
                 if let Some(arr_ref) = obj.downcast_ref::<PyNdArray>() {
                     let arr_inner = arr_ref.inner();
-                    let cast = arr_inner.astype(numpy_rust_core::DType::Float64);
-                    if let numpy_rust_core::ArrayData::Float64(a) = cast.data() {
-                        let coords: Vec<f64> = a.iter().copied().collect();
-                        if coords.len() <= 1 {
-                            Ok(GradientSpacing::Uniform(
-                                coords.first().copied().unwrap_or(1.0),
-                            ))
-                        } else {
-                            Ok(GradientSpacing::Coordinates(coords))
-                        }
+                    let coords = arr_inner.to_flat_f64_vec();
+                    if coords.len() <= 1 {
+                        Ok(GradientSpacing::Uniform(
+                            coords.first().copied().unwrap_or(1.0),
+                        ))
                     } else {
-                        Ok(GradientSpacing::Uniform(1.0))
+                        Ok(GradientSpacing::Coordinates(coords))
                     }
                 } else if let Ok(v) = obj.clone().try_into_value::<f64>(vm) {
                     Ok(GradientSpacing::Uniform(v))

@@ -2478,41 +2478,7 @@ impl PyNdArray {
     #[pymethod]
     fn tobytes(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         let inner = self.data.read().unwrap();
-        let flat = inner.flatten();
-        let bytes = match flat.data() {
-            numpy_rust_core::ArrayData::Float64(arr) => {
-                let mut bytes = Vec::with_capacity(arr.len() * 8);
-                for &val in arr.iter() {
-                    bytes.extend_from_slice(&val.to_le_bytes());
-                }
-                bytes
-            }
-            numpy_rust_core::ArrayData::Int64(arr) => {
-                let mut bytes = Vec::with_capacity(arr.len() * 8);
-                for &val in arr.iter() {
-                    bytes.extend_from_slice(&val.to_le_bytes());
-                }
-                bytes
-            }
-            numpy_rust_core::ArrayData::Int32(arr) => {
-                let mut bytes = Vec::with_capacity(arr.len() * 4);
-                for &val in arr.iter() {
-                    bytes.extend_from_slice(&val.to_le_bytes());
-                }
-                bytes
-            }
-            numpy_rust_core::ArrayData::Float32(arr) => {
-                let mut bytes = Vec::with_capacity(arr.len() * 4);
-                for &val in arr.iter() {
-                    bytes.extend_from_slice(&val.to_le_bytes());
-                }
-                bytes
-            }
-            numpy_rust_core::ArrayData::Bool(arr) => {
-                arr.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect()
-            }
-            _ => return Err(vm.new_type_error("tobytes not supported for this dtype".to_string())),
-        };
+        let bytes = inner.to_bytes_le().map_err(|e| numpy_err(e, vm))?;
         Ok(vm.ctx.new_bytes(bytes).into())
     }
 
