@@ -2,6 +2,7 @@
 from _numpy_native import ndarray
 from ._helpers import _copy_into
 from ._creation import asarray, array
+from ._type_promotion import promote_types
 from ._math import (
     add, subtract, multiply, divide, true_divide, floor_divide,
     power, remainder, fmod, maximum, minimum, fmax, fmin,
@@ -479,6 +480,19 @@ class ufunc:
     def __repr__(self):
         return f"<ufunc '{self.__name__}'>"
 
+    def _prepare_reducelike_input(self, a, dtype, out):
+        a = asarray(a)
+        if dtype is not None:
+            target = str(dtype)
+            return a.astype(target)
+        if out is not None:
+            out_arr = out[0] if isinstance(out, tuple) else out
+            if hasattr(out_arr, "dtype"):
+                exec_dtype = str(promote_types(str(a.dtype), str(out_arr.dtype)))
+                if exec_dtype != str(a.dtype):
+                    return a.astype(exec_dtype)
+        return a
+
     def reduce(self, a, axis=0, dtype=None, out=None, keepdims=False,
                initial=_REDUCE_NOVALUE, where=True):
         if self.nin != 2:
@@ -505,6 +519,7 @@ class ufunc:
                     raise TypeError("out must be a single array, not a tuple")
             if not hasattr(out, 'shape'):
                 raise TypeError("out must be an array, not {!r}".format(type(out).__name__))
+        a = self._prepare_reducelike_input(a, None if dtype is None else str(dtype), out)
         # Validate axis
         if axis is not None and not isinstance(axis, (int, tuple)):
             raise TypeError(
@@ -571,9 +586,7 @@ class ufunc:
     def accumulate(self, a, axis=0, dtype=None, out=None):
         if self.nin != 2:
             raise ValueError("accumulate only supported for binary functions")
-        a = asarray(a)
-        if dtype is not None:
-            a = a.astype(str(dtype))
+        a = self._prepare_reducelike_input(a, None if dtype is None else str(dtype), out)
         if self._accumulate_fast is not None:
             result = self._accumulate_fast(a, axis=axis)
         else:
@@ -606,9 +619,7 @@ class ufunc:
     def reduceat(self, a, indices, axis=0, dtype=None, out=None):
         if self.nin != 2:
             raise ValueError("reduceat only supported for binary functions")
-        a = asarray(a)
-        if dtype is not None:
-            a = a.astype(str(dtype))
+        a = self._prepare_reducelike_input(a, None if dtype is None else str(dtype), out)
         indices = [int(x) for x in indices]
         n = a.shape[axis]
         results = []

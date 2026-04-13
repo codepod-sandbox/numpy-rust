@@ -1956,6 +1956,16 @@ def test_compare_signed_array_with_big_python_ints():
     assert_eq((a <= 2**300).all(), True)
     assert_eq((a >= -(2**320)).all(), True)
 
+
+def test_ufunc_reduce_out_promotes_execution_dtype():
+    arr = np.ones(1000, dtype=np.uint8)
+    out = np.zeros((), dtype=np.uint16)
+    assert_eq(int(np.add.reduce(arr, out=out)), 1000)
+
+    arr[:10] = 2
+    out = np.zeros((), dtype=np.uint16)
+    assert_eq(int(np.multiply.reduce(arr, out=out)), 2**10)
+
 def test_floor_divide():
     a = np.array([7.0, 10.0])
     b = np.array([2.0, 3.0])

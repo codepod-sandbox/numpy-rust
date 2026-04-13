@@ -1286,6 +1286,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-utils",
  "num-complex",
+ "num-traits",
  "numpy-rust-core",
  "once_cell",
  "rustpython-derive",
