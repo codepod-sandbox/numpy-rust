@@ -21,6 +21,7 @@ from ._string_bridge import (
     python_string_splitlines,
     python_string_strip,
     python_string_transform,
+    python_string_unicode_predicate,
     python_string_zfill,
 )
 
@@ -542,18 +543,10 @@ class chararray:
         return python_string_predicate(self, lambda item: item.istitle())
 
     def isnumeric(self):
-        items, _ = python_string_items(self)
-        for item in items:
-            if isinstance(item, bytes):
-                raise TypeError("isnumeric is only available for unicode strings")
-        return python_string_predicate(self, lambda item: item.isnumeric())
+        return python_string_unicode_predicate(self, "isnumeric")
 
     def isdecimal(self):
-        items, _ = python_string_items(self)
-        for item in items:
-            if isinstance(item, bytes):
-                raise TypeError("isdecimal is only available for unicode strings")
-        return python_string_predicate(self, lambda item: item.isdecimal())
+        return python_string_unicode_predicate(self, "isdecimal")
 
     def split(self, sep=None, maxsplit=-1):
         return python_string_split(self, sep=sep, maxsplit=maxsplit)
@@ -978,11 +971,7 @@ class _char_mod:
 
     @staticmethod
     def isnumeric(a):
-        items, _ = python_string_items(a)
-        for item in items:
-            if isinstance(item, bytes):
-                raise TypeError("isnumeric is only available for unicode strings")
-        return python_string_predicate(a, lambda item: item.isnumeric())
+        return python_string_unicode_predicate(a, "isnumeric")
 
     @staticmethod
     def isupper(a):
@@ -1002,16 +991,10 @@ class _char_mod:
 
     @staticmethod
     def isdecimal(a):
-        items, _ = python_string_items(a)
-        for item in items:
-            if isinstance(item, bytes):
-                raise TypeError("isdecimal is only available for unicode strings")
-        return python_string_predicate(a, lambda item: item.isdecimal())
+        return python_string_unicode_predicate(a, "isdecimal")
 
     @staticmethod
     def expandtabs(a, tabsize=8):
-        if isinstance(a, (str, bytes)):
-            return a.expandtabs(tabsize)
         return python_string_transform(a, "expandtabs", tabsize)
 
     @staticmethod

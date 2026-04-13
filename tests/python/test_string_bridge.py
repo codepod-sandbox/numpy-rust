@@ -349,6 +349,27 @@ def test_encode_decode_share_bridge_behavior_and_public_return_kind():
     assert decoded_carr.tolist() == ["hi", "yo"]
 
 
+def test_encode_scalar_and_expandtabs_scalar_follow_shared_bridge_shape():
+    encoded = np.char.encode("hi", "utf-8")
+    expanded = np.char.expandtabs("a\tb")
+
+    assert isinstance(encoded, _ObjectArray)
+    assert encoded.shape == ()
+    assert encoded.tolist() == b"hi"
+    assert type(expanded) is np.ndarray
+    assert expanded.shape == ()
+    assert expanded.tolist() == "a       b"
+
+
+@pytest.mark.parametrize("method_name", ["isnumeric", "isdecimal"])
+def test_unicode_only_string_predicates_share_bytes_validation(method_name):
+    bytes_arr = np.array([b"12"], dtype="|S2")
+    with pytest.raises(TypeError):
+        getattr(np.char, method_name)(bytes_arr)
+    with pytest.raises(TypeError):
+        getattr(np.char.asarray(bytes_arr), method_name)()
+
+
 @pytest.mark.parametrize(
     ("method_name", "value", "args", "expected"),
     [

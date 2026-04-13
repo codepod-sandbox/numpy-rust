@@ -99,6 +99,16 @@ def _object_result_shape(shape, size):
     return (size,)
 
 
+def _object_result(value, shape, *, dtype="object", itemsize=None):
+    items = list(value) if isinstance(value, (list, tuple)) else [value]
+    return _ObjectArray(
+        items,
+        dtype,
+        shape=_object_result_shape(shape, len(items)),
+        itemsize=itemsize,
+    )
+
+
 def _result_contains_bytes(result):
     if isinstance(result, bytes):
         return True
@@ -134,7 +144,9 @@ def python_string_map(
         out = _ObjectArray(data, "object", shape=target_shape)
     else:
         out = array(result)
-    if out_shape and result_kind != "object":
+    if result_kind != "object" and out_shape == ():
+        out = out.reshape(())
+    elif out_shape and result_kind != "object":
         out = out.reshape(out_shape)
     if wrap_chararray:
         from ._string_ops import chararray
@@ -255,7 +267,7 @@ def python_string_split(value, sep=None, maxsplit=-1):
         )
         for item in items
     ]
-    return _ObjectArray(result, "object", shape=_object_result_shape(shape, len(result)))
+    return _object_result(result, shape)
 
 
 def python_string_rsplit(value, sep=None, maxsplit=-1):
@@ -267,13 +279,13 @@ def python_string_rsplit(value, sep=None, maxsplit=-1):
         )
         for item in items
     ]
-    return _ObjectArray(result, "object", shape=_object_result_shape(shape, len(result)))
+    return _object_result(result, shape)
 
 
 def python_string_splitlines(value):
     items, shape = python_string_items(value)
     result = [_string_method_target(item).splitlines() for item in items]
-    return _ObjectArray(result, "object", shape=_object_result_shape(shape, len(result)))
+    return _object_result(result, shape)
 
 
 def python_string_partition(
@@ -321,7 +333,7 @@ def python_string_zfill(value, width, *, wrap_chararray=False):
     items, shape = python_string_items(value)
     result = [_string_method_target(item).zfill(int(width)) for item in items]
     if any(isinstance(item, bytes) for item in result):
-        out = _ObjectArray(result, "object", shape=_object_result_shape(shape, len(result)))
+        out = _object_result(result, shape, dtype="bytes", itemsize=max(len(item) for item in result) if result else None)
     else:
         out = array(result)
         if shape == ():
@@ -341,7 +353,12 @@ def python_string_encode(value, encoding="utf-8", errors="strict"):
         item if isinstance(item, bytes) else str(item).encode(encoding, errors)
         for item in items
     ]
-    return _ObjectArray(result, "object", shape=_object_result_shape(shape, len(result)))
+    return _object_result(
+        result,
+        shape,
+        dtype="bytes",
+        itemsize=max(len(item) for item in result) if result else None,
+    )
 
 
 def python_string_decode(value, encoding="utf-8", errors="strict"):
@@ -374,3 +391,13 @@ def python_string_join(seq, sep, *, wrap_chararray=False):
         ),
         wrap_chararray=wrap_chararray,
     ).reshape(shape or (len(items),))
+
+
+def python_string_unicode_predicate(value, predicate):
+    items, _ = python_string_items(value)
+    for item in items:
+        if isinstance(item, bytes):
+            raise TypeError(
+                f"{predicate} is only available for unicode strings"
+            )
+    return python_string_predicate(value, lambda item: getattr(item, predicate)())
