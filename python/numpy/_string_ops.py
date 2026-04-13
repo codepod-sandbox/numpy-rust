@@ -9,6 +9,8 @@ from ._string_bridge import (
     python_string_join,
     python_string_items,
     python_string_map,
+    python_string_encode,
+    python_string_decode,
     python_string_pad,
     python_string_partition,
     python_string_predicate,
@@ -19,6 +21,7 @@ from ._string_bridge import (
     python_string_splitlines,
     python_string_strip,
     python_string_transform,
+    python_string_zfill,
 )
 
 __all__ = ['char']
@@ -473,11 +476,7 @@ class chararray:
         )
 
     def zfill(self, width):
-        return python_string_map(
-            self,
-            lambda item: str(item).zfill(int(width)),
-            wrap_chararray=True,
-        )
+        return python_string_zfill(self, width, wrap_chararray=True)
 
     def replace(self, old, new, count=None):
         return python_string_replace(
@@ -577,18 +576,10 @@ class chararray:
         )
 
     def encode(self, encoding='utf-8', errors='strict'):
-        return python_string_map(
-            self,
-            lambda item: item if isinstance(item, bytes) else str(item).encode(encoding, errors),
-            wrap_chararray=True,
-        )
+        return python_string_encode(self, encoding=encoding, errors=errors)
 
     def decode(self, encoding='utf-8', errors='strict'):
-        return python_string_map(
-            self,
-            lambda item: item.decode(encoding, errors) if isinstance(item, bytes) else item,
-            wrap_chararray=True,
-        )
+        return python_string_decode(self, encoding=encoding, errors=errors)
 
     def join(self, seq):
         return python_string_join(seq, self, wrap_chararray=True)
@@ -963,7 +954,7 @@ class _char_mod:
 
     @staticmethod
     def zfill(a, width):
-        return python_string_map(a, lambda item: str(item).zfill(int(width)))
+        return python_string_zfill(a, width)
 
     @staticmethod
     def title(a):
@@ -1025,39 +1016,19 @@ class _char_mod:
 
     @staticmethod
     def partition(a, sep):
-        if isinstance(a, (str, bytes)):
-            return list(a.partition(sep))
         return python_string_partition(a, sep)
 
     @staticmethod
     def rpartition(a, sep):
-        if isinstance(a, (str, bytes)):
-            return list(a.rpartition(sep))
         return python_string_partition(a, sep, method_name="rpartition")
 
     @staticmethod
     def encode(a, encoding='utf-8', errors='strict'):
-        """Encode each string element to bytes."""
-        if isinstance(a, (str, bytes)):
-            if isinstance(a, bytes):
-                return a
-            return a.encode(encoding, errors)
-        return python_string_map(
-            a,
-            lambda item: item if isinstance(item, bytes) else str(item).encode(encoding, errors),
-        )
+        return python_string_encode(a, encoding=encoding, errors=errors)
 
     @staticmethod
     def decode(a, encoding='utf-8', errors='strict'):
-        """Decode each bytes element to string."""
-        if isinstance(a, (str, bytes)):
-            if isinstance(a, bytes):
-                return a.decode(encoding, errors)
-            return a
-        return python_string_map(
-            a,
-            lambda item: item.decode(encoding, errors) if isinstance(item, bytes) else item,
-        )
+        return python_string_decode(a, encoding=encoding, errors=errors)
 
 
 char = _char_mod()

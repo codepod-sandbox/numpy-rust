@@ -295,7 +295,10 @@ class _ObjectArray:
         return _ObjectArray(list(self._data), dtype_str, shape=self._shape, is_fortran=self._is_fortran)
     def flatten(self): return self
     def ravel(self): return self
-    def tolist(self): return list(self._data)
+    def tolist(self):
+        if self._shape == ():
+            return self._data[0] if self._data else None
+        return list(self._data)
     def all(self): return all(self._data)
     def any(self): return any(self._data)
     def __len__(self): return len(self._data)

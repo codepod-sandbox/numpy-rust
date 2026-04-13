@@ -129,6 +129,17 @@ def test_shared_bridge_preserves_bytes_semantics():
     ]
 
 
+def test_zfill_shared_bridge_preserves_bytes_semantics():
+    arr = _ObjectArray([b"42", b"-7"], "object", shape=(2,))
+    carr = np.char.asarray(arr)
+
+    arr_out = np.char.zfill(arr, 4)
+    carr_out = carr.zfill(4)
+
+    assert arr_out.tolist() == [b"0042", b"-007"]
+    assert carr_out.tolist() == [b"0042", b"-007"]
+
+
 def test_startswith_shared_normalization_keeps_shape_and_return_kind():
     arr = np.array([["hello", "world"]])
     carr = np.char.asarray(arr)
@@ -233,6 +244,26 @@ def test_split_families_preserve_public_return_type():
     assert splitlines_carr_out.tolist() == [["a b"], ["c", "d"]]
 
 
+def test_split_scalar_and_0d_preserve_numpy_shape_and_type():
+    scalar_split = np.char.split("a b")
+    zero_d_split = np.char.split(np.array("a b").reshape(()))
+    scalar_splitlines = np.char.splitlines("a\nb")
+    zero_d_splitlines = np.char.splitlines(np.array("a\nb").reshape(()))
+
+    assert isinstance(scalar_split, _ObjectArray)
+    assert isinstance(zero_d_split, _ObjectArray)
+    assert isinstance(scalar_splitlines, _ObjectArray)
+    assert isinstance(zero_d_splitlines, _ObjectArray)
+    assert scalar_split.shape == ()
+    assert zero_d_split.shape == ()
+    assert scalar_splitlines.shape == ()
+    assert zero_d_splitlines.shape == ()
+    assert scalar_split.tolist() == ["a", "b"]
+    assert zero_d_split.tolist() == ["a", "b"]
+    assert scalar_splitlines.tolist() == ["a", "b"]
+    assert zero_d_splitlines.tolist() == ["a", "b"]
+
+
 def test_partition_families_preserve_public_return_shape_and_kind():
     arr = np.array(["a-b", "c-d"])
     carr = np.char.asarray(arr)
@@ -250,6 +281,44 @@ def test_partition_families_preserve_public_return_shape_and_kind():
     assert arr_out.tolist() == [["a", "-", "b"], ["c", "-", "d"]]
     assert carr_np_out.tolist() == [["a", "-", "b"], ["c", "-", "d"]]
     assert carr_method_out.tolist() == [["a", "-", "b"], ["c", "-", "d"]]
+
+
+def test_partition_scalar_and_0d_preserve_numpy_shape_and_type():
+    scalar_out = np.char.partition("a-b", "-")
+    zero_d = np.array("a-b").reshape(())
+    zero_d_out = np.char.partition(zero_d, "-")
+    zero_d_chararray_out = np.char.asarray(zero_d).partition("-")
+
+    assert type(scalar_out) is np.ndarray
+    assert type(zero_d_out) is np.ndarray
+    assert isinstance(zero_d_chararray_out, type(np.char.asarray(["x"])))
+    assert scalar_out.shape == (3,)
+    assert zero_d_out.shape == (3,)
+    assert zero_d_chararray_out.shape == (3,)
+    assert scalar_out.tolist() == ["a", "-", "b"]
+    assert zero_d_out.tolist() == ["a", "-", "b"]
+    assert zero_d_chararray_out.tolist() == ["a", "-", "b"]
+
+
+def test_encode_decode_share_bridge_behavior_and_public_return_kind():
+    arr = np.array(["hi", "yo"])
+    bytes_arr = np.array([b"hi", b"yo"])
+    carr = np.char.asarray(arr)
+    bytes_carr = np.char.asarray(bytes_arr)
+
+    encoded = np.char.encode(arr, "utf-8")
+    encoded_carr = carr.encode("utf-8")
+    decoded = np.char.decode(bytes_arr, "utf-8")
+    decoded_carr = bytes_carr.decode("utf-8")
+
+    assert isinstance(encoded, _ObjectArray)
+    assert not isinstance(encoded_carr, type(carr))
+    assert type(decoded) is np.ndarray
+    assert not isinstance(decoded_carr, type(bytes_carr))
+    assert encoded.tolist() == [b"hi", b"yo"]
+    assert encoded_carr.tolist() == [b"hi", b"yo"]
+    assert decoded.tolist() == ["hi", "yo"]
+    assert decoded_carr.tolist() == ["hi", "yo"]
 
 
 @pytest.mark.parametrize(
