@@ -1,10 +1,11 @@
 use crate::array_data::ArrayD;
 use ndarray::IxDyn;
-use num_complex::Complex;
 
 use crate::array_data::ArrayData;
+use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
-use crate::error::{NumpyError, Result};
+use crate::error::Result;
+use crate::storage::ArrayStorage;
 use crate::NdArray;
 
 /// Create a 1-D array with evenly spaced values within [start, stop).
@@ -69,104 +70,18 @@ pub fn linspace_with_step(start: f64, stop: f64, num: usize) -> (NdArray, f64) {
 /// - `m` -- number of columns (defaults to `n` when `None`)
 /// - `k` -- diagonal offset: 0 = main, positive = superdiagonal, negative = subdiagonal
 pub fn eye(n: usize, m: Option<usize>, k: isize, dtype: DType) -> Result<NdArray> {
-    if dtype.is_string() {
-        return Err(NumpyError::TypeError(
-            "eye() not supported for string dtype".into(),
-        ));
-    }
     let cols = m.unwrap_or(n);
-    let mut arr = NdArray::zeros(&[n, cols], dtype);
-    match &mut arr.data {
-        ArrayData::Bool(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = true;
-                }
-            }
-        }
-        ArrayData::Int32(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1;
-                }
-            }
-        }
-        ArrayData::Int64(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1;
-                }
-            }
-        }
-        ArrayData::Float32(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1.0;
-                }
-            }
-        }
-        ArrayData::Float64(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = 1.0;
-                }
-            }
-        }
-        ArrayData::Complex64(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = Complex::new(1.0f32, 0.0);
-                }
-            }
-        }
-        ArrayData::Complex128(a) => {
-            for i in 0..n {
-                let j = i as isize + k;
-                if j >= 0 && (j as usize) < cols {
-                    a[[i, j as usize]] = Complex::new(1.0f64, 0.0);
-                }
-            }
-        }
-        ArrayData::Str(_) => {
-            return Err(NumpyError::TypeError(
-                "eye() not supported for string dtype".into(),
-            ));
-        }
-    }
-    Ok(arr)
+    let descriptor = descriptor_for_dtype(dtype);
+    Ok(NdArray::from_parts(
+        ArrayStorage::eye(n, cols, k, descriptor)?,
+        descriptor,
+    ))
 }
 
 /// Create an array filled with a given value.
 pub fn full(shape: &[usize], value: f64, dtype: DType) -> NdArray {
-    let storage = dtype.storage_dtype();
-    let sh = IxDyn(shape);
-    let data = match storage {
-        DType::Bool => ArrayData::Bool(ArrayD::from_elem(sh, value != 0.0).into_shared()),
-        DType::Int32 => ArrayData::Int32(ArrayD::from_elem(sh, value as i32).into_shared()),
-        DType::Int64 => ArrayData::Int64(ArrayD::from_elem(sh, value as i64).into_shared()),
-        DType::Float32 => ArrayData::Float32(ArrayD::from_elem(sh, value as f32).into_shared()),
-        DType::Float64 => ArrayData::Float64(ArrayD::from_elem(sh, value).into_shared()),
-        DType::Complex64 => ArrayData::Complex64(
-            ArrayD::from_elem(sh, Complex::new(value as f32, 0.0)).into_shared(),
-        ),
-        DType::Complex128 => {
-            ArrayData::Complex128(ArrayD::from_elem(sh, Complex::new(value, 0.0)).into_shared())
-        }
-        DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string()).into_shared()),
-        _ => unreachable!("storage_dtype maps to canonical types"),
-    };
-    let data = if dtype.is_narrow() {
-        crate::casting::narrow_truncate(data, dtype)
-    } else {
-        data
-    };
-    NdArray::from_data(data).with_declared_dtype(dtype)
+    let descriptor = descriptor_for_dtype(dtype);
+    NdArray::from_parts(ArrayStorage::full_f64(shape, descriptor, value), descriptor)
 }
 
 /// Create a string array filled with a given string value.

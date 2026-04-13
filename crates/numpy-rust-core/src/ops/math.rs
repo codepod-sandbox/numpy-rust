@@ -3,9 +3,84 @@ use num_complex::Complex;
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
+use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::kernel::{
+    DecomposeUnaryKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp,
+    RealUnaryKernelOp, ValueUnaryKernelOp,
+};
 use crate::NdArray;
+
+fn map_complex_data<R>(
+    data: &ArrayData,
+    on64: impl FnOnce(&ndarray::ArcArray<Complex<f32>, ndarray::IxDyn>) -> R,
+    on128: impl FnOnce(&ndarray::ArcArray<Complex<f64>, ndarray::IxDyn>) -> R,
+) -> Option<R> {
+    match data {
+        ArrayData::Complex64(a) => Some(on64(a)),
+        ArrayData::Complex128(a) => Some(on128(a)),
+        _ => None,
+    }
+}
+
+fn update_complex32_component(
+    current: &ndarray::ArcArray<Complex<f32>, ndarray::IxDyn>,
+    values: &NdArray,
+    update: impl Fn(Complex<f32>, f32) -> Complex<f32>,
+) -> Option<ArrayData> {
+    let values = values.astype(DType::Float32);
+    let ArrayData::Float32(values) = values.data() else {
+        return None;
+    };
+
+    let replacement_values: Vec<f32> = values.iter().copied().collect();
+    let new_data: Vec<_> = if replacement_values.len() == 1 {
+        current
+            .iter()
+            .map(|&c| update(c, replacement_values[0]))
+            .collect()
+    } else {
+        current
+            .iter()
+            .zip(replacement_values.iter())
+            .map(|(&c, &v)| update(c, v))
+            .collect()
+    };
+
+    ndarray::Array::from_shape_vec(ndarray::IxDyn(current.shape()), new_data)
+        .ok()
+        .map(|arr| ArrayData::Complex64(arr.into_shared()))
+}
+
+fn update_complex128_component(
+    current: &ndarray::ArcArray<Complex<f64>, ndarray::IxDyn>,
+    values: &NdArray,
+    update: impl Fn(Complex<f64>, f64) -> Complex<f64>,
+) -> Option<ArrayData> {
+    let values = values.astype(DType::Float64);
+    let ArrayData::Float64(values) = values.data() else {
+        return None;
+    };
+
+    let replacement_values: Vec<f64> = values.iter().copied().collect();
+    let new_data: Vec<_> = if replacement_values.len() == 1 {
+        current
+            .iter()
+            .map(|&c| update(c, replacement_values[0]))
+            .collect()
+    } else {
+        current
+            .iter()
+            .zip(replacement_values.iter())
+            .map(|(&c, &v)| update(c, v))
+            .collect()
+    };
+
+    ndarray::Array::from_shape_vec(ndarray::IxDyn(current.shape()), new_data)
+        .ok()
+        .map(|arr| ArrayData::Complex128(arr.into_shared()))
+}
 
 /// Helper: ensure array is floating-point (cast int/bool to f64, matching NumPy behavior).
 /// Complex types are kept as-is.
@@ -20,22 +95,174 @@ fn ensure_float(data: &ArrayData) -> ArrayData {
     }
 }
 
+fn execute_math_unary_on_data(data: ArrayData, op: MathUnaryKernelOp) -> NdArray {
+    let descriptor = descriptor_for_dtype(data.dtype());
+    let kernel = descriptor
+        .math_unary_kernel(op)
+        .unwrap_or_else(|| panic!("math unary kernel not registered for {}", data.dtype()));
+    NdArray::from_data(kernel(data).expect("math unary kernel dtype mismatch"))
+}
+
+fn execute_math_unary(input: &NdArray, op: MathUnaryKernelOp) -> NdArray {
+    execute_math_unary_on_data(ensure_float(input.data()), op)
+}
+
+fn execute_value_unary(
+    input: &NdArray,
+    op: ValueUnaryKernelOp,
+    preserve_descriptor: bool,
+) -> NdArray {
+    let descriptor = input.descriptor();
+    let kernel = descriptor
+        .value_unary_kernel(op)
+        .unwrap_or_else(|| panic!("value unary kernel not registered for {}", input.dtype()));
+    let data = kernel(input.data().clone()).expect("value unary kernel dtype mismatch");
+    let mut result = NdArray::from_data(data);
+    if preserve_descriptor && input.dtype().storage_dtype() == result.data().dtype() {
+        result.preserve_descriptor_from(input);
+    }
+    result
+}
+
+fn execute_real_math_unary(
+    input: &NdArray,
+    op: MathUnaryKernelOp,
+    op_name: &'static str,
+) -> Result<NdArray> {
+    if input.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+    Ok(execute_math_unary(input, op))
+}
+
+fn execute_real_math_binary(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: MathBinaryKernelOp,
+    op_name: &'static str,
+) -> Result<NdArray> {
+    if lhs.dtype().is_complex() || rhs.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+
+    let lhs_data = ensure_float(lhs.data());
+    let rhs_data = ensure_float(rhs.data());
+    let execution_dtype = match (&lhs_data, &rhs_data) {
+        (ArrayData::Float32(_), ArrayData::Float32(_)) => DType::Float32,
+        _ => DType::Float64,
+    };
+    let lhs_data = cast_array_data(&lhs_data, execution_dtype);
+    let rhs_data = cast_array_data(&rhs_data, execution_dtype);
+    let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
+    let lhs_data = broadcast_array_data(&lhs_data, &out_shape);
+    let rhs_data = broadcast_array_data(&rhs_data, &out_shape);
+
+    let descriptor = descriptor_for_dtype(execution_dtype);
+    let kernel = descriptor
+        .math_binary_kernel(op)
+        .unwrap_or_else(|| panic!("math binary kernel not registered for {execution_dtype}"));
+    Ok(NdArray::from_data(
+        kernel(lhs_data, rhs_data).expect("math binary kernel dtype mismatch"),
+    ))
+}
+
+fn execute_real_unary(
+    input: &NdArray,
+    op: RealUnaryKernelOp,
+    op_name: &'static str,
+) -> Result<NdArray> {
+    if input.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+    let data = ensure_float(input.data());
+    let descriptor = descriptor_for_dtype(data.dtype());
+    let kernel = descriptor
+        .real_unary_kernel(op)
+        .unwrap_or_else(|| panic!("real unary kernel not registered for {}", data.dtype()));
+    Ok(NdArray::from_data(
+        kernel(data).expect("real unary kernel dtype mismatch"),
+    ))
+}
+
+fn execute_real_binary(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: RealBinaryKernelOp,
+    op_name: &'static str,
+) -> Result<NdArray> {
+    if lhs.dtype().is_complex() || rhs.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+
+    let lhs_data = ensure_float(lhs.data());
+    let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
+    let execution_dtype = match op {
+        RealBinaryKernelOp::ArcTan2 => match (&lhs_data, &ensure_float(rhs.data())) {
+            (ArrayData::Float32(_), ArrayData::Float32(_)) => DType::Float32,
+            _ => DType::Float64,
+        },
+        RealBinaryKernelOp::LDExp => match lhs_data {
+            ArrayData::Float32(_) => DType::Float32,
+            _ => DType::Float64,
+        },
+    };
+
+    let lhs_data = cast_array_data(&lhs_data, execution_dtype);
+    let lhs_data = broadcast_array_data(&lhs_data, &out_shape);
+    let rhs_data = match op {
+        RealBinaryKernelOp::ArcTan2 => {
+            let rhs_data = ensure_float(rhs.data());
+            let rhs_data = cast_array_data(&rhs_data, execution_dtype);
+            broadcast_array_data(&rhs_data, &out_shape)
+        }
+        RealBinaryKernelOp::LDExp => {
+            let rhs_data = cast_array_data(rhs.data(), DType::Int32);
+            broadcast_array_data(&rhs_data, &out_shape)
+        }
+    };
+
+    let descriptor = descriptor_for_dtype(execution_dtype);
+    let kernel = descriptor
+        .real_binary_kernel(op)
+        .unwrap_or_else(|| panic!("real binary kernel not registered for {execution_dtype}"));
+    Ok(NdArray::from_data(
+        kernel(lhs_data, rhs_data).expect("real binary kernel dtype mismatch"),
+    ))
+}
+
+fn execute_real_decompose(
+    input: &NdArray,
+    op: DecomposeUnaryKernelOp,
+    op_name: &'static str,
+) -> Result<(NdArray, NdArray)> {
+    if input.dtype().is_complex() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for complex arrays"
+        )));
+    }
+    let data = ensure_float(input.data());
+    let descriptor = descriptor_for_dtype(data.dtype());
+    let kernel = descriptor
+        .decompose_unary_kernel(op)
+        .unwrap_or_else(|| panic!("decompose unary kernel not registered for {}", data.dtype()));
+    let (first, second) = kernel(data).expect("decompose unary kernel dtype mismatch");
+    Ok((NdArray::from_data(first), NdArray::from_data(second)))
+}
+
 /// Apply a float unary op (works on Float32, Float64, Complex64, Complex128).
 macro_rules! float_unary {
-    ($name:ident, $f32_op:expr, $f64_op:expr, $c64_op:expr, $c128_op:expr) => {
+    ($name:ident, $op:expr) => {
         impl NdArray {
             pub fn $name(&self) -> NdArray {
-                let data = ensure_float(&self.data);
-                let result = match data {
-                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
-                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
-                    ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv($c64_op).into_shared()),
-                    ArrayData::Complex128(a) => {
-                        ArrayData::Complex128(a.mapv($c128_op).into_shared())
-                    }
-                    _ => unreachable!(),
-                };
-                NdArray::from_data(result)
+                execute_math_unary(self, $op)
             }
         }
     };
@@ -43,312 +270,84 @@ macro_rules! float_unary {
 
 /// Apply a float unary op that does NOT work on complex types.
 macro_rules! float_only_unary {
-    ($name:ident, $f32_op:expr, $f64_op:expr) => {
+    ($name:ident, $op:expr) => {
         impl NdArray {
             pub fn $name(&self) -> Result<NdArray> {
-                if self.dtype().is_complex() {
-                    return Err(NumpyError::TypeError(
-                        concat!(stringify!($name), " not supported for complex arrays").into(),
-                    ));
-                }
-                let data = ensure_float(&self.data);
-                let result = match data {
-                    ArrayData::Float32(a) => ArrayData::Float32(a.mapv($f32_op).into_shared()),
-                    ArrayData::Float64(a) => ArrayData::Float64(a.mapv($f64_op).into_shared()),
-                    _ => unreachable!(),
-                };
-                Ok(NdArray::from_data(result))
+                execute_real_math_unary(self, $op, stringify!($name))
             }
         }
     };
 }
 
-float_unary!(
-    sqrt,
-    |x: f32| x.sqrt(),
-    |x: f64| x.sqrt(),
-    |x: Complex<f32>| x.sqrt(),
-    |x: Complex<f64>| x.sqrt()
-);
-float_unary!(
-    exp,
-    |x: f32| x.exp(),
-    |x: f64| x.exp(),
-    |x: Complex<f32>| x.exp(),
-    |x: Complex<f64>| x.exp()
-);
-float_unary!(
-    log,
-    |x: f32| x.ln(),
-    |x: f64| x.ln(),
-    |x: Complex<f32>| x.ln(),
-    |x: Complex<f64>| x.ln()
-);
-float_unary!(
-    sin,
-    |x: f32| x.sin(),
-    |x: f64| x.sin(),
-    |x: Complex<f32>| x.sin(),
-    |x: Complex<f64>| x.sin()
-);
-float_unary!(
-    cos,
-    |x: f32| x.cos(),
-    |x: f64| x.cos(),
-    |x: Complex<f32>| x.cos(),
-    |x: Complex<f64>| x.cos()
-);
-float_unary!(
-    tan,
-    |x: f32| x.tan(),
-    |x: f64| x.tan(),
-    |x: Complex<f32>| x.tan(),
-    |x: Complex<f64>| x.tan()
-);
+float_unary!(sqrt, MathUnaryKernelOp::Sqrt);
+float_unary!(exp, MathUnaryKernelOp::Exp);
+float_unary!(log, MathUnaryKernelOp::Log);
+float_unary!(sin, MathUnaryKernelOp::Sin);
+float_unary!(cos, MathUnaryKernelOp::Cos);
+float_unary!(tan, MathUnaryKernelOp::Tan);
 
-float_only_unary!(floor, |x: f32| x.floor(), |x: f64| x.floor());
-float_only_unary!(ceil, |x: f32| x.ceil(), |x: f64| x.ceil());
-float_only_unary!(round, |x: f32| x.round(), |x: f64| x.round());
+float_only_unary!(floor, MathUnaryKernelOp::Floor);
+float_only_unary!(ceil, MathUnaryKernelOp::Ceil);
+float_only_unary!(round, MathUnaryKernelOp::Round);
 
-float_unary!(
-    log10,
-    |x: f32| x.log10(),
-    |x: f64| x.log10(),
-    |x: Complex<f32>| x.ln() / Complex::new(std::f32::consts::LN_10, 0.0),
-    |x: Complex<f64>| x.ln() / Complex::new(std::f64::consts::LN_10, 0.0)
-);
-float_unary!(
-    log2,
-    |x: f32| x.log2(),
-    |x: f64| x.log2(),
-    |x: Complex<f32>| x.ln() / Complex::new(std::f32::consts::LN_2, 0.0),
-    |x: Complex<f64>| x.ln() / Complex::new(std::f64::consts::LN_2, 0.0)
-);
-float_unary!(
-    sinh,
-    |x: f32| x.sinh(),
-    |x: f64| x.sinh(),
-    |x: Complex<f32>| x.sinh(),
-    |x: Complex<f64>| x.sinh()
-);
-float_unary!(
-    cosh,
-    |x: f32| x.cosh(),
-    |x: f64| x.cosh(),
-    |x: Complex<f32>| x.cosh(),
-    |x: Complex<f64>| x.cosh()
-);
-float_unary!(
-    tanh,
-    |x: f32| x.tanh(),
-    |x: f64| x.tanh(),
-    |x: Complex<f32>| x.tanh(),
-    |x: Complex<f64>| x.tanh()
-);
-float_unary!(
-    arcsin,
-    |x: f32| x.asin(),
-    |x: f64| x.asin(),
-    |x: Complex<f32>| x.asin(),
-    |x: Complex<f64>| x.asin()
-);
-float_unary!(
-    arccos,
-    |x: f32| x.acos(),
-    |x: f64| x.acos(),
-    |x: Complex<f32>| x.acos(),
-    |x: Complex<f64>| x.acos()
-);
-float_unary!(
-    arctan,
-    |x: f32| x.atan(),
-    |x: f64| x.atan(),
-    |x: Complex<f32>| x.atan(),
-    |x: Complex<f64>| x.atan()
-);
+float_unary!(log10, MathUnaryKernelOp::Log10);
+float_unary!(log2, MathUnaryKernelOp::Log2);
+float_unary!(sinh, MathUnaryKernelOp::Sinh);
+float_unary!(cosh, MathUnaryKernelOp::Cosh);
+float_unary!(tanh, MathUnaryKernelOp::Tanh);
+float_unary!(arcsin, MathUnaryKernelOp::ArcSin);
+float_unary!(arccos, MathUnaryKernelOp::ArcCos);
+float_unary!(arctan, MathUnaryKernelOp::ArcTan);
 
-float_unary!(
-    arcsinh,
-    |x: f32| x.asinh(),
-    |x: f64| x.asinh(),
-    |x: Complex<f32>| x.asinh(),
-    |x: Complex<f64>| x.asinh()
-);
-float_unary!(
-    arccosh,
-    |x: f32| x.acosh(),
-    |x: f64| x.acosh(),
-    |x: Complex<f32>| x.acosh(),
-    |x: Complex<f64>| x.acosh()
-);
-float_unary!(
-    arctanh,
-    |x: f32| x.atanh(),
-    |x: f64| x.atanh(),
-    |x: Complex<f32>| x.atanh(),
-    |x: Complex<f64>| x.atanh()
-);
+float_unary!(arcsinh, MathUnaryKernelOp::ArcSinh);
+float_unary!(arccosh, MathUnaryKernelOp::ArcCosh);
+float_unary!(arctanh, MathUnaryKernelOp::ArcTanh);
 
-float_only_unary!(log1p, |x: f32| x.ln_1p(), |x: f64| x.ln_1p());
-float_only_unary!(expm1, |x: f32| x.exp_m1(), |x: f64| x.exp_m1());
-float_only_unary!(deg2rad, |x: f32| x.to_radians(), |x: f64| x.to_radians());
-float_only_unary!(rad2deg, |x: f32| x.to_degrees(), |x: f64| x.to_degrees());
-float_only_unary!(trunc, |x: f32| x.trunc(), |x: f64| x.trunc());
+float_only_unary!(log1p, MathUnaryKernelOp::Log1p);
+float_only_unary!(expm1, MathUnaryKernelOp::Expm1);
+float_only_unary!(deg2rad, MathUnaryKernelOp::Deg2Rad);
+float_only_unary!(rad2deg, MathUnaryKernelOp::Rad2Deg);
+float_only_unary!(trunc, MathUnaryKernelOp::Trunc);
 
 // --- libm-backed unary functions ---
 // These use float_only_unary! (no complex support).
 // libm functions return NaN for out-of-domain inputs; no panics.
-float_only_unary!(cbrt, libm::cbrtf, libm::cbrt);
-float_only_unary!(gamma, libm::tgammaf, libm::tgamma);
-float_only_unary!(lgamma, libm::lgammaf, libm::lgamma);
-float_only_unary!(erf, libm::erff, libm::erf);
-float_only_unary!(erfc, libm::erfcf, libm::erfc);
-float_only_unary!(j0, libm::j0f, libm::j0);
-float_only_unary!(j1, libm::j1f, libm::j1);
-float_only_unary!(y0, libm::y0f, libm::y0);
-float_only_unary!(y1, libm::y1f, libm::y1);
+float_only_unary!(cbrt, MathUnaryKernelOp::Cbrt);
+float_only_unary!(gamma, MathUnaryKernelOp::Gamma);
+float_only_unary!(lgamma, MathUnaryKernelOp::LGamma);
+float_only_unary!(erf, MathUnaryKernelOp::Erf);
+float_only_unary!(erfc, MathUnaryKernelOp::Erfc);
+float_only_unary!(j0, MathUnaryKernelOp::J0);
+float_only_unary!(j1, MathUnaryKernelOp::J1);
+float_only_unary!(y0, MathUnaryKernelOp::Y0);
+float_only_unary!(y1, MathUnaryKernelOp::Y1);
 
 // --- Binary float math macro ---
 macro_rules! math_binary {
-    ($name:ident, $f32_fn:expr, $f64_fn:expr) => {
+    ($name:ident, $op:expr) => {
         impl NdArray {
             pub fn $name(&self, other: &NdArray) -> Result<NdArray> {
-                if self.dtype().is_complex() || other.dtype().is_complex() {
-                    return Err(NumpyError::TypeError(
-                        concat!(stringify!($name), " not supported for complex arrays").into(),
-                    ));
-                }
-                let data_a = ensure_float(&self.data);
-                let data_b = ensure_float(&other.data);
-                // Unify dtypes: Float32 only if BOTH inputs are Float32; otherwise Float64.
-                let out_dtype = match (&data_a, &data_b) {
-                    (ArrayData::Float32(_), ArrayData::Float32(_)) => DType::Float32,
-                    _ => DType::Float64,
-                };
-                let data_a = cast_array_data(&data_a, out_dtype);
-                let data_b = cast_array_data(&data_b, out_dtype);
-                let out_shape = broadcast_shape(self.shape(), other.shape())?;
-                let data_a = broadcast_array_data(&data_a, &out_shape);
-                let data_b = broadcast_array_data(&data_b, &out_shape);
-                let result = match (data_a, data_b) {
-                    (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(
-                        ndarray::Zip::from(&a)
-                            .and(&b)
-                            .map_collect(|&x, &y| $f32_fn(x, y))
-                            .into_shared(),
-                    ),
-                    (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(
-                        ndarray::Zip::from(&a)
-                            .and(&b)
-                            .map_collect(|&x, &y| $f64_fn(x, y))
-                            .into_shared(),
-                    ),
-                    _ => unreachable!(),
-                };
-                Ok(NdArray::from_data(result))
+                execute_real_math_binary(self, other, $op, stringify!($name))
             }
         }
     };
 }
 
-math_binary!(copysign, libm::copysignf, libm::copysign);
-math_binary!(hypot, libm::hypotf, libm::hypot);
-math_binary!(fmod, libm::fmodf, libm::fmod);
-math_binary!(nextafter, libm::nextafterf, libm::nextafter);
-math_binary!(
-    logaddexp,
-    |a: f32, b: f32| {
-        if a.is_nan() || b.is_nan() {
-            return f32::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f32 + (-(a - b).abs()).exp()).ln()
-    },
-    |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            return f64::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f64 + (-(a - b).abs()).exp()).ln()
-    }
-);
-math_binary!(
-    logaddexp2,
-    |a: f32, b: f32| {
-        if a.is_nan() || b.is_nan() {
-            return f32::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f32 + (-(a - b).abs()).exp2()).log2()
-    },
-    |a: f64, b: f64| {
-        if a.is_nan() || b.is_nan() {
-            return f64::NAN;
-        }
-        let mx = a.max(b);
-        mx + (1.0_f64 + (-(a - b).abs()).exp2()).log2()
-    }
-);
-// fmax/fmin: NaN-ignoring (f32::max / f64::max returns non-NaN operand)
-math_binary!(fmax, f32::max, f64::max);
-math_binary!(fmin, f32::min, f64::min);
-// maximum/minimum: NaN-propagating
-math_binary!(
-    maximum,
-    |a: f32, b: f32| if a.is_nan() || b.is_nan() {
-        f32::NAN
-    } else {
-        a.max(b)
-    },
-    |a: f64, b: f64| if a.is_nan() || b.is_nan() {
-        f64::NAN
-    } else {
-        a.max(b)
-    }
-);
-math_binary!(
-    minimum,
-    |a: f32, b: f32| if a.is_nan() || b.is_nan() {
-        f32::NAN
-    } else {
-        a.min(b)
-    },
-    |a: f64, b: f64| if a.is_nan() || b.is_nan() {
-        f64::NAN
-    } else {
-        a.min(b)
-    }
-);
+math_binary!(copysign, MathBinaryKernelOp::CopySign);
+math_binary!(hypot, MathBinaryKernelOp::Hypot);
+math_binary!(fmod, MathBinaryKernelOp::FMod);
+math_binary!(nextafter, MathBinaryKernelOp::NextAfter);
+math_binary!(logaddexp, MathBinaryKernelOp::LogAddExp);
+math_binary!(logaddexp2, MathBinaryKernelOp::LogAddExp2);
+math_binary!(fmax, MathBinaryKernelOp::FMax);
+math_binary!(fmin, MathBinaryKernelOp::FMin);
+math_binary!(maximum, MathBinaryKernelOp::Maximum);
+math_binary!(minimum, MathBinaryKernelOp::Minimum);
 
 impl NdArray {
     /// ldexp(x, n) = x * 2^n, element-wise. n is cast to Int32.
     pub fn ldexp(&self, exp_arr: &NdArray) -> Result<NdArray> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "ldexp not supported for complex arrays".into(),
-            ));
-        }
-        let data_a = ensure_float(&self.data);
-        let exp_i32 = cast_array_data(&exp_arr.data, DType::Int32);
-        let out_shape = broadcast_shape(self.shape(), exp_arr.shape())?;
-        let data_a = broadcast_array_data(&data_a, &out_shape);
-        let exp_i32 = broadcast_array_data(&exp_i32, &out_shape);
-        let result = match (data_a, exp_i32) {
-            (ArrayData::Float32(a), ArrayData::Int32(e)) => ArrayData::Float32(
-                ndarray::Zip::from(&a)
-                    .and(&e)
-                    .map_collect(|&x, &n| libm::ldexpf(x, n))
-                    .into_shared(),
-            ),
-            (ArrayData::Float64(a), ArrayData::Int32(e)) => ArrayData::Float64(
-                ndarray::Zip::from(&a)
-                    .and(&e)
-                    .map_collect(|&x, &n| libm::ldexp(x, n))
-                    .into_shared(),
-            ),
-            _ => unreachable!(),
-        };
-        Ok(NdArray::from_data(result))
+        execute_real_binary(self, exp_arr, RealBinaryKernelOp::LDExp, "ldexp")
     }
 }
 
@@ -356,7 +355,7 @@ impl NdArray {
     /// Element-wise absolute value. Works on int and float types.
     /// For complex types, returns the magnitude (norm) as a float.
     pub fn abs(&self) -> NdArray {
-        let result = match &self.data {
+        let result = match self.data() {
             ArrayData::Bool(a) => ArrayData::Bool(a.clone()),
             ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.abs()).into_shared()),
             ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.abs()).into_shared()),
@@ -369,80 +368,46 @@ impl NdArray {
         let mut r = NdArray::from_data(result);
         // Preserve narrow dtype for non-complex (complex abs returns float)
         if !self.dtype().is_complex() {
-            r.declared_dtype = self.declared_dtype;
+            r.preserve_descriptor_from(self);
         }
         r
     }
 
     /// Return the real part of the array.
     pub fn real(&self) -> NdArray {
-        match &self.data {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.re).into_shared()))
-            }
-            // Real arrays are their own real part
-            _ => self.clone(),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.re).into_shared())),
+            |a| NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.re).into_shared())),
+        )
+        .unwrap_or_else(|| self.clone())
     }
 
     /// Return the imaginary part of the array.
     pub fn imag(&self) -> NdArray {
-        match &self.data {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.im).into_shared()))
-            }
-            // Real arrays have zero imaginary part
-            _ => NdArray::zeros(self.shape(), self.dtype()),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.im).into_shared())),
+            |a| NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.im).into_shared())),
+        )
+        .unwrap_or_else(|| NdArray::zeros(self.shape(), self.dtype()))
     }
 
     /// Set the real part of the array from `real_values` (in-place replacement).
     pub fn set_real(&mut self, real_values: &NdArray) {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
-                let re = real_values.astype(crate::DType::Float32);
-                if let ArrayData::Float32(re_arr) = &re.data {
-                    let re_vec: Vec<f32> = re_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if re_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(re_vec[0], c.im))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(re_vec.iter())
-                            .map(|(c, &r)| num_complex::Complex::new(r, c.im))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex64(new_arr.into_shared());
-                    }
+                if let Some(new_data) =
+                    update_complex32_component(a, real_values, |c, re| Complex::new(re, c.im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex64);
                 }
             }
             ArrayData::Complex128(a) => {
-                let re = real_values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(re_arr) = &re.data {
-                    let re_vec: Vec<f64> = re_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if re_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(re_vec[0], c.im))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(re_vec.iter())
-                            .map(|(c, &r)| num_complex::Complex::new(r, c.im))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex128(new_arr.into_shared());
-                    }
+                if let Some(new_data) =
+                    update_complex128_component(a, real_values, |c, re| Complex::new(re, c.im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex128);
                 }
             }
             _ => {
@@ -454,45 +419,19 @@ impl NdArray {
 
     /// Set the imaginary part of the array from `imag_values` (in-place replacement).
     pub fn set_imag(&mut self, imag_values: &NdArray) {
-        match &self.data {
+        match self.data() {
             ArrayData::Complex64(a) => {
-                let im = imag_values.astype(crate::DType::Float32);
-                if let ArrayData::Float32(im_arr) = &im.data {
-                    let im_vec: Vec<f32> = im_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if im_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(c.re, im_vec[0]))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(im_vec.iter())
-                            .map(|(c, &v)| num_complex::Complex::new(c.re, v))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex64(new_arr.into_shared());
-                    }
+                if let Some(new_data) =
+                    update_complex32_component(a, imag_values, |c, im| Complex::new(c.re, im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex64);
                 }
             }
             ArrayData::Complex128(a) => {
-                let im = imag_values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(im_arr) = &im.data {
-                    let im_vec: Vec<f64> = im_arr.iter().copied().collect();
-                    let new_data: Vec<_> = if im_vec.len() == 1 {
-                        a.iter()
-                            .map(|c| num_complex::Complex::new(c.re, im_vec[0]))
-                            .collect()
-                    } else {
-                        a.iter()
-                            .zip(im_vec.iter())
-                            .map(|(c, &v)| num_complex::Complex::new(c.re, v))
-                            .collect()
-                    };
-                    let shape = ndarray::IxDyn(a.shape());
-                    if let Ok(new_arr) = ndarray::Array::from_shape_vec(shape, new_data) {
-                        self.data = ArrayData::Complex128(new_arr.into_shared());
-                    }
+                if let Some(new_data) =
+                    update_complex128_component(a, imag_values, |c, im| Complex::new(c.re, im))
+                {
+                    self.replace_data_with_dtype(new_data, DType::Complex128);
                 }
             }
             _ => {
@@ -503,30 +442,22 @@ impl NdArray {
 
     /// Return the complex conjugate.
     pub fn conj(&self) -> NdArray {
-        match &self.data {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj()).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Complex128(a.mapv(|c| c.conj()).into_shared()))
-            }
-            // Conjugate of real is self
-            _ => self.clone(),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj()).into_shared())),
+            |a| NdArray::from_data(ArrayData::Complex128(a.mapv(|c| c.conj()).into_shared())),
+        )
+        .unwrap_or_else(|| self.clone())
     }
 
     /// Return the angle (argument) of complex elements.
     pub fn angle(&self) -> NdArray {
-        match &self.data {
-            ArrayData::Complex64(a) => {
-                NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()).into_shared()))
-            }
-            ArrayData::Complex128(a) => {
-                NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.arg()).into_shared()))
-            }
-            // Angle of positive real is 0
-            _ => NdArray::zeros(self.shape(), DType::Float64),
-        }
+        map_complex_data(
+            self.data(),
+            |a| NdArray::from_data(ArrayData::Float32(a.mapv(|c| c.arg()).into_shared())),
+            |a| NdArray::from_data(ArrayData::Float64(a.mapv(|c| c.arg()).into_shared())),
+        )
+        .unwrap_or_else(|| NdArray::zeros(self.shape(), DType::Float64))
     }
 
     /// Round to given number of decimal places.
@@ -536,7 +467,7 @@ impl NdArray {
             return self.clone();
         }
         let factor = 10.0_f64.powi(decimals);
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float32(a) => {
                 let f = factor as f32;
@@ -552,83 +483,17 @@ impl NdArray {
 
     /// Returns a Bool array: true where sign bit is set (negative).
     pub fn signbit(&self) -> NdArray {
-        let data = match &self.data {
-            ArrayData::Float32(a) => {
-                ArrayData::Bool(a.mapv(|x| x.is_sign_negative()).into_shared())
-            }
-            ArrayData::Float64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.is_sign_negative()).into_shared())
-            }
-            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x < 0).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x < 0).into_shared()),
-            _ => ArrayData::Bool(
-                ndarray::ArrayD::from_elem(ndarray::IxDyn(self.shape()), false).into_shared(),
-            ),
-        };
-        NdArray::from_data(data)
+        execute_value_unary(self, ValueUnaryKernelOp::SignBit, false)
     }
 
     /// Element-wise sign function. Returns -1, 0, or 1.
     pub fn sign(&self) -> NdArray {
-        let result = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Int32(a.mapv(|x| if x { 1 } else { 0 }).into_shared()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.signum()).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| x.signum()).into_shared()),
-            ArrayData::Float32(a) => ArrayData::Float32(
-                a.mapv(|x| {
-                    if x.is_nan() {
-                        x
-                    } else if x == 0.0 {
-                        0.0
-                    } else {
-                        x.signum()
-                    }
-                })
-                .into_shared(),
-            ),
-            ArrayData::Float64(a) => ArrayData::Float64(
-                a.mapv(|x| {
-                    if x.is_nan() {
-                        x
-                    } else if x == 0.0 {
-                        0.0
-                    } else {
-                        x.signum()
-                    }
-                })
-                .into_shared(),
-            ),
-            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
-                // NumPy returns x/|x| for complex, but skip for now — return clone
-                return self.clone();
-            }
-            ArrayData::Str(_) => panic!("sign not supported for string arrays"),
-        };
-        NdArray::from_data(result)
+        execute_value_unary(self, ValueUnaryKernelOp::Sign, false)
     }
 
     /// Element-wise negation. Works on int and float types.
     pub fn neg(&self) -> NdArray {
-        let result = match &self.data {
-            ArrayData::Bool(_) => {
-                // NumPy: -True == -1, -False == 0 -> cast to i32 then negate
-                let cast = cast_array_data(&self.data, DType::Int32);
-                match cast {
-                    ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x).into_shared()),
-                    _ => unreachable!(),
-                }
-            }
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| -x).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| -x).into_shared()),
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| -x).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| -x).into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.mapv(|x| -x).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|x| -x).into_shared()),
-            ArrayData::Str(_) => panic!("negation not supported for string arrays"),
-        };
-        let mut r = NdArray::from_data(result);
-        r.declared_dtype = self.declared_dtype;
-        r
+        execute_value_unary(self, ValueUnaryKernelOp::Neg, true)
     }
 }
 
@@ -637,41 +502,12 @@ impl NdArray {
     /// self=y, other=x. Result is in [-pi, pi].
     /// Not supported for complex arrays.
     pub fn arctan2(&self, other: &NdArray) -> Result<NdArray> {
-        if self.dtype().is_complex() || other.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "arctan2 not supported for complex arrays".into(),
-            ));
-        }
-        let data_y = ensure_float(&self.data);
-        let data_x = ensure_float(&other.data);
-        // broadcast
-        let out_shape = broadcast_shape(self.shape(), other.shape())?;
-        let data_y = broadcast_array_data(&data_y, &out_shape);
-        let data_x = broadcast_array_data(&data_x, &out_shape);
-
-        let result = match (data_y, data_x) {
-            (ArrayData::Float32(y), ArrayData::Float32(x)) => {
-                let mut out = y.clone();
-                ndarray::Zip::from(&mut out)
-                    .and(&x)
-                    .for_each(|o, &xi| *o = o.atan2(xi));
-                ArrayData::Float32(out)
-            }
-            (ArrayData::Float64(y), ArrayData::Float64(x)) => {
-                let mut out = y.clone();
-                ndarray::Zip::from(&mut out)
-                    .and(&x)
-                    .for_each(|o, &xi| *o = o.atan2(xi));
-                ArrayData::Float64(out)
-            }
-            _ => unreachable!(),
-        };
-        Ok(NdArray::from_data(result))
+        execute_real_binary(self, other, RealBinaryKernelOp::ArcTan2, "arctan2")
     }
 
     /// Clip (limit) array values to [a_min, a_max].
     pub fn clip(&self, a_min: Option<f64>, a_max: Option<f64>) -> NdArray {
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(
                 a.mapv(|x| {
@@ -719,7 +555,7 @@ impl NdArray {
         a_max: Option<num_complex::Complex<f64>>,
     ) -> NdArray {
         use crate::ops::comparison::complex_cmp;
-        match &self.data {
+        match self.data() {
             ArrayData::Complex128(a) => {
                 let result = a.mapv(|x| {
                     let mut v = x;
@@ -775,10 +611,10 @@ impl NdArray {
             crate::dtype::DType::Bool
             | crate::dtype::DType::Int32
             | crate::dtype::DType::Int64
-            | crate::dtype::DType::Str => return NdArray::from_data(self.data.deep_copy()),
+            | crate::dtype::DType::Str => return NdArray::from_data(self.data().deep_copy()),
             _ => {}
         }
-        let data = ensure_float(&self.data);
+        let data = ensure_float(self.data());
         let result = match data {
             ArrayData::Float32(a) => ArrayData::Float32(
                 a.mapv(|x| {
@@ -858,7 +694,7 @@ impl NdArray {
             ),
             _ => {
                 // Bool/Int/Str already handled above; this shouldn't happen
-                return NdArray::from_data(self.data.deep_copy());
+                return NdArray::from_data(self.data().deep_copy());
             }
         };
         NdArray::from_data(result)
@@ -866,72 +702,13 @@ impl NdArray {
 
     /// Distance between x and the nearest adjacent floating-point number.
     pub fn spacing(&self) -> Result<NdArray> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "spacing not supported for complex arrays".into(),
-            ));
-        }
-        let data = ensure_float(&self.data);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(
-                a.mapv(|x| {
-                    let ax = x.abs();
-                    libm::nextafterf(ax, f32::INFINITY) - ax
-                })
-                .into_shared(),
-            ),
-            ArrayData::Float64(a) => ArrayData::Float64(
-                a.mapv(|x| {
-                    let ax = x.abs();
-                    libm::nextafter(ax, f64::INFINITY) - ax
-                })
-                .into_shared(),
-            ),
-            _ => unreachable!(),
-        };
-        Ok(NdArray::from_data(result))
+        execute_real_unary(self, RealUnaryKernelOp::Spacing, "spacing")
     }
 
     /// Modified Bessel function of the first kind, order 0.
     /// Uses series expansion: I0(x) = Σ ((x/2)^k / k!)^2
     pub fn i0(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let result = match data {
-            ArrayData::Float64(a) => ArrayData::Float64(
-                a.mapv(|x| {
-                    let mut val = 1.0_f64;
-                    let mut term = 1.0_f64;
-                    let h = x * 0.5;
-                    for k in 1_u32..30 {
-                        term *= (h * h) / (k * k) as f64;
-                        val += term;
-                        if term.abs() < 1e-15 * val.abs() {
-                            break;
-                        }
-                    }
-                    val
-                })
-                .into_shared(),
-            ),
-            ArrayData::Float32(a) => ArrayData::Float32(
-                a.mapv(|x| {
-                    let mut val = 1.0_f32;
-                    let mut term = 1.0_f32;
-                    let h = x * 0.5;
-                    for k in 1_u32..25 {
-                        term *= (h * h) / (k * k) as f32;
-                        val += term;
-                        if term.abs() < 1e-7_f32 * val.abs() {
-                            break;
-                        }
-                    }
-                    val
-                })
-                .into_shared(),
-            ),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_real_unary(self, RealUnaryKernelOp::I0, "i0").expect("i0 supports real inputs")
     }
 }
 
@@ -939,107 +716,13 @@ impl NdArray {
     /// Decomposes each element into mantissa and base-2 exponent.
     /// Returns (mantissa: Float64, exponent: Int32), both same shape as input.
     pub fn frexp(&self) -> Result<(NdArray, NdArray)> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "frexp not supported for complex arrays".into(),
-            ));
-        }
-        let data = ensure_float(&self.data);
-        let shape: Vec<usize> = self.shape().to_vec();
-        match data {
-            ArrayData::Float64(a) => {
-                let mut mantissas = Vec::with_capacity(a.len());
-                let mut exponents = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (m, e) = libm::frexp(x);
-                    mantissas.push(m);
-                    exponents.push(e);
-                }
-                let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
-                    .unwrap()
-                    .into_shared();
-                let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float64(m)),
-                    NdArray::from_data(ArrayData::Int32(e)),
-                ))
-            }
-            ArrayData::Float32(a) => {
-                let mut mantissas = Vec::with_capacity(a.len());
-                let mut exponents = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (m, e) = libm::frexpf(x);
-                    mantissas.push(m);
-                    exponents.push(e);
-                }
-                let m = ndarray::ArrayD::from_shape_vec(shape.clone(), mantissas)
-                    .unwrap()
-                    .into_shared();
-                let e = ndarray::ArrayD::from_shape_vec(shape, exponents)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float32(m)),
-                    NdArray::from_data(ArrayData::Int32(e)),
-                ))
-            }
-            _ => unreachable!(),
-        }
+        execute_real_decompose(self, DecomposeUnaryKernelOp::Frexp, "frexp")
     }
 
     /// Splits each element into fractional and integer parts.
     /// Returns (fractional, integer), both same dtype as input (float).
     pub fn modf(&self) -> Result<(NdArray, NdArray)> {
-        if self.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "modf not supported for complex arrays".into(),
-            ));
-        }
-        let data = ensure_float(&self.data);
-        let shape: Vec<usize> = self.shape().to_vec();
-        match data {
-            ArrayData::Float64(a) => {
-                let mut fracs = Vec::with_capacity(a.len());
-                let mut ints = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (frac, int_part) = libm::modf(x);
-                    fracs.push(frac);
-                    ints.push(int_part);
-                }
-                let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
-                    .unwrap()
-                    .into_shared();
-                let i = ndarray::ArrayD::from_shape_vec(shape, ints)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float64(f)),
-                    NdArray::from_data(ArrayData::Float64(i)),
-                ))
-            }
-            ArrayData::Float32(a) => {
-                let mut fracs = Vec::with_capacity(a.len());
-                let mut ints = Vec::with_capacity(a.len());
-                for &x in a.iter() {
-                    let (frac, int_part) = libm::modff(x);
-                    fracs.push(frac);
-                    ints.push(int_part);
-                }
-                let f = ndarray::ArrayD::from_shape_vec(shape.clone(), fracs)
-                    .unwrap()
-                    .into_shared();
-                let i = ndarray::ArrayD::from_shape_vec(shape, ints)
-                    .unwrap()
-                    .into_shared();
-                Ok((
-                    NdArray::from_data(ArrayData::Float32(f)),
-                    NdArray::from_data(ArrayData::Float32(i)),
-                ))
-            }
-            _ => unreachable!(),
-        }
+        execute_real_decompose(self, DecomposeUnaryKernelOp::Modf, "modf")
     }
 }
 
@@ -1058,139 +741,61 @@ fn maybe_complex(data: &ArrayData, is_out_of_domain: impl Fn(f64) -> bool) -> Ar
     }
 }
 
+fn execute_scimath_unary(
+    input: &NdArray,
+    op: MathUnaryKernelOp,
+    is_out_of_domain: impl Fn(f64) -> bool,
+) -> NdArray {
+    let data = ensure_float(input.data());
+    let data = maybe_complex(&data, is_out_of_domain);
+    execute_math_unary_on_data(data, op)
+}
+
 impl NdArray {
     pub fn scimath_sqrt(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.sqrt()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.sqrt()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.sqrt()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Sqrt, |x| x < 0.0)
     }
 
     pub fn scimath_log(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.ln()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.ln()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.ln()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Log, |x| x < 0.0)
     }
 
     pub fn scimath_log2(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let ln2 = std::f64::consts::LN_2;
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.log2()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.log2()).into_shared()),
-            ArrayData::Complex128(a) => {
-                ArrayData::Complex128(a.mapv(|z| z.ln() / Complex::new(ln2, 0.0)).into_shared())
-            }
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Log2, |x| x < 0.0)
     }
 
     pub fn scimath_log10(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let data = maybe_complex(&data, |x| x < 0.0);
-        let ln10 = std::f64::consts::LN_10;
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.log10()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.log10()).into_shared()),
-            ArrayData::Complex128(a) => {
-                ArrayData::Complex128(a.mapv(|z| z.ln() / Complex::new(ln10, 0.0)).into_shared())
-            }
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::Log10, |x| x < 0.0)
     }
 
     pub fn scimath_arcsin(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let data = maybe_complex(&data, |x| x.abs() > 1.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.asin()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.asin()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.asin()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::ArcSin, |x| x.abs() > 1.0)
     }
 
     pub fn scimath_arccos(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let data = maybe_complex(&data, |x| x.abs() > 1.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.acos()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.acos()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.acos()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::ArcCos, |x| x.abs() > 1.0)
     }
 
     pub fn scimath_arctanh(&self) -> NdArray {
-        let data = ensure_float(&self.data);
-        let data = maybe_complex(&data, |x| x.abs() > 1.0);
-        let result = match data {
-            ArrayData::Float32(a) => ArrayData::Float32(a.mapv(|x| x.atanh()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.mapv(|x| x.atanh()).into_shared()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.mapv(|z| z.atanh()).into_shared()),
-            _ => unreachable!(),
-        };
-        NdArray::from_data(result)
+        execute_scimath_unary(self, MathUnaryKernelOp::ArcTanh, |x| x.abs() > 1.0)
     }
 
     /// Complex-safe power: negative base → complex via powc.
     pub fn scimath_power(&self, exp_arr: &NdArray) -> Result<NdArray> {
-        let data_a = ensure_float(&self.data);
-        let data_e = ensure_float(&exp_arr.data);
-        let out_shape = broadcast_shape(self.shape(), exp_arr.shape())?;
-        let data_a = broadcast_array_data(&data_a, &out_shape);
-        let data_e = broadcast_array_data(&data_e, &out_shape);
-        // Check if any base is negative (needs complex)
+        let data_a = ensure_float(self.data());
         let needs_complex = match &data_a {
             ArrayData::Float32(a) => a.iter().any(|&x| x < 0.0),
             ArrayData::Float64(a) => a.iter().any(|&x| x < 0.0),
             _ => false,
         };
         if needs_complex {
-            let c_a = cast_array_data(&data_a, DType::Complex128);
-            let c_e = cast_array_data(&data_e, DType::Complex128);
-            if let (ArrayData::Complex128(a), ArrayData::Complex128(e)) = (c_a, c_e) {
-                return Ok(NdArray::from_data(ArrayData::Complex128(
-                    ndarray::Zip::from(&a)
-                        .and(&e)
-                        .map_collect(|&b, &p| b.powc(p))
-                        .into_shared(),
-                )));
-            }
+            let base = NdArray::from_data(cast_array_data(&data_a, DType::Complex128));
+            let exp = exp_arr.astype(DType::Complex128);
+            return base.pow(&exp);
         }
-        // Normal float power
-        let result = match (data_a, data_e) {
-            (ArrayData::Float32(a), ArrayData::Float32(e)) => ArrayData::Float32(
-                ndarray::Zip::from(&a)
-                    .and(&e)
-                    .map_collect(|&x, &p| x.powf(p))
-                    .into_shared(),
-            ),
-            (ArrayData::Float64(a), ArrayData::Float64(e)) => ArrayData::Float64(
-                ndarray::Zip::from(&a)
-                    .and(&e)
-                    .map_collect(|&x, &p| x.powf(p))
-                    .into_shared(),
-            ),
-            _ => unreachable!(),
-        };
-        Ok(NdArray::from_data(result))
+        let base = NdArray::from_data(data_a);
+        let exp = NdArray::from_data(ensure_float(exp_arr.data()));
+        base.pow(&exp)
     }
 }
 
@@ -1364,6 +969,36 @@ mod tests {
     }
 
     #[test]
+    fn test_set_real_complex_scalar_broadcast() {
+        let mut a =
+            NdArray::from_complex128_vec(vec![Complex::new(1.0, 2.0), Complex::new(3.0, 4.0)]);
+        a.set_real(&NdArray::from_vec(vec![9.0_f64]));
+
+        let ArrayData::Complex128(arr) = a.data() else {
+            panic!();
+        };
+        assert_eq!(arr[[0]].re, 9.0);
+        assert_eq!(arr[[0]].im, 2.0);
+        assert_eq!(arr[[1]].re, 9.0);
+        assert_eq!(arr[[1]].im, 4.0);
+    }
+
+    #[test]
+    fn test_set_imag_complex_elementwise() {
+        let mut a =
+            NdArray::from_complex64_vec(vec![Complex::new(1.0f32, 2.0), Complex::new(3.0, 4.0)]);
+        a.set_imag(&NdArray::from_vec(vec![7.0_f32, 8.0]));
+
+        let ArrayData::Complex64(arr) = a.data() else {
+            panic!();
+        };
+        assert_eq!(arr[[0]].re, 1.0);
+        assert_eq!(arr[[0]].im, 7.0);
+        assert_eq!(arr[[1]].re, 3.0);
+        assert_eq!(arr[[1]].im, 8.0);
+    }
+
+    #[test]
     fn test_around_decimals() {
         let a = NdArray::from_vec(vec![1.234_f64, 2.567, 3.891]);
         let b = a.around(2);
@@ -1511,6 +1146,27 @@ mod tests {
         assert!((arr[[0]] - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
         assert!((arr[[1]] - 0.0).abs() < 1e-10);
         assert!((arr[[2]] - (-std::f64::consts::FRAC_PI_2)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_arctan2_mixed_float_promotes_to_float64() {
+        let y = NdArray::from_vec(vec![1.0_f32, -1.0]);
+        let x = NdArray::from_vec(vec![1.0_f64, 1.0]);
+        let result = y.arctan2(&x).unwrap();
+        assert_eq!(result.dtype(), DType::Float64);
+        let vals = f64_vals(&result);
+        assert!((vals[0] - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+        assert!((vals[1] + std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ldexp() {
+        let a = arr(vec![1.5, 0.25]);
+        let e = NdArray::from_vec(vec![2_i32, 3]);
+        let result = a.ldexp(&e).unwrap();
+        let vals = f64_vals(&result);
+        assert!((vals[0] - 6.0).abs() < 1e-10);
+        assert!((vals[1] - 2.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1677,6 +1333,19 @@ mod tests {
             let v = arr.iter().next().unwrap();
             assert!((v.re - 0.0).abs() < 1e-10);
             assert!((v.im - std::f64::consts::PI).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_scimath_power_negative_base_promotes_to_complex() {
+        let a = arr(vec![-4.0]);
+        let e = arr(vec![0.5]);
+        let r = a.scimath_power(&e).unwrap();
+        assert!(matches!(r.data(), ArrayData::Complex128(_)));
+        if let ArrayData::Complex128(arr) = r.data() {
+            let v = arr.iter().next().unwrap();
+            assert!(v.re.abs() < 1e-10);
+            assert!((v.im - 2.0).abs() < 1e-10);
         }
     }
 }

@@ -41,6 +41,15 @@ def test_div():
     assert_close(c[0], 5.0)
     assert_close(c[1], 4.0)
 
+def test_promotes_int32_plus_float64_to_float64():
+    a = np.array([1, 2, 3], dtype="int32")
+    b = np.array([0.5, 1.5, 2.5], dtype="float64")
+    c = a + b
+    assert_eq(str(c.dtype), "float64")
+    assert_close(c[0], 1.5)
+    assert_close(c[1], 3.5)
+    assert_close(c[2], 5.5)
+
 def test_neg():
     a = np.ones((3,))
     b = -a
@@ -77,6 +86,12 @@ def test_gt():
     c = a.__gt__(b)
     assert_eq(c.all(), True)
 
+def test_eq_cross_dtype_promotes_for_comparison():
+    a = np.array([1, 2, 3], dtype="int32")
+    b = np.array([1.0, 9.0, 3.0], dtype="float64")
+    c = a == b
+    assert_eq(c.tolist(), [True, False, True])
+
 
 # --- Reductions (no axis -> scalar) ---
 
@@ -84,6 +99,11 @@ def test_sum_scalar():
     a = np.ones((2, 3))
     s = a.sum()
     assert_close(s, 6.0)
+
+def test_sum_of_int32_array_returns_expected_scalar():
+    a = np.array([1, 2, 3, 4], dtype="int32")
+    s = a.sum()
+    assert_eq(int(s), 10)
 
 def test_sum_axis0():
     a = np.ones((2, 3))
@@ -1542,6 +1562,14 @@ def test_ravel_multi_index_ints():
     idx = np.ravel_multi_index((1, 1), (3, 4))
     assert_eq(int(idx), 5)
 
+def test_ravel_multi_index_list_input():
+    idx = np.ravel_multi_index([np.array([1.0]), np.array([1.0])], (3, 4))
+    assert_eq(int(idx), 5)
+
+def test_ravel_multi_index_scalar_lists():
+    idx = np.ravel_multi_index(([1], [1]), (3, 4))
+    assert_eq(int(idx), 5)
+
 
 # --- Tier 9: Dtype correctness ---
 
@@ -1699,6 +1727,13 @@ def test_gradient_spacing():
     g = np.gradient(f, 0.5)
     assert_close(float(g[0]), 4.0)
     assert_close(float(g[1]), 4.0)
+
+def test_gradient_spacing_list():
+    f = np.array([0.0, 1.0, 3.0])
+    g = np.gradient(f, [0.0, 1.0, 3.0])
+    assert_close(float(g[0]), 1.0)
+    assert_close(float(g[1]), 1.0)
+    assert_close(float(g[2]), 1.0)
 
 
 # --- linalg.lstsq ---
@@ -2122,6 +2157,11 @@ def test_delete_multiple():
     assert_close(b[1], 3.0)
     assert_close(b[2], 5.0)
 
+def test_delete_bool_list():
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    b = np.delete(a, [False, True, False, True])
+    assert_eq(b.tolist(), [1.0, 3.0])
+
 def test_insert_1d():
     a = np.array([1.0, 2.0, 3.0])
     b = np.insert(a, 1, 10.0)
@@ -2130,6 +2170,11 @@ def test_insert_1d():
     assert_close(b[1], 10.0)
     assert_close(b[2], 2.0)
     assert_close(b[3], 3.0)
+
+def test_insert_ndarray_indices():
+    a = np.array([1.0, 2.0, 3.0])
+    b = np.insert(a, np.array([1, 3]), 9.0)
+    assert_eq(b.tolist(), [1.0, 9.0, 2.0, 3.0, 9.0])
 
 def test_select():
     x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
@@ -2189,6 +2234,12 @@ def test_ix_():
     assert_close(a[1][0], 1.0)
     assert_close(b[0][0], 2.0)
     assert_close(b[0][2], 4.0)
+
+def test_ix_bool_input():
+    a, b = np.ix_([True, False, True], [1, 3])
+    assert_eq(a.shape, (2, 1))
+    assert_eq(b.shape, (1, 2))
+    assert_eq(a.tolist(), [[0], [2]])
 
 def test_equal():
     a = np.array([1.0, 2.0, 3.0])
@@ -3111,11 +3162,11 @@ def test_char_split():
     assert_eq(r[1], ["foo", "bar", "baz"])
     # Single string
     r2 = np.char.split(np.array(["a-b-c"]), sep="-")
-    assert_eq(r2, ["a", "b", "c"])
+    assert_eq(r2.tolist(), [["a", "b", "c"]])
 
 def test_char_join():
     r = np.char.join("-", ["hello", "world"])
-    assert_eq(r, "hello-world")
+    assert_eq(r.tolist(), ["h-e-l-l-o", "w-o-r-l-d"])
 
 def test_char_find():
     a = np.array(["hello", "world", "help"])
@@ -5032,6 +5083,55 @@ def test_char_ljust():
     assert str(r[0]).startswith("hi")
     assert len(str(r[0])) == 10
 
+def test_char_replace_scalar_array_mix():
+    a = np.array(["alpha", "beta", "gamma"])
+    r = np.char.replace(a, "a", "A")
+    assert_eq(str(r[0]), "AlphA")
+    assert_eq(str(r[1]), "betA")
+    assert_eq(str(r[2]), "gAmmA")
+
+def test_char_startswith_scalar_broadcast():
+    a = np.array(["hello", "world", "he"])
+    r = np.char.startswith(a, "he")
+    assert_eq(bool(r[0]), True)
+    assert_eq(bool(r[1]), False)
+    assert_eq(bool(r[2]), True)
+
+def test_char_strip_preserves_shape():
+    a = np.array([["  hi  ", " there "], ["x ", " y"]])
+    r = np.char.strip(a)
+    assert_eq(r.shape, (2, 2))
+    assert_eq(str(r[0, 0]), "hi")
+    assert_eq(str(r[1, 1]), "y")
+
+def test_char_native_string_wrappers_coerce_sequence_inputs():
+    upper = np.char.upper(["hello", "world"])
+    assert_eq(upper.tolist(), ["HELLO", "WORLD"])
+
+    lower = np.char.lower(("HELLO", "WORLD"))
+    assert_eq(lower.tolist(), ["hello", "world"])
+
+    stripped = np.char.strip(["  hi  ", " there "])
+    assert_eq(stripped.tolist(), ["hi", "there"])
+
+    starts = np.char.startswith(("hello", "world"), "he")
+    assert_eq(starts.tolist(), [True, False])
+
+    ends = np.char.endswith(["hello", "world"], "ld")
+    assert_eq(ends.tolist(), [False, True])
+
+    replaced = np.char.replace(("alpha", "beta"), "a", "A")
+    assert_eq(replaced.tolist(), ["AlphA", "betA"])
+
+def test_char_strip_preserves_object_array_shape_through_shared_coercion():
+    from numpy._helpers import _ObjectArray
+
+    a = _ObjectArray(["  hi  ", " there ", "x ", " y"], "str", shape=(2, 2))
+    r = np.char.strip(a)
+
+    assert_eq(r.shape, (2, 2))
+    assert_eq(r.tolist(), [["hi", "there"], ["x", "y"]])
+
 def test_char_rjust():
     r = np.char.rjust(["hi"], 10)
     assert str(r[0]).endswith("hi")
@@ -5307,6 +5407,12 @@ def test_histogramdd():
     data = np.array([[0.5, 0.5], [1.5, 1.5], [0.5, 1.5]])
     hist, edges = np.histogramdd(data, bins=2)
     assert len(edges) == 2
+
+def test_histogramdd_custom_edges():
+    data = np.array([[0.5, 0.5], [1.5, 1.5], [0.5, 1.5]])
+    hist, edges = np.histogramdd(data, bins=([0.0, 1.0, 2.0], [0.0, 1.0, 2.0]))
+    assert_eq(hist.shape, (2, 2))
+    assert_eq(len(edges), 2)
 
 def test_linalg_eigvalsh():
     a = np.array([[2.0, 1.0], [1.0, 3.0]])
@@ -7798,6 +7904,16 @@ def test_t38_lib_scimath_log():
     flat = result.flatten()
     v = flat[0]
     assert isinstance(v, complex), f"expected complex, got {type(v)}: {v}"
+
+def test_t38_lib_scimath_power():
+    """lib.scimath.power should promote negative bases into the complex domain."""
+    import numpy as np
+    result = np.lib.scimath.power(np.array([-4.0]), 0.5)
+    flat = result.flatten()
+    v = flat[0]
+    assert isinstance(v, complex), f"expected complex, got {type(v)}: {v}"
+    assert abs(v.real) < 1e-10
+    assert abs(v.imag - 2.0) < 1e-10
 
 def test_t38_lib_numpyversion():
     """lib.NumpyVersion should support comparison."""

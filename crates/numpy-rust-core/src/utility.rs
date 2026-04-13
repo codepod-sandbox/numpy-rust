@@ -3,8 +3,10 @@ use ndarray::IxDyn;
 
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
-use crate::casting::cast_array_data;
+use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
+use crate::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
+use crate::resolver::{resolve_dot_op, resolve_where_op, DotOp, DotOpPlan, WhereOp, WhereOpPlan};
 use crate::{DType, NdArray};
 
 /// Convert IEEE 754 half-precision (16-bit) bit pattern to f32.
@@ -82,72 +84,38 @@ fn f32_to_half_bits(f: f32) -> u16 {
 /// Element-wise ternary: select from `x` where `cond` is true, else from `y`.
 /// Like `numpy.where(cond, x, y)`.
 pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
-    let bool_cond = match &cond.data {
+    let (cond, x, y, plan) = prepare_where_execution(cond, x, y)?;
+    let descriptor = descriptor_for_dtype(plan.execution_dtype());
+    let kernel = descriptor
+        .where_kernel(WhereKernelOp::Select)
+        .ok_or_else(|| NumpyError::TypeError("where kernel not registered".into()))?;
+    let data = kernel(cond, x, y)?;
+    let mut result = NdArray::from_data(data);
+    if plan.execution_dtype().is_narrow() {
+        result.set_declared_dtype(plan.execution_dtype());
+    }
+    Ok(result)
+}
+
+fn prepare_where_execution(
+    cond: &NdArray,
+    x: &NdArray,
+    y: &NdArray,
+) -> Result<(ArrayData, ArrayData, ArrayData, WhereOpPlan)> {
+    let bool_cond = match cond.data() {
         ArrayData::Bool(a) => a.clone(),
         _ => return Err(NumpyError::TypeError("condition must be boolean".into())),
     };
 
-    // Promote x and y to common dtype (skip promotion for string+string)
-    let (xd, yd) = if x.dtype().is_string() && y.dtype().is_string() {
-        (x.data.clone(), y.data.clone())
-    } else if x.dtype().is_string() || y.dtype().is_string() {
-        return Err(NumpyError::TypeError(
-            "where: cannot mix string and numeric arrays".into(),
-        ));
-    } else {
-        let common_dtype = x.dtype().promote(y.dtype());
-        (
-            cast_array_data(&x.data, common_dtype),
-            cast_array_data(&y.data, common_dtype),
-        )
-    };
-
-    // Broadcast all three to common shape
+    let plan = resolve_where_op(WhereOp::Select, x.dtype(), y.dtype())?;
     let shape_xy = broadcast_shape(x.shape(), y.shape())?;
     let out_shape = broadcast_shape(cond.shape(), &shape_xy)?;
 
-    let cond_b = broadcast_array_data(&ArrayData::Bool(bool_cond), &out_shape);
-    let xb = broadcast_array_data(&xd, &out_shape);
-    let yb = broadcast_array_data(&yd, &out_shape);
+    let cond = broadcast_array_data(&ArrayData::Bool(bool_cond), &out_shape);
+    let x = broadcast_array_data(&x.cast_for_execution(plan.x_cast()), &out_shape);
+    let y = broadcast_array_data(&y.cast_for_execution(plan.y_cast()), &out_shape);
 
-    let cond_arr = match cond_b {
-        ArrayData::Bool(a) => a,
-        _ => unreachable!(),
-    };
-
-    macro_rules! do_where {
-        ($xa:expr, $ya:expr, $variant:ident) => {{
-            let result = ndarray::Zip::from(&cond_arr)
-                .and($xa)
-                .and($ya)
-                .map_collect(|&c, &xv, &yv| if c { xv } else { yv });
-            ArrayData::$variant(result.into_shared())
-        }};
-    }
-
-    let data = match (xb, yb) {
-        (ArrayData::Float64(xa), ArrayData::Float64(ya)) => do_where!(&xa, &ya, Float64),
-        (ArrayData::Float32(xa), ArrayData::Float32(ya)) => do_where!(&xa, &ya, Float32),
-        (ArrayData::Int64(xa), ArrayData::Int64(ya)) => do_where!(&xa, &ya, Int64),
-        (ArrayData::Int32(xa), ArrayData::Int32(ya)) => do_where!(&xa, &ya, Int32),
-        (ArrayData::Bool(xa), ArrayData::Bool(ya)) => do_where!(&xa, &ya, Bool),
-        (ArrayData::Complex64(xa), ArrayData::Complex64(ya)) => {
-            do_where!(&xa, &ya, Complex64)
-        }
-        (ArrayData::Complex128(xa), ArrayData::Complex128(ya)) => {
-            do_where!(&xa, &ya, Complex128)
-        }
-        (ArrayData::Str(xa), ArrayData::Str(ya)) => {
-            let result = ndarray::Zip::from(&cond_arr)
-                .and(&xa)
-                .and(&ya)
-                .map_collect(|&c, xv, yv| if c { xv.clone() } else { yv.clone() });
-            ArrayData::Str(result.into_shared())
-        }
-        _ => unreachable!("promotion ensures matching types"),
-    };
-
-    Ok(NdArray::from_data(data))
+    Ok((cond, x, y, plan))
 }
 
 impl NdArray {
@@ -155,57 +123,20 @@ impl NdArray {
     /// For integer/bool types, always returns all-false.
     /// For complex types, true if either component is NaN.
     pub fn isnan(&self) -> NdArray {
-        let data = match &self.data {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_nan()).into_shared()),
-            ArrayData::Complex64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan()).into_shared())
-            }
-            ArrayData::Complex128(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re.is_nan() || x.im.is_nan()).into_shared())
-            }
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false).into_shared()),
-        };
-        NdArray::from_data(data)
+        execute_predicate(self, PredicateKernelOp::IsNaN)
     }
 
     /// Returns a Bool array: true where elements are finite (not NaN or Inf).
     /// For integer/bool types, always returns all-true.
     /// For complex types, true if both components are finite.
     pub fn isfinite(&self) -> NdArray {
-        let data = match &self.data {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_finite()).into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_finite() && x.im.is_finite())
-                    .into_shared(),
-            ),
-            ArrayData::Complex128(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_finite() && x.im.is_finite())
-                    .into_shared(),
-            ),
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), true).into_shared()),
-        };
-        NdArray::from_data(data)
+        execute_predicate(self, PredicateKernelOp::IsFinite)
     }
 
     /// Returns a Bool array: true where elements are infinite.
     /// For integer/bool types, always returns all-false.
     pub fn isinf(&self) -> NdArray {
-        let data = match &self.data {
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x.is_infinite()).into_shared()),
-            ArrayData::Complex64(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_infinite() || x.im.is_infinite())
-                    .into_shared(),
-            ),
-            ArrayData::Complex128(a) => ArrayData::Bool(
-                a.mapv(|x| x.re.is_infinite() || x.im.is_infinite())
-                    .into_shared(),
-            ),
-            _ => ArrayData::Bool(ArrayD::from_elem(IxDyn(self.shape()), false).into_shared()),
-        };
-        NdArray::from_data(data)
+        execute_predicate(self, PredicateKernelOp::IsInf)
     }
 
     /// Reinterpret the raw data as a different dtype (view).
@@ -221,7 +152,7 @@ impl NdArray {
 
         // Same itemsize: reinterpret bytes 1:1
         if src_size == tgt_size {
-            match (&self.data, target) {
+            match (self.data(), target) {
                 // Bool (1 byte) <-> Int8 (1 byte)
                 (ArrayData::Bool(a), DType::Int8) => {
                     let raw: Vec<i32> = a.iter().map(|&b| if b { 1 } else { 0 }).collect();
@@ -245,39 +176,33 @@ impl NdArray {
                     if src_dt == DType::UInt16 || src_dt == DType::Int16 =>
                 {
                     let raw: Vec<f32> = a.iter().map(|&v| half_bits_to_f32(v as u16)).collect();
-                    Ok(NdArray {
-                        data: ArrayData::Float32(
-                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                                .unwrap()
-                                .into_shared(),
-                        ),
-                        declared_dtype: Some(DType::Float16),
-                    })
+                    Ok(NdArray::from_data(ArrayData::Float32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
+                    ))
+                    .with_declared_dtype(DType::Float16))
                 }
                 (ArrayData::Float32(a), DType::UInt16) if src_dt == DType::Float16 => {
                     let raw: Vec<i32> = a.iter().map(|&f| f32_to_half_bits(f) as i32).collect();
-                    Ok(NdArray {
-                        data: ArrayData::Int32(
-                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                                .unwrap()
-                                .into_shared(),
-                        ),
-                        declared_dtype: Some(DType::UInt16),
-                    })
+                    Ok(NdArray::from_data(ArrayData::Int32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
+                    ))
+                    .with_declared_dtype(DType::UInt16))
                 }
                 (ArrayData::Float32(a), DType::Int16) if src_dt == DType::Float16 => {
                     let raw: Vec<i32> = a
                         .iter()
                         .map(|&f| f32_to_half_bits(f) as i16 as i32)
                         .collect();
-                    Ok(NdArray {
-                        data: ArrayData::Int32(
-                            ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                                .unwrap()
-                                .into_shared(),
-                        ),
-                        declared_dtype: Some(DType::Int16),
-                    })
+                    Ok(NdArray::from_data(ArrayData::Int32(
+                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
+                            .unwrap()
+                            .into_shared(),
+                    ))
+                    .with_declared_dtype(DType::Int16))
                 }
                 // Float32 (4 bytes) <-> Int32 (4 bytes)
                 (ArrayData::Float32(a), DType::Int32) => {
@@ -326,64 +251,84 @@ impl NdArray {
 
     /// Check if any element is infinite.
     pub fn has_inf(&self) -> bool {
-        match &self.data {
-            ArrayData::Float32(a) => a.iter().any(|x| x.is_infinite()),
-            ArrayData::Float64(a) => a.iter().any(|x| x.is_infinite()),
-            ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_infinite() || x.im.is_infinite()),
-            ArrayData::Complex128(a) => a.iter().any(|x| x.re.is_infinite() || x.im.is_infinite()),
-            _ => false,
-        }
+        execute_predicate_presence(self, PredicatePresenceOp::HasInf)
     }
 
     pub fn has_nan(&self) -> bool {
-        match &self.data {
-            ArrayData::Float32(a) => a.iter().any(|x| x.is_nan()),
-            ArrayData::Float64(a) => a.iter().any(|x| x.is_nan()),
-            ArrayData::Complex64(a) => a.iter().any(|x| x.re.is_nan() || x.im.is_nan()),
-            ArrayData::Complex128(a) => a.iter().any(|x| x.re.is_nan() || x.im.is_nan()),
-            _ => false,
-        }
+        execute_predicate_presence(self, PredicatePresenceOp::HasNaN)
     }
 
     /// Deep copy of the array.
     pub fn copy(&self) -> NdArray {
-        NdArray {
-            data: self.data.deep_copy(),
-            declared_dtype: self.declared_dtype,
-        }
+        NdArray::from_data(self.data().deep_copy()).with_preserved_dtype(self)
     }
 
     /// Check if this array shares its underlying buffer with another.
     pub fn shares_memory_with(&self, other: &NdArray) -> bool {
-        self.data.shares_memory_with(&other.data)
+        self.storage().overlaps(other.storage())
     }
+}
+
+fn execute_predicate(input: &NdArray, op: PredicateKernelOp) -> NdArray {
+    let descriptor = descriptor_for_dtype(input.dtype());
+    let kernel = descriptor
+        .predicate_kernel(op)
+        .unwrap_or_else(|| panic!("predicate kernel not registered for {}", input.dtype()));
+    NdArray::from_data(kernel(input.data().clone()).expect("predicate kernel dtype mismatch"))
+}
+
+fn execute_predicate_presence(input: &NdArray, op: PredicatePresenceOp) -> bool {
+    let descriptor = descriptor_for_dtype(input.dtype());
+    let kernel = descriptor.predicate_presence_kernel(op).unwrap_or_else(|| {
+        panic!(
+            "predicate presence kernel not registered for {}",
+            input.dtype()
+        )
+    });
+    kernel(input.data()).expect("predicate presence kernel dtype mismatch")
+}
+
+fn flattened_float64(array: &NdArray) -> ArrayD<f64> {
+    array.flatten().to_float64_data()
+}
+
+fn nonzero_linear_indices(array: &NdArray) -> Vec<usize> {
+    flattened_float64(array)
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &val)| (val != 0.0).then_some(idx))
+        .collect()
+}
+
+fn linear_index_to_coords(
+    mut linear_idx: usize,
+    shape: &[usize],
+    ndim: usize,
+    at_least_1d: bool,
+) -> Vec<i64> {
+    let coord_ndim = if at_least_1d { ndim.max(1) } else { ndim };
+    let mut coord = vec![0i64; coord_ndim];
+    for d in (0..coord_ndim).rev() {
+        let dim_size = if d < shape.len() { shape[d] } else { 1 };
+        coord[d] = (linear_idx % dim_size) as i64;
+        linear_idx /= dim_size;
+    }
+    coord
 }
 
 /// Return the indices of non-zero elements as an (N, ndim) Int64 array.
 pub fn argwhere(a: &NdArray) -> NdArray {
     let shape = a.shape().to_vec();
     let ndim = a.ndim();
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
-        unreachable!()
-    };
-
     let mut coords: Vec<i64> = Vec::new();
-    let mut count = 0usize;
+    let indices = nonzero_linear_indices(a);
 
-    for (linear_idx, &val) in arr.iter().enumerate() {
-        if val != 0.0 {
-            let mut remaining = linear_idx;
-            let mut coord = vec![0i64; ndim];
-            for d in (0..ndim).rev() {
-                coord[d] = (remaining % shape[d]) as i64;
-                remaining /= shape[d];
-            }
-            coords.extend_from_slice(&coord);
-            count += 1;
-        }
+    for linear_idx in &indices {
+        let coord = linear_index_to_coords(*linear_idx, &shape, ndim, false);
+        coords.extend_from_slice(&coord);
     }
 
+    let count = indices.len();
     let result_shape = if ndim == 0 {
         vec![count, 0]
     } else {
@@ -401,20 +346,13 @@ pub fn argwhere(a: &NdArray) -> NdArray {
 pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
     let shape = a.shape().to_vec();
     let ndim = a.ndim().max(1); // at least 1-D
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
-        unreachable!()
-    };
-
     let mut indices: Vec<Vec<i64>> = vec![Vec::new(); ndim];
-    for (linear_idx, &val) in arr.iter().enumerate() {
-        if val != 0.0 {
-            let mut remaining = linear_idx;
-            for d in (0..ndim).rev() {
-                let dim_size = if d < shape.len() { shape[d] } else { 1 };
-                indices[d].push((remaining % dim_size) as i64);
-                remaining /= dim_size;
-            }
+    for linear_idx in nonzero_linear_indices(a) {
+        for (d, value) in linear_index_to_coords(linear_idx, &shape, ndim, true)
+            .into_iter()
+            .enumerate()
+        {
+            indices[d].push(value);
         }
     }
 
@@ -432,11 +370,7 @@ pub fn nonzero(a: &NdArray) -> Vec<NdArray> {
 
 /// Count the number of non-zero elements.
 pub fn count_nonzero(a: &NdArray) -> usize {
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
-        unreachable!()
-    };
-    arr.iter().filter(|&&x| x != 0.0).count()
+    nonzero_linear_indices(a).len()
 }
 
 /// Dot product of two arrays.
@@ -444,14 +378,10 @@ pub fn count_nonzero(a: &NdArray) -> usize {
 /// - 2-D x 2-D: matrix multiply
 /// - 2-D x 1-D: matrix-vector multiply
 pub fn dot(a: &NdArray, b: &NdArray) -> Result<NdArray> {
-    let common = a.dtype().promote(b.dtype());
-    let ad = cast_array_data(&a.data, common);
-    let bd = cast_array_data(&b.data, common);
-
     match (a.ndim(), b.ndim()) {
-        (1, 1) => dot_1d_1d(&ad, &bd),
-        (2, 2) => matmul_2d_2d(&ad, &bd),
-        (2, 1) => matmul_2d_1d(&ad, &bd),
+        (1, 1) => execute_resolved_dot(a, b, DotOp::Dot1d1d, DotKernelOp::Dot1d1d),
+        (2, 2) => execute_resolved_dot(a, b, DotOp::MatMul2d2d, DotKernelOp::MatMul2d2d),
+        (2, 1) => execute_resolved_dot(a, b, DotOp::MatMul2d1d, DotKernelOp::MatMul2d1d),
         _ => Err(NumpyError::ValueError(format!(
             "dot not supported for {}D x {}D arrays",
             a.ndim(),
@@ -460,68 +390,34 @@ pub fn dot(a: &NdArray, b: &NdArray) -> Result<NdArray> {
     }
 }
 
-fn dot_1d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
-    macro_rules! do_dot {
-        ($a:expr, $b:expr, $variant:ident) => {{
-            let s = $a.iter().zip($b.iter()).map(|(&x, &y)| x * y).sum();
-            ArrayData::$variant(ArrayD::from_elem(IxDyn(&[]), s).into_shared())
-        }};
-    }
-
-    let data = match (a, b) {
-        (ArrayData::Float64(a), ArrayData::Float64(b)) => do_dot!(a, b, Float64),
-        (ArrayData::Float32(a), ArrayData::Float32(b)) => do_dot!(a, b, Float32),
-        (ArrayData::Int64(a), ArrayData::Int64(b)) => do_dot!(a, b, Int64),
-        (ArrayData::Int32(a), ArrayData::Int32(b)) => do_dot!(a, b, Int32),
-        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_dot!(a, b, Complex64),
-        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_dot!(a, b, Complex128),
-        _ => unreachable!(),
-    };
-    Ok(NdArray::from_data(data))
+fn prepare_dot_execution(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: DotOp,
+) -> Result<(ArrayData, ArrayData, DotOpPlan)> {
+    let plan = resolve_dot_op(op, lhs.dtype(), rhs.dtype())?;
+    let lhs = lhs.cast_for_execution(plan.lhs_cast());
+    let rhs = rhs.cast_for_execution(plan.rhs_cast());
+    Ok((lhs, rhs, plan))
 }
 
-fn matmul_2d_2d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
-    macro_rules! do_matmul {
-        ($a:expr, $b:expr, $variant:ident) => {{
-            let a2 = $a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
-            let b2 = $b.view().into_dimensionality::<ndarray::Ix2>().unwrap();
-            let result = a2.dot(&b2).into_dyn().into_shared();
-            ArrayData::$variant(result)
-        }};
+fn execute_resolved_dot(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: DotOp,
+    kernel_op: DotKernelOp,
+) -> Result<NdArray> {
+    let (lhs, rhs, plan) = prepare_dot_execution(lhs, rhs, op)?;
+    let descriptor = descriptor_for_dtype(plan.execution_dtype());
+    let kernel = descriptor
+        .dot_kernel(kernel_op)
+        .ok_or_else(|| NumpyError::TypeError("unsupported operand types for dot".into()))?;
+    let data = kernel(lhs, rhs)?;
+    let mut result = NdArray::from_data(data);
+    if plan.execution_dtype().is_narrow() {
+        result.set_declared_dtype(plan.execution_dtype());
     }
-
-    let data = match (a, b) {
-        (ArrayData::Float64(a), ArrayData::Float64(b)) => do_matmul!(a, b, Float64),
-        (ArrayData::Float32(a), ArrayData::Float32(b)) => do_matmul!(a, b, Float32),
-        (ArrayData::Int64(a), ArrayData::Int64(b)) => do_matmul!(a, b, Int64),
-        (ArrayData::Int32(a), ArrayData::Int32(b)) => do_matmul!(a, b, Int32),
-        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_matmul!(a, b, Complex64),
-        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_matmul!(a, b, Complex128),
-        _ => unreachable!(),
-    };
-    Ok(NdArray::from_data(data))
-}
-
-fn matmul_2d_1d(a: &ArrayData, b: &ArrayData) -> Result<NdArray> {
-    macro_rules! do_matvec {
-        ($a:expr, $b:expr, $variant:ident) => {{
-            let a2 = $a.view().into_dimensionality::<ndarray::Ix2>().unwrap();
-            let b1 = $b.view().into_dimensionality::<ndarray::Ix1>().unwrap();
-            let result = a2.dot(&b1).into_dyn().into_shared();
-            ArrayData::$variant(result)
-        }};
-    }
-
-    let data = match (a, b) {
-        (ArrayData::Float64(a), ArrayData::Float64(b)) => do_matvec!(a, b, Float64),
-        (ArrayData::Float32(a), ArrayData::Float32(b)) => do_matvec!(a, b, Float32),
-        (ArrayData::Int64(a), ArrayData::Int64(b)) => do_matvec!(a, b, Int64),
-        (ArrayData::Int32(a), ArrayData::Int32(b)) => do_matvec!(a, b, Int32),
-        (ArrayData::Complex64(a), ArrayData::Complex64(b)) => do_matvec!(a, b, Complex64),
-        (ArrayData::Complex128(a), ArrayData::Complex128(b)) => do_matvec!(a, b, Complex128),
-        _ => unreachable!(),
-    };
-    Ok(NdArray::from_data(data))
+    Ok(result)
 }
 
 /// Extract diagonal from a 2D array.
@@ -544,38 +440,29 @@ pub fn diagonal(a: &NdArray, offset: i64) -> Result<NdArray> {
     };
 
     if n == 0 {
-        return Ok(NdArray::from_data(ArrayData::Float64(
+        return Ok(NdArray::from_float64_data(
             ArrayD::from_shape_vec(IxDyn(&[0]), vec![])
                 .unwrap()
                 .into_shared(),
-        )));
+        ));
     }
 
     // Extract elements along diagonal
-    let flat = a.astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
-        unreachable!()
-    };
+    let arr = a.to_float64_data();
     let arr2 = arr.view().into_dimensionality::<ndarray::Ix2>().unwrap();
     let vals: Vec<f64> = (0..n).map(|i| arr2[[start_r + i, start_c + i]]).collect();
 
-    Ok(NdArray::from_data(ArrayData::Float64(
+    Ok(NdArray::from_float64_data(
         ArrayD::from_shape_vec(IxDyn(&[n]), vals)
             .unwrap()
             .into_shared(),
-    )))
+    ))
 }
 
 /// Compute outer product of two arrays (flattened).
 pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_flat = a.flatten().astype(crate::DType::Float64);
-    let b_flat = b.flatten().astype(crate::DType::Float64);
-    let ArrayData::Float64(aa) = &a_flat.data else {
-        unreachable!()
-    };
-    let ArrayData::Float64(bb) = &b_flat.data else {
-        unreachable!()
-    };
+    let aa = flattened_float64(a);
+    let bb = flattened_float64(b);
 
     let m = aa.len();
     let n = bb.len();
@@ -585,11 +472,11 @@ pub fn outer(a: &NdArray, b: &NdArray) -> NdArray {
             result.push(ai * bi);
         }
     }
-    NdArray::from_data(ArrayData::Float64(
+    NdArray::from_float64_data(
         ArrayD::from_shape_vec(IxDyn(&[m, n]), result)
             .unwrap()
             .into_shared(),
-    ))
+    )
 }
 
 #[cfg(test)]

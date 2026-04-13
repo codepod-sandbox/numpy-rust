@@ -150,7 +150,7 @@ impl PyFlatIter {
         let total = data.size();
         let idx = parse_flat_index(&key, total, vm)?;
         let coord = linear_to_coord(idx, data.shape());
-        let scalar = py_obj_to_scalar(&value, data.dtype(), vm)?;
+        let scalar = py_obj_to_scalar(&value, vm)?;
         data.set(&coord, scalar).map_err(|e| numpy_err(e, vm))
     }
 
@@ -321,94 +321,9 @@ fn scalar_to_0d_ndarray(s: Scalar) -> NdArray {
     }
 }
 
-/// Convert a Python object to a Scalar matching the target array dtype.
-/// For narrow dtypes, maps to the storage type's Scalar variant.
-pub(crate) fn py_obj_to_scalar(
-    obj: &PyObjectRef,
-    dtype: DType,
-    vm: &VirtualMachine,
-) -> PyResult<Scalar> {
-    // Use storage dtype for scalar conversion (narrow types map to wider storage)
-    let storage = dtype.storage_dtype();
-    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
-        return Ok(match storage {
-            DType::Float64 => Scalar::Float64(f),
-            DType::Float32 => Scalar::Float32(f as f32),
-            DType::Int64 => Scalar::Int64(f as i64),
-            DType::Int32 => Scalar::Int32(f as i32),
-            DType::Bool => Scalar::Bool(f != 0.0),
-            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(f as f32, 0.0)),
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(f, 0.0)),
-            DType::Str => Scalar::Str(f.to_string()),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
-    }
-    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
-        return Ok(match storage {
-            DType::Float64 => Scalar::Float64(i as f64),
-            DType::Float32 => Scalar::Float32(i as f32),
-            DType::Int64 => Scalar::Int64(i),
-            DType::Int32 => Scalar::Int32(i as i32),
-            DType::Bool => Scalar::Bool(i != 0),
-            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(i as f32, 0.0)),
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(i as f64, 0.0)),
-            DType::Str => Scalar::Str(i.to_string()),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
-    }
-    // Handle Python complex numbers
-    if let Some(c) = obj.downcast_ref::<vm::builtins::PyComplex>() {
-        let cx = c.to_complex();
-        return Ok(match storage {
-            DType::Complex64 => {
-                Scalar::Complex64(num_complex::Complex::new(cx.re as f32, cx.im as f32))
-            }
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(cx.re, cx.im)),
-            DType::Float64 => Scalar::Float64(cx.re),
-            DType::Float32 => Scalar::Float32(cx.re as f32),
-            DType::Int64 => Scalar::Int64(cx.re as i64),
-            DType::Int32 => Scalar::Int32(cx.re as i32),
-            DType::Bool => Scalar::Bool(cx.re != 0.0 || cx.im != 0.0),
-            DType::Str => Scalar::Str(format!("({},{})", cx.re, cx.im)),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
-    }
-    // Handle (re, im) tuples (our complex scalar representation)
-    if let Some(tup) = obj.downcast_ref::<vm::builtins::PyTuple>() {
-        let elems = tup.as_slice();
-        if elems.len() == 2 {
-            let re = elems[0].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
-            let im = elems[1].clone().try_into_value::<f64>(vm).unwrap_or(0.0);
-            return Ok(match storage {
-                DType::Complex64 => {
-                    Scalar::Complex64(num_complex::Complex::new(re as f32, im as f32))
-                }
-                DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(re, im)),
-                DType::Float64 => Scalar::Float64(re),
-                DType::Float32 => Scalar::Float32(re as f32),
-                DType::Int64 => Scalar::Int64(re as i64),
-                DType::Int32 => Scalar::Int32(re as i32),
-                DType::Bool => Scalar::Bool(re != 0.0 || im != 0.0),
-                DType::Str => Scalar::Str(format!("({},{})", re, im)),
-                _ => unreachable!("storage_dtype maps to canonical types"),
-            });
-        }
-    }
-    // Handle str objects for Str dtype
-    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
-        return Ok(match storage {
-            DType::Str => Scalar::Str(s.as_str().to_owned()),
-            DType::Float64 => Scalar::Float64(s.as_str().parse().unwrap_or(0.0)),
-            DType::Float32 => Scalar::Float32(s.as_str().parse().unwrap_or(0.0)),
-            DType::Int64 => Scalar::Int64(s.as_str().parse().unwrap_or(0)),
-            DType::Int32 => Scalar::Int32(s.as_str().parse().unwrap_or(0)),
-            DType::Bool => Scalar::Bool(!s.as_str().is_empty()),
-            DType::Complex64 => Scalar::Complex64(num_complex::Complex::new(0.0, 0.0)),
-            DType::Complex128 => Scalar::Complex128(num_complex::Complex::new(0.0, 0.0)),
-            _ => unreachable!("storage_dtype maps to canonical types"),
-        });
-    }
-    Err(vm.new_type_error("cannot convert value to array scalar".to_owned()))
+/// Convert a Python object to a generic core Scalar.
+pub(crate) fn py_obj_to_scalar(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Scalar> {
+    crate::py_creation::object_to_scalar(obj, vm)
 }
 
 /// Convert a Python object (int, float, or complex) to f64.
@@ -648,17 +563,20 @@ impl PyNdArray {
     }
 
     #[pygetset(name = "T")]
-    fn transpose_prop(&self) -> PyNdArray {
-        let result = PyNdArray::from_core(self.data.read().unwrap().transpose());
+    fn transpose_prop(zelf: PyRef<Self>, _vm: &VirtualMachine) -> PyNdArray {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let result =
+            PyNdArray::from_core_with_base(zelf.data.read().unwrap().transpose(), self_obj);
         result
             .is_aligned
-            .store(self.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
+            .store(zelf.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
         result
     }
 
     #[pygetset(name = "mT")]
-    fn matrix_transpose_prop(&self, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let inner = self.data.read().unwrap();
+    fn matrix_transpose_prop(zelf: PyRef<Self>, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let inner = zelf.data.read().unwrap();
         let ndim = inner.ndim();
         if ndim < 2 {
             return Err(
@@ -667,17 +585,22 @@ impl PyNdArray {
         }
         inner
             .swapaxes(ndim - 2, ndim - 1)
-            .map(PyNdArray::from_core)
+            .map(|r| PyNdArray::from_core_with_base(r, self_obj))
             .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
-    fn transpose(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let inner = self.data.read().unwrap();
+    fn transpose(
+        zelf: PyRef<Self>,
+        args: vm::function::FuncArgs,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let inner = zelf.data.read().unwrap();
 
         // No args or single None arg => simple transpose (reverse axes)
         if args.args.is_empty() {
-            return Ok(PyNdArray::from_core(inner.transpose()));
+            return Ok(PyNdArray::from_core_with_base(inner.transpose(), self_obj));
         }
 
         // Extract axes from args - could be transpose(1, 0, 2) or transpose((1, 0, 2))
@@ -685,7 +608,7 @@ impl PyNdArray {
         if args.args.len() == 1 {
             let first = &args.args[0];
             if vm.is_none(first) {
-                return Ok(PyNdArray::from_core(inner.transpose()));
+                return Ok(PyNdArray::from_core_with_base(inner.transpose(), self_obj));
             }
             // Try as tuple/list
             if let Ok(tuple) = first.clone().try_into_value::<vm::builtins::PyTupleRef>(vm) {
@@ -732,8 +655,8 @@ impl PyNdArray {
                 }
             } else {
                 let _idx: i64 = first.clone().try_into_value(vm)?;
-                // Single int arg for 1-d: just return copy
-                return Ok(PyNdArray::from_core(inner.transpose()));
+                // Single int arg for 1-d: just return view
+                return Ok(PyNdArray::from_core_with_base(inner.transpose(), self_obj));
             }
         } else {
             // Multiple positional args: transpose(1, 0, 2)
@@ -751,7 +674,7 @@ impl PyNdArray {
 
         inner
             .transpose_axes(&axes)
-            .map(PyNdArray::from_core)
+            .map(|r| PyNdArray::from_core_with_base(r, self_obj))
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
@@ -1461,12 +1384,18 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn swapaxes(&self, axis1: usize, axis2: usize, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        self.data
+    fn swapaxes(
+        zelf: PyRef<Self>,
+        axis1: usize,
+        axis2: usize,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        zelf.data
             .read()
             .unwrap()
             .swapaxes(axis1, axis2)
-            .map(PyNdArray::from_core)
+            .map(|r| PyNdArray::from_core_with_base(r, self_obj))
             .map_err(|e| numpy_err(e, vm))
     }
 
@@ -1726,7 +1655,23 @@ impl PyNdArray {
     // --- Indexing ---
 
     #[pymethod]
-    fn __getitem__(&self, key: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+    fn __getitem__(
+        zelf: PyRef<Self>,
+        key: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let parent_obj: PyObjectRef = zelf.as_object().to_owned();
+        zelf.getitem_impl(key, parent_obj, vm)
+    }
+
+    /// Internal implementation of `__getitem__`.  `parent_obj` is the `PyObjectRef` of
+    /// the array being indexed, stored as the `base` on returned view arrays.
+    fn getitem_impl(
+        &self,
+        key: PyObjectRef,
+        parent_obj: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
         let data = self.data.read().unwrap();
 
         // Integer index -> scalar or sub-array
@@ -1744,7 +1689,7 @@ impl PyNdArray {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
                     .map_err(|e| numpy_err(e, vm))?;
-                return Ok(PyNdArray::from_core(result).to_py(vm));
+                return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
             }
         }
 
@@ -1752,7 +1697,7 @@ impl PyNdArray {
         if let Some(slice) = key.downcast_ref::<PySlice>() {
             let arg = py_slice_to_slice_arg(slice, vm)?;
             let result = data.slice(&[arg]).map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core(result).to_py(vm));
+            return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
         }
 
         // Tuple index -> multi-dimensional indexing (integers and/or slices)
@@ -1887,9 +1832,13 @@ impl PyNdArray {
                     if let Ok(reshaped) = result.reshape(&shape) {
                         result = reshaped;
                     }
-                    return Ok(PyNdArray::from_core(result).to_py(vm));
+                    return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
                 }
-                return Ok(ndarray_or_scalar(result, vm));
+                // Return view if ndim > 0, scalar otherwise
+                if result.ndim() == 0 {
+                    return Ok(ndarray_or_scalar(result, vm));
+                }
+                return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
             }
 
             // All integers (with possible newaxis insertions)
@@ -1927,7 +1876,7 @@ impl PyNdArray {
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core(result).to_py(vm));
+            return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
         }
 
         // NdArray index: boolean mask or integer fancy indexing
@@ -1978,10 +1927,10 @@ impl PyNdArray {
             return Ok(PyNdArray::from_core(result).to_py(vm));
         }
 
-        // Ellipsis -> return a copy/view of the entire array
+        // Ellipsis -> return a view of the entire array
         if key.is(&vm.ctx.ellipsis) {
             let result = data.clone();
-            return Ok(PyNdArray::from_core(result).to_py(vm));
+            return Ok(PyNdArray::from_core_with_base(result, parent_obj).to_py(vm));
         }
 
         Err(vm.new_type_error("unsupported index type".to_owned()))
@@ -2015,7 +1964,7 @@ impl PyNdArray {
         } else {
             zelf_dtype
         };
-        let other = match obj_to_ndarray_nep50(other, nep50_target, vm) {
+        let other = match crate::py_creation::object_to_ndarray_weak(other, nep50_target, vm) {
             Ok(arr) => arr,
             Err(_) => {
                 return Ok(vm::function::Either::B(
@@ -2933,164 +2882,7 @@ pub fn obj_to_ndarray(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArr
             "maximum recursion depth exceeded in array conversion".to_owned(),
         ));
     }
-    if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
-        return Ok(arr.data.read().unwrap().clone());
-    }
-    // Preserve numpy scalar wrapper dtype when available (set by python/numpy/__init__.py).
-    if let Ok(dtype_name_obj) = obj.get_attr("_numpy_dtype_name", vm) {
-        if let Ok(dtype_name) = dtype_name_obj.try_into_value::<String>(vm) {
-            let dt = parse_dtype(dtype_name.as_str(), vm)?;
-            if dt == DType::Bool {
-                let b = obj.to_owned().try_into_value::<bool>(vm)?;
-                let arr = NdArray::from_vec(vec![b]);
-                return arr
-                    .reshape(&[])
-                    .map_err(|e| vm.new_type_error(e.to_string()));
-            }
-            if dt.is_complex() {
-                let c = obj
-                    .to_owned()
-                    .try_into_value::<vm::function::ArgIntoComplex>(vm)?
-                    .into_complex();
-                let base =
-                    NdArray::from_complex128_vec(vec![num_complex::Complex::new(c.re, c.im)])
-                        .reshape(&[])
-                        .map_err(|e| vm.new_type_error(e.to_string()))?;
-                return Ok(base.astype(dt));
-            }
-            // Try f64 first, then fall back to i64 for int subtypes (e.g. _NumpyIntScalar)
-            if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
-                return Ok(NdArray::from_scalar(f).astype(dt));
-            }
-            if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-                if let Ok(val) = i.try_to_primitive::<i64>(vm) {
-                    return Ok(NdArray::from_scalar(val as f64).astype(dt));
-                }
-            }
-            return Err(
-                vm.new_type_error(format!("cannot convert {} to array", obj.class().name()))
-            );
-        }
-    }
-    // Preserve Python bool scalars as bool dtype (not float64).
-    if obj.class().is(vm.ctx.types.bool_type) {
-        let b = obj.to_owned().try_into_value::<bool>(vm)?;
-        let arr = NdArray::from_vec(vec![b]);
-        return arr
-            .reshape(&[])
-            .map_err(|e| vm.new_type_error(e.to_string()));
-    }
-    // Try generic float conversion first (handles large ints via __float__)
-    if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
-        return Ok(NdArray::from_scalar(f));
-    }
-    // Try generic complex conversion
-    if let Ok(c) = obj
-        .to_owned()
-        .try_into_value::<vm::function::ArgIntoComplex>(vm)
-    {
-        let z = c.into_complex();
-        if z.im == 0.0 {
-            return Ok(NdArray::from_scalar(z.re));
-        }
-        let arr = NdArray::from_complex128_vec(vec![num_complex::Complex::new(z.re, z.im)]);
-        return arr
-            .reshape(&[])
-            .map_err(|e| vm.new_type_error(e.to_string()));
-    }
-    // Try float (PyFloat)
-    if let Some(f) = obj.downcast_ref::<vm::builtins::PyFloat>() {
-        return Ok(NdArray::from_scalar(f.to_f64()));
-    }
-    // Try int (PyInt) — extract i64 then convert to f64; fall back to __float__ for large ints
-    if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-        if let Ok(val) = i.try_to_primitive::<i64>(vm) {
-            return Ok(NdArray::from_scalar(val as f64));
-        }
-        // Large int that overflows i64 — convert via float (gives inf/-inf for huge values)
-        let f = vm.call_method(obj, "__float__", ())?;
-        if let Ok(fv) = f.try_into_value::<f64>(vm) {
-            return Ok(NdArray::from_scalar(fv));
-        }
-    }
-    // Try str (PyStr) — create 0-D string array
-    if let Some(s) = obj.downcast_ref::<vm::builtins::PyStr>() {
-        return Ok(NdArray::from_vec(vec![s.as_str().to_owned()]));
-    }
-    // Try list/tuple → convert to array of floats
-    if let Some(list) = obj.downcast_ref::<vm::builtins::PyList>() {
-        let items = list.borrow_vec();
-        let mut vals = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            if let Some(f) = item.downcast_ref::<vm::builtins::PyFloat>() {
-                vals.push(f.to_f64());
-            } else if let Some(i) = item.downcast_ref::<vm::builtins::PyInt>() {
-                let v: i64 = i.try_to_primitive(vm)?;
-                vals.push(v as f64);
-            } else {
-                return Err(vm.new_type_error("expected ndarray or scalar".to_owned()));
-            }
-        }
-        return Ok(NdArray::from_vec(vals));
-    }
-    if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
-        let items = tuple.as_slice();
-        let mut vals = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            if let Some(f) = item.downcast_ref::<vm::builtins::PyFloat>() {
-                vals.push(f.to_f64());
-            } else if let Some(i) = item.downcast_ref::<vm::builtins::PyInt>() {
-                let v: i64 = i.try_to_primitive(vm)?;
-                vals.push(v as f64);
-            } else {
-                return Err(vm.new_type_error("expected ndarray or scalar".to_owned()));
-            }
-        }
-        return Ok(NdArray::from_vec(vals));
-    }
-    Err(vm.new_type_error("expected ndarray or scalar".to_owned()))
-}
-
-/// NEP50-aware scalar conversion: plain Python scalars (int, float) adopt the target dtype
-/// (weak typing), while numpy scalars and arrays keep their explicit dtype (strong typing).
-fn obj_to_ndarray_nep50(
-    obj: &vm::PyObject,
-    target_dtype: DType,
-    vm: &VirtualMachine,
-) -> PyResult<NdArray> {
-    // numpy array: strong typing, unchanged
-    if obj.downcast_ref::<PyNdArray>().is_some() {
-        return obj_to_ndarray(obj, vm);
-    }
-    // numpy scalar (has _numpy_dtype_name): strong typing, unchanged
-    if obj.get_attr("_numpy_dtype_name", vm).is_ok() {
-        return obj_to_ndarray(obj, vm);
-    }
-    // Python bool: stays bool (don't demote to integer/float)
-    if obj.class().is(vm.ctx.types.bool_type) {
-        return obj_to_ndarray(obj, vm);
-    }
-    // Plain Python float: weak typing, but only adopts float/complex target dtypes.
-    // For int targets, float stays as float64 (normal promotion will widen).
-    if obj.class().is(vm.ctx.types.float_type) {
-        if target_dtype.is_float() || target_dtype.is_complex() {
-            if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
-                return Ok(NdArray::from_scalar(f).astype(target_dtype));
-            }
-        }
-        // Fall through to normal conversion (creates float64)
-        return obj_to_ndarray(obj, vm);
-    }
-    // Plain Python int: weak typing → cast to target_dtype
-    if obj.class().is(vm.ctx.types.int_type) {
-        if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-            if let Ok(val) = i.try_to_primitive::<i64>(vm) {
-                return Ok(NdArray::from_scalar(val as f64).astype(target_dtype));
-            }
-        }
-    }
-    // Fallback: use normal conversion
-    obj_to_ndarray(obj, vm)
+    crate::py_creation::object_to_ndarray(obj, vm)
 }
 
 /// Check numpy errstate for invalid operations (NaN results from subtraction etc).
@@ -3170,35 +2962,28 @@ fn number_bin_op(
     op: fn(&NdArray, &NdArray) -> numpy_rust_core::Result<NdArray>,
     vm: &VirtualMachine,
 ) -> PyResult {
-    // Use NEP 50 weak-type semantics: if one operand is a Python scalar (int/float/complex)
-    // and the other is an ndarray or numpy scalar, cast the Python scalar to the array's dtype.
-    let a_is_arr =
-        a.downcast_ref::<PyNdArray>().is_some() || a.get_attr("_numpy_dtype_name", vm).is_ok();
-    let b_is_arr =
-        b.downcast_ref::<PyNdArray>().is_some() || b.get_attr("_numpy_dtype_name", vm).is_ok();
+    let a_is_arr = crate::py_creation::is_array_like_object(a, vm);
+    let b_is_arr = crate::py_creation::is_array_like_object(b, vm);
 
     let (a_arr, b_arr) = if a_is_arr && !b_is_arr {
         let a_arr = obj_to_ndarray(a, vm)?;
-        let target = a_arr.dtype();
-        // For Bool arrays, NEP 50 weak typing targets Int8 (Bool arithmetic -> int8)
-        let nep50_target = if target == DType::Bool {
+        let weak_target = if a_arr.dtype() == DType::Bool {
             DType::Int8
         } else {
-            target
+            a_arr.dtype()
         };
-        match obj_to_ndarray_nep50(b, nep50_target, vm) {
+        match crate::py_creation::object_to_ndarray_weak(b, weak_target, vm) {
             Ok(b_arr) => (a_arr, b_arr),
             Err(_) => return Ok(vm.ctx.not_implemented()),
         }
     } else if b_is_arr && !a_is_arr {
         let b_arr = obj_to_ndarray(b, vm)?;
-        let target = b_arr.dtype();
-        let nep50_target = if target == DType::Bool {
+        let weak_target = if b_arr.dtype() == DType::Bool {
             DType::Int8
         } else {
-            target
+            b_arr.dtype()
         };
-        match obj_to_ndarray_nep50(a, nep50_target, vm) {
+        match crate::py_creation::object_to_ndarray_weak(a, weak_target, vm) {
             Ok(a_arr) => (a_arr, b_arr),
             Err(_) => return Ok(vm.ctx.not_implemented()),
         }
@@ -3535,7 +3320,8 @@ impl AsMapping for PyNdArray {
             }),
             subscript: atomic_func!(|mapping, needle: &vm::PyObject, vm| {
                 let zelf = PyNdArray::mapping_downcast(mapping);
-                zelf.__getitem__(needle.to_owned(), vm)
+                let parent_obj = zelf.as_object().to_owned();
+                zelf.getitem_impl(needle.to_owned(), parent_obj, vm)
             }),
             ass_subscript: atomic_func!(|mapping, needle: &vm::PyObject, value, vm| {
                 let zelf = PyNdArray::mapping_downcast(mapping);
@@ -4245,7 +4031,6 @@ fn setitem_impl(
         let data = zelf.data.read().unwrap();
         let shape = data.shape().to_vec();
         let ndim = data.ndim();
-        let dtype = data.dtype();
         drop(data);
 
         let resolved = if idx < 0 {
@@ -4256,7 +4041,7 @@ fn setitem_impl(
 
         if ndim == 1 {
             // Scalar assignment: a[i] = value
-            let scalar = py_obj_to_scalar(&value, dtype, vm)?;
+            let scalar = py_obj_to_scalar(&value, vm)?;
             zelf.data
                 .write()
                 .unwrap()
@@ -4278,13 +4063,6 @@ fn setitem_impl(
     if let Some(slice) = key.downcast_ref::<PySlice>() {
         let arg = py_slice_to_slice_arg(slice, vm)?;
         let value_arr = obj_to_ndarray(&value, vm)?;
-        // Cast value to target dtype if needed
-        let target_dt = zelf.data.read().unwrap().dtype();
-        let value_arr = if value_arr.dtype() != target_dt {
-            value_arr.astype(target_dt)
-        } else {
-            value_arr
-        };
         zelf.data
             .write()
             .unwrap()
@@ -4315,13 +4093,6 @@ fn setitem_impl(
                 .map(|item| py_obj_to_slice_arg(item, vm))
                 .collect::<PyResult<Vec<_>>>()?;
             let value_arr = obj_to_ndarray(&value, vm)?;
-            // Cast value to target dtype if needed
-            let target_dt = zelf.data.read().unwrap().dtype();
-            let value_arr = if value_arr.dtype() != target_dt {
-                value_arr.astype(target_dt)
-            } else {
-                value_arr
-            };
             zelf.data
                 .write()
                 .unwrap()
@@ -4338,7 +4109,6 @@ fn setitem_impl(
         }
         let data = zelf.data.read().unwrap();
         let shape = data.shape().to_vec();
-        let dtype = data.dtype();
         drop(data);
 
         let usize_indices: Vec<usize> = indices
@@ -4352,7 +4122,7 @@ fn setitem_impl(
                 }
             })
             .collect();
-        let scalar = py_obj_to_scalar(&value, dtype, vm)?;
+        let scalar = py_obj_to_scalar(&value, vm)?;
         zelf.data
             .write()
             .unwrap()
@@ -4421,21 +4191,13 @@ fn setitem_impl(
     // Ellipsis key → a[...] = value (set all elements)
     if key.is(&vm.ctx.ellipsis) {
         let value_arr = obj_to_ndarray(&value, vm)?;
-        // If value is a scalar (size 1), fill the entire array
-        let val_data = value_arr;
-        let target_dt = zelf.data.read().unwrap().dtype();
-        let val_data = if val_data.dtype() != target_dt {
-            val_data.astype(target_dt)
-        } else {
-            val_data
-        };
         // Use set_slice with full slice for each dimension
         let ndim = zelf.data.read().unwrap().ndim();
         let args: Vec<SliceArg> = (0..ndim).map(|_| SliceArg::Full).collect();
         zelf.data
             .write()
             .unwrap()
-            .set_slice(&args, &val_data)
+            .set_slice(&args, &value_arr)
             .map_err(|e| numpy_err(e, vm))?;
         return Ok(());
     }

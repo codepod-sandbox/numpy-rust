@@ -1,8 +1,10 @@
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
+use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::kernel::{BitwiseBinaryKernelOp, BitwiseUnaryKernelOp, TruthKernelOp};
 use crate::NdArray;
 
 /// Prepare two NdArrays for bitwise ops: promote types and broadcast shapes.
@@ -29,8 +31,8 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
     let storage_dtype = logical_dtype.storage_dtype();
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(&lhs.data, storage_dtype);
-    let b = cast_array_data(&rhs.data, storage_dtype);
+    let a = cast_array_data(lhs.data(), storage_dtype);
+    let b = cast_array_data(rhs.data(), storage_dtype);
 
     let a = broadcast_array_data(&a, &out_shape);
     let b = broadcast_array_data(&b, &out_shape);
@@ -41,259 +43,91 @@ fn prepare_bitwise(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData
 /// Prepare two NdArrays for logical ops: broadcast shapes. All dtypes allowed.
 fn prepare_logical(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData)> {
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
-    let a = broadcast_array_data(&lhs.data, &out_shape);
-    let b = broadcast_array_data(&rhs.data, &out_shape);
+    let a = broadcast_array_data(lhs.data(), &out_shape);
+    let b = broadcast_array_data(rhs.data(), &out_shape);
     Ok((a, b))
+}
+
+fn truth_array(data: ArrayData) -> ArrayData {
+    let descriptor = descriptor_for_dtype(data.dtype());
+    let kernel = descriptor
+        .truth_kernel(TruthKernelOp::ToBool)
+        .unwrap_or_else(|| panic!("truth kernel not registered for {}", data.dtype()));
+    kernel(data).expect("truth kernel dtype mismatch")
+}
+
+fn finalize_bitwise_result(result: ArrayData, logical_dtype: DType) -> NdArray {
+    let result = if logical_dtype.is_narrow() {
+        crate::casting::narrow_truncate(result, logical_dtype)
+    } else {
+        result
+    };
+    let mut array = NdArray::from_data(result);
+    if logical_dtype.is_narrow() {
+        array.set_declared_dtype(logical_dtype);
+    }
+    array
+}
+
+fn execute_bitwise_binary(
+    lhs: &NdArray,
+    rhs: &NdArray,
+    op: BitwiseBinaryKernelOp,
+) -> Result<NdArray> {
+    let (a, b, logical_dtype) = prepare_bitwise(lhs, rhs)?;
+    let descriptor = descriptor_for_dtype(a.dtype());
+    let kernel = descriptor.bitwise_binary_kernel(op).ok_or_else(|| {
+        NumpyError::TypeError("unsupported operand types for bitwise operation".into())
+    })?;
+    let result = kernel(a, b)?;
+    Ok(finalize_bitwise_result(result, logical_dtype))
 }
 
 impl NdArray {
     /// Element-wise bitwise AND. For Bool arrays: logical AND. For integers: bitwise &.
     pub fn bitwise_and(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
-        let result = match (a, b) {
-            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let r = ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x && y)
-                    .into_shared();
-                ArrayData::Bool(r)
-            }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x & y)
-                    .into_shared(),
-            ),
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x & y)
-                    .into_shared(),
-            ),
-            _ => unreachable!("promotion ensures matching types"),
-        };
-        let result = if logical_dtype.is_narrow() {
-            crate::casting::narrow_truncate(result, logical_dtype)
-        } else {
-            result
-        };
-        let mut r = NdArray::from_data(result);
-        if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
-        }
-        Ok(r)
+        execute_bitwise_binary(self, other, BitwiseBinaryKernelOp::And)
     }
 
     /// Element-wise bitwise OR. For Bool arrays: logical OR. For integers: bitwise |.
     pub fn bitwise_or(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
-        let result = match (a, b) {
-            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let r = ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x || y)
-                    .into_shared();
-                ArrayData::Bool(r)
-            }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x | y)
-                    .into_shared(),
-            ),
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x | y)
-                    .into_shared(),
-            ),
-            _ => unreachable!("promotion ensures matching types"),
-        };
-        let result = if logical_dtype.is_narrow() {
-            crate::casting::narrow_truncate(result, logical_dtype)
-        } else {
-            result
-        };
-        let mut r = NdArray::from_data(result);
-        if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
-        }
-        Ok(r)
+        execute_bitwise_binary(self, other, BitwiseBinaryKernelOp::Or)
     }
 
     /// Element-wise bitwise XOR. For Bool arrays: logical XOR. For integers: bitwise ^.
     pub fn bitwise_xor(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
-        let result = match (a, b) {
-            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let r = ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x ^ y)
-                    .into_shared();
-                ArrayData::Bool(r)
-            }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x ^ y)
-                    .into_shared(),
-            ),
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| x ^ y)
-                    .into_shared(),
-            ),
-            _ => unreachable!("promotion ensures matching types"),
-        };
-        let result = if logical_dtype.is_narrow() {
-            crate::casting::narrow_truncate(result, logical_dtype)
-        } else {
-            result
-        };
-        let mut r = NdArray::from_data(result);
-        if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
-        }
-        Ok(r)
+        execute_bitwise_binary(self, other, BitwiseBinaryKernelOp::Xor)
     }
 
     /// Element-wise left shift. Bool arrays are cast to Int64 first.
     /// Shift amounts are masked to avoid overflow panics.
     pub fn left_shift(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
-        let result = match (a, b) {
-            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let a = a.mapv(|x| x as i64);
-                let b = b.mapv(|x| x as i64);
-                ArrayData::Int64(
-                    ndarray::Zip::from(&a)
-                        .and(&b)
-                        .map_collect(|&x, &y| if !(0..64).contains(&y) { 0 } else { x << y })
-                        .into_shared(),
-                )
-            }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| if !(0..32).contains(&y) { 0 } else { x << y })
-                    .into_shared(),
-            ),
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| if !(0..64).contains(&y) { 0 } else { x << y })
-                    .into_shared(),
-            ),
-            _ => unreachable!("promotion ensures matching types"),
-        };
-        let result = if logical_dtype.is_narrow() {
-            crate::casting::narrow_truncate(result, logical_dtype)
-        } else {
-            result
-        };
-        let mut r = NdArray::from_data(result);
-        if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
-        }
-        Ok(r)
+        execute_bitwise_binary(self, other, BitwiseBinaryKernelOp::LeftShift)
     }
 
     /// Element-wise right shift. Bool arrays are cast to Int64 first.
     /// Shift amounts are masked to avoid overflow panics.
     pub fn right_shift(&self, other: &NdArray) -> Result<NdArray> {
-        let (a, b, logical_dtype) = prepare_bitwise(self, other)?;
-        let result = match (a, b) {
-            (ArrayData::Bool(a), ArrayData::Bool(b)) => {
-                let a = a.mapv(|x| x as i64);
-                let b = b.mapv(|x| x as i64);
-                ArrayData::Int64(
-                    ndarray::Zip::from(&a)
-                        .and(&b)
-                        .map_collect(|&x, &y| {
-                            if !(0..64).contains(&y) {
-                                x >> 63
-                            } else {
-                                x >> y
-                            }
-                        })
-                        .into_shared(),
-                )
-            }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| {
-                        if !(0..32).contains(&y) {
-                            x >> 31
-                        } else {
-                            x >> y
-                        }
-                    })
-                    .into_shared(),
-            ),
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(
-                ndarray::Zip::from(&a)
-                    .and(&b)
-                    .map_collect(|&x, &y| {
-                        if !(0..64).contains(&y) {
-                            x >> 63
-                        } else {
-                            x >> y
-                        }
-                    })
-                    .into_shared(),
-            ),
-            _ => unreachable!("promotion ensures matching types"),
-        };
-        let result = if logical_dtype.is_narrow() {
-            crate::casting::narrow_truncate(result, logical_dtype)
-        } else {
-            result
-        };
-        let mut r = NdArray::from_data(result);
-        if logical_dtype.is_narrow() {
-            r.declared_dtype = Some(logical_dtype);
-        }
-        Ok(r)
+        execute_bitwise_binary(self, other, BitwiseBinaryKernelOp::RightShift)
     }
 
     /// Element-wise logical NOT. Returns Bool array (true where element is falsy).
     pub fn logical_not(&self) -> NdArray {
-        let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x).into_shared()),
-            ArrayData::Int32(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Bool(a.mapv(|x| x == 0).into_shared()),
-            ArrayData::Float32(a) => ArrayData::Bool(a.mapv(|x| x == 0.0).into_shared()),
-            ArrayData::Float64(a) => ArrayData::Bool(a.mapv(|x| x == 0.0).into_shared()),
-            ArrayData::Complex64(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0).into_shared())
-            }
-            ArrayData::Complex128(a) => {
-                ArrayData::Bool(a.mapv(|x| x.re == 0.0 && x.im == 0.0).into_shared())
-            }
-            ArrayData::Str(a) => ArrayData::Bool(a.mapv(|ref x| x.is_empty()).into_shared()),
+        let ArrayData::Bool(data) = truth_array(self.data().clone()) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        NdArray::from_data(data)
+        NdArray::from_data(ArrayData::Bool(data.mapv(|x| !x).into_shared()))
     }
 
     /// Element-wise logical AND. Returns Bool array. Works on all dtypes (truthy check).
     pub fn logical_and(&self, other: &NdArray) -> Result<NdArray> {
         let (a, b) = prepare_logical(self, other)?;
-        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
-            match data {
-                ArrayData::Bool(a) => a.mapv(|x| x),
-                ArrayData::Int32(a) => a.mapv(|x| x != 0),
-                ArrayData::Int64(a) => a.mapv(|x| x != 0),
-                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
-            }
+        let ArrayData::Bool(ba) = truth_array(a) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        let ba = to_bool(&a);
-        let bb = to_bool(&b);
+        let ArrayData::Bool(bb) = truth_array(b) else {
+            unreachable!("truth kernel must produce bool arrays")
+        };
         let result = ndarray::Zip::from(&ba)
             .and(&bb)
             .map_collect(|&x, &y| x && y)
@@ -304,20 +138,12 @@ impl NdArray {
     /// Element-wise logical OR. Returns Bool array. Works on all dtypes (truthy check).
     pub fn logical_or(&self, other: &NdArray) -> Result<NdArray> {
         let (a, b) = prepare_logical(self, other)?;
-        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
-            match data {
-                ArrayData::Bool(a) => a.mapv(|x| x),
-                ArrayData::Int32(a) => a.mapv(|x| x != 0),
-                ArrayData::Int64(a) => a.mapv(|x| x != 0),
-                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
-            }
+        let ArrayData::Bool(ba) = truth_array(a) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        let ba = to_bool(&a);
-        let bb = to_bool(&b);
+        let ArrayData::Bool(bb) = truth_array(b) else {
+            unreachable!("truth kernel must produce bool arrays")
+        };
         let result = ndarray::Zip::from(&ba)
             .and(&bb)
             .map_collect(|&x, &y| x || y)
@@ -328,20 +154,12 @@ impl NdArray {
     /// Element-wise logical XOR. Returns Bool array. Works on all dtypes (truthy check).
     pub fn logical_xor(&self, other: &NdArray) -> Result<NdArray> {
         let (a, b) = prepare_logical(self, other)?;
-        let to_bool = |data: &ArrayData| -> ndarray::ArrayD<bool> {
-            match data {
-                ArrayData::Bool(a) => a.mapv(|x| x),
-                ArrayData::Int32(a) => a.mapv(|x| x != 0),
-                ArrayData::Int64(a) => a.mapv(|x| x != 0),
-                ArrayData::Float32(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Float64(a) => a.mapv(|x| x != 0.0),
-                ArrayData::Complex64(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Complex128(a) => a.mapv(|x| x.re != 0.0 || x.im != 0.0),
-                ArrayData::Str(a) => a.mapv(|ref x| !x.is_empty()),
-            }
+        let ArrayData::Bool(ba) = truth_array(a) else {
+            unreachable!("truth kernel must produce bool arrays")
         };
-        let ba = to_bool(&a);
-        let bb = to_bool(&b);
+        let ArrayData::Bool(bb) = truth_array(b) else {
+            unreachable!("truth kernel must produce bool arrays")
+        };
         let result = ndarray::Zip::from(&ba)
             .and(&bb)
             .map_collect(|&x, &y| x ^ y)
@@ -356,29 +174,25 @@ impl NdArray {
                 "bitwise NOT not supported for complex arrays".into(),
             ));
         }
-        let result = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(a.mapv(|x| !x).into_shared()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| !x).into_shared()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.mapv(|x| !x).into_shared()),
-            ArrayData::Float32(_) | ArrayData::Float64(_) => {
-                return Err(NumpyError::TypeError(
-                    "bitwise NOT not supported for float arrays".into(),
-                ));
-            }
-            ArrayData::Complex64(_) | ArrayData::Complex128(_) => {
-                return Err(NumpyError::TypeError(
-                    "bitwise NOT not supported for complex arrays".into(),
-                ));
-            }
-            ArrayData::Str(_) => {
-                return Err(NumpyError::TypeError(
-                    "bitwise NOT not supported for string arrays".into(),
-                ));
-            }
-        };
-        let mut r = NdArray::from_data(result);
-        r.declared_dtype = self.declared_dtype;
-        Ok(r)
+        if self.dtype().is_float() {
+            return Err(NumpyError::TypeError(
+                "bitwise NOT not supported for float arrays".into(),
+            ));
+        }
+        if self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "bitwise NOT not supported for string arrays".into(),
+            ));
+        }
+        let descriptor = descriptor_for_dtype(self.dtype());
+        let kernel = descriptor
+            .bitwise_unary_kernel(BitwiseUnaryKernelOp::Not)
+            .ok_or_else(|| {
+                NumpyError::TypeError("unsupported operand type for bitwise NOT".into())
+            })?;
+        let mut result = NdArray::from_data(kernel(self.data().clone())?);
+        result.preserve_descriptor_from(self);
+        Ok(result)
     }
 }
 
@@ -504,7 +318,7 @@ mod tests {
         let c = a.logical_and(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
         assert_eq!(c.shape(), &[4]);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[true, false, false, false]);
         } else {
             panic!("expected Bool");
@@ -519,7 +333,7 @@ mod tests {
         let c = a.logical_or(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
         assert_eq!(c.shape(), &[4]);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[true, true, true, false]);
         } else {
             panic!("expected Bool");
@@ -534,7 +348,7 @@ mod tests {
         let c = a.logical_xor(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
         assert_eq!(c.shape(), &[4]);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[false, true, true, false]);
         } else {
             panic!("expected Bool");
@@ -548,7 +362,7 @@ mod tests {
         let b = NdArray::from_vec(vec![1_i32, 1, 0]);
         let c = a.logical_and(&b).unwrap();
         assert_eq!(c.dtype(), DType::Bool);
-        if let ArrayData::Bool(arr) = &c.data {
+        if let ArrayData::Bool(arr) = c.data() {
             assert_eq!(arr.as_slice().unwrap(), &[true, false, false]);
         } else {
             panic!("expected Bool");

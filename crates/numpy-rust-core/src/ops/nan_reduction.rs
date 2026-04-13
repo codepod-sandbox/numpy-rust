@@ -42,241 +42,255 @@ fn maybe_keepdims(
 
 /// Helper: extract the Float64 inner array from an NdArray that has been cast.
 fn as_f64(arr: &NdArray) -> &ArrayD<f64> {
-    match &arr.data {
+    match arr.data() {
         ArrayData::Float64(a) => a,
         _ => unreachable!("expected Float64 after astype"),
     }
+}
+
+fn execute_nan_float64_reduction<FAll, FAxis>(
+    array: &NdArray,
+    axis: Option<usize>,
+    keepdims: bool,
+    reduce_all: FAll,
+    reduce_axis: FAxis,
+) -> Result<NdArray>
+where
+    FAll: FnOnce(&ArrayD<f64>) -> f64,
+    FAxis: FnOnce(&ArrayD<f64>, usize) -> ArrayD<f64>,
+{
+    let cast = array.astype(DType::Float64);
+    let arr = as_f64(&cast);
+    let original_ndim = array.ndim();
+
+    let result = match axis {
+        None => NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
+            IxDyn(&[]),
+            reduce_all(arr),
+        ))),
+        Some(ax) => {
+            validate_axis(ax, array.ndim())?;
+            NdArray::from_data(ArrayData::Float64(reduce_axis(arr, ax)))
+        }
+    };
+
+    Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+}
+
+fn execute_nan_float64_result_reduction<FAll, FAxis>(
+    array: &NdArray,
+    axis: Option<usize>,
+    keepdims: bool,
+    reduce_all: FAll,
+    reduce_axis: FAxis,
+) -> Result<NdArray>
+where
+    FAll: FnOnce(&ArrayD<f64>) -> Result<f64>,
+    FAxis: FnOnce(&ArrayD<f64>, usize) -> Result<ArrayD<f64>>,
+{
+    let cast = array.astype(DType::Float64);
+    let arr = as_f64(&cast);
+    let original_ndim = array.ndim();
+
+    let result = match axis {
+        None => NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
+            IxDyn(&[]),
+            reduce_all(arr)?,
+        ))),
+        Some(ax) => {
+            validate_axis(ax, array.ndim())?;
+            NdArray::from_data(ArrayData::Float64(reduce_axis(arr, ax)?))
+        }
+    };
+
+    Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+}
+
+fn reduce_nan_extrema_iter(
+    values: impl Iterator<Item = f64>,
+    op_name: &str,
+    reduce: impl Fn(f64, f64) -> f64,
+) -> Result<f64> {
+    values
+        .filter(|x| !x.is_nan())
+        .fold(None, |acc: Option<f64>, x| {
+            Some(match acc {
+                Some(v) => reduce(v, x),
+                None => x,
+            })
+        })
+        .ok_or_else(|| NumpyError::ValueError(format!("All-NaN slice encountered in {op_name}")))
+}
+
+fn reduce_nan_extrema_all(
+    arr: &ArrayD<f64>,
+    op_name: &str,
+    reduce: impl Fn(f64, f64) -> f64,
+) -> Result<f64> {
+    reduce_nan_extrema_iter(arr.iter().copied(), op_name, reduce)
+}
+
+fn reduce_nan_extrema_axis(
+    arr: &ArrayD<f64>,
+    axis: usize,
+    op_name: &str,
+    reduce: impl Fn(f64, f64) -> f64,
+) -> Result<ArrayD<f64>> {
+    let mut results = Vec::new();
+    for lane in arr.lanes(Axis(axis)) {
+        results.push(reduce_nan_extrema_iter(
+            lane.iter().copied(),
+            op_name,
+            &reduce,
+        )?);
+    }
+
+    let mut result_shape = arr.shape().to_vec();
+    result_shape.remove(axis);
+    let result_dim = if result_shape.is_empty() {
+        IxDyn(&[])
+    } else {
+        IxDyn(&result_shape)
+    };
+
+    Ok(ArrayD::from_shape_vec(result_dim, results).expect("shape matches lanes count"))
+}
+
+fn reduce_nan_arg_extrema_iter(
+    values: impl Iterator<Item = f64>,
+    op_name: &str,
+    better: impl Fn(f64, f64) -> bool,
+    init: f64,
+) -> Result<usize> {
+    let mut best_idx = None;
+    let mut best_val = init;
+    for (i, v) in values.enumerate() {
+        if !v.is_nan() && better(v, best_val) {
+            best_val = v;
+            best_idx = Some(i);
+        }
+    }
+    best_idx
+        .ok_or_else(|| NumpyError::ValueError(format!("All-NaN slice encountered in {op_name}")))
+}
+
+fn reduce_nan_arg_extrema_all(
+    arr: &ArrayD<f64>,
+    op_name: &str,
+    better: impl Fn(f64, f64) -> bool,
+    init: f64,
+) -> Result<usize> {
+    reduce_nan_arg_extrema_iter(arr.iter().copied(), op_name, better, init)
+}
+
+fn reduce_nan_arg_extrema_axis(
+    arr: &ArrayD<f64>,
+    axis: usize,
+    op_name: &str,
+    better: impl Fn(f64, f64) -> bool + Copy,
+    init: f64,
+) -> Result<ArrayD<i64>> {
+    let mut results = Vec::new();
+    for lane in arr.lanes(Axis(axis)) {
+        results
+            .push(reduce_nan_arg_extrema_iter(lane.iter().copied(), op_name, better, init)? as i64);
+    }
+
+    let mut result_shape = arr.shape().to_vec();
+    result_shape.remove(axis);
+    let result_dim = if result_shape.is_empty() {
+        IxDyn(&[])
+    } else {
+        IxDyn(&result_shape)
+    };
+
+    Ok(ArrayD::from_shape_vec(result_dim, results).expect("shape matches lanes count"))
 }
 
 impl NdArray {
     /// Sum of array elements, ignoring NaN values.
     /// NaN values are treated as zero.
     pub fn nansum(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let s: f64 = arr.iter().filter(|x| !x.is_nan()).sum();
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), s)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr =
-                    arr.map_axis(Axis(ax), |lane| lane.iter().filter(|x| !x.is_nan()).sum());
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| arr.iter().filter(|x| !x.is_nan()).sum(),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| lane.iter().filter(|x| !x.is_nan()).sum())
+                    .into_shared()
+            },
+        )
     }
 
     /// Mean of array elements, ignoring NaN values.
     /// If all values along the reduction are NaN, the result is NaN.
     pub fn nanmean(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let (sum, count) = arr.iter().fold((0.0_f64, 0_usize), |(s, c), &x| {
-                    if x.is_nan() {
-                        (s, c)
-                    } else {
-                        (s + x, c + 1)
-                    }
-                });
-                let mean = if count == 0 {
-                    f64::NAN
-                } else {
-                    sum / count as f64
-                };
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), mean)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr = arr.map_axis(Axis(ax), |lane| {
-                    let (sum, count) = lane.iter().fold((0.0_f64, 0_usize), |(s, c), &x| {
-                        if x.is_nan() {
-                            (s, c)
-                        } else {
-                            (s + x, c + 1)
-                        }
-                    });
-                    if count == 0 {
-                        f64::NAN
-                    } else {
-                        sum / count as f64
-                    }
-                });
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| nanmean_slice(arr.iter().copied()),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| nanmean_slice(lane.iter().copied()))
+                    .into_shared()
+            },
+        )
     }
 
     /// Variance of array elements, ignoring NaN values.
     /// Uses the formula: sum((x - mean)^2) / (n - ddof) on NaN-filtered values.
     /// If all values are NaN, or n <= ddof, the result is NaN.
     pub fn nanvar(&self, axis: Option<usize>, ddof: usize, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let val = nanvar_slice(arr.iter().copied(), ddof);
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), val)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr =
-                    arr.map_axis(Axis(ax), |lane| nanvar_slice(lane.iter().copied(), ddof));
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| nanvar_slice(arr.iter().copied(), ddof),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| nanvar_slice(lane.iter().copied(), ddof))
+                    .into_shared()
+            },
+        )
     }
 
     /// Standard deviation of array elements, ignoring NaN values.
     /// This is the square root of nanvar.
     pub fn nanstd(&self, axis: Option<usize>, ddof: usize, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let val = nanvar_slice(arr.iter().copied(), ddof).sqrt();
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), val)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr = arr.map_axis(Axis(ax), |lane| {
-                    nanvar_slice(lane.iter().copied(), ddof).sqrt()
-                });
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| nanstd_slice(arr.iter().copied(), ddof),
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| nanstd_slice(lane.iter().copied(), ddof))
+                    .into_shared()
+            },
+        )
     }
 
     /// Minimum of array elements, ignoring NaN values.
     /// Returns an error if all values along the reduction are NaN.
     pub fn nanmin(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let min = arr
-                    .iter()
-                    .copied()
-                    .filter(|x| !x.is_nan())
-                    .fold(None, |acc: Option<f64>, x| {
-                        Some(match acc {
-                            Some(m) => m.min(x),
-                            None => x,
-                        })
-                    })
-                    .ok_or_else(|| {
-                        NumpyError::ValueError("All-NaN slice encountered in nanmin".into())
-                    })?;
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), min)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                // Check for all-NaN lanes before building the result.
-                let mut results: Vec<f64> = Vec::new();
-                for lane in arr.lanes(Axis(ax)) {
-                    let min = lane
-                        .iter()
-                        .copied()
-                        .filter(|x| !x.is_nan())
-                        .fold(None, |acc: Option<f64>, x| {
-                            Some(match acc {
-                                Some(m) => m.min(x),
-                                None => x,
-                            })
-                        })
-                        .ok_or_else(|| {
-                            NumpyError::ValueError("All-NaN slice encountered in nanmin".into())
-                        })?;
-                    results.push(min);
-                }
-                let mut result_shape = arr.shape().to_vec();
-                result_shape.remove(ax);
-                let result_dim = if result_shape.is_empty() {
-                    IxDyn(&[])
-                } else {
-                    IxDyn(&result_shape)
-                };
-                let result_arr =
-                    ArrayD::from_shape_vec(result_dim, results).expect("shape matches lanes count");
-                NdArray::from_data(ArrayData::Float64(result_arr))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_result_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| reduce_nan_extrema_all(arr, "nanmin", f64::min),
+            |arr, ax| reduce_nan_extrema_axis(arr, ax, "nanmin", f64::min),
+        )
     }
 
     /// Maximum of array elements, ignoring NaN values.
     /// Returns an error if all values along the reduction are NaN.
     pub fn nanmax(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let max = arr
-                    .iter()
-                    .copied()
-                    .filter(|x| !x.is_nan())
-                    .fold(None, |acc: Option<f64>, x| {
-                        Some(match acc {
-                            Some(m) => m.max(x),
-                            None => x,
-                        })
-                    })
-                    .ok_or_else(|| {
-                        NumpyError::ValueError("All-NaN slice encountered in nanmax".into())
-                    })?;
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), max)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let mut results: Vec<f64> = Vec::new();
-                for lane in arr.lanes(Axis(ax)) {
-                    let max = lane
-                        .iter()
-                        .copied()
-                        .filter(|x| !x.is_nan())
-                        .fold(None, |acc: Option<f64>, x| {
-                            Some(match acc {
-                                Some(m) => m.max(x),
-                                None => x,
-                            })
-                        })
-                        .ok_or_else(|| {
-                            NumpyError::ValueError("All-NaN slice encountered in nanmax".into())
-                        })?;
-                    results.push(max);
-                }
-                let mut result_shape = arr.shape().to_vec();
-                result_shape.remove(ax);
-                let result_dim = if result_shape.is_empty() {
-                    IxDyn(&[])
-                } else {
-                    IxDyn(&result_shape)
-                };
-                let result_arr =
-                    ArrayD::from_shape_vec(result_dim, results).expect("shape matches lanes count");
-                NdArray::from_data(ArrayData::Float64(result_arr))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+        execute_nan_float64_result_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| reduce_nan_extrema_all(arr, "nanmax", f64::max),
+            |arr, ax| reduce_nan_extrema_axis(arr, ax, "nanmax", f64::max),
+        )
     }
 
     /// Index of the minimum value, ignoring NaN values.
@@ -286,50 +300,22 @@ impl NdArray {
         let arr = as_f64(&f);
 
         match axis {
-            None => {
-                let mut min_idx: Option<usize> = None;
-                let mut min_val = f64::INFINITY;
-                for (i, &v) in arr.iter().enumerate() {
-                    if !v.is_nan() && v < min_val {
-                        min_val = v;
-                        min_idx = Some(i);
-                    }
-                }
-                let idx = min_idx.ok_or_else(|| {
-                    NumpyError::ValueError("All-NaN slice encountered in nanargmin".into())
-                })?;
-                Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
-                    IxDyn(&[]),
-                    idx as i64,
-                ))))
-            }
+            None => Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
+                IxDyn(&[]),
+                reduce_nan_arg_extrema_all(arr, "nanargmin", |x, best| x < best, f64::INFINITY)?
+                    as i64,
+            )))),
             Some(ax) => {
                 validate_axis(ax, self.ndim())?;
-                let mut results: Vec<i64> = Vec::new();
-                for lane in arr.lanes(Axis(ax)) {
-                    let mut min_idx: Option<usize> = None;
-                    let mut min_val = f64::INFINITY;
-                    for (i, &v) in lane.iter().enumerate() {
-                        if !v.is_nan() && v < min_val {
-                            min_val = v;
-                            min_idx = Some(i);
-                        }
-                    }
-                    let idx = min_idx.ok_or_else(|| {
-                        NumpyError::ValueError("All-NaN slice encountered in nanargmin".into())
-                    })?;
-                    results.push(idx as i64);
-                }
-                let mut result_shape = arr.shape().to_vec();
-                result_shape.remove(ax);
-                let result_dim = if result_shape.is_empty() {
-                    IxDyn(&[])
-                } else {
-                    IxDyn(&result_shape)
-                };
-                let result_arr =
-                    ArrayD::from_shape_vec(result_dim, results).expect("shape matches lanes count");
-                Ok(NdArray::from_data(ArrayData::Int64(result_arr)))
+                Ok(NdArray::from_data(ArrayData::Int64(
+                    reduce_nan_arg_extrema_axis(
+                        arr,
+                        ax,
+                        "nanargmin",
+                        |x, best| x < best,
+                        f64::INFINITY,
+                    )?,
+                )))
             }
         }
     }
@@ -341,50 +327,22 @@ impl NdArray {
         let arr = as_f64(&f);
 
         match axis {
-            None => {
-                let mut max_idx: Option<usize> = None;
-                let mut max_val = f64::NEG_INFINITY;
-                for (i, &v) in arr.iter().enumerate() {
-                    if !v.is_nan() && v > max_val {
-                        max_val = v;
-                        max_idx = Some(i);
-                    }
-                }
-                let idx = max_idx.ok_or_else(|| {
-                    NumpyError::ValueError("All-NaN slice encountered in nanargmax".into())
-                })?;
-                Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
-                    IxDyn(&[]),
-                    idx as i64,
-                ))))
-            }
+            None => Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
+                IxDyn(&[]),
+                reduce_nan_arg_extrema_all(arr, "nanargmax", |x, best| x > best, f64::NEG_INFINITY)?
+                    as i64,
+            )))),
             Some(ax) => {
                 validate_axis(ax, self.ndim())?;
-                let mut results: Vec<i64> = Vec::new();
-                for lane in arr.lanes(Axis(ax)) {
-                    let mut max_idx: Option<usize> = None;
-                    let mut max_val = f64::NEG_INFINITY;
-                    for (i, &v) in lane.iter().enumerate() {
-                        if !v.is_nan() && v > max_val {
-                            max_val = v;
-                            max_idx = Some(i);
-                        }
-                    }
-                    let idx = max_idx.ok_or_else(|| {
-                        NumpyError::ValueError("All-NaN slice encountered in nanargmax".into())
-                    })?;
-                    results.push(idx as i64);
-                }
-                let mut result_shape = arr.shape().to_vec();
-                result_shape.remove(ax);
-                let result_dim = if result_shape.is_empty() {
-                    IxDyn(&[])
-                } else {
-                    IxDyn(&result_shape)
-                };
-                let result_arr =
-                    ArrayD::from_shape_vec(result_dim, results).expect("shape matches lanes count");
-                Ok(NdArray::from_data(ArrayData::Int64(result_arr)))
+                Ok(NdArray::from_data(ArrayData::Int64(
+                    reduce_nan_arg_extrema_axis(
+                        arr,
+                        ax,
+                        "nanargmax",
+                        |x, best| x > best,
+                        f64::NEG_INFINITY,
+                    )?,
+                )))
             }
         }
     }
@@ -392,29 +350,24 @@ impl NdArray {
     /// Product of array elements, ignoring NaN values.
     /// NaN values are treated as 1.
     pub fn nanprod(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
-        let f = self.astype(DType::Float64);
-        let arr = as_f64(&f);
-        let original_ndim = self.ndim();
-
-        let result = match axis {
-            None => {
-                let p: f64 = arr
-                    .iter()
+        execute_nan_float64_reduction(
+            self,
+            axis,
+            keepdims,
+            |arr| {
+                arr.iter()
                     .map(|&x| if x.is_nan() { 1.0 } else { x })
-                    .product();
-                NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), p)))
-            }
-            Some(ax) => {
-                validate_axis(ax, self.ndim())?;
-                let result_arr = arr.map_axis(Axis(ax), |lane| {
+                    .product()
+            },
+            |arr, ax| {
+                arr.map_axis(Axis(ax), |lane| {
                     lane.iter()
                         .map(|&x| if x.is_nan() { 1.0 } else { x })
                         .product()
-                });
-                NdArray::from_data(ArrayData::Float64(result_arr.into_shared()))
-            }
-        };
-        Ok(maybe_keepdims(result, axis, keepdims, original_ndim))
+                })
+                .into_shared()
+            },
+        )
     }
 }
 
@@ -429,6 +382,25 @@ fn nanvar_slice(values: impl Iterator<Item = f64>, ddof: usize) -> f64 {
     let mean = filtered.iter().sum::<f64>() / n as f64;
     let sum_sq: f64 = filtered.iter().map(|&x| (x - mean) * (x - mean)).sum();
     sum_sq / (n - ddof) as f64
+}
+
+fn nanmean_slice(values: impl Iterator<Item = f64>) -> f64 {
+    let (sum, count) = values.fold((0.0_f64, 0_usize), |(s, c), x| {
+        if x.is_nan() {
+            (s, c)
+        } else {
+            (s + x, c + 1)
+        }
+    });
+    if count == 0 {
+        f64::NAN
+    } else {
+        sum / count as f64
+    }
+}
+
+fn nanstd_slice(values: impl Iterator<Item = f64>, ddof: usize) -> f64 {
+    nanvar_slice(values, ddof).sqrt()
 }
 
 #[cfg(test)]

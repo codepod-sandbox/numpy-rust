@@ -6,235 +6,137 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
+fn prepare_float64_axis_op(
+    array: &NdArray,
+    axis: Option<usize>,
+    op_name: &str,
+) -> Result<ArrayD<f64>> {
+    if array.dtype().is_string() {
+        return Err(NumpyError::TypeError(format!(
+            "{op_name} not supported for string arrays"
+        )));
+    }
+
+    let cast = array.astype(DType::Float64);
+    let ArrayData::Float64(arr) = cast.data() else {
+        unreachable!()
+    };
+
+    if let Some(ax) = axis {
+        if ax >= cast.ndim() {
+            return Err(NumpyError::InvalidAxis {
+                axis: ax,
+                ndim: cast.ndim(),
+            });
+        }
+    }
+
+    Ok(arr.to_owned().into_shared())
+}
+
+fn execute_float64_cumulative<F>(
+    array: &NdArray,
+    axis: Option<usize>,
+    op_name: &str,
+    init: f64,
+    mut step: F,
+) -> Result<NdArray>
+where
+    F: FnMut(&mut f64, f64) -> f64,
+{
+    let arr = prepare_float64_axis_op(array, axis, op_name)?;
+
+    let out = match axis {
+        None => {
+            let flat: Vec<f64> = arr.iter().copied().collect();
+            let mut cumulated = Vec::with_capacity(flat.len());
+            let mut acc = init;
+            for v in flat {
+                let next = step(&mut acc, v);
+                cumulated.push(next);
+            }
+            ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
+                .expect("flat vec matches shape")
+                .into_shared()
+        }
+        Some(ax) => {
+            let mut out = arr;
+            for mut lane in out.lanes_mut(Axis(ax)) {
+                let mut acc = init;
+                for elem in lane.iter_mut() {
+                    *elem = step(&mut acc, *elem);
+                }
+            }
+            out.into_shared()
+        }
+    };
+
+    Ok(NdArray::from_data(ArrayData::Float64(out)))
+}
+
+fn prepare_float64_diff_input(
+    array: &NdArray,
+    axis: Option<usize>,
+) -> Result<(ndarray::ArrayD<f64>, usize)> {
+    let arr = prepare_float64_axis_op(array, axis, "diff")?;
+
+    match axis {
+        None => {
+            let flat: Vec<f64> = arr.iter().copied().collect();
+            let flat_arr = ndarray::ArrayD::from_shape_vec(IxDyn(&[flat.len()]), flat)
+                .expect("flat vec matches");
+            Ok((flat_arr, 0))
+        }
+        Some(ax) => Ok((arr.to_owned(), ax)),
+    }
+}
+
 impl NdArray {
     /// Cumulative sum along an axis.
     /// If `axis` is `None`, the array is flattened first and the cumulative sum
     /// is computed over the flat array, returning a 1-D result.
     pub fn cumsum(&self, axis: Option<usize>) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "cumsum not supported for string arrays".into(),
-            ));
-        }
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
-            unreachable!()
-        };
-        match axis {
-            None => {
-                let flat: Vec<f64> = arr.iter().copied().collect();
-                let mut cumulated = Vec::with_capacity(flat.len());
-                let mut acc = 0.0_f64;
-                for v in &flat {
-                    acc += v;
-                    cumulated.push(acc);
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(
-                    ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape")
-                        .into_shared(),
-                )))
-            }
-            Some(ax) => {
-                if ax >= f.ndim() {
-                    return Err(NumpyError::InvalidAxis {
-                        axis: ax,
-                        ndim: f.ndim(),
-                    });
-                }
-                let mut out = arr.to_owned();
-                for mut lane in out.lanes_mut(Axis(ax)) {
-                    let mut acc = 0.0_f64;
-                    for elem in lane.iter_mut() {
-                        acc += *elem;
-                        *elem = acc;
-                    }
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
-            }
-        }
+        execute_float64_cumulative(self, axis, "cumsum", 0.0, |acc, value| {
+            *acc += value;
+            *acc
+        })
     }
 
     /// Cumulative product along an axis.
     /// If `axis` is `None`, the array is flattened first and the cumulative product
     /// is computed over the flat array, returning a 1-D result.
     pub fn cumprod(&self, axis: Option<usize>) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "cumprod not supported for string arrays".into(),
-            ));
-        }
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
-            unreachable!()
-        };
-        match axis {
-            None => {
-                let flat: Vec<f64> = arr.iter().copied().collect();
-                let mut cumulated = Vec::with_capacity(flat.len());
-                let mut acc = 1.0_f64;
-                for v in &flat {
-                    acc *= v;
-                    cumulated.push(acc);
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(
-                    ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape")
-                        .into_shared(),
-                )))
-            }
-            Some(ax) => {
-                if ax >= f.ndim() {
-                    return Err(NumpyError::InvalidAxis {
-                        axis: ax,
-                        ndim: f.ndim(),
-                    });
-                }
-                let mut out = arr.to_owned();
-                for mut lane in out.lanes_mut(Axis(ax)) {
-                    let mut acc = 1.0_f64;
-                    for elem in lane.iter_mut() {
-                        acc *= *elem;
-                        *elem = acc;
-                    }
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
-            }
-        }
+        execute_float64_cumulative(self, axis, "cumprod", 1.0, |acc, value| {
+            *acc *= value;
+            *acc
+        })
     }
 
     /// Cumulative sum, treating NaN as zero.
     pub fn nancumsum(&self, axis: Option<usize>) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "nancumsum not supported for string arrays".into(),
-            ));
-        }
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
-            unreachable!()
-        };
-        match axis {
-            None => {
-                let flat: Vec<f64> = arr.iter().copied().collect();
-                let mut cumulated = Vec::with_capacity(flat.len());
-                let mut acc = 0.0_f64;
-                for v in &flat {
-                    if !v.is_nan() {
-                        acc += v;
-                    }
-                    cumulated.push(acc);
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(
-                    ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape")
-                        .into_shared(),
-                )))
+        execute_float64_cumulative(self, axis, "nancumsum", 0.0, |acc, value| {
+            if !value.is_nan() {
+                *acc += value;
             }
-            Some(ax) => {
-                if ax >= f.ndim() {
-                    return Err(NumpyError::InvalidAxis {
-                        axis: ax,
-                        ndim: f.ndim(),
-                    });
-                }
-                let mut out = arr.to_owned();
-                for mut lane in out.lanes_mut(Axis(ax)) {
-                    let mut acc = 0.0_f64;
-                    for elem in lane.iter_mut() {
-                        if !elem.is_nan() {
-                            acc += *elem;
-                        }
-                        *elem = acc;
-                    }
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
-            }
-        }
+            *acc
+        })
     }
 
     /// Cumulative product, treating NaN as one.
     pub fn nancumprod(&self, axis: Option<usize>) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "nancumprod not supported for string arrays".into(),
-            ));
-        }
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
-            unreachable!()
-        };
-        match axis {
-            None => {
-                let flat: Vec<f64> = arr.iter().copied().collect();
-                let mut cumulated = Vec::with_capacity(flat.len());
-                let mut acc = 1.0_f64;
-                for v in &flat {
-                    if !v.is_nan() {
-                        acc *= v;
-                    }
-                    cumulated.push(acc);
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(
-                    ArrayD::from_shape_vec(IxDyn(&[cumulated.len()]), cumulated)
-                        .expect("flat vec matches shape")
-                        .into_shared(),
-                )))
+        execute_float64_cumulative(self, axis, "nancumprod", 1.0, |acc, value| {
+            if !value.is_nan() {
+                *acc *= value;
             }
-            Some(ax) => {
-                if ax >= f.ndim() {
-                    return Err(NumpyError::InvalidAxis {
-                        axis: ax,
-                        ndim: f.ndim(),
-                    });
-                }
-                let mut out = arr.to_owned();
-                for mut lane in out.lanes_mut(Axis(ax)) {
-                    let mut acc = 1.0_f64;
-                    for elem in lane.iter_mut() {
-                        if !elem.is_nan() {
-                            acc *= *elem;
-                        }
-                        *elem = acc;
-                    }
-                }
-                Ok(NdArray::from_data(ArrayData::Float64(out.into_shared())))
-            }
-        }
+            *acc
+        })
     }
 
     /// N-th discrete difference along an axis.
     /// If `axis` is `None`, the array is flattened first.
     /// The result shape has `shape[axis] - n` along the diff axis.
     pub fn diff(&self, n: usize, axis: Option<usize>) -> Result<NdArray> {
-        if self.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "diff not supported for string arrays".into(),
-            ));
-        }
-        let f = self.astype(DType::Float64);
-        let ArrayData::Float64(arr) = &f.data else {
-            unreachable!()
-        };
-
-        let (work, ax) = match axis {
-            None => {
-                // Flatten to 1-D
-                let flat: Vec<f64> = arr.iter().copied().collect();
-                let flat_arr = ndarray::ArrayD::from_shape_vec(IxDyn(&[flat.len()]), flat)
-                    .expect("flat vec matches");
-                (flat_arr, 0)
-            }
-            Some(ax) => {
-                if ax >= f.ndim() {
-                    return Err(NumpyError::InvalidAxis {
-                        axis: ax,
-                        ndim: f.ndim(),
-                    });
-                }
-                (arr.to_owned(), ax)
-            }
-        };
+        let (work, ax) = prepare_float64_diff_input(self, axis)?;
 
         if n == 0 {
             return Ok(NdArray::from_data(ArrayData::Float64(work.into_shared())));

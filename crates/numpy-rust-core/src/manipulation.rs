@@ -15,54 +15,13 @@ impl NdArray {
                 to: shape.to_vec(),
             });
         }
-        let sh = IxDyn(shape);
-        // Helper macro: try into_shape_with_order, fall back to making contiguous copy first
-        macro_rules! reshape_or_copy {
-            ($a:expr, $sh:expr) => {{
-                let arr = $a.clone();
-                match arr.into_shape_with_order($sh.clone()) {
-                    Ok(reshaped) => reshaped.into_shared(),
-                    Err(_) => {
-                        // Non-contiguous layout: make a contiguous copy first
-                        let contiguous = $a.as_standard_layout().into_owned();
-                        let clen = contiguous.len();
-                        contiguous
-                            .into_shape_with_order($sh)
-                            .map_err(|_| NumpyError::ReshapeError {
-                                from: clen,
-                                to: shape.to_vec(),
-                            })?
-                            .into_shared()
-                    }
-                }
-            }};
-        }
-        let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(reshape_or_copy!(a, sh)),
-            ArrayData::Int32(a) => ArrayData::Int32(reshape_or_copy!(a, sh)),
-            ArrayData::Int64(a) => ArrayData::Int64(reshape_or_copy!(a, sh)),
-            ArrayData::Float32(a) => ArrayData::Float32(reshape_or_copy!(a, sh)),
-            ArrayData::Float64(a) => ArrayData::Float64(reshape_or_copy!(a, sh)),
-            ArrayData::Complex64(a) => ArrayData::Complex64(reshape_or_copy!(a, sh)),
-            ArrayData::Complex128(a) => ArrayData::Complex128(reshape_or_copy!(a, sh)),
-            ArrayData::Str(a) => ArrayData::Str(reshape_or_copy!(a, sh)),
-        };
+        let data = self.data().reshape_clone(IxDyn(shape))?;
         Ok(NdArray::from_data(data).with_preserved_dtype(self))
     }
 
     /// Transpose the array (reverse axes). Returns a view sharing the same data.
     pub fn transpose(&self) -> NdArray {
-        let data = match &self.data {
-            // clone() is O(1) for ArcArray, reversed_axes just swaps strides/dims
-            ArrayData::Bool(a) => ArrayData::Bool(a.clone().reversed_axes()),
-            ArrayData::Int32(a) => ArrayData::Int32(a.clone().reversed_axes()),
-            ArrayData::Int64(a) => ArrayData::Int64(a.clone().reversed_axes()),
-            ArrayData::Float32(a) => ArrayData::Float32(a.clone().reversed_axes()),
-            ArrayData::Float64(a) => ArrayData::Float64(a.clone().reversed_axes()),
-            ArrayData::Complex64(a) => ArrayData::Complex64(a.clone().reversed_axes()),
-            ArrayData::Complex128(a) => ArrayData::Complex128(a.clone().reversed_axes()),
-            ArrayData::Str(a) => ArrayData::Str(a.clone().reversed_axes()),
-        };
+        let data = self.data().reversed_axes_view();
         NdArray::from_data(data).with_preserved_dtype(self)
     }
 
@@ -86,23 +45,7 @@ impl NdArray {
         }
         let perm: Vec<usize> = axes.to_vec();
 
-        macro_rules! do_perm {
-            ($arr:expr) => {{
-                // clone() is O(1) for ArcArray, permuted_axes just rearranges strides/dims
-                $arr.clone().permuted_axes(perm.clone())
-            }};
-        }
-
-        let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(do_perm!(a)),
-            ArrayData::Int32(a) => ArrayData::Int32(do_perm!(a)),
-            ArrayData::Int64(a) => ArrayData::Int64(do_perm!(a)),
-            ArrayData::Float32(a) => ArrayData::Float32(do_perm!(a)),
-            ArrayData::Float64(a) => ArrayData::Float64(do_perm!(a)),
-            ArrayData::Complex64(a) => ArrayData::Complex64(do_perm!(a)),
-            ArrayData::Complex128(a) => ArrayData::Complex128(do_perm!(a)),
-            ArrayData::Str(a) => ArrayData::Str(do_perm!(a)),
-        };
+        let data = self.data().permuted_axes_view(perm);
         Ok(NdArray::from_data(data).with_preserved_dtype(self))
     }
 
@@ -118,26 +61,9 @@ impl NdArray {
         if axis1 == axis2 {
             return Ok(self.clone());
         }
-        // Build permutation: identity with axis1 and axis2 swapped
         let mut perm: Vec<usize> = (0..ndim).collect();
         perm.swap(axis1, axis2);
-
-        macro_rules! do_swap {
-            ($arr:expr) => {{
-                $arr.clone().permuted_axes(perm.clone())
-            }};
-        }
-
-        let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(do_swap!(a)),
-            ArrayData::Int32(a) => ArrayData::Int32(do_swap!(a)),
-            ArrayData::Int64(a) => ArrayData::Int64(do_swap!(a)),
-            ArrayData::Float32(a) => ArrayData::Float32(do_swap!(a)),
-            ArrayData::Float64(a) => ArrayData::Float64(do_swap!(a)),
-            ArrayData::Complex64(a) => ArrayData::Complex64(do_swap!(a)),
-            ArrayData::Complex128(a) => ArrayData::Complex128(do_swap!(a)),
-            ArrayData::Str(a) => ArrayData::Str(do_swap!(a)),
-        };
+        let data = self.data().permuted_axes_view(perm);
         Ok(NdArray::from_data(data).with_preserved_dtype(self))
     }
 
@@ -189,7 +115,7 @@ impl NdArray {
                     };
                 }
 
-                let data = match &self.data {
+                let data = match self.data() {
                     ArrayData::Bool(a) => ArrayData::Bool(do_flip!(a)),
                     ArrayData::Int32(a) => ArrayData::Int32(do_flip!(a)),
                     ArrayData::Int64(a) => ArrayData::Int64(do_flip!(a)),
@@ -367,7 +293,7 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
 
     let promoted: Vec<_> = arrays
         .iter()
-        .map(|a| cast_array_data(&a.data, common_dtype))
+        .map(|a| cast_array_data(a.data(), common_dtype))
         .collect();
 
     let ax = Axis(axis);
@@ -658,7 +584,7 @@ pub fn tile(a: &NdArray, reps: &[usize]) -> Result<NdArray> {
 /// Return sorted unique values of the flattened array.
 pub fn unique(a: &NdArray) -> NdArray {
     let flat = a.flatten().astype(crate::DType::Float64);
-    let ArrayData::Float64(arr) = &flat.data else {
+    let ArrayData::Float64(arr) = flat.data() else {
         unreachable!()
     };
     let mut vals: Vec<f64> = arr.iter().copied().collect();
@@ -692,7 +618,7 @@ pub fn meshgrid(arrays: &[&NdArray], indexing: &str) -> Result<Vec<NdArray>> {
 
     for (i, arr) in arrays.iter().enumerate() {
         let flat = arr.astype(DType::Float64).flatten();
-        let ArrayData::Float64(data) = &flat.data else {
+        let ArrayData::Float64(data) = flat.data() else {
             unreachable!()
         };
         let values: Vec<f64> = data.iter().copied().collect();
@@ -754,7 +680,7 @@ pub fn pad_constant(
     }
 
     let f = arr.astype(DType::Float64);
-    let ArrayData::Float64(data) = &f.data else {
+    let ArrayData::Float64(data) = f.data() else {
         unreachable!()
     };
 

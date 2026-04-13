@@ -3,6 +3,10 @@ use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
+use crate::resolver::resolve_assignment_cast;
+use crate::storage::ArrayStorage;
+use crate::storage::{array_data_to_scalar, normalize_string_assignment, scalar_to_array_data};
+use crate::DType;
 use crate::NdArray;
 
 /// Describes how to slice one axis.
@@ -33,11 +37,57 @@ pub enum Scalar {
     Str(String),
 }
 
+impl Scalar {
+    fn dtype(&self) -> DType {
+        match self {
+            Scalar::Bool(_) => DType::Bool,
+            Scalar::Int32(_) => DType::Int32,
+            Scalar::Int64(_) => DType::Int64,
+            Scalar::Float32(_) => DType::Float32,
+            Scalar::Float64(_) => DType::Float64,
+            Scalar::Complex64(_) => DType::Complex64,
+            Scalar::Complex128(_) => DType::Complex128,
+            Scalar::Str(_) => DType::Str,
+        }
+    }
+}
+
+fn coerce_scalar_for_assignment(
+    value: Scalar,
+    target: &ArrayStorage,
+    target_dtype: DType,
+) -> Result<Scalar> {
+    let plan = resolve_assignment_cast(value.dtype(), target_dtype)?;
+    let mut data = crate::casting::cast_array_data(
+        &scalar_to_array_data(&value),
+        plan.execution_storage_dtype(),
+    );
+    if plan.requires_narrowing() {
+        data = crate::casting::narrow_truncate(data, target_dtype);
+    }
+    let data = normalize_string_assignment(target, data);
+    Ok(array_data_to_scalar(&data))
+}
+
+fn coerce_array_for_assignment(
+    values: &NdArray,
+    target: &ArrayStorage,
+    target_dtype: DType,
+) -> Result<ArrayData> {
+    resolve_assignment_cast(values.dtype(), target_dtype)?;
+    let data = if values.dtype() == target_dtype {
+        values.data().clone()
+    } else {
+        values.astype(target_dtype).data().clone()
+    };
+    Ok(normalize_string_assignment(target, data))
+}
+
 impl NdArray {
     /// Get a single element by multi-dimensional index.
     pub fn get(&self, index: &[usize]) -> Result<Scalar> {
         let idx = IxDyn(index);
-        match &self.data {
+        match self.data() {
             ArrayData::Bool(a) => a
                 .get(idx)
                 .map(|&v| Scalar::Bool(v))
@@ -134,44 +184,14 @@ impl NdArray {
         }
 
         let info: Vec<SliceInfoElem> = slice_elems;
-
-        macro_rules! do_slice {
-            ($arr:expr) => {{
-                let info_ref = &info;
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    // clone() is O(1) for ArcArray (Arc refcount increment),
-                    // slice_move adjusts metadata without copying data,
-                    // so the result shares the same buffer (true view).
-                    $arr.clone().slice_move(info_ref.as_slice())
-                }));
-                match result {
-                    Ok(v) => v,
-                    Err(panic_info) => {
-                        let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
-                            s.clone()
-                        } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                            s.to_string()
-                        } else {
-                            "internal error during slicing".to_string()
-                        };
-                        return Err(NumpyError::ValueError(msg));
-                    }
-                }
-            }};
-        }
-
-        let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(do_slice!(a)),
-            ArrayData::Int32(a) => ArrayData::Int32(do_slice!(a)),
-            ArrayData::Int64(a) => ArrayData::Int64(do_slice!(a)),
-            ArrayData::Float32(a) => ArrayData::Float32(do_slice!(a)),
-            ArrayData::Float64(a) => ArrayData::Float64(do_slice!(a)),
-            ArrayData::Complex64(a) => ArrayData::Complex64(do_slice!(a)),
-            ArrayData::Complex128(a) => ArrayData::Complex128(do_slice!(a)),
-            ArrayData::Str(a) => ArrayData::Str(do_slice!(a)),
-        };
-
-        Ok(NdArray::from_data(data))
+        let data = self.data().slice_view(info.as_slice())?;
+        Ok(NdArray::from_parts(
+            crate::storage::ArrayStorage::from_array_data_with_string_width(
+                data,
+                self.storage().string_width(),
+            ),
+            self.descriptor(),
+        ))
     }
 
     /// Select elements along an axis by integer indices.
@@ -194,31 +214,14 @@ impl NdArray {
             }
         }
 
-        macro_rules! do_select {
-            ($arr:expr) => {{
-                let views: Vec<_> = indices
-                    .iter()
-                    .map(|&i| $arr.index_axis(ndarray::Axis(axis), i))
-                    .collect();
-                let view_refs: Vec<_> = views.iter().map(|v| v.view()).collect();
-                ndarray::stack(ndarray::Axis(axis), &view_refs)
-                    .map_err(|e| NumpyError::ShapeMismatch(e.to_string()))?
-                    .into_shared()
-            }};
-        }
-
-        let data = match &self.data {
-            ArrayData::Bool(a) => ArrayData::Bool(do_select!(a)),
-            ArrayData::Int32(a) => ArrayData::Int32(do_select!(a)),
-            ArrayData::Int64(a) => ArrayData::Int64(do_select!(a)),
-            ArrayData::Float32(a) => ArrayData::Float32(do_select!(a)),
-            ArrayData::Float64(a) => ArrayData::Float64(do_select!(a)),
-            ArrayData::Complex64(a) => ArrayData::Complex64(do_select!(a)),
-            ArrayData::Complex128(a) => ArrayData::Complex128(do_select!(a)),
-            ArrayData::Str(a) => ArrayData::Str(do_select!(a)),
-        };
-
-        Ok(NdArray::from_data(data))
+        let data = self.data().index_select(axis, indices)?;
+        Ok(NdArray::from_parts(
+            crate::storage::ArrayStorage::from_array_data_with_string_width(
+                data,
+                self.storage().string_width(),
+            ),
+            self.descriptor(),
+        ))
     }
 
     /// Set elements along an axis by integer indices from a values array.
@@ -231,146 +234,75 @@ impl NdArray {
             });
         }
 
-        macro_rules! do_set {
-            ($dst:expr, $src:expr) => {{
-                if $src.len() == 1 {
-                    // Scalar broadcast: fill each indexed slice with the single value
-                    let val = $src.iter().next().unwrap().clone();
-                    for &idx in indices.iter() {
-                        let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
-                        dst_view.fill(val.clone());
-                    }
-                } else {
-                    for (pos, &idx) in indices.iter().enumerate() {
-                        let src_view = $src.index_axis(ndarray::Axis(axis), pos);
-                        let mut dst_view = $dst.index_axis_mut(ndarray::Axis(axis), idx);
-                        dst_view.assign(&src_view);
-                    }
-                }
-            }};
-        }
-
-        // Cast values to match self dtype if needed
-        let cast_values = if values.dtype() != self.dtype() {
-            values.astype(self.dtype())
-        } else {
-            values.clone()
-        };
-
-        match (&mut self.data, &cast_values.data) {
-            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_set!(dst, src),
-            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_set!(dst, src),
-            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_set!(dst, src),
-            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_set!(dst, src),
-            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_set!(dst, src),
-            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_set!(dst, src),
-            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_set!(dst, src),
-            (ArrayData::Str(dst), ArrayData::Str(src)) => do_set!(dst, src),
-            _ => {
-                return Err(NumpyError::TypeError(
-                    "cannot assign array of incompatible dtype".into(),
-                ));
-            }
-        }
-        Ok(())
+        let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
+        self.mutate_data(|data| data.assign_indexed(axis, indices, &cast_values))
     }
 
     /// Set a single element by multi-dimensional index.
     pub fn set(&mut self, index: &[usize], value: Scalar) -> Result<()> {
         let idx = IxDyn(index);
-        match (&mut self.data, value) {
+        let value = coerce_scalar_for_assignment(value, self.storage(), self.dtype())?;
+        self.mutate_data(|data| match (data, value) {
             (ArrayData::Bool(a), Scalar::Bool(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
+                Ok(())
             }
             (ArrayData::Int32(a), Scalar::Int32(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
+                Ok(())
             }
             (ArrayData::Int64(a), Scalar::Int64(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
+                Ok(())
             }
             (ArrayData::Float32(a), Scalar::Float32(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
+                Ok(())
             }
             (ArrayData::Float64(a), Scalar::Float64(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
+                Ok(())
             }
             (ArrayData::Complex64(a), Scalar::Complex64(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
+                Ok(())
             }
             (ArrayData::Complex128(a), Scalar::Complex128(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
-            }
-            // Allow cross-type numeric assignment (cast to target dtype)
-            (ArrayData::Float64(a), Scalar::Int64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as f64;
-            }
-            (ArrayData::Float64(a), Scalar::Int32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as f64;
-            }
-            (ArrayData::Float64(a), Scalar::Float32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as f64;
-            }
-            (ArrayData::Int64(a), Scalar::Int32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v as i64;
-            }
-            (ArrayData::Complex128(a), Scalar::Float64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = Complex::new(v, 0.0);
-            }
-            (ArrayData::Complex128(a), Scalar::Complex64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = Complex::new(v.re as f64, v.im as f64);
+                Ok(())
             }
             (ArrayData::Str(a), Scalar::Str(v)) => {
                 let elem = a
                     .get_mut(idx)
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
                 *elem = v;
+                Ok(())
             }
-            _ => {
-                return Err(NumpyError::TypeError(
-                    "cannot assign scalar of incompatible dtype".into(),
-                ));
-            }
-        }
-        Ok(())
+            _ => Err(NumpyError::TypeError(
+                "cannot assign scalar of incompatible dtype".into(),
+            )),
+        })
     }
 
     /// Set a slice of the array from values in another array.
@@ -411,61 +343,13 @@ impl NdArray {
         }
 
         let info: Vec<SliceInfoElem> = slice_elems;
-
-        macro_rules! do_set_slice {
-            ($dst:expr, $src:expr) => {{
-                let mut view = $dst.slice_mut(info.as_slice());
-                if view.shape() == $src.shape() {
-                    view.assign($src);
-                } else if $src.len() == 1 {
-                    // Scalar broadcast: fill all elements with the single value
-                    let val = $src.iter().next().unwrap().clone();
-                    view.fill(val);
-                } else {
-                    return Err(NumpyError::ShapeMismatch(format!(
-                        "could not broadcast input array from shape {:?} into shape {:?}",
-                        $src.shape(),
-                        view.shape()
-                    )));
-                }
-            }};
-        }
-
-        match (&mut self.data, &values.data) {
-            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_set_slice!(dst, src),
-            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_set_slice!(dst, src),
-            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_set_slice!(dst, src),
-            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_set_slice!(dst, src),
-            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_set_slice!(dst, src),
-            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_set_slice!(dst, src),
-            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_set_slice!(dst, src),
-            (ArrayData::Str(dst), ArrayData::Str(src)) => do_set_slice!(dst, src),
-            // Allow float64 array to accept cast from other numeric types
-            (ArrayData::Float64(dst), _) => {
-                let cast = values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(src) = &cast.data {
-                    do_set_slice!(dst, src);
-                }
-            }
-            // Allow complex128 array to accept cast from other numeric types
-            (ArrayData::Complex128(dst), _) => {
-                let cast = values.astype(crate::DType::Complex128);
-                if let ArrayData::Complex128(src) = &cast.data {
-                    do_set_slice!(dst, src);
-                }
-            }
-            _ => {
-                return Err(NumpyError::TypeError(
-                    "cannot assign array of incompatible dtype".into(),
-                ));
-            }
-        }
-        Ok(())
+        let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
+        self.mutate_data(|data| data.assign_slice(info.as_slice(), &cast_values))
     }
 
     /// Set elements where mask is true to the corresponding values.
     pub fn mask_set(&mut self, mask: &NdArray, values: &NdArray) -> Result<()> {
-        let bool_mask = match &mask.data {
+        let bool_mask = match mask.data() {
             ArrayData::Bool(m) => m,
             _ => return Err(NumpyError::TypeError("mask must be a boolean array".into())),
         };
@@ -489,76 +373,15 @@ impl NdArray {
             )));
         }
 
-        macro_rules! do_mask_set {
-            ($dst:expr, $src:expr) => {{
-                let mut val_idx = 0;
-                let src_flat: Vec<_> = $src.iter().copied().collect();
-                // Use flat iteration + indexed mutation for non-contiguous arrays
-                if let Some(flat) = $dst.as_slice_mut() {
-                    // Fast path: contiguous array
-                    for (i, &m) in flat_mask.iter().enumerate() {
-                        if m {
-                            flat[i] = if src_flat.len() == 1 {
-                                src_flat[0]
-                            } else {
-                                src_flat[val_idx]
-                            };
-                            val_idx += 1;
-                        }
-                    }
-                } else {
-                    // Slow path: non-contiguous array - use coordinate indexing
-                    let shape = $dst.shape().to_vec();
-                    for (i, &m) in flat_mask.iter().enumerate() {
-                        if m {
-                            // Convert flat index to nd coord
-                            let mut rem = i;
-                            let mut coord = vec![0usize; shape.len()];
-                            for d in (0..shape.len()).rev() {
-                                coord[d] = rem % shape[d];
-                                rem /= shape[d];
-                            }
-                            let val = if src_flat.len() == 1 {
-                                src_flat[0]
-                            } else {
-                                src_flat[val_idx]
-                            };
-                            $dst[ndarray::IxDyn(&coord)] = val;
-                            val_idx += 1;
-                        }
-                    }
-                }
-            }};
-        }
-
-        match (&mut self.data, &values.data) {
-            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_mask_set!(dst, src),
-            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_mask_set!(dst, src),
-            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_mask_set!(dst, src),
-            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_mask_set!(dst, src),
-            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_mask_set!(dst, src),
-            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_mask_set!(dst, src),
-            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => do_mask_set!(dst, src),
-            (ArrayData::Float64(dst), _) => {
-                let cast = values.astype(crate::DType::Float64);
-                if let ArrayData::Float64(src) = &cast.data {
-                    do_mask_set!(dst, src);
-                }
-            }
-            _ => {
-                return Err(NumpyError::TypeError(
-                    "cannot assign values of incompatible dtype".into(),
-                ));
-            }
-        }
-        Ok(())
+        let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
+        self.mutate_data(|data| data.assign_masked(&flat_mask, &cast_values))
     }
 
     /// Select elements where mask is true, returning a 1-D array.
     /// Like `a[mask]` in NumPy where mask is a boolean array.
     pub fn mask_select(&self, mask: &NdArray) -> Result<NdArray> {
         // Mask must be Bool dtype
-        let bool_mask = match &mask.data {
+        let bool_mask = match mask.data() {
             ArrayData::Bool(m) => m,
             _ => return Err(NumpyError::TypeError("mask must be a boolean array".into())),
         };
@@ -574,50 +397,14 @@ impl NdArray {
 
         let flat_mask: Vec<bool> = bool_mask.iter().copied().collect();
 
-        macro_rules! do_mask {
-            ($arr:expr, $variant:ident) => {{
-                let flat: Vec<_> = $arr.iter().copied().collect();
-                let selected: Vec<_> = flat
-                    .into_iter()
-                    .zip(flat_mask.iter())
-                    .filter(|(_, &m)| m)
-                    .map(|(v, _)| v)
-                    .collect();
-                let len = selected.len();
-                ArrayData::$variant(
-                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected)
-                        .unwrap()
-                        .into_shared(),
-                )
-            }};
-        }
-
-        let data = match &self.data {
-            ArrayData::Bool(a) => do_mask!(a, Bool),
-            ArrayData::Int32(a) => do_mask!(a, Int32),
-            ArrayData::Int64(a) => do_mask!(a, Int64),
-            ArrayData::Float32(a) => do_mask!(a, Float32),
-            ArrayData::Float64(a) => do_mask!(a, Float64),
-            ArrayData::Complex64(a) => do_mask!(a, Complex64),
-            ArrayData::Complex128(a) => do_mask!(a, Complex128),
-            ArrayData::Str(a) => {
-                let flat: Vec<_> = a.iter().cloned().collect();
-                let selected: Vec<_> = flat
-                    .into_iter()
-                    .zip(flat_mask.iter())
-                    .filter(|(_, &m)| m)
-                    .map(|(v, _)| v)
-                    .collect();
-                let len = selected.len();
-                ArrayData::Str(
-                    ndarray::ArrayD::from_shape_vec(IxDyn(&[len]), selected)
-                        .unwrap()
-                        .into_shared(),
-                )
-            }
-        };
-
-        Ok(NdArray::from_data(data))
+        let data = self.data().select_masked(&flat_mask);
+        Ok(NdArray::from_parts(
+            crate::storage::ArrayStorage::from_array_data_with_string_width(
+                data,
+                self.storage().string_width(),
+            ),
+            self.descriptor(),
+        ))
     }
 }
 

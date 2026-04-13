@@ -44,7 +44,7 @@ mod inner {
     /// Input: real-valued 1-D array.
     /// Output: complex array as shape [n, 2] where columns are (real, imag).
     pub fn fft(a: &NdArray) -> Result<NdArray> {
-        let mut buffer = to_complex(&a.data)?;
+        let mut buffer = to_complex(a.data())?;
         let n = buffer.len();
         if n == 0 {
             return Ok(from_complex(&buffer));
@@ -80,7 +80,7 @@ mod inner {
     /// Input: real-valued 1-D array of length n.
     /// Output: complex array as shape [n/2+1, 2].
     pub fn rfft(a: &NdArray) -> Result<NdArray> {
-        let mut buffer = to_complex(&a.data)?;
+        let mut buffer = to_complex(a.data())?;
         let n = buffer.len();
         if n == 0 {
             return Ok(from_complex(&buffer));
@@ -137,7 +137,7 @@ mod inner {
 
     /// Helper: parse a [n, 2] complex array back into Vec<Complex<f64>>.
     fn complex_from_array(a: &NdArray) -> Result<Vec<Complex<f64>>> {
-        let f64_data = cast_array_data(&a.data, DType::Float64);
+        let f64_data = cast_array_data(a.data(), DType::Float64);
         match f64_data {
             ArrayData::Float64(arr) => {
                 if arr.ndim() != 2 || arr.shape()[1] != 2 {

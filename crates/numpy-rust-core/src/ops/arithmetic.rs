@@ -1,320 +1,122 @@
 use std::ops;
 
-use ndarray::Zip;
-
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
-use crate::casting::cast_array_data;
-use crate::dtype::DType;
+use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
+use crate::kernel::ArithmeticKernelOp;
+use crate::resolver::{resolve_binary_op, BinaryOp, BinaryOpPlan};
 use crate::NdArray;
 
-/// Prepare two NdArrays for a binary operation: promote types and broadcast shapes.
-/// Returns `(lhs_data, rhs_data, logical_result_dtype)`.
-/// The logical dtype may be a narrow type (e.g. Int8) while the actual data
-/// is stored as the corresponding storage type (e.g. Int32).
-fn prepare_binary(lhs: &NdArray, rhs: &NdArray) -> Result<(ArrayData, ArrayData, DType)> {
-    if lhs.dtype().is_string() || rhs.dtype().is_string() {
-        return Err(crate::error::NumpyError::TypeError(
-            "arithmetic not supported for string arrays".into(),
-        ));
-    }
-    let logical_dtype = lhs.dtype().promote(rhs.dtype());
-    let storage_dtype = logical_dtype.storage_dtype();
+struct PreparedBinaryExecution {
+    lhs: ArrayData,
+    rhs: ArrayData,
+    plan: BinaryOpPlan,
+}
+
+fn prepare_binary_execution(
+    op: BinaryOp,
+    lhs: &NdArray,
+    rhs: &NdArray,
+) -> Result<PreparedBinaryExecution> {
+    let plan = resolve_binary_op(op, lhs.dtype(), rhs.dtype())?;
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
 
-    let a = cast_array_data(&lhs.data, storage_dtype);
-    let b = cast_array_data(&rhs.data, storage_dtype);
+    let lhs = broadcast_array_data(&lhs.cast_for_execution(plan.lhs_cast()), &out_shape);
+    let rhs = broadcast_array_data(&rhs.cast_for_execution(plan.rhs_cast()), &out_shape);
 
-    let a = broadcast_array_data(&a, &out_shape);
-    let b = broadcast_array_data(&b, &out_shape);
-
-    Ok((a, b, logical_dtype))
+    Ok(PreparedBinaryExecution { lhs, rhs, plan })
 }
 
-macro_rules! impl_binary_op {
-    ($trait:ident, $method:ident, $op:tt) => {
-        impl ops::$trait<&NdArray> for &NdArray {
-            type Output = Result<NdArray>;
-
-            fn $method(self, rhs: &NdArray) -> Result<NdArray> {
-                // Compute the logical result dtype. For arithmetic, Bool is treated
-                // as the other operand's type (Bool+Bool -> Int8).
-                let logical_dtype = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
-                    DType::Int8  // bool + bool -> int8 for arithmetic
-                } else {
-                    self.dtype().promote(rhs.dtype())
-                };
-
-                // For actual computation, cast Bool operands to the storage type
-                let (lhs_ref, rhs_ref);
-                let (lhs_tmp, rhs_tmp);
-                let storage = logical_dtype.storage_dtype();
-                if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
-                    lhs_tmp = if self.dtype() == DType::Bool { self.astype(storage) } else { self.clone() };
-                    rhs_tmp = if rhs.dtype() == DType::Bool { rhs.astype(storage) } else { rhs.clone() };
-                    lhs_ref = &lhs_tmp;
-                    rhs_ref = &rhs_tmp;
-                } else {
-                    lhs_ref = self;
-                    rhs_ref = rhs;
-                }
-                let (a, b, _) = prepare_binary(lhs_ref, rhs_ref)?;
-                let data = match (a, b) {
-                    (ArrayData::Float64(a), ArrayData::Float64(b)) => ArrayData::Float64(a $op b),
-                    (ArrayData::Float32(a), ArrayData::Float32(b)) => ArrayData::Float32(a $op b),
-                    (ArrayData::Int64(a), ArrayData::Int64(b)) => ArrayData::Int64(a $op b),
-                    (ArrayData::Int32(a), ArrayData::Int32(b)) => ArrayData::Int32(a $op b),
-                    (ArrayData::Complex64(a), ArrayData::Complex64(b)) => ArrayData::Complex64(a $op b),
-                    (ArrayData::Complex128(a), ArrayData::Complex128(b)) => ArrayData::Complex128(a $op b),
-                    _ => {
-                        return Err(NumpyError::TypeError(
-                            format!("unsupported operand types for binary operation"),
-                        ));
-                    }
-                };
-                let data = if logical_dtype.is_narrow() {
-                    crate::casting::narrow_truncate(data, logical_dtype)
-                } else {
-                    data
-                };
-                let mut result = NdArray::from_data(data);
-                if logical_dtype.is_narrow() {
-                    result.declared_dtype = Some(logical_dtype);
-                }
-                Ok(result)
-            }
-        }
-    };
+fn arithmetic_kernel_op(op: BinaryOp) -> ArithmeticKernelOp {
+    match op {
+        BinaryOp::Add => ArithmeticKernelOp::Add,
+        BinaryOp::Sub => ArithmeticKernelOp::Sub,
+        BinaryOp::Mul => ArithmeticKernelOp::Mul,
+        BinaryOp::Div => ArithmeticKernelOp::Div,
+        BinaryOp::FloorDiv => ArithmeticKernelOp::FloorDiv,
+        BinaryOp::Remainder => ArithmeticKernelOp::Remainder,
+        BinaryOp::Pow => ArithmeticKernelOp::Pow,
+    }
 }
 
-impl_binary_op!(Add, add, +);
-impl_binary_op!(Sub, sub, -);
-impl_binary_op!(Mul, mul, *);
-impl_binary_op!(Div, div, /);
+fn execute_resolved_binary(op: BinaryOp, lhs: &NdArray, rhs: &NdArray) -> Result<NdArray> {
+    let prepared = prepare_binary_execution(op, lhs, rhs)?;
+    let descriptor = descriptor_for_dtype(prepared.plan.result_storage_dtype());
+    let kernel = descriptor
+        .binary_kernel(arithmetic_kernel_op(op))
+        .ok_or_else(|| {
+            NumpyError::TypeError("unsupported operand types for binary operation".into())
+        })?;
+    let data = kernel(prepared.lhs, prepared.rhs)?;
+    Ok(NdArray::from_binary_plan_result(data, prepared.plan))
+}
+
+fn execute_real_binary(op: BinaryOp, lhs: &NdArray, rhs: &NdArray) -> Result<NdArray> {
+    execute_resolved_binary(op, lhs, rhs)
+}
+
+impl ops::Add<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn add(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_binary(BinaryOp::Add, self, rhs)
+    }
+}
+
+impl ops::Sub<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn sub(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_binary(BinaryOp::Sub, self, rhs)
+    }
+}
+
+impl ops::Mul<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn mul(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_binary(BinaryOp::Mul, self, rhs)
+    }
+}
+
+impl ops::Div<&NdArray> for &NdArray {
+    type Output = Result<NdArray>;
+
+    fn div(self, rhs: &NdArray) -> Result<NdArray> {
+        execute_resolved_binary(BinaryOp::Div, self, rhs)
+    }
+}
 
 impl NdArray {
     /// Element-wise power: self ** rhs.
-    /// Integer types are cast to Float64 first (matching NumPy behavior).
-    /// Complex types use Complex::powc.
     pub fn pow(&self, rhs: &NdArray) -> Result<NdArray> {
-        if self.dtype().is_string() || rhs.dtype().is_string() {
-            return Err(NumpyError::TypeError(
-                "power not supported for string arrays".into(),
-            ));
-        }
-        // If either is complex, work in complex domain
-        if self.dtype().is_complex() || rhs.dtype().is_complex() {
-            let lhs_c = self.astype(DType::Complex128);
-            let rhs_c = rhs.astype(DType::Complex128);
-            let (a, b, _) = prepare_binary(&lhs_c, &rhs_c)?;
-            return match (a, b) {
-                (ArrayData::Complex128(a), ArrayData::Complex128(b)) => {
-                    let mut out = a.clone();
-                    Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                        *o = o.powc(r);
-                    });
-                    Ok(NdArray::from_data(ArrayData::Complex128(out)))
-                }
-                _ => unreachable!("both cast to Complex128"),
-            };
-        }
-        // Cast both to Float64 for uniform powf handling
-        let lhs_f = self.astype(DType::Float64);
-        let rhs_f = rhs.astype(DType::Float64);
-        let (a, b, _) = prepare_binary(&lhs_f, &rhs_f)?;
-        match (a, b) {
-            (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    *o = o.powf(r);
-                });
-                Ok(NdArray::from_data(ArrayData::Float64(out)))
+        execute_resolved_binary(BinaryOp::Pow, self, rhs).map_err(|err| match err {
+            NumpyError::TypeError(_) if self.dtype().is_string() || rhs.dtype().is_string() => {
+                NumpyError::TypeError("power not supported for string arrays".into())
             }
-            _ => unreachable!("both cast to Float64"),
-        }
+            other => other,
+        })
     }
 
     /// Element-wise floor division: self // rhs (toward -inf, matching NumPy).
     pub fn floor_div(&self, rhs: &NdArray) -> Result<NdArray> {
-        if self.dtype().is_complex() || rhs.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "floor division not supported for complex arrays".into(),
-            ));
-        }
-        // Cast Bool operands for floor division (matching NumPy promotion)
-        if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
-            let target = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
-                DType::Int8
-            } else if self.dtype() == DType::Bool {
-                rhs.dtype()
-            } else {
-                self.dtype()
-            };
-            let storage = target.storage_dtype();
-            let lhs_up = if self.dtype() == DType::Bool {
-                self.astype(storage).with_declared_dtype(target)
-            } else {
-                self.clone()
-            };
-            let rhs_up = if rhs.dtype() == DType::Bool {
-                rhs.astype(storage).with_declared_dtype(target)
-            } else {
-                rhs.clone()
-            };
-            return lhs_up.floor_div(&rhs_up);
-        }
-        let (a, b, logical_dtype) = prepare_binary(self, rhs)?;
-        let data = match (a, b) {
-            (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    *o = (*o / r).floor();
-                });
-                ArrayData::Float64(out)
+        execute_real_binary(BinaryOp::FloorDiv, self, rhs).map_err(|err| match err {
+            NumpyError::TypeError(_) if self.dtype().is_complex() || rhs.dtype().is_complex() => {
+                NumpyError::TypeError("floor division not supported for complex arrays".into())
             }
-            (ArrayData::Float32(a), ArrayData::Float32(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    *o = (*o / r).floor();
-                });
-                ArrayData::Float32(out)
-            }
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    if r == 0 {
-                        *o = 0;
-                    } else if *o == i64::MIN && r == -1 {
-                        // Overflow case: i64::MIN / -1 wraps; NumPy returns i64::MIN
-                        *o = i64::MIN;
-                    } else {
-                        let d = *o / r;
-                        let rem = *o % r;
-                        *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
-                    }
-                });
-                ArrayData::Int64(out)
-            }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    if r == 0 {
-                        *o = 0;
-                    } else if *o == i32::MIN && r == -1 {
-                        *o = i32::MIN;
-                    } else {
-                        let d = *o / r;
-                        let rem = *o % r;
-                        *o = if rem != 0 && (rem ^ r) < 0 { d - 1 } else { d };
-                    }
-                });
-                ArrayData::Int32(out)
-            }
-            _ => {
-                return Err(NumpyError::TypeError(
-                    "unsupported operand types for floor division".into(),
-                ));
-            }
-        };
-        let mut result = NdArray::from_data(data);
-        if logical_dtype.is_narrow() {
-            result.declared_dtype = Some(logical_dtype);
-        }
-        Ok(result)
+            other => other,
+        })
     }
 
     /// Element-wise remainder: self % rhs (sign of divisor, matching NumPy).
     pub fn remainder(&self, rhs: &NdArray) -> Result<NdArray> {
-        if self.dtype().is_complex() || rhs.dtype().is_complex() {
-            return Err(NumpyError::TypeError(
-                "remainder not supported for complex arrays".into(),
-            ));
-        }
-        // Cast Bool operands for remainder (matching NumPy promotion)
-        if self.dtype() == DType::Bool || rhs.dtype() == DType::Bool {
-            let target = if self.dtype() == DType::Bool && rhs.dtype() == DType::Bool {
-                DType::Int8
-            } else if self.dtype() == DType::Bool {
-                rhs.dtype()
-            } else {
-                self.dtype()
-            };
-            let storage = target.storage_dtype();
-            let lhs_up = if self.dtype() == DType::Bool {
-                self.astype(storage).with_declared_dtype(target)
-            } else {
-                self.clone()
-            };
-            let rhs_up = if rhs.dtype() == DType::Bool {
-                rhs.astype(storage).with_declared_dtype(target)
-            } else {
-                rhs.clone()
-            };
-            return lhs_up.remainder(&rhs_up);
-        }
-        let (a, b, logical_dtype) = prepare_binary(self, rhs)?;
-        let data = match (a, b) {
-            (ArrayData::Float64(a), ArrayData::Float64(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    *o = *o - (*o / r).floor() * r;
-                });
-                ArrayData::Float64(out)
+        execute_real_binary(BinaryOp::Remainder, self, rhs).map_err(|err| match err {
+            NumpyError::TypeError(_) if self.dtype().is_complex() || rhs.dtype().is_complex() => {
+                NumpyError::TypeError("remainder not supported for complex arrays".into())
             }
-            (ArrayData::Float32(a), ArrayData::Float32(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    *o = *o - (*o / r).floor() * r;
-                });
-                ArrayData::Float32(out)
-            }
-            (ArrayData::Int64(a), ArrayData::Int64(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    if r == 0 {
-                        *o = 0;
-                    } else if *o == i64::MIN && r == -1 {
-                        *o = 0; // i64::MIN % -1 = 0 mathematically
-                    } else {
-                        let rem = *o % r;
-                        *o = if rem != 0 && (rem ^ r) < 0 {
-                            rem + r
-                        } else {
-                            rem
-                        };
-                    }
-                });
-                ArrayData::Int64(out)
-            }
-            (ArrayData::Int32(a), ArrayData::Int32(b)) => {
-                let mut out = a.clone();
-                Zip::from(&mut out).and(&b).for_each(|o, &r| {
-                    // r==0: return 0; i32::MIN%-1 would overflow (= 0 mathematically)
-                    if r == 0 || (*o == i32::MIN && r == -1) {
-                        *o = 0;
-                    } else {
-                        let rem = *o % r;
-                        *o = if rem != 0 && (rem ^ r) < 0 {
-                            rem + r
-                        } else {
-                            rem
-                        };
-                    }
-                });
-                ArrayData::Int32(out)
-            }
-            _ => {
-                return Err(NumpyError::TypeError(
-                    "unsupported operand types for remainder".into(),
-                ));
-            }
-        };
-        let mut result = NdArray::from_data(data);
-        if logical_dtype.is_narrow() {
-            result.declared_dtype = Some(logical_dtype);
-        }
-        Ok(result)
+            other => other,
+        })
     }
 }
 

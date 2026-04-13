@@ -31,6 +31,12 @@ def test_zeros_3d():
     assert_eq(a.ndim, 3)
     assert_eq(a.size, 24)
 
+def test_zeros_respects_explicit_dtype():
+    a = np.zeros((2, 2), dtype="int32")
+    assert_eq(a.dtype, "int32")
+    assert_eq(a[(0, 0)], 0)
+    assert_eq(a[(1, 1)], 0)
+
 
 # --- np.ones ---
 
@@ -62,6 +68,35 @@ def test_array_values():
     assert_close(a[0], 10.0)
     assert_close(a[1], 20.0)
     assert_close(a[2], 30.0)
+
+def test_array_from_tuple():
+    a = np.array((1.0, 2.0, 3.0))
+    assert_eq(a.shape, (3,))
+    assert_eq(a.tolist(), [1.0, 2.0, 3.0])
+
+def test_array_scalar_preserves_bool():
+    a = np.array(True)
+    assert_eq(a.shape, ())
+    assert_eq(a.dtype, "bool")
+    assert_eq(bool(a), True)
+
+def test_array_complex_scalar():
+    a = np.array(1 + 2j)
+    assert_eq(a.shape, ())
+    assert_eq(a.dtype, "complex128")
+    assert_eq(a.item(), (1.0, 2.0))
+
+def test_array_bool_sequence():
+    a = np.array([True, False, True])
+    assert_eq(a.shape, (3,))
+    assert_eq(a.dtype, "bool")
+    assert_eq(a.tolist(), [True, False, True])
+
+def test_array_complex_nested_sequence():
+    a = np.array([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]])
+    assert_eq(a.shape, (2, 2))
+    assert_eq(a.dtype, "complex128")
+    assert_eq(a.tolist(), [[(1.0, 2.0), (3.0, 4.0)], [(5.0, 6.0), (7.0, 8.0)]])
 
 
 # --- np.arange ---

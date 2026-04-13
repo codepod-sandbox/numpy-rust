@@ -15,6 +15,121 @@ __all__ = [
 ]
 
 
+def _normalize_edit_axis(arr, axis, none_message):
+    """Normalize axis handling shared by delete/insert style edits."""
+    if axis is None:
+        return arr.flatten(), 0
+    if not isinstance(axis, int):
+        try:
+            axis = int(axis)
+        except (TypeError, ValueError):
+            raise TypeError(none_message)
+    if arr.ndim == 0:
+        raise AxisError(
+            "axis {} is out of bounds for array of dimension 0".format(axis)
+        )
+    if axis < 0:
+        axis = arr.ndim + axis
+    if axis < 0 or axis >= arr.ndim:
+        raise AxisError(
+            "axis {} is out of bounds for array of dimension {}".format(axis, arr.ndim)
+        )
+    return arr, axis
+
+
+def _delete_index_type_error():
+    return IndexError(
+        "only integers, slices (`:`), ellipsis (`...`), "
+        "numpy.newaxis (`None`) and integer or boolean arrays are "
+        "valid indices"
+    )
+
+
+def _normalize_delete_obj(obj, axis, n):
+    """Normalize delete obj into integer positions on the target axis."""
+    obj_dtype = str(obj.dtype) if isinstance(obj, ndarray) else ''
+
+    if isinstance(obj, slice):
+        idx_arr = arange(n)[obj]
+        return [int(v) for v in idx_arr.flatten().tolist()]
+    if isinstance(obj, bool):
+        raise ValueError(
+            "in the future, boolean array-likes will be handled as a "
+            "boolean array index"
+        )
+    if isinstance(obj, ndarray):
+        if 'float' in obj_dtype or 'complex' in obj_dtype:
+            raise IndexError("arrays used as indices must be of integer (or boolean) type")
+        if obj_dtype == 'object' or 'timedelta' in obj_dtype or 'datetime' in obj_dtype:
+            raise _delete_index_type_error()
+        flat_list = obj.flatten().tolist()
+        if obj_dtype == 'bool':
+            if len(flat_list) != n:
+                raise ValueError(
+                    "boolean index did not match indexed array along "
+                    "dimension {}; dimension is {} but corresponding boolean "
+                    "dimension is {}".format(axis, n, len(flat_list))
+                )
+            return [i for i, v in enumerate(flat_list) if v]
+        values = flat_list
+    elif isinstance(obj, (list, tuple)):
+        if len(obj) == 0:
+            return []
+        if all(isinstance(x, bool) for x in obj):
+            if len(obj) != n:
+                raise ValueError(
+                    "boolean index did not match indexed array along "
+                    "dimension {}; dimension is {} but corresponding boolean "
+                    "dimension is {}".format(axis, n, len(obj))
+                )
+            return [i for i, v in enumerate(obj) if v]
+        values = list(obj)
+    elif isinstance(obj, int):
+        values = [obj]
+    else:
+        try:
+            values = [int(obj)]
+        except (TypeError, ValueError):
+            raise _delete_index_type_error()
+
+    indices = []
+    for value in values:
+        index = int(value)
+        if index < -n or index >= n:
+            raise IndexError(
+                "index {} is out of bounds for axis {} with size {}".format(index, axis, n)
+            )
+        indices.append(index)
+    return indices
+
+
+def _normalize_insert_obj(obj, n):
+    """Normalize insert obj into integer indices and scalar-ness."""
+    scalar_obj = False
+    if isinstance(obj, slice):
+        return list(_builtin_range(*obj.indices(n))), False
+    if isinstance(obj, ndarray) and obj.dtype.kind == 'b':
+        return [i for i in _builtin_range(obj.size) if bool(obj.flat[i])], False
+    if isinstance(obj, ndarray) and obj.dtype.kind == 'f':
+        raise IndexError("index {} is not a valid index for insertion".format(obj))
+    if isinstance(obj, ndarray) and obj.size == 0:
+        return [], False
+    if isinstance(obj, (list, tuple)):
+        return [int(v) for v in obj], False
+    if isinstance(obj, ndarray) and obj.ndim > 0:
+        if obj.dtype.kind == 'f':
+            raise IndexError("index {} is not a valid index for insertion".format(obj))
+        return [int(v) for v in obj.flatten().tolist()], False
+    if isinstance(obj, ndarray) and obj.ndim == 0:
+        if obj.dtype.kind == 'f':
+            raise IndexError("index {} is not a valid index for insertion".format(obj))
+        return [int(float(obj[()]))], True
+    if isinstance(obj, float):
+        raise IndexError("index {} is not a valid index for insertion".format(obj))
+    scalar_obj = True
+    return [int(obj)], scalar_obj
+
+
 def choose(a, choices, out=None, mode="raise"):
     if not isinstance(a, ndarray):
         a = asarray(a)
@@ -541,7 +656,6 @@ def delete(arr, obj, axis=None):
 
     arr = asarray(arr)
 
-    # Validate axis type
     if axis is not None and not isinstance(axis, int):
         try:
             axis = int(axis)
@@ -557,95 +671,19 @@ def delete(arr, obj, axis=None):
         raise AxisError(
             "Axis {} is out of bounds for array of dimension 0".format(axis)
         )
+    elif axis < 0:
+        axis = arr.ndim + axis
+        if axis < 0:
+            raise AxisError(
+                "axis {} is out of bounds for array of dimension {}".format(axis, arr.ndim)
+            )
+    elif axis >= arr.ndim:
+        raise AxisError(
+            "axis {} is out of bounds for array of dimension {}".format(axis, arr.ndim)
+        )
 
     n = arr.shape[axis]
-    _obj_dtype = str(obj.dtype) if isinstance(obj, ndarray) else ''
-
-    # Parse obj into a list of integer indices to delete
-    if isinstance(obj, slice):
-        # Use arange(n)[obj] to get actual indices (handles out-of-bounds slices correctly)
-        _idx_arr = arange(n)[obj]
-        del_indices = list(int(v) for v in _idx_arr.flatten().tolist())
-    elif isinstance(obj, bool):
-        raise ValueError(
-            "in the future, boolean array-likes will be handled as a "
-            "boolean array index"
-        )
-    elif isinstance(obj, ndarray):
-        if 'float' in _obj_dtype or 'complex' in _obj_dtype:
-            raise IndexError(
-                "arrays used as indices must be of integer (or boolean) type"
-            )
-        if _obj_dtype == 'object' or 'timedelta' in _obj_dtype or 'datetime' in _obj_dtype:
-            raise IndexError(
-                "only integers, slices (`:`), ellipsis (`...`), "
-                "numpy.newaxis (`None`) and integer or boolean arrays are "
-                "valid indices"
-            )
-        flat_list = obj.flatten().tolist()
-        if _obj_dtype == 'bool':
-            if len(flat_list) != n:
-                raise ValueError(
-                    "boolean index did not match indexed array along "
-                    "dimension {}; dimension is {} but corresponding boolean "
-                    "dimension is {}".format(axis, n, len(flat_list))
-                )
-            del_indices = [i for i, v in enumerate(flat_list) if v]
-        else:
-            del_indices = []
-            for x in flat_list:
-                i = int(x)
-                if i < -n or i >= n:
-                    raise IndexError(
-                        "index {} is out of bounds for axis {} with size "
-                        "{}".format(i, axis, n)
-                    )
-                del_indices.append(i)
-    elif isinstance(obj, (list, tuple)):
-        if len(obj) == 0:
-            del_indices = []
-        elif all(isinstance(x, bool) for x in obj):
-            if len(obj) != n:
-                raise ValueError(
-                    "boolean index did not match indexed array along "
-                    "dimension {}; dimension is {} but corresponding boolean "
-                    "dimension is {}".format(axis, n, len(obj))
-                )
-            del_indices = [i for i, v in enumerate(obj) if v]
-        else:
-            del_indices = []
-            for x in obj:
-                i = int(x)
-                if i < -n or i >= n:
-                    raise IndexError(
-                        "index {} is out of bounds for axis {} with size "
-                        "{}".format(i, axis, n)
-                    )
-                del_indices.append(i)
-    elif isinstance(obj, int):
-        if obj < -n or obj >= n:
-            raise IndexError(
-                "index {} is out of bounds for axis {} with size {}".format(
-                    obj, axis, n
-                )
-            )
-        del_indices = [obj]
-    else:
-        try:
-            i = int(obj)
-            if i < -n or i >= n:
-                raise IndexError(
-                    "index {} is out of bounds for axis {} with size {}".format(
-                        i, axis, n
-                    )
-                )
-            del_indices = [i]
-        except (TypeError, ValueError):
-            raise IndexError(
-                "only integers, slices (`:`), ellipsis (`...`), "
-                "numpy.newaxis (`None`) and integer or boolean arrays are "
-                "valid indices"
-            )
+    del_indices = _normalize_delete_obj(obj, axis, n)
 
     # Normalize negative indices and build keep list
     del_set = set(i if i >= 0 else n + i for i in del_indices)
@@ -684,62 +722,12 @@ def insert(arr, obj, values, axis=None):
     from ._shape import transpose
     arr = asarray(arr)
 
-    # Validate axis / handle axis=None
-    if axis is None:
-        if arr.ndim == 0:
-            arr = arr.flatten()
-        else:
-            arr = arr.flatten()
-        axis = 0
-    else:
-        if not isinstance(axis, int):
-            raise TypeError("an integer is required")
-        if arr.ndim == 0:
-            raise AxisError("axis {} is out of bounds for array of dimension 0".format(axis))
-        if axis < 0:
-            axis = arr.ndim + axis
-        if axis < 0 or axis >= arr.ndim:
-            raise AxisError("axis {} is out of bounds for array of dimension {}".format(axis, arr.ndim))
+    arr, axis = _normalize_edit_axis(arr, axis, "an integer is required")
 
     ndims = arr.ndim
     n = arr.shape[axis]
 
-    # Normalize obj to a list of integer indices
-    scalar_obj = False
-    if isinstance(obj, slice):
-        indices = list(_builtin_range(*obj.indices(n)))
-        scalar_obj = False
-    elif isinstance(obj, ndarray) and obj.dtype.kind == 'b':
-        # Boolean array: use nonzero
-        indices = [i for i in _builtin_range(obj.size) if bool(obj.flat[i])]
-    elif isinstance(obj, ndarray) and obj.dtype.kind == 'f':
-        raise IndexError("index {} is not a valid index for insertion".format(obj))
-    elif isinstance(obj, ndarray) and obj.size == 0:
-        indices = []
-    elif isinstance(obj, (list, tuple)):
-        # Check for floats
-        for v in obj:
-            if isinstance(v, float) and not hasattr(v, 'dtype'):
-                pass  # Python floats from float() are ok if int-valued? Actually no.
-        obj_raw = [v for v in obj]
-        # Convert to ints (numpy behavior: accept only integers)
-        indices = [int(v) for v in obj_raw]
-    elif isinstance(obj, ndarray) and obj.ndim > 0:
-        if obj.dtype.kind == 'f':
-            raise IndexError("index {} is not a valid index for insertion".format(obj))
-        indices = [int(v) for v in obj.flatten().tolist()]
-    elif isinstance(obj, ndarray) and obj.ndim == 0:
-        val = float(obj[()])
-        if obj.dtype.kind == 'f':
-            raise IndexError("index {} is not a valid index for insertion".format(obj))
-        scalar_obj = True
-        indices = [int(val)]
-    else:
-        # Scalar
-        if isinstance(obj, float):
-            raise IndexError("index {} is not a valid index for insertion".format(obj))
-        scalar_obj = True
-        indices = [int(obj)]
+    indices, scalar_obj = _normalize_insert_obj(obj, n)
 
     # Normalize negative indices and check bounds
     norm_indices = []

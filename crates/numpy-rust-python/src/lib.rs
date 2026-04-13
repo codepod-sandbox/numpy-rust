@@ -56,6 +56,129 @@ pub mod _numpy_native {
 
     // --- Creation functions ---
 
+    fn py_sequence_items(
+        obj: &PyObjectRef,
+        vm: &VirtualMachine,
+        expected: &str,
+    ) -> PyResult<Vec<PyObjectRef>> {
+        if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
+            Ok(tuple.as_slice().to_vec())
+        } else if let Some(list) = obj.downcast_ref::<vm::builtins::PyList>() {
+            Ok(list.borrow_vec().to_vec())
+        } else {
+            Err(vm.new_type_error(expected.to_owned()))
+        }
+    }
+
+    fn parse_usize_values(
+        obj: &PyObjectRef,
+        vm: &VirtualMachine,
+        expected: &str,
+    ) -> PyResult<Vec<usize>> {
+        if let Ok(n) = obj.clone().try_into_value::<usize>(vm) {
+            return Ok(vec![n]);
+        }
+
+        let items = py_sequence_items(obj, vm, expected)?;
+        items
+            .into_iter()
+            .map(|item| item.try_into_value::<usize>(vm))
+            .collect::<PyResult<Vec<_>>>()
+    }
+
+    fn parse_indices_arg(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
+        if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
+            let inner = arr.inner();
+            let flat = inner.flatten().astype(numpy_rust_core::DType::Int64);
+            let numpy_rust_core::ArrayData::Int64(data) = flat.data() else {
+                return Err(vm.new_type_error("indices must be integer type".to_owned()));
+            };
+            Ok(data.iter().map(|&v| v as usize).collect())
+        } else {
+            parse_usize_values(obj, vm, "indices must be list, tuple, ndarray, or int")
+        }
+    }
+
+    fn extract_core_array_sequence(
+        obj: &PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<numpy_rust_core::NdArray>> {
+        let items = py_sequence_items(obj, vm, "expected list or tuple of array-like values")?;
+        items
+            .into_iter()
+            .map(|item| obj_to_ndarray(&item, vm))
+            .collect::<PyResult<Vec<_>>>()
+    }
+
+    fn parse_index_array_sequence(
+        obj: &PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<numpy_rust_core::NdArray>> {
+        let items = py_sequence_items(obj, vm, "multi_index must be a list or tuple")?;
+        items
+            .into_iter()
+            .map(|item| obj_to_ndarray(&item, vm))
+            .collect::<PyResult<Vec<_>>>()
+    }
+
+    fn parse_usize_pair(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<(usize, usize)> {
+        let items = py_sequence_items(obj, vm, "expected pair of integers")?;
+        if items.len() != 2 {
+            return Err(vm.new_value_error("pad_width tuples must have 2 elements".to_owned()));
+        }
+        Ok((
+            items[0].clone().try_into_value::<usize>(vm)?,
+            items[1].clone().try_into_value::<usize>(vm)?,
+        ))
+    }
+
+    fn parse_gradient_axes(
+        axes: &vm::PyRef<vm::builtins::PyList>,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<usize>> {
+        axes.borrow_vec()
+            .iter()
+            .map(|obj| obj.clone().try_into_value::<i64>(vm).map(|v| v as usize))
+            .collect::<PyResult<Vec<_>>>()
+            .map_err(|_| vm.new_type_error("axis must be an integer".to_string()))
+    }
+
+    fn parse_gradient_spacings(
+        spacings: &vm::PyRef<vm::builtins::PyList>,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<numpy_rust_core::ops::numerical::GradientSpacing>> {
+        use numpy_rust_core::ops::numerical::GradientSpacing;
+
+        spacings
+            .borrow_vec()
+            .iter()
+            .map(|obj| {
+                if let Some(arr_ref) = obj.downcast_ref::<PyNdArray>() {
+                    let arr_inner = arr_ref.inner();
+                    let cast = arr_inner.astype(numpy_rust_core::DType::Float64);
+                    if let numpy_rust_core::ArrayData::Float64(a) = cast.data() {
+                        let coords: Vec<f64> = a.iter().copied().collect();
+                        if coords.len() <= 1 {
+                            Ok(GradientSpacing::Uniform(
+                                coords.first().copied().unwrap_or(1.0),
+                            ))
+                        } else {
+                            Ok(GradientSpacing::Coordinates(coords))
+                        }
+                    } else {
+                        Ok(GradientSpacing::Uniform(1.0))
+                    }
+                } else if let Ok(v) = obj.clone().try_into_value::<f64>(vm) {
+                    Ok(GradientSpacing::Uniform(v))
+                } else if let Ok(v) = obj.clone().try_into_value::<i64>(vm) {
+                    Ok(GradientSpacing::Uniform(v as f64))
+                } else {
+                    Ok(GradientSpacing::Uniform(1.0))
+                }
+            })
+            .collect()
+    }
+
     #[pyfunction]
     fn array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         py_creation::py_array(data, vm)
@@ -215,15 +338,12 @@ pub mod _numpy_native {
         let axis = axis.unwrap_or(0);
         let spec = if let Ok(n) = indices_or_sections.clone().try_into_value::<usize>(vm) {
             numpy_rust_core::SplitSpec::NSections(n)
-        } else if let Some(list) = indices_or_sections.downcast_ref::<vm::builtins::PyList>() {
-            let items = list.borrow_vec();
-            let indices: Vec<usize> = items
-                .iter()
-                .map(|item| item.clone().try_into_value::<usize>(vm))
-                .collect::<PyResult<Vec<_>>>()?;
-            numpy_rust_core::SplitSpec::Indices(indices)
         } else {
-            return Err(vm.new_type_error("indices_or_sections must be int or list".to_owned()));
+            numpy_rust_core::SplitSpec::Indices(parse_usize_values(
+                &indices_or_sections,
+                vm,
+                "indices_or_sections must be int or list/tuple",
+            )?)
         };
         let parts = numpy_rust_core::split(&a.inner(), &spec, axis)
             .map_err(|e| vm.new_value_error(e.to_string()))?;
@@ -253,23 +373,7 @@ pub mod _numpy_native {
         reps: PyObjectRef,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
-        let reps_vec = if let Ok(n) = reps.clone().try_into_value::<usize>(vm) {
-            vec![n]
-        } else if let Some(tuple) = reps.downcast_ref::<vm::builtins::PyTuple>() {
-            tuple
-                .as_slice()
-                .iter()
-                .map(|item| item.clone().try_into_value::<usize>(vm))
-                .collect::<PyResult<Vec<_>>>()?
-        } else if let Some(list) = reps.downcast_ref::<vm::builtins::PyList>() {
-            let items = list.borrow_vec();
-            items
-                .iter()
-                .map(|item| item.clone().try_into_value::<usize>(vm))
-                .collect::<PyResult<Vec<_>>>()?
-        } else {
-            return Err(vm.new_type_error("reps must be int, tuple, or list".to_owned()));
-        };
+        let reps_vec = parse_usize_values(&reps, vm, "reps must be int, tuple, or list")?;
         numpy_rust_core::manipulation::tile(&a.inner(), &reps_vec)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1234,17 +1338,10 @@ pub mod _numpy_native {
         choices: PyObjectRef,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
-        let list = choices
-            .downcast_ref::<vm::builtins::PyList>()
-            .ok_or_else(|| vm.new_type_error("choose requires a list of arrays".to_owned()))?;
-        let items = list.borrow_vec();
-        let py_arrays: Vec<vm::PyRef<PyNdArray>> = items
-            .iter()
-            .map(|item| item.clone().try_into_value::<vm::PyRef<PyNdArray>>(vm))
-            .collect::<PyResult<Vec<_>>>()?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            py_arrays.iter().map(|c| c.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arrays = extract_core_array_sequence(&choices, vm).map_err(|_| {
+            vm.new_type_error("choose requires a list or tuple of array-like values".to_owned())
+        })?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arrays.iter().collect();
         numpy_rust_core::choose(&a.inner(), &refs)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1578,34 +1675,7 @@ pub mod _numpy_native {
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
-        // Parse indices from list, tuple, or ndarray
-        let idx: Vec<usize> = if let Some(arr) = indices.downcast_ref::<PyNdArray>() {
-            // Extract from ndarray
-            let inner = arr.inner();
-            let flat = inner.flatten().astype(numpy_rust_core::DType::Int64);
-            let numpy_rust_core::ArrayData::Int64(data) = flat.data() else {
-                return Err(vm.new_type_error("indices must be integer type".to_owned()));
-            };
-            data.iter().map(|&v| v as usize).collect()
-        } else if let Some(list) = indices.downcast_ref::<vm::builtins::PyList>() {
-            let items = list.borrow_vec();
-            items
-                .iter()
-                .map(|item| item.clone().try_into_value::<usize>(vm))
-                .collect::<PyResult<Vec<_>>>()?
-        } else if let Some(tuple) = indices.downcast_ref::<vm::builtins::PyTuple>() {
-            tuple
-                .as_slice()
-                .iter()
-                .map(|item| item.clone().try_into_value::<usize>(vm))
-                .collect::<PyResult<Vec<_>>>()?
-        } else if let Ok(single) = indices.clone().try_into_value::<usize>(vm) {
-            vec![single]
-        } else {
-            return Err(
-                vm.new_type_error("indices must be list, tuple, ndarray, or int".to_owned())
-            );
-        };
+        let idx = parse_indices_arg(&indices, vm)?;
 
         let data = a.inner();
         let ax = parse_optional_axis(axis, vm)?;
@@ -1617,23 +1687,7 @@ pub mod _numpy_native {
     // --- Index Utilities ---
 
     fn parse_shape_tuple(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
-        if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
-            tuple
-                .as_slice()
-                .iter()
-                .map(|item| item.clone().try_into_value::<usize>(vm))
-                .collect::<PyResult<Vec<_>>>()
-        } else if let Some(list) = obj.downcast_ref::<vm::builtins::PyList>() {
-            let items = list.borrow_vec();
-            items
-                .iter()
-                .map(|item| item.clone().try_into_value::<usize>(vm))
-                .collect::<PyResult<Vec<_>>>()
-        } else if let Ok(n) = obj.clone().try_into_value::<usize>(vm) {
-            Ok(vec![n])
-        } else {
-            Err(vm.new_type_error("shape must be tuple, list, or int".to_owned()))
-        }
+        parse_usize_values(obj, vm, "shape must be tuple, list, or int")
     }
 
     #[pyfunction]
@@ -1661,15 +1715,7 @@ pub mod _numpy_native {
         dims: PyObjectRef,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        // Parse multi_index: tuple of arrays/ints
-        let tuple = multi_index
-            .downcast_ref::<vm::builtins::PyTuple>()
-            .ok_or_else(|| vm.new_type_error("multi_index must be a tuple".to_owned()))?;
-        let arrs: Vec<numpy_rust_core::NdArray> = tuple
-            .as_slice()
-            .iter()
-            .map(|item| obj_to_ndarray(item, vm))
-            .collect::<PyResult<Vec<_>>>()?;
+        let arrs = parse_index_array_sequence(&multi_index, vm)?;
         let refs: Vec<&numpy_rust_core::NdArray> = arrs.iter().collect();
         let dims_vec = parse_shape_tuple(&dims, vm)?;
         numpy_rust_core::indexing::ravel_multi_index(&refs, &dims_vec)
@@ -1679,27 +1725,6 @@ pub mod _numpy_native {
 
     // --- Stacking helpers ---
 
-    fn extract_ndarray_list(
-        obj: &PyObjectRef,
-        vm: &VirtualMachine,
-    ) -> PyResult<Vec<vm::PyRef<PyNdArray>>> {
-        if let Some(list) = obj.downcast_ref::<vm::builtins::PyList>() {
-            let items = list.borrow_vec();
-            items
-                .iter()
-                .map(|item| item.clone().try_into_value::<vm::PyRef<PyNdArray>>(vm))
-                .collect::<PyResult<Vec<_>>>()
-        } else if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
-            tuple
-                .as_slice()
-                .iter()
-                .map(|item| item.clone().try_into_value::<vm::PyRef<PyNdArray>>(vm))
-                .collect::<PyResult<Vec<_>>>()
-        } else {
-            Err(vm.new_type_error("expected list or tuple of arrays".to_owned()))
-        }
-    }
-
     #[pyfunction]
     fn stack_native(
         arrays: PyObjectRef,
@@ -1707,10 +1732,8 @@ pub mod _numpy_native {
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         let ax = axis.unwrap_or(0);
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         numpy_rust_core::stack(&refs, ax)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1718,10 +1741,8 @@ pub mod _numpy_native {
 
     #[pyfunction]
     fn column_stack(arrays: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         numpy_rust_core::column_stack(&refs)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1729,10 +1750,8 @@ pub mod _numpy_native {
 
     #[pyfunction]
     fn dstack(arrays: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         numpy_rust_core::dstack(&refs)
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
@@ -1747,10 +1766,8 @@ pub mod _numpy_native {
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let idx = indexing.as_ref().map(|s| s.as_str()).unwrap_or("xy");
-        let arr_list = extract_ndarray_list(&arrays, vm)?;
-        let borrowed: Vec<std::sync::RwLockReadGuard<'_, numpy_rust_core::NdArray>> =
-            arr_list.iter().map(|a| a.inner()).collect();
-        let refs: Vec<&numpy_rust_core::NdArray> = borrowed.iter().map(|r| &**r).collect();
+        let arr_list = extract_core_array_sequence(&arrays, vm)?;
+        let refs: Vec<&numpy_rust_core::NdArray> = arr_list.iter().collect();
         let result =
             numpy_rust_core::meshgrid(&refs, idx).map_err(|e| vm.new_value_error(e.to_string()))?;
         let py_arrays: Vec<PyObjectRef> = result
@@ -1765,44 +1782,23 @@ pub mod _numpy_native {
         ndim: usize,
         vm: &VirtualMachine,
     ) -> PyResult<Vec<(usize, usize)>> {
-        // Single int: apply to all axes, both sides
         if let Ok(n) = obj.clone().try_into_value::<usize>(vm) {
             return Ok(vec![(n, n); ndim]);
         }
-        // Tuple of two ints: (before, after) for all axes
-        if let Some(tuple) = obj.downcast_ref::<vm::builtins::PyTuple>() {
-            let items = tuple.as_slice();
-            if items.len() == 2 {
-                if let (Ok(a), Ok(b)) = (
-                    items[0].clone().try_into_value::<usize>(vm),
-                    items[1].clone().try_into_value::<usize>(vm),
-                ) {
-                    return Ok(vec![(a, b); ndim]);
-                }
-            }
-            // List of tuples
-            let mut result = Vec::with_capacity(items.len());
-            for item in items {
-                if let Some(inner) = item.downcast_ref::<vm::builtins::PyTuple>() {
-                    let inner_items = inner.as_slice();
-                    if inner_items.len() == 2 {
-                        let a: usize = inner_items[0].clone().try_into_value(vm)?;
-                        let b: usize = inner_items[1].clone().try_into_value(vm)?;
-                        result.push((a, b));
-                    } else {
-                        return Err(
-                            vm.new_value_error("pad_width tuples must have 2 elements".to_owned())
-                        );
-                    }
-                } else {
-                    return Err(vm.new_type_error(
-                        "pad_width must be int, (int, int), or tuple of (int, int)".to_owned(),
-                    ));
-                }
-            }
-            return Ok(result);
+
+        if let Ok(pair) = parse_usize_pair(obj, vm) {
+            return Ok(vec![pair; ndim]);
         }
-        Err(vm.new_type_error("pad_width must be int, tuple, or list".to_owned()))
+
+        let items = py_sequence_items(
+            obj,
+            vm,
+            "pad_width must be int, (int, int), or tuple/list of (int, int)",
+        )?;
+        items
+            .into_iter()
+            .map(|item| parse_usize_pair(&item, vm))
+            .collect::<PyResult<Vec<_>>>()
     }
 
     #[pyfunction]
@@ -1868,50 +1864,10 @@ pub mod _numpy_native {
         axes: vm::PyRef<vm::builtins::PyList>,
         vm: &VirtualMachine,
     ) -> PyResult<vm::PyRef<vm::builtins::PyList>> {
-        use numpy_rust_core::ops::numerical::GradientSpacing;
-
         let f_inner = f.inner();
         let edge_order = edge_order as usize;
-
-        // Parse axes
-        let mut axes_vec = Vec::new();
-        for obj in axes.borrow_vec().iter() {
-            if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-                let v = i.try_to_primitive::<i64>(vm)?;
-                axes_vec.push(v as usize);
-            } else {
-                return Err(vm.new_type_error("axis must be an integer".to_string()));
-            }
-        }
-
-        // Parse spacings
-        let mut sp_vec = Vec::new();
-        for obj in spacings.borrow_vec().iter() {
-            if let Some(arr_ref) = obj.downcast_ref::<PyNdArray>() {
-                let arr_inner = arr_ref.inner();
-                let cast = arr_inner.astype(numpy_rust_core::DType::Float64);
-                if let numpy_rust_core::ArrayData::Float64(a) = cast.data() {
-                    let coords: Vec<f64> = a.iter().copied().collect();
-                    if coords.len() <= 1 {
-                        // Single-element array = scalar spacing
-                        sp_vec.push(GradientSpacing::Uniform(
-                            coords.first().copied().unwrap_or(1.0),
-                        ));
-                    } else {
-                        sp_vec.push(GradientSpacing::Coordinates(coords));
-                    }
-                } else {
-                    sp_vec.push(GradientSpacing::Uniform(1.0));
-                }
-            } else if let Some(f) = obj.downcast_ref::<vm::builtins::PyFloat>() {
-                sp_vec.push(GradientSpacing::Uniform(f.to_f64()));
-            } else if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
-                let v = i.try_to_primitive::<i64>(vm)? as f64;
-                sp_vec.push(GradientSpacing::Uniform(v));
-            } else {
-                sp_vec.push(GradientSpacing::Uniform(1.0));
-            }
-        }
+        let axes_vec = parse_gradient_axes(&axes, vm)?;
+        let sp_vec = parse_gradient_spacings(&spacings, vm)?;
 
         let results = numpy_rust_core::ops::numerical::gradient_full(
             &f_inner, &sp_vec, edge_order, &axes_vec,

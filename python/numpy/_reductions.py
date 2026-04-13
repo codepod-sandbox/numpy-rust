@@ -140,54 +140,73 @@ def _dtype_cast(result, dtype):
     return result
 
 
+def _ensure_reduction_array(a, fallback_builtin=None):
+    """Normalize reduction input to ndarray when appropriate."""
+    if isinstance(a, ndarray):
+        return a
+    if fallback_builtin is not None and not isinstance(a, (list, tuple)):
+        return fallback_builtin(a)
+    return asarray(a)
+
+
+def _copy_reduction_out(out, result):
+    if out is not None and isinstance(out, ndarray):
+        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
+        return out
+    return None
+
+
+def _preserve_inexact_result_dtype(result, input_arr):
+    input_dt = str(input_arr.dtype)
+    if not isinstance(result, ndarray):
+        return _scalar_result(result, input_arr)
+    if input_dt.startswith(('float', 'complex')) and str(result.dtype) != input_dt:
+        try:
+            return result.astype(input_dt)
+        except Exception:
+            return result
+    return result
+
+
+def _apply_where_mask(a, where, *, false_fill=None, true_identity=False):
+    if where is True:
+        return a
+    w = asarray(where).astype("bool")
+    if false_fill is None:
+        mask_f = w.astype("float64")
+        return a * mask_f + ((1.0 - mask_f) if true_identity else 0.0)
+    flat_a = a.flatten().tolist()
+    flat_w = w.flatten().tolist()
+    masked = [v if m else false_fill for v, m in zip(flat_a, flat_w)]
+    return array(masked).reshape(a.shape)
+
+
 def sum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
+    a = _ensure_reduction_array(a, fallback_builtin=_builtin_sum)
     if not isinstance(a, ndarray):
-        # For plain lists/tuples, convert to array; for other iterables use builtin sum
-        if isinstance(a, (list, tuple)):
-            a = asarray(a)
-        else:
-            return _builtin_sum(a)
-    if where is not True:
-        w = asarray(where).astype("bool").astype("float64")
-        a = a * w
+        return a
+    a = _apply_where_mask(a, where)
     if axis is not None:
         result = a.sum(axis, keepdims)
     else:
         result = a.sum(None, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
-    elif not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray):
-        _in_dt = str(a.dtype)
-        if _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
-            try:
-                result = result.astype(_in_dt)
-            except Exception:
-                pass
+    else:
+        result = _preserve_inexact_result_dtype(result, a)
     if initial is not None:
         result = result + initial
     return result
 
 
 def prod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    if where is not True:
-        w = asarray(where).astype("bool").astype("float64")
-        a = a * w + (1.0 - w)
-    _in_dt = str(a.dtype)
+    a = _ensure_reduction_array(a)
+    a = _apply_where_mask(a, where, true_identity=True)
     result = a.prod(axis, keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
-    elif not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray):
-        if _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
-            try:
-                result = result.astype(_in_dt)
-            except Exception:
-                pass
+    else:
+        result = _preserve_inexact_result_dtype(result, a)
     if initial is not None:
         result = result * initial
     return result
@@ -1342,10 +1361,66 @@ def _validate_q_range(q, is_percentile=False):
         _check(q)
 
 
+def _normalize_quantile_axis(axis, ndim):
+    orig_axis = axis
+    if isinstance(axis, (list, tuple)):
+        axis = _normalize_axes_tuple(axis, ndim)
+    elif axis is not None:
+        axis = _normalize_axis_arg(axis, ndim)
+    return axis, orig_axis
+
+
+def _normalize_q_array(q, *, scale=1.0):
+    q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
+    q_flat = [float(qi) * scale for qi in q_arr.flatten().tolist()]
+    return q_arr, q_flat
+
+
+def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dtype):
+    import numpy as _np
+
+    results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
+    if keepdims:
+        results = [_apply_keepdims(r, a, orig_axis) for r in results]
+
+    stacked = _np.stack(results)
+    try:
+        stacked = stacked.astype(target_dtype)
+    except Exception:
+        pass
+    if q_arr.ndim > 1:
+        stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
+    return stacked
+
+
+def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dtype):
+    axis, orig_axis = _normalize_quantile_axis(axis, a.ndim)
+
+    if isinstance(q, (list, tuple, ndarray)):
+        q_arr, q_flat = _normalize_q_array(q, scale=q_scale)
+        results = [_quantile_core(a, qi, axis, method, keepdims=False) for qi in q_flat]
+        stacked = _stack_quantile_results(
+            a, q_arr, results, keepdims=keepdims, orig_axis=orig_axis, target_dtype=result_dtype
+        )
+        if out is not None:
+            out[...] = stacked
+            return out
+        return stacked
+
+    result = _quantile_core(
+        a, float(q) * q_scale, axis, method, keepdims=keepdims, orig_axis_for_keepdims=orig_axis
+    )
+    if not isinstance(result, ndarray):
+        result = _scalar_result(result, a, _mean_result_dtype(a))
+    if out is not None:
+        out[...] = result
+        return out
+    return result
+
+
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
-    import numpy as _np
 
     # Validate method
     if method not in _VALID_QUANTILE_METHODS:
@@ -1358,49 +1433,16 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
-
-    # Normalize and validate axis
-    orig_axis = axis
-    if isinstance(axis, (list, tuple)):
-        axis = _normalize_axes_tuple(axis, a.ndim)  # returns list
-    elif axis is not None:
-        axis = _normalize_axis_arg(axis, a.ndim)
-
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        q_flat = q_arr.flatten().tolist()
-        results = [_quantile_core(a, float(qi), axis, method, keepdims=False) for qi in q_flat]
-        results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
-        if keepdims:
-            results = [_apply_keepdims(r, a, orig_axis) for r in results]
-        stacked = _np.stack(results)
-        # Preserve result dtype
-        _tdtype = _get_quantile_result_dtype(a, method)
-        try:
-            stacked = stacked.astype(_tdtype)
-        except Exception:
-            pass
-        if q_arr.ndim > 1:
-            stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
-        if out is not None:
-            out[...] = stacked
-            return out
-        return stacked
-
-    result = _quantile_core(a, float(q), axis, method, keepdims=keepdims,
-                            orig_axis_for_keepdims=orig_axis)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a, _mean_result_dtype(a))
-    if out is not None:
-        out[...] = result
-        return out
-    return result
+    return _quantile_dispatch(
+        a, q, axis, out, method, keepdims,
+        q_scale=1.0,
+        result_dtype=_get_quantile_result_dtype(a, method),
+    )
 
 
 def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     if not isinstance(a, ndarray):
         a = array(a)
-    import numpy as _np
 
     # Validate method
     if method not in _VALID_QUANTILE_METHODS:
@@ -1413,44 +1455,11 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
-
-    # Normalize and validate axis
-    orig_axis = axis
-    if isinstance(axis, (list, tuple)):
-        axis = _normalize_axes_tuple(axis, a.ndim)
-    elif axis is not None:
-        axis = _normalize_axis_arg(axis, a.ndim)
-
-    # Convert percentile to quantile
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        q_flat = [float(qi) / 100.0 for qi in q_arr.flatten().tolist()]
-        results = [_quantile_core(a, qi, axis, method, keepdims=False) for qi in q_flat]
-        results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
-        if keepdims:
-            results = [_apply_keepdims(r, a, orig_axis) for r in results]
-        stacked = _np.stack(results)
-        _tdtype = _get_quantile_result_dtype(a, method)
-        try:
-            stacked = stacked.astype(_tdtype)
-        except Exception:
-            pass
-        if q_arr.ndim > 1:
-            stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
-        if out is not None:
-            out[...] = stacked
-            return out
-        return stacked
-
-    q_val = float(q) / 100.0
-    result = _quantile_core(a, q_val, axis, method, keepdims=keepdims,
-                            orig_axis_for_keepdims=orig_axis)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a, _mean_result_dtype(a))
-    if out is not None:
-        out[...] = result
-        return out
-    return result
+    return _quantile_dispatch(
+        a, q, axis, out, method, keepdims,
+        q_scale=0.01,
+        result_dtype=_get_quantile_result_dtype(a, method),
+    )
 
 
 def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
@@ -2011,25 +2020,25 @@ def _nanq_list_impl(a, q_arr, q_scale, axis, keepdims, out, _rdt):
     return result
 
 
+def _nan_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale):
+    rdt = _nanmedian_result_dtype(a)
+    if isinstance(q, (list, tuple, ndarray)):
+        q_arr, q_flat = _normalize_q_array(q, scale=q_scale)
+        q_scaled = asarray(q_flat, dtype='float64').reshape(q_arr.shape)
+        return _nanq_list_impl(a, q_arr, q_scaled, axis, keepdims, out, rdt)
+    return _nanq_impl(a, float(q) * q_scale, axis, keepdims, out, rdt)
+
+
 def nanpercentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     """Compute the qth percentile, ignoring NaNs."""
     a = asarray(a)
-    _rdt = _nanmedian_result_dtype(a)
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        q_scaled = q_arr / 100.0
-        return _nanq_list_impl(a, q_arr, q_scaled, axis, keepdims, out, _rdt)
-    return _nanq_impl(a, float(q) / 100.0, axis, keepdims, out, _rdt)
+    return _nan_quantile_dispatch(a, q, axis, out, keepdims, q_scale=0.01)
 
 
 def nanquantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
     """Compute the qth quantile, ignoring NaNs."""
     a = asarray(a)
-    _rdt = _nanmedian_result_dtype(a)
-    if isinstance(q, (list, tuple, ndarray)):
-        q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-        return _nanq_list_impl(a, q_arr, q_arr, axis, keepdims, out, _rdt)
-    return _nanq_impl(a, float(q), axis, keepdims, out, _rdt)
+    return _nan_quantile_dispatch(a, q, axis, out, keepdims, q_scale=1.0)
 
 
 def ediff1d(ary, to_end=None, to_begin=None):
@@ -2071,38 +2080,30 @@ def ediff1d(ary, to_end=None, to_begin=None):
 
 
 def max(a, axis=None, out=None, keepdims=False, initial=None, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    _in_dt = str(a.dtype)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        fill_val = float('-inf')
-        flat_a = a.flatten().tolist()
-        flat_w = w.flatten().tolist()
-        masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
-        a = array(masked).reshape(a.shape)
+    a = _ensure_reduction_array(a)
+    input_dt = str(a.dtype)
+    a = _apply_where_mask(a, where, false_fill=float('-inf'))
     if axis is not None:
         result = a.max(axis, keepdims)
     else:
         result = a.max(None, keepdims)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+    result = _scalar_result(result, a) if not isinstance(result, ndarray) else result
+    if isinstance(result, ndarray) and str(result.dtype) != input_dt:
         try:
-            result = result.astype(_in_dt)
+            result = result.astype(input_dt)
         except Exception:
             pass
     if initial is not None:
         import numpy as _np
         result = _np.maximum(result, initial)
-        if isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+        if isinstance(result, ndarray) and str(result.dtype) != input_dt:
             try:
-                result = result.astype(_in_dt)
+                result = result.astype(input_dt)
             except Exception:
                 pass
-    if out is not None and isinstance(out, ndarray):
-        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
-        return out
+    copied = _copy_reduction_out(out, result)
+    if copied is not None:
+        return copied
     return result
 
 
@@ -2110,38 +2111,30 @@ amax = max
 
 
 def min(a, axis=None, out=None, keepdims=False, initial=None, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    _in_dt = str(a.dtype)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        fill_val = float('inf')
-        flat_a = a.flatten().tolist()
-        flat_w = w.flatten().tolist()
-        masked = [v if m else fill_val for v, m in zip(flat_a, flat_w)]
-        a = array(masked).reshape(a.shape)
+    a = _ensure_reduction_array(a)
+    input_dt = str(a.dtype)
+    a = _apply_where_mask(a, where, false_fill=float('inf'))
     if axis is not None:
         result = a.min(axis, keepdims)
     else:
         result = a.min(None, keepdims)
-    if not isinstance(result, ndarray):
-        result = _scalar_result(result, a)
-    elif isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+    result = _scalar_result(result, a) if not isinstance(result, ndarray) else result
+    if isinstance(result, ndarray) and str(result.dtype) != input_dt:
         try:
-            result = result.astype(_in_dt)
+            result = result.astype(input_dt)
         except Exception:
             pass
     if initial is not None:
         import numpy as _np
         result = _np.minimum(result, initial)
-        if isinstance(result, ndarray) and str(result.dtype) != _in_dt:
+        if isinstance(result, ndarray) and str(result.dtype) != input_dt:
             try:
-                result = result.astype(_in_dt)
+                result = result.astype(input_dt)
             except Exception:
                 pass
-    if out is not None and isinstance(out, ndarray):
-        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
-        return out
+    copied = _copy_reduction_out(out, result)
+    if copied is not None:
+        return copied
     return result
 
 
@@ -2295,6 +2288,64 @@ def _gradient_scalar_spacing(sp):
     return float(sp)
 
 
+def _coerce_gradient_spacing(sp):
+    """Normalize one spacing argument to a float or 1-D ndarray."""
+    if isinstance(sp, ndarray):
+        arr = sp
+    elif isinstance(sp, (list, tuple)):
+        arr = asarray(sp)
+    else:
+        return float(sp)
+
+    if arr.ndim > 1:
+        raise ValueError("Spacing must be scalars or 1d, not {}d".format(arr.ndim))
+    if arr.size == 1:
+        return float(arr.flatten()[0])
+    return arr
+
+
+def _resolve_gradient_axes(axis, ndim):
+    """Normalize gradient axes and whether the result should stay scalar-axis shaped."""
+    if axis is None:
+        return list(_builtin_range(ndim)), False
+    if isinstance(axis, int):
+        return [_normalize_axis_arg(axis, ndim)], True
+    return _normalize_axes_tuple(axis, ndim), False
+
+
+def _resolve_gradient_spacings(varargs, axes, ndim_shape):
+    """Normalize gradient spacing arguments to the runtime shape expected by native code."""
+    len_axes = len(axes)
+
+    if len(varargs) == 0:
+        spacings = [1.0] * len_axes
+    elif len(varargs) == 1:
+        sp = _coerce_gradient_spacing(varargs[0])
+        is_non_scalar_spacing = isinstance(sp, ndarray)
+        if is_non_scalar_spacing and len_axes != 1:
+            raise TypeError(
+                "gradient() only takes 1 non-scalar spacing argument when "
+                "axis is not a single integer, but {} axes were specified".format(len_axes)
+            )
+        spacings = [sp] * len_axes
+    elif len(varargs) == len_axes:
+        spacings = [_coerce_gradient_spacing(sp) for sp in varargs]
+    else:
+        raise TypeError(
+            "gradient() takes from 1 to {} positional arguments but {} "
+            "were given".format(len(ndim_shape) + 1, len(varargs) + 1)
+        )
+
+    for i, sp in enumerate(spacings):
+        if isinstance(sp, ndarray) and sp.size != ndim_shape[axes[i]]:
+            raise ValueError(
+                "Spacing array has wrong size {} for axis {} with size {}".format(
+                    sp.size, axes[i], ndim_shape[axes[i]]
+                )
+            )
+    return spacings
+
+
 def _gradient_1d_nonuniform(f_1d, x, edge_order):
     """Compute 1-D gradient with non-uniform coordinate array x."""
     n = len(f_1d)
@@ -2421,75 +2472,15 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
 
 
 def gradient(f, *varargs, axis=None, edge_order=1):
-    from ._helpers import AxisError as _AxisError
-    if not isinstance(f, ndarray):
-        f = array(f)
+    f = array(f) if not isinstance(f, ndarray) else f
     if f.ndim == 0:
         raise ValueError("f must have at least 1 dimension")
     if edge_order not in (1, 2):
         raise ValueError("'edge_order' must be 1 or 2")
-    N = f.ndim
-    # Determine axes to compute gradient for
-    if axis is None:
-        axes = list(_builtin_range(N))
-        single_axis = False
-    elif isinstance(axis, int):
-        ax_norm = axis if axis >= 0 else axis + N
-        if ax_norm < 0 or ax_norm >= N:
-            raise _AxisError(axis, N)
-        axes = [ax_norm]
-        single_axis = True
-    else:
-        axes = []
-        for ax in axis:
-            ax_norm = ax if ax >= 0 else ax + N
-            if ax_norm < 0 or ax_norm >= N:
-                raise _AxisError(ax, N)
-            axes.append(ax_norm)
-        single_axis = False
-    len_axes = len(axes)
-    # Validate and resolve spacings
-    if len(varargs) == 0:
-        spacings = [1.0] * len_axes
-    elif len(varargs) == 1:
-        sp = varargs[0]
-        if isinstance(sp, ndarray) and sp.ndim > 1:
-            raise ValueError(
-                "Spacing must be scalars or 1d, not {}d".format(sp.ndim)
-            )
-        # Non-scalar array spacing is only valid for a single axis
-        is_array_sp = isinstance(sp, ndarray) and sp.size > 1
-        if is_array_sp and len_axes != 1:
-            raise TypeError(
-                "gradient() only takes 1 non-scalar spacing argument when "
-                "axis is not a single integer, but {} axes were specified".format(len_axes)
-            )
-        # One spacing for all axes
-        spacings = [sp] * len_axes
-    elif len(varargs) == len_axes:
-        spacings = list(varargs)
-    else:
-        raise TypeError(
-            "gradient() takes from 1 to {} positional arguments but {} "
-            "were given".format(N + 1, len(varargs) + 1)
-        )
-    # Validate spacings have correct sizes and dimensionality
-    for i, sp in enumerate(spacings):
-        if isinstance(sp, ndarray) and sp.ndim > 1:
-            raise ValueError(
-                "Spacing must be scalars or 1d, not {}d".format(sp.ndim)
-            )
-        if isinstance(sp, ndarray) and sp.ndim == 1 and sp.size != 1:
-            ax = axes[i]
-            if sp.size != f.shape[ax]:
-                raise ValueError(
-                    "Spacing array has wrong size {} for axis {} with size {}".format(
-                        sp.size, ax, f.shape[ax]
-                    )
-                )
-    # Delegate to Rust for the actual computation
+    axes, single_axis = _resolve_gradient_axes(axis, f.ndim)
+    spacings = _resolve_gradient_spacings(varargs, axes, f.shape)
     results = _native.gradient(f, spacings, edge_order, axes)
-    if single_axis or (axis is None and N == 1):
+    if single_axis or (axis is None and f.ndim == 1):
         return results[0]
     return tuple(results)
 
@@ -2715,13 +2706,8 @@ def in1d(ar1, ar2, assume_unique=False, invert=False):
 
 
 def all(a, axis=None, out=None, keepdims=False, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        # Masked elements become True (identity for AND)
-        mask_f = w.astype("float64")
-        a = a * mask_f + (1.0 - mask_f)
+    a = _ensure_reduction_array(a)
+    a = _apply_where_mask(a, where, true_identity=True)
     if axis is None:
         return a.all()
     # Reduce along specific axis: all elements nonzero iff min != 0
@@ -2734,13 +2720,8 @@ def all(a, axis=None, out=None, keepdims=False, where=True):
 
 
 def any(a, axis=None, out=None, keepdims=False, where=True):
-    if not isinstance(a, ndarray):
-        a = asarray(a)
-    if where is not True:
-        w = asarray(where).astype("bool")
-        # Masked elements become False (identity for OR / 0.0)
-        mask_f = w.astype("float64")
-        a = a * mask_f
+    a = _ensure_reduction_array(a)
+    a = _apply_where_mask(a, where)
     if axis is None:
         return a.any()
     # Reduce along specific axis: any element nonzero iff max != 0

@@ -201,6 +201,20 @@ def test_setitem_scalar():
     assert_close(a[1], 2.0)
     assert_close(a[2], 3.0)
 
+def test_setitem_scalar_assignment_coerces_in_runtime():
+    a = np.array([1, 2, 3], dtype="int32")
+    a[0] = 9.75
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[0]), 9)
+
+def test_setitem_slice_assignment_coerces_in_runtime():
+    a = np.array([1, 2, 3], dtype="int32")
+    a[1:] = np.array([7.25, 8.75], dtype="float64")
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[0]), 1)
+    assert_eq(int(a[1]), 7)
+    assert_eq(int(a[2]), 8)
+
 def test_setitem_negative():
     a = np.array([1.0, 2.0, 3.0])
     a[-1] = 99.0
@@ -215,6 +229,42 @@ def test_setitem_slice():
     assert_close(a[2], 77.0)
     assert_close(a[3], 4.0)
 
+def test_setitem_string_scalar():
+    a = np.array(["a", "b", "c"])
+    a[1] = "xyz"
+    assert_eq(str(a[1]), "x")
+
+def test_setitem_string_scalar_array_value():
+    a = np.array(["a", "b", "c"])
+    value = np.array(["xyz"])[0]
+    a[1] = value
+    assert_eq(str(a[1]), "x")
+
+def test_setitem_string_scalar_capacity_preserved():
+    a = np.array(["ab", "cd"])
+    a[0] = "x"
+    a[1] = "y"
+    a[0] = "wxyz"
+    assert_eq(str(a[0]), "wx")
+
+def test_setitem_string_scalar_empty_width_preserved():
+    a = np.array([""])
+    a[0] = "xyz"
+    assert_eq(str(a[0]), "x")
+
+def test_setitem_string_scalar_slice_preserves_width():
+    a = np.array(["abcd", "xy"])
+    b = a[1:]
+    b[0] = "wxyz"
+    assert_eq(str(b[0]), "wxyz")
+
+def test_setitem_string_slice_broadcast():
+    a = np.array(["a", "b", "c"])
+    a[1:] = "q"
+    assert_eq(str(a[0]), "a")
+    assert_eq(str(a[1]), "q")
+    assert_eq(str(a[2]), "q")
+
 def test_setitem_2d_scalar():
     a = np.array([[1.0, 2.0], [3.0, 4.0]])
     a[(0, 1)] = 99.0
@@ -228,6 +278,25 @@ def test_setitem_2d_row():
     assert_close(a[(0, 1)], 20.0)
     assert_close(a[(0, 2)], 30.0)
     assert_close(a[(1, 0)], 4.0)
+
+def test_setitem_2d_row_assignment_coerces_in_runtime():
+    a = np.array([[1, 2, 3], [4, 5, 6]], dtype="int32")
+    a[0] = np.array([10.5, 20.5, 30.5])
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[(0, 0)]), 10)
+    assert_eq(int(a[(0, 1)]), 20)
+    assert_eq(int(a[(0, 2)]), 30)
+
+def test_setitem_scalar_accepts_size_one_array():
+    a = np.array([1, 2, 3], dtype="int32")
+    a[0] = np.array([9.75])
+    assert_eq(a.dtype, "int32")
+    assert_eq(int(a[0]), 9)
+
+def test_setitem_complex_scalar_tuple():
+    a = np.zeros(1, dtype="complex128")
+    a[0] = (1.0, 2.0)
+    assert_eq(a.item(), (1.0, 2.0))
 
 
 # --- tolist ---

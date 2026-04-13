@@ -160,6 +160,12 @@ class _ObjectArray:
             self._itemsize = itemsize
         elif isinstance(self._dtype, str) and self._dtype == 'str':
             self._itemsize = 4
+        elif (
+            isinstance(self._dtype, str)
+            and self._dtype.lstrip("<>=|").startswith("S")
+            and self._dtype.lstrip("<>=|")[1:].isdigit()
+        ):
+            self._itemsize = int(self._dtype.lstrip("<>=|")[1:])
         elif isinstance(self._dtype, str) and self._dtype in ('bytes', 'S1'):
             self._itemsize = 1
         else:
@@ -186,6 +192,15 @@ class _ObjectArray:
                         d.itemsize = 4 * ulen
                         d.kind = 'U'
                         d.char = 'U'
+                if d.name == 'bytes' and d.str == '|S0':
+                    raw = self._dtype
+                    stripped = raw.lstrip('<>=|')
+                    if stripped.startswith('S') and len(stripped) > 1 and stripped[1:].isdigit():
+                        blen = int(stripped[1:])
+                        d.str = '|S' + str(blen)
+                        d.itemsize = blen
+                        d.kind = 'S'
+                        d.char = 'S'
                 return d
             except Exception:
                 pass
@@ -295,7 +310,10 @@ class _ObjectArray:
         return _ObjectArray(list(self._data), dtype_str, shape=self._shape, is_fortran=self._is_fortran)
     def flatten(self): return self
     def ravel(self): return self
-    def tolist(self): return list(self._data)
+    def tolist(self):
+        if self._shape == ():
+            return self._data[0] if self._data else None
+        return list(self._data)
     def all(self): return all(self._data)
     def any(self): return any(self._data)
     def __len__(self): return len(self._data)

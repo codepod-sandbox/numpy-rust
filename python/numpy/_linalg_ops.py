@@ -12,6 +12,45 @@ __all__ = [
 ]
 
 
+def _ensure_array(value):
+    return value if isinstance(value, ndarray) else asarray(value)
+
+
+def _ensure_array_pair(a, b):
+    return _ensure_array(a), _ensure_array(b)
+
+
+def _flatten_array(value):
+    return _ensure_array(value).flatten()
+
+
+def _normalize_tensordot_axes(axes, a_ndim, b_ndim):
+    if isinstance(axes, int):
+        axes_a = list(range(a_ndim - axes, a_ndim))
+        axes_b = list(range(0, axes))
+    else:
+        axes_a = list(axes[0]) if not isinstance(axes[0], int) else [axes[0]]
+        axes_b = list(axes[1]) if not isinstance(axes[1], int) else [axes[1]]
+    axes_a = [ax if ax >= 0 else ax + a_ndim for ax in axes_a]
+    axes_b = [ax if ax >= 0 else ax + b_ndim for ax in axes_b]
+    return axes_a, axes_b
+
+
+def _coerce_einsum_arrays(arrays, dtype=None):
+    arrays = [_ensure_array(arr) for arr in arrays]
+    if dtype is not None:
+        import numpy as _np
+        compute_dt = str(_np.dtype(dtype))
+        return [arr if str(arr.dtype) == compute_dt else arr.astype(compute_dt) for arr in arrays]
+    if len(arrays) > 1:
+        import numpy as _np
+        common_dt = str(arrays[0].dtype)
+        for arr in arrays[1:]:
+            common_dt = str(_np.promote_types(common_dt, str(arr.dtype)))
+        arrays = [arr if str(arr.dtype) == common_dt else arr.astype(common_dt) for arr in arrays]
+    return arrays
+
+
 def _has_complex(result):
     """Check if any element in result is complex (avoids shadowed builtin any)."""
     for r in result:
@@ -35,44 +74,44 @@ class _ScimathModule:
     """Complex-safe math functions (numpy.lib.scimath)."""
 
     @staticmethod
+    def _unary(fn, x):
+        return _scimath_wrap(fn(_ensure_array(x)))
+
+    @staticmethod
+    def _binary(fn, x, y):
+        return _scimath_wrap(fn(_ensure_array(x), _ensure_array(y)))
+
+    @staticmethod
     def sqrt(x):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_sqrt(asarray(x)))
+        return _ScimathModule._unary(_native.scimath_sqrt, x)
 
     @staticmethod
     def log(x):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_log(asarray(x)))
+        return _ScimathModule._unary(_native.scimath_log, x)
 
     @staticmethod
     def log2(x):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_log2(asarray(x)))
+        return _ScimathModule._unary(_native.scimath_log2, x)
 
     @staticmethod
     def log10(x):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_log10(asarray(x)))
+        return _ScimathModule._unary(_native.scimath_log10, x)
 
     @staticmethod
     def arcsin(x):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_arcsin(asarray(x)))
+        return _ScimathModule._unary(_native.scimath_arcsin, x)
 
     @staticmethod
     def arccos(x):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_arccos(asarray(x)))
+        return _ScimathModule._unary(_native.scimath_arccos, x)
 
     @staticmethod
     def arctanh(x):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_arctanh(asarray(x)))
+        return _ScimathModule._unary(_native.scimath_arctanh, x)
 
     @staticmethod
     def power(x, p):
-        from ._creation import asarray
-        return _scimath_wrap(_native.scimath_power(asarray(x), asarray(p)))
+        return _ScimathModule._binary(_native.scimath_power, x, p)
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +120,8 @@ class _ScimathModule:
 
 def outer(a, b, out=None):
     """Compute outer product."""
-    a = asarray(a).flatten()
-    b = asarray(b).flatten()
+    a = _flatten_array(a)
+    b = _flatten_array(b)
     result = _native.outer(a, b)
     if out is not None:
         _copy_into(out, result)
@@ -95,8 +134,7 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
     from ._manipulation import moveaxis, broadcast_shapes, broadcast_to
     _a_scalar = not isinstance(a, (ndarray, list, tuple))
     _b_scalar = not isinstance(b, (ndarray, list, tuple))
-    a = asarray(a) if not isinstance(a, ndarray) else a
-    b = asarray(b) if not isinstance(b, ndarray) else b
+    a, b = _ensure_array_pair(a, b)
     if a.ndim == 0 or b.ndim == 0 or _a_scalar or _b_scalar:
         raise ValueError("At least one array has zero dimension")
     if axis is not None:
@@ -193,18 +231,10 @@ def tensordot(a, b, axes=2):
     """Compute tensor dot product along specified axes."""
     from ._manipulation import _transpose_with_axes
     from _numpy_native import dot
-    a = asarray(a) if not isinstance(a, ndarray) else a
-    b = asarray(b) if not isinstance(b, ndarray) else b
-    if isinstance(axes, int):
-        axes_a = list(range(a.ndim - axes, a.ndim))
-        axes_b = list(range(0, axes))
-    else:
-        axes_a = list(axes[0]) if not isinstance(axes[0], int) else [axes[0]]
-        axes_b = list(axes[1]) if not isinstance(axes[1], int) else [axes[1]]
+    a, b = _ensure_array_pair(a, b)
     na = a.ndim
     nb = b.ndim
-    axes_a = [ax if ax >= 0 else ax + na for ax in axes_a]
-    axes_b = [ax if ax >= 0 else ax + nb for ax in axes_b]
+    axes_a, axes_b = _normalize_tensordot_axes(axes, na, nb)
     free_a = [i for i in range(na) if i not in axes_a]
     free_b = [i for i in range(nb) if i not in axes_b]
     perm_a = free_a + axes_a
@@ -236,8 +266,7 @@ def tensordot(a, b, axes=2):
 def inner(a, b):
     """Inner product of two arrays."""
     from _numpy_native import dot
-    a = asarray(a)
-    b = asarray(b)
+    a, b = _ensure_array_pair(a, b)
     if a.ndim <= 1 and b.ndim <= 1:
         return dot(a, b)
     if a.ndim == 2 and b.ndim == 2:
@@ -247,8 +276,7 @@ def inner(a, b):
 
 def kron(a, b):
     """Kronecker product of two arrays."""
-    a = asarray(a)
-    b = asarray(b)
+    a, b = _ensure_array_pair(a, b)
     if a.ndim == 1:
         a = a.reshape((1, a.size))
     if b.ndim == 1:
@@ -277,16 +305,15 @@ def matmul(x1, x2):
                 if result is not NotImplemented:
                     return result
     from _numpy_native import dot
-    x1 = asarray(x1)
-    x2 = asarray(x2)
+    x1, x2 = _ensure_array_pair(x1, x2)
     return dot(x1, x2)
 
 
 def vdot(a, b):
     """Conjugate dot product of two arrays (flattened)."""
     from _numpy_native import dot
-    a = asarray(a).flatten()
-    b = asarray(b).flatten()
+    a = _flatten_array(a)
+    b = _flatten_array(b)
     return dot(a, b)
 
 
@@ -356,25 +383,7 @@ def einsum(*operands, **kwargs):
     if len(arrays) == 0 and subscripts == '':
         raise ValueError("No input operands")
     # Validate and convert all operands to arrays
-    for i in range(len(arrays)):
-        if not isinstance(arrays[i], ndarray):
-            arrays[i] = asarray(arrays[i])
-    # When dtype is specified, cast all inputs to that dtype for computation
-    if dtype is not None:
-        import numpy as _np
-        _compute_dt = str(_np.dtype(dtype))
-        for i in range(len(arrays)):
-            if str(arrays[i].dtype) != _compute_dt:
-                arrays[i] = arrays[i].astype(_compute_dt)
-    # Upcast all arrays to a common dtype to avoid Rust type mismatch errors
-    elif len(arrays) > 1:
-        import numpy as _np
-        common_dt = str(arrays[0].dtype)
-        for a in arrays[1:]:
-            common_dt = str(_np.promote_types(common_dt, str(a.dtype)))
-        for i in range(len(arrays)):
-            if str(arrays[i].dtype) != common_dt:
-                arrays[i] = arrays[i].astype(common_dt)
+    arrays = _coerce_einsum_arrays(arrays, dtype=dtype)
     # Handle implicit output subscripts
     if '->' not in subscripts:
         input_subs = subscripts.replace(' ', '')
@@ -451,7 +460,7 @@ def einsum(*operands, **kwargs):
         err_msg = str(e)
         if "Expected type" in err_msg:
             # Upcast everything to float64 as a safe fallback
-            new_arrays = [asarray(a).astype('float64') if not isinstance(a, ndarray) else a.astype('float64') for a in arrays]
+            new_arrays = [arr.astype('float64') for arr in arrays]
             result = _native.einsum(subscripts, *new_arrays)
         else:
             raise

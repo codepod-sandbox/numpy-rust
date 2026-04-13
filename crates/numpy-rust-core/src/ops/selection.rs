@@ -7,6 +7,110 @@ use crate::array_data::ArrayData;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
+use num_complex::Complex;
+
+fn to_float64(array: &NdArray) -> ArrayD<f64> {
+    let cast = array.astype(DType::Float64);
+    let ArrayData::Float64(arr) = cast.data() else {
+        unreachable!("float64 cast must produce float64 storage")
+    };
+    arr.clone()
+}
+
+fn flatten_to_float64_vec(array: &NdArray) -> Vec<f64> {
+    to_float64(&array.flatten()).iter().copied().collect()
+}
+
+fn flatten_to_int64(array: &NdArray) -> ArrayD<i64> {
+    let cast = array.astype(DType::Int64);
+    let flat = cast.flatten();
+    let ArrayData::Int64(arr) = flat.data() else {
+        unreachable!("int64 cast must produce int64 storage")
+    };
+    arr.clone()
+}
+
+fn flatten_to_float64_choice_vec(choice: &NdArray, target_shape: &[usize]) -> Vec<f64> {
+    let prepared = prepare_choice_array(choice, DType::Float64, target_shape);
+    to_float64(&prepared.flatten()).iter().copied().collect()
+}
+
+fn flatten_to_complex128_choice_vec(choice: &NdArray, target_shape: &[usize]) -> Vec<Complex<f64>> {
+    let prepared = prepare_choice_array(choice, DType::Complex128, target_shape);
+    let flattened = prepared.flatten().astype(DType::Complex128);
+    let ArrayData::Complex128(arr) = flattened.data() else {
+        unreachable!("complex128 cast must produce complex128 storage")
+    };
+    arr.iter().copied().collect()
+}
+
+fn prepare_choice_array(choice: &NdArray, dtype: DType, target_shape: &[usize]) -> NdArray {
+    let cast = choice.astype(dtype);
+    if cast.shape() == target_shape {
+        cast
+    } else {
+        NdArray::from_data(crate::broadcasting::broadcast_array_data(
+            cast.data(),
+            target_shape,
+        ))
+    }
+}
+
+fn choose_choice_index(choice: i64, n_choices: usize) -> Result<usize> {
+    if choice < 0 {
+        return Err(NumpyError::ValueError(format!(
+            "invalid entry {choice} in choice array (negative indices not supported)"
+        )));
+    }
+
+    let choice_idx = choice as usize;
+    if choice_idx >= n_choices {
+        return Err(NumpyError::ValueError(format!(
+            "invalid entry {choice} in choice array (out of range for {n_choices} choices)"
+        )));
+    }
+
+    Ok(choice_idx)
+}
+
+fn choose_from_flat_choices<T: Copy>(
+    idx_arr: &ArrayD<i64>,
+    flat_choices: &[Vec<T>],
+    n_choices: usize,
+) -> Result<Vec<T>> {
+    let mut result = Vec::with_capacity(idx_arr.len());
+    for (pos, &choice) in idx_arr.iter().enumerate() {
+        let choice_idx = choose_choice_index(choice, n_choices)?;
+        let values = &flat_choices[choice_idx];
+        if pos >= values.len() {
+            return Err(NumpyError::ValueError(format!(
+                "shape mismatch: index array has {} elements but choice {} has {}",
+                idx_arr.len(),
+                choice_idx,
+                values.len()
+            )));
+        }
+        result.push(values[pos]);
+    }
+    Ok(result)
+}
+
+fn prepare_float64_choice_vecs(choices: &[&NdArray], target_shape: &[usize]) -> Vec<Vec<f64>> {
+    choices
+        .iter()
+        .map(|choice| flatten_to_float64_choice_vec(choice, target_shape))
+        .collect()
+}
+
+fn prepare_complex128_choice_vecs(
+    choices: &[&NdArray],
+    target_shape: &[usize],
+) -> Vec<Vec<Complex<f64>>> {
+    choices
+        .iter()
+        .map(|choice| flatten_to_complex128_choice_vec(choice, target_shape))
+        .collect()
+}
 
 impl NdArray {
     /// Binary search in a sorted 1-D array. Returns Int64 array of insertion indices.
@@ -17,14 +121,8 @@ impl NdArray {
                 "searchsorted requires a 1-D sorted array".into(),
             ));
         }
-        let sorted = self.astype(DType::Float64);
-        let vals = values.astype(DType::Float64);
-        let ArrayData::Float64(sorted_arr) = &sorted.data else {
-            unreachable!()
-        };
-        let ArrayData::Float64(vals_arr) = &vals.data else {
-            unreachable!()
-        };
+        let sorted_arr = to_float64(self);
+        let vals_arr = to_float64(values);
         let sorted_slice: Vec<f64> = sorted_arr.iter().copied().collect();
         let left = match side {
             "left" => true,
@@ -55,7 +153,7 @@ impl NdArray {
     /// Select slices along `axis` where `condition` is true.
     pub fn compress(&self, condition: &NdArray, axis: Option<usize>) -> Result<NdArray> {
         let cond = condition.astype(DType::Bool);
-        let ArrayData::Bool(mask) = &cond.data else {
+        let ArrayData::Bool(mask) = cond.data() else {
             unreachable!()
         };
 
@@ -91,117 +189,23 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
             "choose requires at least one choice array".into(),
         ));
     }
-    let idx = a.astype(DType::Int64);
-    let flat_idx = idx.flatten();
-    let ArrayData::Int64(idx_arr) = &flat_idx.data else {
-        unreachable!()
-    };
+    let idx_arr = flatten_to_int64(a);
 
     let n_choices = choices.len();
     let target_shape = a.shape();
 
-    // Detect if any choice is complex
     let any_complex = choices.iter().any(|c| c.dtype().is_complex());
+    let out_shape = a.shape().to_vec();
 
     if any_complex {
-        // Complex path: cast all to Complex128, broadcasting to index shape
-        let flat_vecs: Vec<Vec<num_complex::Complex<f64>>> = choices
-            .iter()
-            .map(|c| {
-                let c = c.astype(DType::Complex128);
-                let bc = if c.shape() != target_shape {
-                    NdArray::from_data(crate::broadcasting::broadcast_array_data(
-                        &c.data,
-                        target_shape,
-                    ))
-                } else {
-                    c
-                };
-                let f = bc.flatten();
-                match &f.data {
-                    ArrayData::Complex128(arr) => arr.iter().copied().collect(),
-                    _ => unreachable!(),
-                }
-            })
-            .collect();
-
-        let mut result = Vec::with_capacity(idx_arr.len());
-        for (pos, &i) in idx_arr.iter().enumerate() {
-            if i < 0 {
-                return Err(NumpyError::ValueError(format!(
-                    "invalid entry {i} in choice array (negative indices not supported)"
-                )));
-            }
-            let choice_idx = i as usize;
-            if choice_idx >= n_choices {
-                return Err(NumpyError::ValueError(format!(
-                    "invalid entry {i} in choice array (out of range for {n_choices} choices)"
-                )));
-            }
-            let vec = &flat_vecs[choice_idx];
-            if pos >= vec.len() {
-                return Err(NumpyError::ValueError(format!(
-                    "shape mismatch: index array has {} elements but choice {} has {}",
-                    idx_arr.len(),
-                    choice_idx,
-                    vec.len()
-                )));
-            }
-            result.push(vec[pos]);
-        }
-
-        let out_shape = a.shape().to_vec();
+        let flat_choices = prepare_complex128_choice_vecs(choices, target_shape);
+        let result = choose_from_flat_choices(&idx_arr, &flat_choices, n_choices)?;
         Ok(NdArray::from_data(ArrayData::Complex128(
             ArrayD::from_shape_vec(IxDyn(&out_shape), result).expect("shape matches"),
         )))
     } else {
-        // Float path: cast all to Float64, broadcasting to index shape
-        let flat_vecs: Vec<Vec<f64>> = choices
-            .iter()
-            .map(|c| {
-                let c = c.astype(DType::Float64);
-                let bc = if c.shape() != target_shape {
-                    NdArray::from_data(crate::broadcasting::broadcast_array_data(
-                        &c.data,
-                        target_shape,
-                    ))
-                } else {
-                    c
-                };
-                let f = bc.flatten();
-                let ArrayData::Float64(arr) = &f.data else {
-                    unreachable!()
-                };
-                arr.iter().copied().collect()
-            })
-            .collect();
-
-        let mut result = Vec::with_capacity(idx_arr.len());
-        for (pos, &i) in idx_arr.iter().enumerate() {
-            if i < 0 {
-                return Err(NumpyError::ValueError(format!(
-                    "invalid entry {i} in choice array (negative indices not supported)"
-                )));
-            }
-            let choice_idx = i as usize;
-            if choice_idx >= n_choices {
-                return Err(NumpyError::ValueError(format!(
-                    "invalid entry {i} in choice array (out of range for {n_choices} choices)"
-                )));
-            }
-            let vec = &flat_vecs[choice_idx];
-            if pos >= vec.len() {
-                return Err(NumpyError::ValueError(format!(
-                    "shape mismatch: index array has {} elements but choice {} has {}",
-                    idx_arr.len(),
-                    choice_idx,
-                    vec.len()
-                )));
-            }
-            result.push(vec[pos]);
-        }
-
-        let out_shape = a.shape().to_vec();
+        let flat_choices = prepare_float64_choice_vecs(choices, target_shape);
+        let result = choose_from_flat_choices(&idx_arr, &flat_choices, n_choices)?;
         Ok(NdArray::from_data(ArrayData::Float64(
             ArrayD::from_shape_vec(IxDyn(&out_shape), result).expect("shape matches"),
         )))
@@ -210,17 +214,11 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
 
 /// Return sorted unique values present in both arrays.
 pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_f = a.astype(DType::Float64).flatten();
-    let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = &a_f.data else {
-        unreachable!()
-    };
-    let ArrayData::Float64(b_arr) = &b_f.data else {
-        unreachable!()
-    };
+    let a_values = flatten_to_float64_vec(a);
+    let b_values = flatten_to_float64_vec(b);
 
-    let b_set: HashSet<u64> = b_arr.iter().map(|v| v.to_bits()).collect();
-    let mut result: Vec<f64> = a_arr
+    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_values
         .iter()
         .copied()
         .filter(|v| b_set.contains(&v.to_bits()))
@@ -236,16 +234,10 @@ pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted unique values from either array.
 pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_f = a.astype(DType::Float64).flatten();
-    let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = &a_f.data else {
-        unreachable!()
-    };
-    let ArrayData::Float64(b_arr) = &b_f.data else {
-        unreachable!()
-    };
+    let a_values = flatten_to_float64_vec(a);
+    let b_values = flatten_to_float64_vec(b);
 
-    let mut result: Vec<f64> = a_arr.iter().chain(b_arr.iter()).copied().collect();
+    let mut result: Vec<f64> = a_values.iter().chain(b_values.iter()).copied().collect();
     result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
     result.dedup();
 
@@ -256,17 +248,11 @@ pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted values in `a` that are NOT in `b`.
 pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_f = a.astype(DType::Float64).flatten();
-    let b_f = b.astype(DType::Float64).flatten();
-    let ArrayData::Float64(a_arr) = &a_f.data else {
-        unreachable!()
-    };
-    let ArrayData::Float64(b_arr) = &b_f.data else {
-        unreachable!()
-    };
+    let a_values = flatten_to_float64_vec(a);
+    let b_values = flatten_to_float64_vec(b);
 
-    let b_set: HashSet<u64> = b_arr.iter().map(|v| v.to_bits()).collect();
-    let mut result: Vec<f64> = a_arr
+    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_values
         .iter()
         .copied()
         .filter(|v| !b_set.contains(&v.to_bits()))
@@ -281,14 +267,8 @@ pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return boolean array with same shape as `element`, true where value exists in `test_elements`.
 pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
-    let elem_f = element.astype(DType::Float64);
-    let test_f = test_elements.astype(DType::Float64).flatten();
-    let ArrayData::Float64(elem_arr) = &elem_f.data else {
-        unreachable!()
-    };
-    let ArrayData::Float64(test_arr) = &test_f.data else {
-        unreachable!()
-    };
+    let elem_arr = to_float64(element);
+    let test_arr = flatten_to_float64_vec(test_elements);
 
     let test_set: HashSet<u64> = test_arr.iter().map(|v| v.to_bits()).collect();
     let shape: Vec<usize> = element.shape().to_vec();
@@ -354,6 +334,34 @@ mod tests {
         assert_eq!(arr[[1]], 60.0);
         assert_eq!(arr[[2]], 30.0);
         assert_eq!(arr[[3]], 80.0);
+    }
+
+    #[test]
+    fn test_choose_broadcast_choice() {
+        let a = NdArray::from_vec(vec![0_i64, 1, 0, 1]);
+        let c0 = NdArray::from_vec(vec![10.0_f64]);
+        let c1 = NdArray::from_vec(vec![50.0_f64, 60.0, 70.0, 80.0]);
+        let result = choose(&a, &[&c0, &c1]).unwrap();
+        let ArrayData::Float64(arr) = result.data() else {
+            panic!("expected Float64");
+        };
+        assert_eq!(arr[[0]], 10.0);
+        assert_eq!(arr[[1]], 60.0);
+        assert_eq!(arr[[2]], 10.0);
+        assert_eq!(arr[[3]], 80.0);
+    }
+
+    #[test]
+    fn test_choose_complex_output() {
+        let a = NdArray::from_vec(vec![0_i64, 1]);
+        let c0 = NdArray::from_vec(vec![1.0_f64, 2.0]);
+        let c1 = NdArray::from_vec(vec![Complex::new(3.0_f64, 4.0), Complex::new(5.0_f64, 6.0)]);
+        let result = choose(&a, &[&c0, &c1]).unwrap();
+        let ArrayData::Complex128(arr) = result.data() else {
+            panic!("expected Complex128");
+        };
+        assert_eq!(arr[[0]], Complex::new(1.0, 0.0));
+        assert_eq!(arr[[1]], Complex::new(5.0, 6.0));
     }
 
     #[test]

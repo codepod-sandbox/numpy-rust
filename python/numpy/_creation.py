@@ -1259,25 +1259,28 @@ def _like_order(arr, source, order):
         if hasattr(arr, '_mark_fortran'):
             arr._mark_fortran()
     elif order in ('K', 'A'):
-        if src_is_f and hasattr(arr, '_mark_fortran'):
+        # Only use Fortran layout if source is *strictly* F-order (not also C-contiguous).
+        # 0-d and 1-D arrays are always both C and F, so they default to C.
+        if src_is_f and not src_is_c and hasattr(arr, '_mark_fortran'):
             arr._mark_fortran()
         elif order == 'K' and not src_is_c and not src_is_f:
-            # Non-contiguous source with order='K': match the stride ordering
-            # Only when shapes match (shape override means K-order doesn't apply)
-            if (isinstance(arr, ndarray) and isinstance(source, ndarray)
-                    and hasattr(source, 'strides')
-                    and arr.shape == source.shape):
-                src_strides = source.strides
-                ndim = len(src_strides)
-                if ndim > 1:
-                    axes_by_stride = sorted(range(ndim), key=lambda i: -abs(src_strides[i]))
-                    perm_shape = tuple(arr.shape[i] for i in axes_by_stride)
-                    inv_perm = [0] * ndim
-                    for i, ax in enumerate(axes_by_stride):
-                        inv_perm[ax] = i
-                    fill = arr.flat[0] if arr.size > 0 else 0
-                    new_arr = _np.full(perm_shape, fill, dtype=arr.dtype)
-                    arr = new_arr.transpose(inv_perm)
+            # Non-contiguous source with order='K': match the stride ordering.
+            # Applies when both have the same ndim (even if shapes differ).
+            src_strides = getattr(source, 'strides', None)
+            arr_ndim = len(arr.shape) if hasattr(arr, 'shape') else 0
+            src_ndim = getattr(source, 'ndim', 0)
+            if (isinstance(arr, ndarray) and src_strides is not None
+                    and arr_ndim == src_ndim and arr_ndim > 1):
+                ndim = arr_ndim
+                # Sort axes by descending absolute stride of source (outermost first)
+                axes_by_stride = sorted(range(ndim), key=lambda i: -abs(src_strides[i]))
+                perm_shape = tuple(arr.shape[i] for i in axes_by_stride)
+                inv_perm = [0] * ndim
+                for i, ax in enumerate(axes_by_stride):
+                    inv_perm[ax] = i
+                fill = arr.flat[0] if arr.size > 0 else 0
+                new_arr = _np.full(perm_shape, fill, dtype=arr.dtype)
+                arr = new_arr.transpose(inv_perm)
     # order='C' is the default (no fortran)
     return arr
 
