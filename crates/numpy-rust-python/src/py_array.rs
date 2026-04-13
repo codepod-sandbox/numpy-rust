@@ -3128,25 +3128,7 @@ impl PyNdArray {
         }),
         multiply: Some(|a, b, vm| number_bin_op(a, b, |x, y| x * y, vm)),
         true_divide: Some(|a, b, vm| {
-            // NumPy true_divide always returns float (integers are promoted to float64)
-            let result = number_bin_op(
-                a,
-                b,
-                |x, y| {
-                    let xf = if x.dtype().is_integer() || x.dtype() == DType::Bool {
-                        x.astype(DType::Float64)
-                    } else {
-                        x.clone()
-                    };
-                    let yf = if y.dtype().is_integer() || y.dtype() == DType::Bool {
-                        y.astype(DType::Float64)
-                    } else {
-                        y.clone()
-                    };
-                    &xf / &yf
-                },
-                vm,
-            )?;
+            let result = number_bin_op(a, b, |x, y| x / y, vm)?;
             // Check numpy errstate for divide-by-zero
             check_division_errstate(&result, vm)?;
             Ok(result)

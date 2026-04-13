@@ -1936,6 +1936,21 @@ def test_true_divide():
     assert_close(c[0], 10.0/3.0)
     assert_close(c[1], 5.0)
 
+def test_true_divide_integer_inputs_owned_by_core():
+    a = np.array([3, 4], dtype="int32")
+    b = np.array([2, 2], dtype="int32")
+    c = np.true_divide(a, b)
+    assert_eq(str(c.dtype), "float64")
+    assert_close(c[0], 1.5)
+    assert_close(c[1], 2.0)
+
+def test_true_divide_bool_inputs_owned_by_core():
+    a = np.array([True, False])
+    c = np.true_divide(a, 2)
+    assert_eq(str(c.dtype), "float64")
+    assert_close(c[0], 0.5)
+    assert_close(c[1], 0.0)
+
 def test_floor_divide():
     a = np.array([7.0, 10.0])
     b = np.array([2.0, 3.0])
