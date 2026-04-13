@@ -483,12 +483,9 @@ def python_string_repeat(value, count, *, wrap_chararray=False):
 
 
 def python_string_mod(format_str, values, *, wrap_chararray=False):
-    format_items, format_shape = python_string_items(format_str)
-    value_items, _ = python_string_items(values)
-    if len(value_items) == 1 and len(format_items) > 1:
-        value_items = value_items * len(format_items)
+    format_items, value_items, out_shape = _broadcast_pair(format_str, values)
     result = [fmt % value for fmt, value in zip(format_items, value_items)]
-    return _string_array_result(result, format_shape, wrap_chararray=wrap_chararray)
+    return _string_array_result(result, out_shape, wrap_chararray=wrap_chararray)
 
 
 def python_string_unicode_predicate(value, predicate):

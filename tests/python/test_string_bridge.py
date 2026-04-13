@@ -186,6 +186,29 @@ def test_add_and_multiply_share_bytes_preserving_operator_path():
     assert repeated_carr.tolist() == [b"abab", b"cdcd"]
 
 
+def test_mod_uses_shared_broadcast_and_return_paths():
+    arr = np.array(["%s", "[%s]"])
+    carr = np.char.asarray(arr)
+    values = np.array(["x", "y"])
+    bytes_formats = np.array([b"%s", b"[%s]"], dtype="|S4")
+    bytes_values = np.array([b"x", b"y"], dtype="|S1")
+
+    arr_out = np.char.mod(arr, values)
+    carr_out = carr % values
+    scalar_out = np.char.mod("%s", "x")
+    bytes_out = np.char.mod(bytes_formats, bytes_values)
+
+    assert type(arr_out) is np.ndarray
+    assert isinstance(carr_out, type(carr))
+    assert type(scalar_out) is np.ndarray
+    assert scalar_out.shape == ()
+    assert scalar_out.tolist() == "x"
+    assert getattr(bytes_out.dtype, "str", None) == "|S3"
+    assert arr_out.tolist() == ["x", "[y]"]
+    assert carr_out.tolist() == ["x", "[y]"]
+    assert bytes_out.tolist() == [b"x", b"[y]"]
+
+
 def test_startswith_shared_normalization_keeps_shape_and_return_kind():
     arr = np.array([["hello", "world"]])
     carr = np.char.asarray(arr)

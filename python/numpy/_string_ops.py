@@ -617,17 +617,7 @@ class _char_mod:
     @staticmethod
     def mod(format_str, values):
         """Element-wise string formatting."""
-        import numpy as _np
         if isinstance(format_str, chararray):
-            return format_str % values
-        if isinstance(format_str, (str, bytes)):
-            if isinstance(values, ndarray):
-                items = values.flatten().tolist()
-                result = [format_str % v for v in items]
-                out = _np.array(result)
-                if len(values.shape) > 1:
-                    out = out.reshape(values.shape)
-                return chararray._from_array(out)
             return format_str % values
         return python_string_mod(format_str, values)
 
