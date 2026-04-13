@@ -540,5 +540,7 @@ fn same_kind_rank(dtype: DType) -> u8 {
         DTypeKind::Float => 3,
         DTypeKind::Complex => 4,
         DTypeKind::String => 5,
+        DTypeKind::Temporal => 6,
+        DTypeKind::Object => 7,
     }
 }

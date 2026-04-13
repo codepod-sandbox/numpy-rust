@@ -8,9 +8,7 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::resolver::{BinaryOpPlan, CastPlan};
 use crate::storage::ArrayStorage;
-pub use crate::storage::{
-    BoxedDType, BoxedObjectScalar, BoxedScalar, BoxedStorage, BoxedTemporalScalar,
-};
+pub use crate::storage::{BoxedObjectScalar, BoxedScalar, BoxedStorage, BoxedTemporalScalar};
 
 /// The main N-dimensional array type, analogous to `numpy.ndarray`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +26,54 @@ impl ArrayFlags {
             writeable: true,
         }
     }
+
+    fn from_storage(storage: &ArrayStorage) -> Self {
+        fn check_c_contiguous(shape: &[usize], strides: &[isize]) -> bool {
+            if shape.is_empty() {
+                return true;
+            }
+            let mut expected = 1isize;
+            for (&dim, &stride) in shape.iter().rev().zip(strides.iter().rev()) {
+                if dim <= 1 {
+                    continue;
+                }
+                if stride != expected {
+                    return false;
+                }
+                expected *= dim as isize;
+            }
+            true
+        }
+
+        fn check_f_contiguous(shape: &[usize], strides: &[isize]) -> bool {
+            if shape.is_empty() {
+                return true;
+            }
+            let mut expected = 1isize;
+            for (&dim, &stride) in shape.iter().zip(strides.iter()) {
+                if dim <= 1 {
+                    continue;
+                }
+                if stride != expected {
+                    return false;
+                }
+                expected *= dim as isize;
+            }
+            true
+        }
+
+        if storage.is_boxed() {
+            let shape = storage.shape_vec();
+            let strides = storage.strides_vec();
+            Self {
+                c_contiguous: check_c_contiguous(&shape, &strides),
+                f_contiguous: check_f_contiguous(&shape, &strides),
+                writeable: true,
+            }
+        } else {
+            Self::from_data(&storage.data())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -40,51 +86,6 @@ impl StorageMutationGuard {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct BoxedArray {
-    storage: BoxedStorage,
-    dtype: BoxedDType,
-}
-
-impl BoxedArray {
-    pub(crate) fn new(storage: BoxedStorage, dtype: BoxedDType) -> Self {
-        Self { storage, dtype }
-    }
-
-    pub fn from_boxed_scalars(
-        elements: Vec<BoxedScalar>,
-        shape: &[usize],
-        dtype: BoxedDType,
-    ) -> Result<Self> {
-        let storage = BoxedStorage::from_scalars(elements, shape, dtype)?;
-        Ok(Self::new(storage, dtype))
-    }
-
-    pub fn dtype(&self) -> BoxedDType {
-        self.dtype
-    }
-
-    pub fn shape(&self) -> &[usize] {
-        self.storage.shape()
-    }
-
-    pub fn ndim(&self) -> usize {
-        self.storage.ndim()
-    }
-
-    pub fn size(&self) -> usize {
-        self.storage.size()
-    }
-
-    pub(crate) fn storage(&self) -> &BoxedStorage {
-        &self.storage
-    }
-
-    pub(crate) fn storage_mut(&mut self) -> &mut BoxedStorage {
-        &mut self.storage
-    }
-}
-
 struct ValidatedRuntimeState {
     descriptor: &'static DTypeDescriptor,
     shape: Vec<usize>,
@@ -94,17 +95,25 @@ struct ValidatedRuntimeState {
 
 impl ValidatedRuntimeState {
     fn new(storage: &ArrayStorage, descriptor: &'static DTypeDescriptor) -> Self {
-        let data = storage.data();
-        assert_eq!(
-            data.dtype(),
-            descriptor.id.storage_dtype(),
-            "descriptor storage dtype must match backing storage"
-        );
+        if storage.is_boxed() {
+            assert_eq!(
+                storage.boxed_dtype(),
+                Some(descriptor.id),
+                "boxed descriptor dtype must match backing boxed storage"
+            );
+        } else {
+            let data = storage.data();
+            assert_eq!(
+                data.dtype(),
+                descriptor.id.storage_dtype(),
+                "descriptor storage dtype must match backing storage"
+            );
+        }
         Self {
             descriptor,
-            shape: data.shape().to_vec(),
-            strides: data.strides(),
-            flags: ArrayFlags::from_data(&data),
+            shape: storage.shape_vec(),
+            strides: storage.strides_vec(),
+            flags: ArrayFlags::from_storage(storage),
         }
     }
 }
@@ -184,6 +193,16 @@ impl NdArray {
         Self::from_data(ArrayData::Float64(ArrayD::from_elem(IxDyn(&[]), value)))
     }
 
+    pub fn from_boxed_scalars(
+        elements: Vec<BoxedScalar>,
+        shape: &[usize],
+        dtype: DType,
+    ) -> Result<Self> {
+        let descriptor = descriptor_for_dtype(dtype);
+        let storage = ArrayStorage::from_boxed_scalars(elements, shape, dtype)?;
+        Ok(Self::from_parts(storage, descriptor))
+    }
+
     pub(crate) fn from_float64_data(data: ArrayD<f64>) -> Self {
         Self::from_data(ArrayData::Float64(data))
     }
@@ -230,7 +249,11 @@ impl NdArray {
     }
 
     pub fn debug_storage_repr(&self) -> String {
-        format!("{:?}", self.data())
+        if let Some(storage) = self.storage.boxed_storage() {
+            format!("{storage:?}")
+        } else {
+            format!("{:?}", self.data())
+        }
     }
 
     pub fn byte_offset_bytes(&self) -> usize {
@@ -328,6 +351,16 @@ impl NdArray {
     }
 
     pub fn slice_axis_for_test(&self, start: usize, end: usize) -> Self {
+        if self.storage.is_boxed() {
+            let info = [SliceInfoElem::Slice {
+                start: start as isize,
+                end: Some(end as isize),
+                step: 1,
+            }];
+            let storage = self.storage.slice_view(info.as_slice()).unwrap();
+            return Self::from_parts(storage, self.descriptor()).with_preserved_dtype(self);
+        }
+
         let info = [SliceInfoElem::Slice {
             start: start as isize,
             end: Some(end as isize),
@@ -400,6 +433,26 @@ impl NdArray {
     pub(crate) fn refresh_runtime_state(&mut self) {
         let runtime = ValidatedRuntimeState::new(&self.storage, self.descriptor);
         self.apply_runtime_state(runtime);
+    }
+
+    pub fn get_boxed(&self, index: &[usize]) -> Result<BoxedScalar> {
+        self.storage
+            .boxed_storage()
+            .ok_or_else(|| {
+                NumpyError::TypeError("boxed scalar access requires boxed dtype".into())
+            })?
+            .get(index)
+    }
+
+    pub fn set_boxed(&mut self, index: &[usize], value: BoxedScalar) -> Result<()> {
+        self.storage_mut()
+            .boxed_storage_mut()
+            .ok_or_else(|| {
+                NumpyError::TypeError("boxed scalar assignment requires boxed dtype".into())
+            })?
+            .set(index, value)?;
+        self.refresh_runtime_state();
+        Ok(())
     }
 
     fn commit_runtime_state(&mut self, storage: ArrayStorage, runtime: ValidatedRuntimeState) {
@@ -797,10 +850,10 @@ mod tests {
 
     #[test]
     fn boxed_object_scalar_round_trip_preserves_value() {
-        let arr = BoxedArray::from_boxed_scalars(
+        let arr = NdArray::from_boxed_scalars(
             vec![BoxedScalar::Object(BoxedObjectScalar::Text("hello".into()))],
             &[1],
-            BoxedDType::Object,
+            DType::Object,
         )
         .unwrap();
         assert_eq!(

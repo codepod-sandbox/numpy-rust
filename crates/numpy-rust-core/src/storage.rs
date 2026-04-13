@@ -54,6 +54,7 @@ impl Clone for ViewStorage {
 enum StorageKind {
     Backend(SharedBackend),
     View(ViewStorage),
+    Boxed(BoxedStorage),
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,9 @@ impl ArrayStorage {
         match self.kind {
             StorageKind::Backend(backend) => backend.data.read().unwrap().clone(),
             StorageKind::View(view) => view.cache.into_inner().unwrap().data,
+            StorageKind::Boxed(_) => {
+                panic!("boxed storage does not have numeric ArrayData backing")
+            }
         }
     }
 
@@ -109,6 +113,59 @@ impl ArrayStorage {
                 }
                 view.cache.read().unwrap().data.clone()
             }
+            StorageKind::Boxed(_) => {
+                panic!("boxed storage does not have numeric ArrayData backing")
+            }
+        }
+    }
+
+    pub fn from_boxed_scalars(
+        elements: Vec<BoxedScalar>,
+        shape: &[usize],
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self {
+            kind: StorageKind::Boxed(BoxedStorage::from_scalars(elements, shape, dtype)?),
+            string_width: None,
+        })
+    }
+
+    pub(crate) fn shape_vec(&self) -> Vec<usize> {
+        match &self.kind {
+            StorageKind::Backend(_) | StorageKind::View(_) => self.data().shape().to_vec(),
+            StorageKind::Boxed(storage) => storage.shape().to_vec(),
+        }
+    }
+
+    pub(crate) fn strides_vec(&self) -> Vec<isize> {
+        match &self.kind {
+            StorageKind::Backend(_) | StorageKind::View(_) => self.data().strides(),
+            StorageKind::Boxed(storage) => storage.strides().to_vec(),
+        }
+    }
+
+    pub(crate) fn is_boxed(&self) -> bool {
+        matches!(self.kind, StorageKind::Boxed(_))
+    }
+
+    pub(crate) fn boxed_dtype(&self) -> Option<DType> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => Some(storage.dtype()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn boxed_storage(&self) -> Option<&BoxedStorage> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => Some(storage),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn boxed_storage_mut(&mut self) -> Option<&mut BoxedStorage> {
+        match &mut self.kind {
+            StorageKind::Boxed(storage) => Some(storage),
+            _ => None,
         }
     }
 
@@ -127,17 +184,25 @@ impl ArrayStorage {
             StorageKind::View(_) => {
                 panic!("generic storage mutation is not supported for view storage")
             }
+            StorageKind::Boxed(_) => {
+                panic!("generic numeric mutation is not supported for boxed storage")
+            }
         }
     }
 
     pub fn overlaps(&self, other: &Self) -> bool {
-        self.data().shares_memory_with(&other.data())
+        match (&self.kind, &other.kind) {
+            (StorageKind::Boxed(lhs), StorageKind::Boxed(rhs)) => lhs.shares_memory_with(rhs),
+            (StorageKind::Boxed(_), _) | (_, StorageKind::Boxed(_)) => false,
+            _ => self.data().shares_memory_with(&other.data()),
+        }
     }
 
     pub(crate) fn version(&self) -> usize {
         match &self.kind {
             StorageKind::Backend(backend) => backend.version.load(Ordering::Relaxed),
             StorageKind::View(view) => view.base.version(),
+            StorageKind::Boxed(storage) => storage.version(),
         }
     }
 
@@ -170,22 +235,31 @@ impl ArrayStorage {
                 }
                 view.base.logical_offset_elements() + offset
             }
+            StorageKind::Boxed(storage) => storage.logical_offset_elements(),
         }
     }
 
     pub(crate) fn slice_view(&self, info: &[SliceInfoElem]) -> Result<Self> {
-        let data = self.data().slice_view(info)?;
-        Ok(Self {
-            kind: StorageKind::View(ViewStorage {
-                base: Box::new(self.clone()),
-                info: info.to_vec(),
-                cache: RwLock::new(ViewCache {
-                    version: self.version(),
-                    data,
-                }),
+        match &self.kind {
+            StorageKind::Boxed(storage) => Ok(Self {
+                kind: StorageKind::Boxed(storage.slice_view(info)?),
+                string_width: self.string_width,
             }),
-            string_width: self.string_width,
-        })
+            _ => {
+                let data = self.data().slice_view(info)?;
+                Ok(Self {
+                    kind: StorageKind::View(ViewStorage {
+                        base: Box::new(self.clone()),
+                        info: info.to_vec(),
+                        cache: RwLock::new(ViewCache {
+                            version: self.version(),
+                            data,
+                        }),
+                    }),
+                    string_width: self.string_width,
+                })
+            }
+        }
     }
 
     pub(crate) fn assign_element(
@@ -205,6 +279,9 @@ impl ArrayStorage {
                 }
                 result
             }
+            StorageKind::Boxed(_) => Err(NumpyError::TypeError(
+                "numeric scalar assignment is not supported for boxed storage".into(),
+            )),
         }
     }
 
@@ -228,6 +305,9 @@ impl ArrayStorage {
                 )?;
                 refresh_view_cache(view)
             }
+            StorageKind::Boxed(_) => Err(NumpyError::TypeError(
+                "numeric slice assignment is not supported for boxed storage".into(),
+            )),
         }
     }
 
@@ -254,6 +334,9 @@ impl ArrayStorage {
                 )?;
                 refresh_view_cache(view)
             }
+            StorageKind::Boxed(_) => Err(NumpyError::TypeError(
+                "numeric indexed assignment is not supported for boxed storage".into(),
+            )),
         }
     }
 
@@ -286,18 +369,33 @@ impl ArrayStorage {
                 )?;
                 refresh_view_cache(view)
             }
+            StorageKind::Boxed(_) => Err(NumpyError::TypeError(
+                "numeric masked assignment is not supported for boxed storage".into(),
+            )),
         }
     }
 
     pub fn zeros(shape: &[usize], descriptor: &'static DTypeDescriptor) -> Self {
+        assert!(
+            !descriptor.id.is_boxed(),
+            "boxed dtypes require boxed storage constructors"
+        );
         Self::from_array_data(fill(shape, descriptor.id.storage_dtype(), FillValue::Zero))
     }
 
     pub fn ones(shape: &[usize], descriptor: &'static DTypeDescriptor) -> Self {
+        assert!(
+            !descriptor.id.is_boxed(),
+            "boxed dtypes require boxed storage constructors"
+        );
         Self::from_array_data(fill(shape, descriptor.id.storage_dtype(), FillValue::One))
     }
 
     pub fn full_f64(shape: &[usize], descriptor: &'static DTypeDescriptor, value: f64) -> Self {
+        assert!(
+            !descriptor.id.is_boxed(),
+            "boxed dtypes require boxed storage constructors"
+        );
         let data = fill_f64(shape, descriptor.id, value);
         Self::from_array_data(data)
     }
@@ -328,13 +426,6 @@ impl Default for ArrayStorage {
     fn default() -> Self {
         Self::new()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoxedDType {
-    Object,
-    Datetime64,
-    Timedelta64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -381,17 +472,13 @@ enum BoxedStorageKind {
 #[derive(Debug, Clone)]
 pub struct BoxedStorage {
     kind: BoxedStorageKind,
-    dtype: BoxedDType,
+    dtype: DType,
     shape: Vec<usize>,
     strides: Vec<isize>,
 }
 
 impl BoxedStorage {
-    pub fn from_scalars(
-        elements: Vec<BoxedScalar>,
-        shape: &[usize],
-        dtype: BoxedDType,
-    ) -> Result<Self> {
+    pub fn from_scalars(elements: Vec<BoxedScalar>, shape: &[usize], dtype: DType) -> Result<Self> {
         let total = shape
             .iter()
             .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
@@ -421,7 +508,7 @@ impl BoxedStorage {
         })
     }
 
-    pub fn dtype(&self) -> BoxedDType {
+    pub fn dtype(&self) -> DType {
         self.dtype
     }
 
@@ -505,14 +592,61 @@ impl BoxedStorage {
         }
         Ok(values)
     }
+
+    fn version(&self) -> usize {
+        match &self.kind {
+            BoxedStorageKind::Backend(backend) => backend.version.load(Ordering::Relaxed),
+            BoxedStorageKind::View(view) => view.base.version(),
+        }
+    }
+
+    fn logical_offset_elements(&self) -> isize {
+        match &self.kind {
+            BoxedStorageKind::Backend(_) => 0,
+            BoxedStorageKind::View(view) => {
+                let base_shape = view.base.shape().to_vec();
+                let base_strides = view.base.strides().to_vec();
+                let mut axis = 0usize;
+                let mut offset = 0isize;
+                for elem in &view.info {
+                    match *elem {
+                        SliceInfoElem::Index(index) => {
+                            let len = base_shape[axis] as isize;
+                            let idx = if index < 0 { index + len } else { index };
+                            offset += idx * base_strides[axis];
+                            axis += 1;
+                        }
+                        SliceInfoElem::Slice { start, .. } => {
+                            let len = base_shape[axis] as isize;
+                            let idx = if start < 0 { start + len } else { start };
+                            offset += idx * base_strides[axis];
+                            axis += 1;
+                        }
+                        SliceInfoElem::NewAxis => {}
+                    }
+                }
+                view.base.logical_offset_elements() + offset
+            }
+        }
+    }
+
+    fn shares_memory_with(&self, other: &Self) -> bool {
+        fn root_ptr(storage: &BoxedStorage) -> usize {
+            match &storage.kind {
+                BoxedStorageKind::Backend(backend) => Arc::as_ptr(&backend.data) as usize,
+                BoxedStorageKind::View(view) => root_ptr(&view.base),
+            }
+        }
+        root_ptr(self) == root_ptr(other)
+    }
 }
 
-fn boxed_scalar_matches_dtype(value: &BoxedScalar, dtype: BoxedDType) -> bool {
+fn boxed_scalar_matches_dtype(value: &BoxedScalar, dtype: DType) -> bool {
     matches!(
         (value, dtype),
-        (BoxedScalar::Object(_), BoxedDType::Object)
-            | (BoxedScalar::Datetime(_), BoxedDType::Datetime64)
-            | (BoxedScalar::Timedelta(_), BoxedDType::Timedelta64)
+        (BoxedScalar::Object(_), DType::Object)
+            | (BoxedScalar::Datetime(_), DType::Datetime64)
+            | (BoxedScalar::Timedelta(_), DType::Timedelta64)
     )
 }
 
@@ -913,6 +1047,9 @@ fn fill(shape: &[usize], dtype: DType, fill: FillValue) -> ArrayData {
             FillValue::One => ArrayD::from_elem(sh, Complex::<f64>::new(1.0, 0.0)).into_shared(),
         }),
         DType::Str => ArrayData::Str(ArrayD::from_elem(sh, String::new()).into_shared()),
+        DType::Object | DType::Datetime64 | DType::Timedelta64 => {
+            panic!("boxed dtypes require boxed storage backends")
+        }
         DType::Int8
         | DType::Int16
         | DType::UInt8
@@ -941,6 +1078,9 @@ fn fill_f64(shape: &[usize], dtype: DType, value: f64) -> ArrayData {
             ArrayD::from_elem(sh, Complex::<f64>::new(value, 0.0)).into_shared(),
         ),
         DType::Str => ArrayData::Str(ArrayD::from_elem(sh, value.to_string()).into_shared()),
+        DType::Object | DType::Datetime64 | DType::Timedelta64 => {
+            panic!("boxed dtypes require boxed storage backends")
+        }
         _ => unreachable!("storage fill_f64 should only see canonical storage dtypes"),
     };
 
@@ -994,9 +1134,8 @@ fn write_eye_diagonal(data: &mut ArrayData, rows: usize, cols: usize, k: isize) 
 mod tests {
     use ndarray::SliceInfoElem;
 
-    use crate::array::{
-        BoxedArray, BoxedDType, BoxedObjectScalar, BoxedScalar, BoxedTemporalScalar,
-    };
+    use crate::array::{BoxedObjectScalar, BoxedScalar, BoxedTemporalScalar, NdArray};
+    use crate::dtype::DType;
 
     use super::BoxedStorage;
 
@@ -1009,7 +1148,7 @@ mod tests {
                 BoxedScalar::Object(BoxedObjectScalar::Text("c".into())),
             ],
             &[3],
-            BoxedDType::Object,
+            DType::Object,
         )
         .unwrap();
         let mut view = base
@@ -1032,14 +1171,14 @@ mod tests {
 
     #[test]
     fn boxed_temporal_scalar_round_trip_preserves_nat() {
-        let arr = BoxedArray::from_boxed_scalars(
+        let arr = NdArray::from_boxed_scalars(
             vec![BoxedScalar::Timedelta(BoxedTemporalScalar {
                 value: 0,
                 unit: "generic".into(),
                 is_nat: true,
             })],
             &[1],
-            BoxedDType::Timedelta64,
+            DType::Timedelta64,
         )
         .unwrap();
         assert!(matches!(

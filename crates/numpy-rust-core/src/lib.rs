@@ -19,10 +19,7 @@ pub mod struct_array;
 pub mod utility;
 pub use struct_array::{FieldSpec, StructArrayData};
 
-pub use array::{
-    BoxedArray, BoxedDType, BoxedObjectScalar, BoxedScalar, BoxedStorage, BoxedTemporalScalar,
-    NdArray,
-};
+pub use array::{BoxedObjectScalar, BoxedScalar, BoxedStorage, BoxedTemporalScalar, NdArray};
 pub use array_data::ArrayData;
 pub use creation::{arange, eye, full, linspace, linspace_with_step, ones_like, zeros_like};
 pub use descriptor::{descriptor_for_dtype, DTypeDescriptor};

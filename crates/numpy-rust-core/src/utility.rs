@@ -1,11 +1,14 @@
 use crate::array_data::ArrayD;
 use ndarray::IxDyn;
+use num_complex::Complex;
 
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
-use crate::kernel::{DotKernelOp, PredicateKernelOp, PredicatePresenceOp, WhereKernelOp};
+use crate::kernel::{
+    DotKernelOp, PredicateKernelOp, PredicatePresenceOp, TruthKernelOp, WhereKernelOp,
+};
 use crate::resolver::{resolve_dot_op, resolve_where_op, DotOp, DotOpPlan, WhereOp, WhereOpPlan};
 use crate::{DType, NdArray};
 
@@ -111,9 +114,9 @@ fn prepare_where_execution(
     let shape_xy = broadcast_shape(x.shape(), y.shape())?;
     let out_shape = broadcast_shape(cond.shape(), &shape_xy)?;
 
-    let cond = broadcast_array_data(&ArrayData::Bool(bool_cond), &out_shape);
-    let x = broadcast_array_data(&x.cast_for_execution(plan.x_cast()), &out_shape);
-    let y = broadcast_array_data(&y.cast_for_execution(plan.y_cast()), &out_shape);
+    let cond = broadcast_array_data(ArrayData::Bool(bool_cond), &out_shape);
+    let x = broadcast_array_data(x.cast_for_execution(plan.x_cast()), &out_shape);
+    let y = broadcast_array_data(y.cast_for_execution(plan.y_cast()), &out_shape);
 
     Ok((cond, x, y, plan))
 }
@@ -140,7 +143,8 @@ impl NdArray {
     }
 
     /// Reinterpret the raw data as a different dtype (view).
-    /// Only supports same-itemsize reinterpretation for now.
+    /// Reinterprets packed logical bytes, adjusting the final dimension
+    /// to match NumPy's view(dtype=...) semantics for contiguous arrays.
     pub fn view_as_dtype(&self, target: DType) -> Result<NdArray> {
         let src_dt = self.dtype();
         if src_dt == target {
@@ -150,103 +154,26 @@ impl NdArray {
         let tgt_size = target.itemsize();
         let shape = self.shape().to_vec();
 
-        // Same itemsize: reinterpret bytes 1:1
-        if src_size == tgt_size {
-            match (self.data(), target) {
-                // Bool (1 byte) <-> Int8 (1 byte)
-                (ArrayData::Bool(a), DType::Int8) => {
-                    let raw: Vec<i32> = a.iter().map(|&b| if b { 1 } else { 0 }).collect();
-                    Ok(NdArray::from_data(ArrayData::Int32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    ))
-                    .astype(DType::Int8))
-                }
-                (ArrayData::Int32(a), DType::Bool) if src_dt == DType::Int8 => {
-                    let raw: Vec<bool> = a.iter().map(|&v| v != 0).collect();
-                    Ok(NdArray::from_data(ArrayData::Bool(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    )))
-                }
-                // UInt16/Int16 (stored as Int32) <-> Float16 (stored as Float32)
-                (ArrayData::Int32(a), DType::Float16)
-                    if src_dt == DType::UInt16 || src_dt == DType::Int16 =>
-                {
-                    let raw: Vec<f32> = a.iter().map(|&v| half_bits_to_f32(v as u16)).collect();
-                    Ok(NdArray::from_data(ArrayData::Float32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    ))
-                    .with_declared_dtype(DType::Float16))
-                }
-                (ArrayData::Float32(a), DType::UInt16) if src_dt == DType::Float16 => {
-                    let raw: Vec<i32> = a.iter().map(|&f| f32_to_half_bits(f) as i32).collect();
-                    Ok(NdArray::from_data(ArrayData::Int32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    ))
-                    .with_declared_dtype(DType::UInt16))
-                }
-                (ArrayData::Float32(a), DType::Int16) if src_dt == DType::Float16 => {
-                    let raw: Vec<i32> = a
-                        .iter()
-                        .map(|&f| f32_to_half_bits(f) as i16 as i32)
-                        .collect();
-                    Ok(NdArray::from_data(ArrayData::Int32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    ))
-                    .with_declared_dtype(DType::Int16))
-                }
-                // Float32 (4 bytes) <-> Int32 (4 bytes)
-                (ArrayData::Float32(a), DType::Int32) => {
-                    let raw: Vec<i32> = a.iter().map(|&f| f.to_bits() as i32).collect();
-                    Ok(NdArray::from_data(ArrayData::Int32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    )))
-                }
-                (ArrayData::Int32(a), DType::Float32) => {
-                    let raw: Vec<f32> = a.iter().map(|&i| f32::from_bits(i as u32)).collect();
-                    Ok(NdArray::from_data(ArrayData::Float32(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    )))
-                }
-                // Float64 (8 bytes) <-> Int64 (8 bytes)
-                (ArrayData::Float64(a), DType::Int64) => {
-                    let raw: Vec<i64> = a.iter().map(|&f| f.to_bits() as i64).collect();
-                    Ok(NdArray::from_data(ArrayData::Int64(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    )))
-                }
-                (ArrayData::Int64(a), DType::Float64) => {
-                    let raw: Vec<f64> = a.iter().map(|&i| f64::from_bits(i as u64)).collect();
-                    Ok(NdArray::from_data(ArrayData::Float64(
-                        ArrayD::from_shape_vec(IxDyn(&shape), raw)
-                            .unwrap()
-                            .into_shared(),
-                    )))
-                }
-                _ => {
-                    // Fall back to astype for unsupported view combinations
-                    Ok(self.astype(target))
-                }
-            }
-        } else {
-            // Different itemsizes: fall back to astype
-            Ok(self.astype(target))
+        if src_dt == DType::Str || target == DType::Str {
+            return Ok(self.astype(target));
         }
+
+        if self.ndim() == 0 && src_size != tgt_size {
+            return Err(NumpyError::ValueError(
+                "Changing the dtype of a 0d array is only supported if the itemsize is unchanged"
+                    .into(),
+            ));
+        }
+
+        let bytes = logical_bytes_le(self)?;
+        if bytes.len() % tgt_size != 0 {
+            return Err(NumpyError::ValueError(
+                "new type not compatible with array size".into(),
+            ));
+        }
+
+        let target_shape = reinterpret_shape(&shape, src_size, tgt_size)?;
+        reinterpret_bytes_le(&bytes, target, &target_shape)
     }
 
     /// Check if any element is infinite.
@@ -269,6 +196,289 @@ impl NdArray {
     }
 }
 
+fn reinterpret_shape(shape: &[usize], src_size: usize, tgt_size: usize) -> Result<Vec<usize>> {
+    if shape.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut out = shape.to_vec();
+    let last = out.len() - 1;
+    let last_bytes = out[last]
+        .checked_mul(src_size)
+        .ok_or_else(|| NumpyError::ValueError("array too large".into()))?;
+    if last_bytes % tgt_size != 0 {
+        return Err(NumpyError::ValueError(
+            "new type not compatible with array shape".into(),
+        ));
+    }
+    out[last] = last_bytes / tgt_size;
+    Ok(out)
+}
+
+fn collect_numeric_bytes<T, const N: usize>(
+    values: impl Iterator<Item = T>,
+    to_bytes: impl Fn(T) -> [u8; N],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    for value in values {
+        out.extend_from_slice(&to_bytes(value));
+    }
+    out
+}
+
+fn logical_bytes_le(array: &NdArray) -> Result<Vec<u8>> {
+    let flat = array.flatten();
+    Ok(match (array.dtype(), flat.data()) {
+        (DType::Bool, ArrayData::Bool(arr)) => arr.iter().map(|&b| u8::from(b)).collect(),
+        (DType::Int8, ArrayData::Int32(arr)) => {
+            arr.iter().flat_map(|&v| (v as i8).to_le_bytes()).collect()
+        }
+        (DType::UInt8, ArrayData::Int32(arr)) => {
+            arr.iter().flat_map(|&v| (v as u8).to_le_bytes()).collect()
+        }
+        (DType::Int16, ArrayData::Int32(arr)) => {
+            arr.iter().flat_map(|&v| (v as i16).to_le_bytes()).collect()
+        }
+        (DType::UInt16, ArrayData::Int32(arr)) => {
+            arr.iter().flat_map(|&v| (v as u16).to_le_bytes()).collect()
+        }
+        (DType::Int32, ArrayData::Int32(arr)) => {
+            collect_numeric_bytes(arr.iter().copied(), i32::to_le_bytes)
+        }
+        (DType::UInt32, ArrayData::Int64(arr)) => {
+            arr.iter().flat_map(|&v| (v as u32).to_le_bytes()).collect()
+        }
+        (DType::Int64, ArrayData::Int64(arr)) => {
+            collect_numeric_bytes(arr.iter().copied(), i64::to_le_bytes)
+        }
+        (DType::UInt64, ArrayData::Int64(arr)) => {
+            arr.iter().flat_map(|&v| (v as u64).to_le_bytes()).collect()
+        }
+        (DType::Float16, ArrayData::Float32(arr)) => arr
+            .iter()
+            .flat_map(|&v| f32_to_half_bits(v).to_le_bytes())
+            .collect(),
+        (DType::Float32, ArrayData::Float32(arr)) => {
+            collect_numeric_bytes(arr.iter().copied(), f32::to_le_bytes)
+        }
+        (DType::Float64, ArrayData::Float64(arr)) => {
+            collect_numeric_bytes(arr.iter().copied(), f64::to_le_bytes)
+        }
+        (DType::Complex64, ArrayData::Complex64(arr)) => arr
+            .iter()
+            .flat_map(|&v| {
+                let mut out = Vec::with_capacity(8);
+                out.extend_from_slice(&v.re.to_le_bytes());
+                out.extend_from_slice(&v.im.to_le_bytes());
+                out
+            })
+            .collect(),
+        (DType::Complex128, ArrayData::Complex128(arr)) => arr
+            .iter()
+            .flat_map(|&v| {
+                let mut out = Vec::with_capacity(16);
+                out.extend_from_slice(&v.re.to_le_bytes());
+                out.extend_from_slice(&v.im.to_le_bytes());
+                out
+            })
+            .collect(),
+        _ => {
+            return Err(NumpyError::TypeError(format!(
+                "view not supported for dtype {}",
+                array.dtype()
+            )))
+        }
+    })
+}
+
+fn reinterpret_bytes_le(bytes: &[u8], target: DType, shape: &[usize]) -> Result<NdArray> {
+    let data = match target {
+        DType::Bool => ArrayData::Bool(
+            ArrayD::from_shape_vec(IxDyn(shape), bytes.iter().map(|&b| b != 0).collect())
+                .unwrap()
+                .into_shared(),
+        ),
+        DType::Int8 => ArrayData::Int32(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .iter()
+                    .map(|&b| i8::from_le_bytes([b]) as i32)
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::UInt8 => ArrayData::Int32(
+            ArrayD::from_shape_vec(IxDyn(shape), bytes.iter().map(|&b| b as i32).collect())
+                .unwrap()
+                .into_shared(),
+        ),
+        DType::Int16 => ArrayData::Int32(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(2)
+                    .map(|c| i16::from_le_bytes([c[0], c[1]]) as i32)
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::UInt16 => ArrayData::Int32(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]) as i32)
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Int32 => ArrayData::Int32(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(4)
+                    .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::UInt32 => ArrayData::Int64(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(4)
+                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Int64 => ArrayData::Int64(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(8)
+                    .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::UInt64 => ArrayData::Int64(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(8)
+                    .map(|c| {
+                        u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as i64
+                    })
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Float16 => ArrayData::Float32(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(2)
+                    .map(|c| half_bits_to_f32(u16::from_le_bytes([c[0], c[1]])))
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Float32 => ArrayData::Float32(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Float64 => ArrayData::Float64(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(8)
+                    .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Complex64 => ArrayData::Complex64(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(8)
+                    .map(|c| {
+                        Complex::new(
+                            f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                            f32::from_le_bytes([c[4], c[5], c[6], c[7]]),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Complex128 => ArrayData::Complex128(
+            ArrayD::from_shape_vec(
+                IxDyn(shape),
+                bytes
+                    .chunks_exact(16)
+                    .map(|c| {
+                        Complex::new(
+                            f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]),
+                            f64::from_le_bytes([
+                                c[8], c[9], c[10], c[11], c[12], c[13], c[14], c[15],
+                            ]),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap()
+            .into_shared(),
+        ),
+        DType::Object | DType::Datetime64 | DType::Timedelta64 => {
+            return Err(NumpyError::TypeError(format!(
+                "view not supported for dtype {}",
+                target
+            )));
+        }
+        DType::Str => {
+            return Err(NumpyError::TypeError(
+                "string views are not supported".into(),
+            ));
+        }
+    };
+    let result = NdArray::from_data(data);
+    Ok(
+        if matches!(
+            target,
+            DType::Int8
+                | DType::UInt8
+                | DType::Int16
+                | DType::UInt16
+                | DType::UInt32
+                | DType::UInt64
+                | DType::Float16
+        ) {
+            result.with_declared_dtype(target)
+        } else {
+            result
+        },
+    )
+}
+
 fn execute_predicate(input: &NdArray, op: PredicateKernelOp) -> NdArray {
     let descriptor = descriptor_for_dtype(input.dtype());
     let kernel = descriptor
@@ -285,7 +495,7 @@ fn execute_predicate_presence(input: &NdArray, op: PredicatePresenceOp) -> bool 
             input.dtype()
         )
     });
-    kernel(input.data()).expect("predicate presence kernel dtype mismatch")
+    kernel(&input.data()).expect("predicate presence kernel dtype mismatch")
 }
 
 fn flattened_float64(array: &NdArray) -> ArrayD<f64> {
@@ -293,11 +503,20 @@ fn flattened_float64(array: &NdArray) -> ArrayD<f64> {
 }
 
 fn nonzero_linear_indices(array: &NdArray) -> Vec<usize> {
-    flattened_float64(array)
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, &val)| (val != 0.0).then_some(idx))
-        .collect()
+    let input = array.data();
+    let descriptor = descriptor_for_dtype(input.dtype());
+    let kernel = descriptor
+        .truth_kernel(TruthKernelOp::ToBool)
+        .expect("truth kernel registered for storage dtype");
+    let mask = kernel(input).expect("truth kernel executes for storage dtype");
+    match mask {
+        ArrayData::Bool(values) => values
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &val)| val.then_some(idx))
+            .collect(),
+        _ => unreachable!("truth kernel must produce bool storage"),
+    }
 }
 
 fn linear_index_to_coords(

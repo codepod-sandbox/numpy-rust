@@ -28,6 +28,8 @@ pub enum DTypeKind {
     Float,
     Complex,
     String,
+    Object,
+    Temporal,
 }
 
 #[derive(Debug)]
@@ -264,6 +266,27 @@ static STR_DESCRIPTOR: DTypeDescriptor = DTypeDescriptor {
     kind: DTypeKind::String,
 };
 
+static OBJECT_DESCRIPTOR: DTypeDescriptor = DTypeDescriptor {
+    id: DType::Object,
+    name: "object",
+    itemsize: std::mem::size_of::<usize>(),
+    kind: DTypeKind::Object,
+};
+
+static DATETIME64_DESCRIPTOR: DTypeDescriptor = DTypeDescriptor {
+    id: DType::Datetime64,
+    name: "datetime64",
+    itemsize: 8,
+    kind: DTypeKind::Temporal,
+};
+
+static TIMEDELTA64_DESCRIPTOR: DTypeDescriptor = DTypeDescriptor {
+    id: DType::Timedelta64,
+    name: "timedelta64",
+    itemsize: 8,
+    kind: DTypeKind::Temporal,
+};
+
 pub fn descriptor_for_dtype(dtype: DType) -> &'static DTypeDescriptor {
     match dtype {
         DType::Bool => &BOOL_DESCRIPTOR,
@@ -281,6 +304,9 @@ pub fn descriptor_for_dtype(dtype: DType) -> &'static DTypeDescriptor {
         DType::Complex64 => &COMPLEX64_DESCRIPTOR,
         DType::Complex128 => &COMPLEX128_DESCRIPTOR,
         DType::Str => &STR_DESCRIPTOR,
+        DType::Object => &OBJECT_DESCRIPTOR,
+        DType::Datetime64 => &DATETIME64_DESCRIPTOR,
+        DType::Timedelta64 => &TIMEDELTA64_DESCRIPTOR,
     }
 }
 

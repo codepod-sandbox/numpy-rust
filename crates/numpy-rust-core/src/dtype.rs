@@ -16,6 +16,9 @@ pub enum DType {
     Complex64,  // Complex<f32>
     Complex128, // Complex<f64>
     Str,
+    Object,
+    Datetime64,
+    Timedelta64,
 }
 
 impl DType {
@@ -35,6 +38,12 @@ impl DType {
         let b = other;
         if a == b {
             return a;
+        }
+        if a == DType::Object || b == DType::Object {
+            return DType::Object;
+        }
+        if a.is_temporal() || b.is_temporal() {
+            return if a == b { a } else { DType::Object };
         }
         if a == DType::Str || b == DType::Str {
             return DType::Str;
@@ -158,6 +167,9 @@ impl DType {
             DType::Complex64 => 8,
             DType::Complex128 => 9,
             DType::Str => 255,
+            DType::Object => 250,
+            DType::Datetime64 => 251,
+            DType::Timedelta64 => 252,
         }
     }
 
@@ -170,6 +182,8 @@ impl DType {
             DType::Int64 | DType::UInt64 | DType::Float64 | DType::Complex64 => 8,
             DType::Complex128 => 16,
             DType::Str => 0, // variable-length
+            DType::Object => std::mem::size_of::<usize>(),
+            DType::Datetime64 | DType::Timedelta64 => 8,
         }
     }
 
@@ -234,6 +248,18 @@ impl DType {
     pub fn is_string(self) -> bool {
         matches!(self, DType::Str)
     }
+
+    pub fn is_object(self) -> bool {
+        matches!(self, DType::Object)
+    }
+
+    pub fn is_temporal(self) -> bool {
+        matches!(self, DType::Datetime64 | DType::Timedelta64)
+    }
+
+    pub fn is_boxed(self) -> bool {
+        self.is_object() || self.is_temporal()
+    }
 }
 
 impl std::fmt::Display for DType {
@@ -254,6 +280,9 @@ impl std::fmt::Display for DType {
             DType::Complex64 => write!(f, "complex64"),
             DType::Complex128 => write!(f, "complex128"),
             DType::Str => write!(f, "str"),
+            DType::Object => write!(f, "object"),
+            DType::Datetime64 => write!(f, "datetime64"),
+            DType::Timedelta64 => write!(f, "timedelta64"),
         }
     }
 }

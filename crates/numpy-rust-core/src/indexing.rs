@@ -1,7 +1,6 @@
 use ndarray::{IxDyn, SliceInfoElem};
 use num_complex::Complex;
 
-use crate::array::{BoxedArray, BoxedScalar};
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
 use crate::resolver::resolve_assignment_cast;
@@ -105,6 +104,9 @@ fn logical_scalar_from_storage(value: Scalar, dtype: DType) -> LogicalScalar {
             Scalar::Str(v) => LogicalScalar::Str(v),
             other => unreachable!("string dtype must yield string scalar, got {other:?}"),
         },
+        DType::Object | DType::Datetime64 | DType::Timedelta64 => {
+            unreachable!("boxed dtypes use boxed scalar access, not numeric logical scalars")
+        }
     }
 }
 
@@ -115,7 +117,7 @@ fn coerce_scalar_for_assignment(
 ) -> Result<Scalar> {
     let plan = resolve_assignment_cast(value.dtype(), target_dtype)?;
     let mut data = crate::casting::cast_array_data(
-        &scalar_to_array_data(&value),
+        scalar_to_array_data(&value),
         plan.execution_storage_dtype(),
     );
     if plan.requires_narrowing() {
@@ -410,43 +412,6 @@ impl NdArray {
             ),
             self.descriptor(),
         ))
-    }
-}
-
-impl BoxedArray {
-    pub fn get_boxed(&self, index: &[usize]) -> Result<BoxedScalar> {
-        self.storage().get(index)
-    }
-
-    pub fn set_boxed(&mut self, index: &[usize], value: BoxedScalar) -> Result<()> {
-        self.storage_mut().set(index, value)
-    }
-
-    pub fn slice_axis(&self, axis: usize, start: usize, end: usize) -> Result<Self> {
-        if axis >= self.ndim() {
-            return Err(NumpyError::InvalidAxis {
-                axis,
-                ndim: self.ndim(),
-            });
-        }
-        let mut info = Vec::with_capacity(self.ndim());
-        for i in 0..self.ndim() {
-            if i == axis {
-                info.push(SliceInfoElem::Slice {
-                    start: start as isize,
-                    end: Some(end as isize),
-                    step: 1,
-                });
-            } else {
-                info.push(SliceInfoElem::Slice {
-                    start: 0,
-                    end: None,
-                    step: 1,
-                });
-            }
-        }
-        let storage = self.storage().slice_view(info.as_slice())?;
-        Ok(Self::new(storage, self.dtype()))
     }
 }
 
