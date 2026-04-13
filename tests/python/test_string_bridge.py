@@ -144,6 +144,8 @@ def test_zfill_shared_bridge_preserves_bytes_semantics():
     arr_out = np.char.zfill(arr, 4)
     carr_out = carr.zfill(4)
 
+    assert getattr(arr_out.dtype, "str", None) == "|S4"
+    assert getattr(carr_out.dtype, "str", None) == "|S4"
     assert arr_out.tolist() == [b"0042", b"-007"]
     assert carr_out.tolist() == [b"0042", b"-007"]
 
@@ -343,6 +345,8 @@ def test_encode_decode_share_bridge_behavior_and_public_return_kind():
     assert not isinstance(encoded_carr, type(carr))
     assert type(decoded) is np.ndarray
     assert not isinstance(decoded_carr, type(bytes_carr))
+    assert getattr(encoded.dtype, "str", None) == "|S2"
+    assert getattr(encoded_carr.dtype, "str", None) == "|S2"
     assert encoded.tolist() == [b"hi", b"yo"]
     assert encoded_carr.tolist() == [b"hi", b"yo"]
     assert decoded.tolist() == ["hi", "yo"]
@@ -354,6 +358,7 @@ def test_encode_scalar_and_expandtabs_scalar_follow_shared_bridge_shape():
     expanded = np.char.expandtabs("a\tb")
 
     assert isinstance(encoded, _ObjectArray)
+    assert getattr(encoded.dtype, "str", None) == "|S2"
     assert encoded.shape == ()
     assert encoded.tolist() == b"hi"
     assert type(expanded) is np.ndarray

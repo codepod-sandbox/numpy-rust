@@ -160,6 +160,12 @@ class _ObjectArray:
             self._itemsize = itemsize
         elif isinstance(self._dtype, str) and self._dtype == 'str':
             self._itemsize = 4
+        elif (
+            isinstance(self._dtype, str)
+            and self._dtype.lstrip("<>=|").startswith("S")
+            and self._dtype.lstrip("<>=|")[1:].isdigit()
+        ):
+            self._itemsize = int(self._dtype.lstrip("<>=|")[1:])
         elif isinstance(self._dtype, str) and self._dtype in ('bytes', 'S1'):
             self._itemsize = 1
         else:
@@ -186,6 +192,15 @@ class _ObjectArray:
                         d.itemsize = 4 * ulen
                         d.kind = 'U'
                         d.char = 'U'
+                if d.name == 'bytes' and d.str == '|S0':
+                    raw = self._dtype
+                    stripped = raw.lstrip('<>=|')
+                    if stripped.startswith('S') and len(stripped) > 1 and stripped[1:].isdigit():
+                        blen = int(stripped[1:])
+                        d.str = '|S' + str(blen)
+                        d.itemsize = blen
+                        d.kind = 'S'
+                        d.char = 'S'
                 return d
             except Exception:
                 pass

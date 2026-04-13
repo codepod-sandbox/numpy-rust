@@ -101,6 +101,8 @@ def _object_result_shape(shape, size):
 
 def _object_result(value, shape, *, dtype="object", itemsize=None):
     items = list(value) if isinstance(value, (list, tuple)) else [value]
+    if dtype == "bytes" and itemsize is not None:
+        dtype = f"S{itemsize}"
     return _ObjectArray(
         items,
         dtype,
