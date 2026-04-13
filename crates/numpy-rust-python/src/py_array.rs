@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
+use num_complex::Complex;
 use num_traits::{Signed, ToPrimitive};
 use rustpython_vm as vm;
 use vm::atomic_func;
@@ -99,7 +100,11 @@ impl IterNext for PyNdArrayIter {
         let data = zelf.array.data.read().unwrap();
         if data.ndim() == 1 {
             let s = data.get(&[idx]).map_err(|e| numpy_err(e, vm))?;
-            Ok(PyIterReturn::Return(scalar_to_py(s, vm)))
+            Ok(PyIterReturn::Return(typed_scalar_to_py(
+                s,
+                data.dtype(),
+                vm,
+            )))
         } else {
             let result = data
                 .slice(&[SliceArg::Index(idx as isize)])
@@ -137,7 +142,7 @@ impl PyFlatIter {
         let idx = parse_flat_index(&key, total, vm)?;
         let coord = linear_to_coord(idx, data.shape());
         let s = data.get(&coord).map_err(|e| numpy_err(e, vm))?;
-        Ok(scalar_to_py(s, vm))
+        Ok(typed_scalar_to_py(s, data.dtype(), vm))
     }
 
     #[pymethod]
@@ -163,7 +168,7 @@ impl PyFlatIter {
         for i in 0..total {
             let coord = linear_to_coord(i, data.shape());
             let s = data.get(&coord).expect("flat index must be valid");
-            out.push(scalar_to_py(s, vm));
+            out.push(typed_scalar_to_py(s, data.dtype(), vm));
         }
         vm.ctx.new_list(out).into()
     }
@@ -189,7 +194,11 @@ impl IterNext for PyFlatIter {
         }
         let coord = linear_to_coord(idx, data.shape());
         let s = data.get(&coord).map_err(|e| numpy_err(e, vm))?;
-        Ok(PyIterReturn::Return(scalar_to_py(s, vm)))
+        Ok(PyIterReturn::Return(typed_scalar_to_py(
+            s,
+            data.dtype(),
+            vm,
+        )))
     }
 }
 
@@ -283,21 +292,61 @@ pub(crate) fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
     }
 }
 
+fn typed_scalar_to_py(s: Scalar, dtype: DType, vm: &VirtualMachine) -> PyObjectRef {
+    let py_val = scalar_to_py(s, vm);
+    if let Ok(numpy_mod) = vm.import("numpy", 0) {
+        let numpy_obj: PyObjectRef = numpy_mod;
+        if let Ok(dtype_cls) = numpy_obj.get_attr(numpy_scalar_attr_name(dtype), vm) {
+            if let Ok(result) = dtype_cls.call(vec![py_val.clone()], vm) {
+                return result;
+            }
+        }
+    }
+    py_val
+}
+
 pub(crate) fn logical_scalar_to_py(s: LogicalScalar, vm: &VirtualMachine) -> PyObjectRef {
     match s {
         LogicalScalar::Bool(v) => vm.ctx.new_bool(v).into(),
         LogicalScalar::Int(v) => vm.ctx.new_int(v).into(),
         LogicalScalar::UInt(v) => vm.ctx.new_int(v).into(),
         LogicalScalar::Float(v) => vm.ctx.new_float(v).into(),
-        LogicalScalar::Complex(re, im) => {
-            let tup = vm.ctx.new_tuple(vec![
-                vm.ctx.new_float(re).into(),
-                vm.ctx.new_float(im).into(),
-            ]);
-            tup.into()
-        }
+        LogicalScalar::Complex(re, im) => vm.ctx.new_complex(Complex::new(re, im)).into(),
         LogicalScalar::Str(v) => vm.ctx.new_str(v).into(),
     }
+}
+
+fn numpy_scalar_attr_name(dtype: DType) -> &'static str {
+    match dtype {
+        DType::Int8 => "int8",
+        DType::Int16 => "int16",
+        DType::Int32 => "int32",
+        DType::Int64 => "int64",
+        DType::UInt8 => "uint8",
+        DType::UInt16 => "uint16",
+        DType::UInt32 => "uint32",
+        DType::UInt64 => "uint64",
+        DType::Float16 => "float16",
+        DType::Float32 => "float32",
+        DType::Float64 => "float64",
+        DType::Bool => "bool_",
+        DType::Complex64 => "complex64",
+        DType::Complex128 => "complex128",
+        DType::Str => "str_",
+    }
+}
+
+fn typed_logical_scalar_to_py(s: LogicalScalar, dtype: DType, vm: &VirtualMachine) -> PyObjectRef {
+    let py_val = logical_scalar_to_py(s, vm);
+    if let Ok(numpy_mod) = vm.import("numpy", 0) {
+        let numpy_obj: PyObjectRef = numpy_mod;
+        if let Ok(dtype_cls) = numpy_obj.get_attr(numpy_scalar_attr_name(dtype), vm) {
+            if let Ok(result) = dtype_cls.call(vec![py_val.clone()], vm) {
+                return result;
+            }
+        }
+    }
+    py_val
 }
 
 fn richcompare_other_ndarray(
@@ -380,7 +429,7 @@ fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
 pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
     if arr.ndim() == 0 {
         let s = arr.get_logical(&[]).unwrap();
-        logical_scalar_to_py(s, vm)
+        typed_logical_scalar_to_py(s, arr.dtype(), vm)
     } else {
         PyNdArray::from_core(arr).into_pyobject(vm)
     }
@@ -1719,7 +1768,7 @@ impl PyNdArray {
                 let s = data
                     .get_logical(&[resolved])
                     .map_err(|e| numpy_err(e, vm))?;
-                return Ok(logical_scalar_to_py(s, vm));
+                return Ok(typed_logical_scalar_to_py(s, data.dtype(), vm));
             } else {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
@@ -1910,7 +1959,7 @@ impl PyNdArray {
                 let logical = data
                     .get_logical(&usize_indices)
                     .map_err(|e| numpy_err(e, vm))?;
-                return Ok(logical_scalar_to_py(logical, vm));
+                return Ok(typed_logical_scalar_to_py(logical, data.dtype(), vm));
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
@@ -2106,7 +2155,7 @@ impl PyNdArray {
             let logical = data
                 .get_logical(&vec![0; data.ndim()])
                 .map_err(|e| numpy_err(e, vm))?;
-            return Ok(logical_scalar_to_py(logical, vm));
+            return Ok(typed_logical_scalar_to_py(logical, data.dtype(), vm));
         }
         let mut indices: Vec<usize> = Vec::new();
         if args.args.len() == 1 {
@@ -2170,7 +2219,7 @@ impl PyNdArray {
             }
         }
         let logical = data.get_logical(&indices).map_err(|e| numpy_err(e, vm))?;
-        Ok(logical_scalar_to_py(logical, vm))
+        Ok(typed_logical_scalar_to_py(logical, data.dtype(), vm))
     }
 
     /// as_integer_ratio() for 0-d float arrays.
@@ -2725,8 +2774,8 @@ impl PyNdArray {
         map.insert("CONTIGUOUS".into(), is_c);
         map.insert("FORTRAN".into(), is_f);
         map.insert("UPDATEIFCOPY".into(), false);
-        map.insert("FNC".into(), is_f);
-        map.insert("FORC".into(), is_aligned);
+        map.insert("FNC".into(), is_f && !is_c);
+        map.insert("FORC".into(), is_f || is_c);
         map.insert("BEHAVED".into(), is_aligned);
         map.insert("CARRAY".into(), is_c && is_aligned);
         map.insert("FARRAY".into(), is_f && is_aligned);
@@ -4186,7 +4235,7 @@ fn ndarray_to_pylist(data: &NdArray, vm: &VirtualMachine) -> PyObjectRef {
     if ndim == 0 {
         // 0-D: return plain scalar
         let s = data.get(&[]).unwrap();
-        return scalar_to_py(s, vm);
+        return typed_scalar_to_py(s, data.dtype(), vm);
     }
 
     if ndim == 1 {
@@ -4194,7 +4243,7 @@ fn ndarray_to_pylist(data: &NdArray, vm: &VirtualMachine) -> PyObjectRef {
         let items: Vec<PyObjectRef> = (0..shape[0])
             .map(|i| {
                 let s = data.get(&[i]).unwrap();
-                scalar_to_py(s, vm)
+                typed_scalar_to_py(s, data.dtype(), vm)
             })
             .collect();
         return PyList::from(items).into_ref(&vm.ctx).into();

@@ -173,6 +173,21 @@ def test_save_load_fileobj():
     assert b.tolist() == [10, 20, 30]
 
 
+def test_save_load_complex64_preserves_native_array_and_flags():
+    import io
+    a = np.array([[1 + 5j, 2 + 6j], [3 + 7j, 4 + 8j]], dtype=np.csingle)
+    buf = io.BytesIO()
+    np.save(buf, a)
+    buf.seek(0)
+    b = np.load(buf)
+    assert type(b) is np.ndarray
+    assert b.shape == (2, 2)
+    assert str(b.dtype) == "complex64"
+    assert (a == b).all()
+    assert_eq = (a.flags.fnc == b.flags.fnc)
+    assert assert_eq, f"expected matching fnc flags, got {a.flags.fnc} vs {b.flags.fnc}"
+
+
 def test_load_legacy_text():
     """Files written by the old text-based save() still load."""
     path = _TMP + 'legacy.npy'

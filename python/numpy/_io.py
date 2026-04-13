@@ -291,6 +291,22 @@ def _parse_structured_descr(descr):
     return result
 
 
+def _build_complex_array(flat, shape, dtype_str):
+    reals = [v.real if isinstance(v, complex) else float(v) for v in flat]
+    imags = [v.imag if isinstance(v, complex) else 0.0 for v in flat]
+    result_shape = list(shape) if shape != () else [1]
+    re_arr = _native.array(reals).reshape(result_shape).astype("complex128")
+    im_arr = _native.array(imags).reshape(result_shape).astype("complex128")
+    j_arr = _native.zeros([1], "complex128")
+    j_arr[0] = (0.0, 1.0)
+    result = re_arr + im_arr * j_arr.reshape([])
+    if dtype_str != "complex128":
+        result = result.astype(dtype_str)
+    if shape == ():
+        return result.reshape([])
+    return result
+
+
 def _npy_bytes_to_array(data):
     """Parse a .npy binary blob and return an ndarray."""
     if len(data) < 10 or data[:6] != _MAGIC:
@@ -413,6 +429,11 @@ def _npy_bytes_to_array(data):
         _, struct_char, _ = _DTYPE_INFO[dtype_str]
         flat = list(_struct.unpack_from(endian + struct_char * n, raw))
 
+    if dtype_str in ('complex128', 'complex64'):
+        result = _build_complex_array(flat, shape, dtype_str)
+        if fortran_order and len(shape) > 1 and hasattr(result, '_mark_fortran'):
+            result._mark_fortran()
+        return result
     if fortran_order and len(shape) > 1:
         result = array(flat, dtype=dtype_str).reshape(list(shape[::-1]))
         axes = list(range(len(shape) - 1, -1, -1))
