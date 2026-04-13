@@ -84,7 +84,7 @@ def test_array_complex_scalar():
     a = np.array(1 + 2j)
     assert_eq(a.shape, ())
     assert_eq(a.dtype, "complex128")
-    assert_eq(a.item(), (1.0, 2.0))
+    assert_eq(a.item(), 1 + 2j)
 
 def test_array_bool_sequence():
     a = np.array([True, False, True])
@@ -96,7 +96,7 @@ def test_array_complex_nested_sequence():
     a = np.array([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]])
     assert_eq(a.shape, (2, 2))
     assert_eq(a.dtype, "complex128")
-    assert_eq(a.tolist(), [[(1.0, 2.0), (3.0, 4.0)], [(5.0, 6.0), (7.0, 8.0)]])
+    assert_eq(a.tolist(), [[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]])
 
 
 # --- np.arange ---

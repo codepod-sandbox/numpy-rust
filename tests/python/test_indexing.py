@@ -296,7 +296,7 @@ def test_setitem_scalar_accepts_size_one_array():
 def test_setitem_complex_scalar_tuple():
     a = np.zeros(1, dtype="complex128")
     a[0] = (1.0, 2.0)
-    assert_eq(a.item(), (1.0, 2.0))
+    assert_eq(a.item(), 1 + 2j)
 
 
 # --- tolist ---
