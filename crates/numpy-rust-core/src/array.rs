@@ -8,6 +8,9 @@ use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::resolver::{BinaryOpPlan, CastPlan};
 use crate::storage::ArrayStorage;
+pub use crate::storage::{
+    BoxedDType, BoxedObjectScalar, BoxedScalar, BoxedStorage, BoxedTemporalScalar,
+};
 
 /// The main N-dimensional array type, analogous to `numpy.ndarray`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,11 +30,58 @@ impl ArrayFlags {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct StorageMutationGuard(());
 
+#[cfg(test)]
 impl StorageMutationGuard {
     fn new() -> Self {
         Self(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BoxedArray {
+    storage: BoxedStorage,
+    dtype: BoxedDType,
+}
+
+impl BoxedArray {
+    pub(crate) fn new(storage: BoxedStorage, dtype: BoxedDType) -> Self {
+        Self { storage, dtype }
+    }
+
+    pub fn from_boxed_scalars(
+        elements: Vec<BoxedScalar>,
+        shape: &[usize],
+        dtype: BoxedDType,
+    ) -> Result<Self> {
+        let storage = BoxedStorage::from_scalars(elements, shape, dtype)?;
+        Ok(Self::new(storage, dtype))
+    }
+
+    pub fn dtype(&self) -> BoxedDType {
+        self.dtype
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        self.storage.shape()
+    }
+
+    pub fn ndim(&self) -> usize {
+        self.storage.ndim()
+    }
+
+    pub fn size(&self) -> usize {
+        self.storage.size()
+    }
+
+    pub(crate) fn storage(&self) -> &BoxedStorage {
+        &self.storage
+    }
+
+    pub(crate) fn storage_mut(&mut self) -> &mut BoxedStorage {
+        &mut self.storage
     }
 }
 
@@ -54,7 +104,7 @@ impl ValidatedRuntimeState {
             descriptor,
             shape: data.shape().to_vec(),
             strides: data.strides(),
-            flags: ArrayFlags::from_data(data),
+            flags: ArrayFlags::from_data(&data),
         }
     }
 }
@@ -66,6 +116,7 @@ pub struct NdArray {
     shape: Vec<usize>,
     strides: Vec<isize>,
     flags: ArrayFlags,
+    byteorder: char,
 }
 
 // --- Constructors ---
@@ -85,6 +136,7 @@ impl NdArray {
             strides: runtime.strides,
             flags: runtime.flags,
             storage,
+            byteorder: default_byteorder_for(descriptor.id),
         }
     }
 
@@ -97,6 +149,11 @@ impl NdArray {
     /// Preserve declared_dtype from another NdArray (used in shape-only operations).
     pub fn with_preserved_dtype(mut self, source: &NdArray) -> Self {
         self.preserve_descriptor_from(source);
+        self
+    }
+
+    pub fn with_byteorder(mut self, byteorder: char) -> Self {
+        self.set_byteorder(byteorder);
         self
     }
 
@@ -175,6 +232,15 @@ impl NdArray {
     pub fn debug_storage_repr(&self) -> String {
         format!("{:?}", self.data())
     }
+
+    pub fn byte_offset_bytes(&self) -> usize {
+        let offset = self.storage.logical_offset_elements();
+        if offset <= 0 {
+            0
+        } else {
+            (offset as usize) * self.dtype().itemsize()
+        }
+    }
 }
 
 // --- Attributes ---
@@ -192,6 +258,14 @@ impl NdArray {
         self.descriptor.id
     }
 
+    pub fn byteorder(&self) -> char {
+        self.byteorder
+    }
+
+    pub fn is_native_byteorder(&self) -> bool {
+        is_native_byteorder(self.byteorder)
+    }
+
     pub fn declared_dtype(&self) -> Option<DType> {
         logical_dtype_override(self.descriptor.id)
     }
@@ -200,7 +274,7 @@ impl NdArray {
         self.shape.iter().product()
     }
 
-    pub fn data(&self) -> &ArrayData {
+    pub fn data(&self) -> ArrayData {
         self.storage.data()
     }
 
@@ -210,6 +284,10 @@ impl NdArray {
 
     pub fn storage(&self) -> &ArrayStorage {
         &self.storage
+    }
+
+    pub(crate) fn storage_mut(&mut self) -> &mut ArrayStorage {
+        &mut self.storage
     }
 
     pub fn strides(&self) -> &[isize] {
@@ -284,12 +362,18 @@ impl NdArray {
     pub(crate) fn preserve_descriptor_from(&mut self, source: &NdArray) {
         let runtime = ValidatedRuntimeState::new(&self.storage, source.descriptor());
         self.apply_runtime_state(runtime);
+        self.byteorder = source.byteorder;
+    }
+
+    pub fn set_byteorder(&mut self, byteorder: char) {
+        self.byteorder = normalize_byteorder(self.dtype(), byteorder);
     }
 
     /// Applies an in-place mutation and then re-synchronizes the stored runtime metadata.
     /// The callback must preserve the storage dtype that matches the current descriptor.
+    #[cfg(test)]
     pub(crate) fn mutate_data<R>(&mut self, mutate: impl FnOnce(&mut ArrayData) -> R) -> R {
-        let mut storage = self.storage.clone();
+        let mut storage = ArrayStorage::from_array_data(self.data());
         let result = crate::storage::mutate_storage_with_guard(
             &mut storage,
             StorageMutationGuard::new(),
@@ -313,6 +397,11 @@ impl NdArray {
         self.flags = runtime.flags;
     }
 
+    pub(crate) fn refresh_runtime_state(&mut self) {
+        let runtime = ValidatedRuntimeState::new(&self.storage, self.descriptor);
+        self.apply_runtime_state(runtime);
+    }
+
     fn commit_runtime_state(&mut self, storage: ArrayStorage, runtime: ValidatedRuntimeState) {
         self.storage = storage;
         self.apply_runtime_state(runtime);
@@ -321,6 +410,38 @@ impl NdArray {
 
 fn logical_dtype_override(dtype: DType) -> Option<DType> {
     (dtype.storage_dtype() != dtype).then_some(dtype)
+}
+
+fn native_byteorder_char() -> char {
+    if cfg!(target_endian = "little") {
+        '<'
+    } else {
+        '>'
+    }
+}
+
+fn default_byteorder_for(dtype: DType) -> char {
+    if dtype.itemsize() <= 1 || dtype == DType::Bool {
+        '|'
+    } else {
+        native_byteorder_char()
+    }
+}
+
+fn normalize_byteorder(dtype: DType, byteorder: char) -> char {
+    if dtype.itemsize() <= 1 || dtype == DType::Bool {
+        '|'
+    } else {
+        match byteorder {
+            '=' => native_byteorder_char(),
+            '<' | '>' | '|' => byteorder,
+            _ => default_byteorder_for(dtype),
+        }
+    }
+}
+
+fn is_native_byteorder(byteorder: char) -> bool {
+    matches!(byteorder, '|') || byteorder == native_byteorder_char()
 }
 
 trait ToLeBytes {
@@ -672,5 +793,19 @@ mod tests {
         c[[0]] = 99.0;
         assert_ne!(c.as_ptr(), a.as_ptr(), "CoW on mutation");
         assert_eq!(a[[0]], 1.0, "original unchanged");
+    }
+
+    #[test]
+    fn boxed_object_scalar_round_trip_preserves_value() {
+        let arr = BoxedArray::from_boxed_scalars(
+            vec![BoxedScalar::Object(BoxedObjectScalar::Text("hello".into()))],
+            &[1],
+            BoxedDType::Object,
+        )
+        .unwrap();
+        assert_eq!(
+            arr.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Text("hello".into()))
+        );
     }
 }

@@ -1,6 +1,7 @@
 use ndarray::{IxDyn, SliceInfoElem};
 use num_complex::Complex;
 
+use crate::array::{BoxedArray, BoxedScalar};
 use crate::array_data::ArrayData;
 use crate::error::{NumpyError, Result};
 use crate::resolver::resolve_assignment_cast;
@@ -244,14 +245,8 @@ impl NdArray {
         }
 
         let info: Vec<SliceInfoElem> = slice_elems;
-        let data = self.data().slice_view(info.as_slice())?;
-        Ok(NdArray::from_parts(
-            crate::storage::ArrayStorage::from_array_data_with_string_width(
-                data,
-                self.storage().string_width(),
-            ),
-            self.descriptor(),
-        ))
+        let storage = self.storage().slice_view(info.as_slice())?;
+        Ok(NdArray::from_parts(storage, self.descriptor()))
     }
 
     /// Select elements along an axis by integer indices.
@@ -295,74 +290,18 @@ impl NdArray {
         }
 
         let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
-        self.mutate_data(|data| data.assign_indexed(axis, indices, &cast_values))
+        self.storage_mut()
+            .assign_indexed_values(axis, indices, &cast_values)?;
+        self.refresh_runtime_state();
+        Ok(())
     }
 
     /// Set a single element by multi-dimensional index.
     pub fn set(&mut self, index: &[usize], value: Scalar) -> Result<()> {
-        let idx = IxDyn(index);
         let value = coerce_scalar_for_assignment(value, self.storage(), self.dtype())?;
-        self.mutate_data(|data| match (data, value) {
-            (ArrayData::Bool(a), Scalar::Bool(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            (ArrayData::Int32(a), Scalar::Int32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            (ArrayData::Int64(a), Scalar::Int64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            (ArrayData::Float32(a), Scalar::Float32(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            (ArrayData::Float64(a), Scalar::Float64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            (ArrayData::Complex64(a), Scalar::Complex64(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            (ArrayData::Complex128(a), Scalar::Complex128(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            (ArrayData::Str(a), Scalar::Str(v)) => {
-                let elem = a
-                    .get_mut(idx)
-                    .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))?;
-                *elem = v;
-                Ok(())
-            }
-            _ => Err(NumpyError::TypeError(
-                "cannot assign scalar of incompatible dtype".into(),
-            )),
-        })
+        self.storage_mut().assign_element(index, value)?;
+        self.refresh_runtime_state();
+        Ok(())
     }
 
     /// Set a slice of the array from values in another array.
@@ -404,7 +343,10 @@ impl NdArray {
 
         let info: Vec<SliceInfoElem> = slice_elems;
         let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
-        self.mutate_data(|data| data.assign_slice(info.as_slice(), &cast_values))
+        self.storage_mut()
+            .assign_slice_values(info.as_slice(), &cast_values)?;
+        self.refresh_runtime_state();
+        Ok(())
     }
 
     /// Set elements where mask is true to the corresponding values.
@@ -434,7 +376,10 @@ impl NdArray {
         }
 
         let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
-        self.mutate_data(|data| data.assign_masked(&flat_mask, &cast_values))
+        self.storage_mut()
+            .assign_masked_values(&flat_mask, &cast_values)?;
+        self.refresh_runtime_state();
+        Ok(())
     }
 
     /// Select elements where mask is true, returning a 1-D array.
@@ -465,6 +410,43 @@ impl NdArray {
             ),
             self.descriptor(),
         ))
+    }
+}
+
+impl BoxedArray {
+    pub fn get_boxed(&self, index: &[usize]) -> Result<BoxedScalar> {
+        self.storage().get(index)
+    }
+
+    pub fn set_boxed(&mut self, index: &[usize], value: BoxedScalar) -> Result<()> {
+        self.storage_mut().set(index, value)
+    }
+
+    pub fn slice_axis(&self, axis: usize, start: usize, end: usize) -> Result<Self> {
+        if axis >= self.ndim() {
+            return Err(NumpyError::InvalidAxis {
+                axis,
+                ndim: self.ndim(),
+            });
+        }
+        let mut info = Vec::with_capacity(self.ndim());
+        for i in 0..self.ndim() {
+            if i == axis {
+                info.push(SliceInfoElem::Slice {
+                    start: start as isize,
+                    end: Some(end as isize),
+                    step: 1,
+                });
+            } else {
+                info.push(SliceInfoElem::Slice {
+                    start: 0,
+                    end: None,
+                    step: 1,
+                });
+            }
+        }
+        let storage = self.storage().slice_view(info.as_slice())?;
+        Ok(Self::new(storage, self.dtype()))
     }
 }
 
@@ -768,6 +750,24 @@ mod tests {
         assert_eq!(a.get(&[1]).unwrap(), Scalar::Float64(88.0));
         assert_eq!(a.get(&[2]).unwrap(), Scalar::Float64(77.0));
         assert_eq!(a.get(&[0]).unwrap(), Scalar::Float64(1.0));
+    }
+
+    #[test]
+    fn test_view_slice_write_updates_base() {
+        let base = NdArray::from_vec(vec![0_i64, 1, 2, 3, 4, 5]);
+        let mut view = base
+            .slice(&[SliceArg::Range {
+                start: Some(1),
+                stop: Some(4),
+                step: 1,
+            }])
+            .unwrap();
+        let vals = NdArray::from_vec(vec![9_i64, 8, 7]);
+        view.set_slice(&[SliceArg::Full], &vals).unwrap();
+        let ArrayData::Int64(arr) = base.data() else {
+            panic!("expected Int64");
+        };
+        assert_eq!(arr.as_slice().unwrap(), &[0, 9, 8, 7, 4, 5]);
     }
 
     #[test]
