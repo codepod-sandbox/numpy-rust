@@ -315,9 +315,8 @@ pub fn resolve_reduction_op(op: ReductionOp, input: DType) -> Result<ReductionPl
 
 pub fn resolve_binary_op(op: BinaryOp, lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
     match op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-            resolve_basic_arithmetic(lhs, rhs)
-        }
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => resolve_basic_arithmetic(lhs, rhs),
+        BinaryOp::Div => resolve_true_division(lhs, rhs),
         BinaryOp::FloorDiv | BinaryOp::Remainder => resolve_real_arithmetic(lhs, rhs),
         BinaryOp::Pow => resolve_pow(lhs, rhs),
     }
@@ -386,6 +385,38 @@ fn resolve_basic_arithmetic(lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
     }
 
     let logical_output_dtype = resolve_basic_arithmetic_output_dtype(lhs, rhs);
+    let lhs_cast = resolve_cast(lhs, logical_output_dtype, CastingRule::Unsafe)?;
+    let rhs_cast = resolve_cast(rhs, logical_output_dtype, CastingRule::Unsafe)?;
+    let result_storage_dtype = logical_output_dtype.storage_dtype();
+    let result_cast = resolve_cast(
+        result_storage_dtype,
+        logical_output_dtype,
+        CastingRule::Unsafe,
+    )?;
+
+    Ok(BinaryOpPlan {
+        lhs_cast,
+        rhs_cast,
+        result_cast,
+        logical_output_dtype,
+        result_storage_dtype,
+        requires_output_narrowing: result_cast.requires_narrowing(),
+    })
+}
+
+fn resolve_true_division(lhs: DType, rhs: DType) -> Result<BinaryOpPlan> {
+    if lhs.is_string() || rhs.is_string() {
+        return Err(NumpyError::TypeError(
+            "arithmetic not supported for string arrays".into(),
+        ));
+    }
+
+    let logical_output_dtype =
+        if (lhs.is_integer() || lhs.is_bool()) && (rhs.is_integer() || rhs.is_bool()) {
+            DType::Float64
+        } else {
+            resolve_basic_arithmetic_output_dtype(lhs, rhs)
+        };
     let lhs_cast = resolve_cast(lhs, logical_output_dtype, CastingRule::Unsafe)?;
     let rhs_cast = resolve_cast(rhs, logical_output_dtype, CastingRule::Unsafe)?;
     let result_storage_dtype = logical_output_dtype.storage_dtype();

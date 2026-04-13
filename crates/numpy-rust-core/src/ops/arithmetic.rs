@@ -173,6 +173,24 @@ mod tests {
     }
 
     #[test]
+    fn test_div_int_promotes_to_float64() {
+        let a = NdArray::from_vec(vec![3_i32, 4]);
+        let b = NdArray::from_vec(vec![2_i32, 2]);
+        let c = (&a / &b).unwrap();
+        assert_eq!(c.dtype(), DType::Float64);
+        assert_eq!(c.to_flat_f64_vec(), vec![1.5, 2.0]);
+    }
+
+    #[test]
+    fn test_div_bool_promotes_to_float64() {
+        let a = NdArray::from_vec(vec![true, false]);
+        let b = NdArray::full_f64(&[], 2.0);
+        let c = (&a / &b).unwrap();
+        assert_eq!(c.dtype(), DType::Float64);
+        assert_eq!(c.to_flat_f64_vec(), vec![0.5, 0.0]);
+    }
+
+    #[test]
     fn test_broadcast_incompatible_fails() {
         let a = NdArray::zeros(&[3, 4], DType::Float64);
         let b = NdArray::zeros(&[5], DType::Float64);

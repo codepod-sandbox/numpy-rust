@@ -1951,6 +1951,11 @@ def test_true_divide_bool_inputs_owned_by_core():
     assert_close(c[0], 0.5)
     assert_close(c[1], 0.0)
 
+def test_compare_signed_array_with_big_python_ints():
+    a = np.arange(5).astype("int32")
+    assert_eq((a <= 2**300).all(), True)
+    assert_eq((a >= -(2**320)).all(), True)
+
 def test_floor_divide():
     a = np.array([7.0, 10.0])
     b = np.array([2.0, 3.0])

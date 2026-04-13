@@ -12,6 +12,7 @@ random = ["numpy-rust-core/random"]
 [dependencies]
 numpy-rust-core = { path = "../numpy-rust-core", default-features = false }
 num-complex = "0.4"
+num-traits = "0.2"
 rustpython-vm = { workspace = true }
 rustpython-derive = { workspace = true }
 crossbeam-utils = "0.8.21"

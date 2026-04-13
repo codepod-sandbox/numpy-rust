@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
+use num_traits::{Signed, ToPrimitive};
 use rustpython_vm as vm;
 use vm::atomic_func;
-use vm::builtins::{PyList, PySlice, PyStr, PyTuple};
+use vm::builtins::{PyInt, PyList, PySlice, PyStr, PyTuple};
 use vm::protocol::{PyIterReturn, PyMappingMethods, PyNumberMethods, PySequenceMethods};
 use vm::types::{AsMapping, AsNumber, AsSequence, IterNext, Iterable, Representable, SelfIter};
 use vm::{AsObject, Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
@@ -297,6 +298,48 @@ pub(crate) fn logical_scalar_to_py(s: LogicalScalar, vm: &VirtualMachine) -> PyO
         }
         LogicalScalar::Str(v) => vm.ctx.new_str(v).into(),
     }
+}
+
+fn richcompare_other_ndarray(
+    other: &vm::PyObject,
+    zelf_dtype: DType,
+    vm: &VirtualMachine,
+) -> PyResult<Option<NdArray>> {
+    // NEP50: plain Python scalars (int, float) adopt the array's dtype (weak typing).
+    // For comparisons, Python int scalars must NOT be truncated to the array dtype.
+    // Use Int64 for Bool/unsigned integer targets so values are compared numerically.
+    let nep50_target = if zelf_dtype == DType::Bool
+        || zelf_dtype == DType::UInt8
+        || zelf_dtype == DType::UInt16
+        || zelf_dtype == DType::UInt32
+        || zelf_dtype == DType::UInt64
+    {
+        DType::Int64
+    } else {
+        zelf_dtype
+    };
+
+    if let Ok(arr) = crate::py_creation::object_to_ndarray_weak(other, nep50_target, vm) {
+        return Ok(Some(arr));
+    }
+
+    // Oversized Python ints can exceed i64 and should still compare numerically
+    // against integer and bool arrays rather than returning NotImplemented.
+    if zelf_dtype.is_integer() || zelf_dtype.is_bool() {
+        if let Some(value) = other.downcast_ref::<PyInt>() {
+            let bigint = value.as_bigint();
+            let numeric = bigint.to_f64().unwrap_or_else(|| {
+                if bigint.is_negative() {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }
+            });
+            return Ok(Some(NdArray::from_scalar(numeric)));
+        }
+    }
+
+    Ok(None)
 }
 
 /// Convert a Scalar to a 0-d NdArray.
@@ -1943,25 +1986,10 @@ impl PyNdArray {
         let zelf = zelf
             .downcast_ref::<PyNdArray>()
             .ok_or_else(|| vm.new_type_error("expected ndarray".to_owned()))?;
-        // NEP50: plain Python scalars (int, float) adopt the array's dtype (weak typing).
         let zelf_dtype = zelf.data.read().unwrap().dtype();
-        // For comparisons, Python int scalars must NOT be truncated to the array dtype.
-        // Use Int64 for Bool/unsigned integer targets so values are compared numerically.
-        // e.g., array(True) < 2 → 1 < 2 = True (not True < True = False)
-        // e.g., uint8_array >= -1 → 0 >= -1 = True (not 0 >= 255 = False)
-        let nep50_target = if zelf_dtype == DType::Bool
-            || zelf_dtype == DType::UInt8
-            || zelf_dtype == DType::UInt16
-            || zelf_dtype == DType::UInt32
-            || zelf_dtype == DType::UInt64
-        {
-            DType::Int64
-        } else {
-            zelf_dtype
-        };
-        let other = match crate::py_creation::object_to_ndarray_weak(other, nep50_target, vm) {
-            Ok(arr) => arr,
-            Err(_) => {
+        let other = match richcompare_other_ndarray(other, zelf_dtype, vm)? {
+            Some(arr) => arr,
+            None => {
                 return Ok(vm::function::Either::B(
                     vm::function::PyComparisonValue::NotImplemented,
                 ))
