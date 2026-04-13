@@ -3162,11 +3162,11 @@ def test_char_split():
     assert_eq(r[1], ["foo", "bar", "baz"])
     # Single string
     r2 = np.char.split(np.array(["a-b-c"]), sep="-")
-    assert_eq(r2, ["a", "b", "c"])
+    assert_eq(r2.tolist(), [["a", "b", "c"]])
 
 def test_char_join():
     r = np.char.join("-", ["hello", "world"])
-    assert_eq(r, "hello-world")
+    assert_eq(r.tolist(), ["h-e-l-l-o", "w-o-r-l-d"])
 
 def test_char_find():
     a = np.array(["hello", "world", "help"])

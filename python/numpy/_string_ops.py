@@ -594,6 +594,28 @@ class chararray:
         return python_string_join(seq, self, wrap_chararray=True)
 
 
+def _is_shared_bridge_array_like(value):
+    return isinstance(value, (ndarray, _ObjectArray, list, tuple, chararray))
+
+
+def _contains_bytes_value(value):
+    if isinstance(value, bytes):
+        return True
+    if _is_shared_bridge_array_like(value):
+        items, _ = python_string_items(value)
+        return any(isinstance(item, bytes) for item in items)
+    return False
+
+
+def _should_use_shared_string_bridge(a, *operands):
+    if isinstance(a, chararray) or _contains_bytes_value(a):
+        return True
+    return any(
+        _is_shared_bridge_array_like(operand) or _contains_bytes_value(operand)
+        for operand in operands
+    )
+
+
 class _char_mod:
     # Expose chararray class
     chararray = chararray
@@ -763,65 +785,38 @@ class _char_mod:
 
     @staticmethod
     def startswith(a, prefix, start=0, end=None):
-        if start == 0 and end is None and not isinstance(a, chararray):
+        if start == 0 and end is None and not _should_use_shared_string_bridge(a, prefix):
             return _native_bool_output(a, _native.char_startswith, prefix)
-        return python_string_map(
-            a,
-            lambda item: str(item).startswith(prefix, start)
-            if end is None
-            else str(item).startswith(prefix, start, end),
-            result_kind="bool",
-        )
+        return python_string_search(a, prefix, "startswith", start=start, end=end).astype("bool")
 
     @staticmethod
     def endswith(a, suffix, start=0, end=None):
-        if start == 0 and end is None and not isinstance(a, chararray):
+        if start == 0 and end is None and not _should_use_shared_string_bridge(a, suffix):
             return _native_bool_output(a, _native.char_endswith, suffix)
-        return python_string_map(
-            a,
-            lambda item: str(item).endswith(suffix, start)
-            if end is None
-            else str(item).endswith(suffix, start, end),
-            result_kind="bool",
-        )
+        return python_string_search(a, suffix, "endswith", start=start, end=end).astype("bool")
 
     @staticmethod
     def replace(a, old, new, count=None):
-        if count is None and not isinstance(a, chararray):
+        if count is None and not _should_use_shared_string_bridge(a, old, new):
             return _native_string_output(a, _native.char_replace, old, new)
         return python_string_replace(a, old, new, count=count)
 
     @staticmethod
     def split(a, sep=None, maxsplit=-1):
         """Split each element in a around sep."""
-        out = python_string_split(a, sep=sep, maxsplit=maxsplit)
-        values = out.tolist()
-        return values[0] if len(values) == 1 else values
+        return python_string_split(a, sep=sep, maxsplit=maxsplit)
 
     @staticmethod
     def rsplit(a, sep=None, maxsplit=-1):
-        out = python_string_rsplit(a, sep=sep, maxsplit=maxsplit)
-        values = out.tolist()
-        return values[0] if len(values) == 1 else values
+        return python_string_rsplit(a, sep=sep, maxsplit=maxsplit)
 
     @staticmethod
     def splitlines(a):
-        out = python_string_splitlines(a)
-        values = out.tolist()
-        return values[0] if len(values) == 1 else values
+        return python_string_splitlines(a)
 
     @staticmethod
     def join(sep, a):
         """Join strings in a with separator sep, element-wise."""
-        if isinstance(a, (str, bytes)) and isinstance(sep, (str, bytes)):
-            return str(sep).join(str(a))
-        if (
-            isinstance(sep, (str, bytes))
-            and isinstance(a, (list, tuple))
-            and a
-            and not isinstance(a[0], (list, tuple))
-        ):
-            return str(sep).join(str(item) for item in a)
         return python_string_join(a, sep)
 
     @staticmethod

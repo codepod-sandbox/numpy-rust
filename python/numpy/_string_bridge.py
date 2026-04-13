@@ -75,6 +75,18 @@ def python_string_broadcast(value, size):
     return values
 
 
+def _string_method_target(item):
+    if isinstance(item, (str, bytes)):
+        return item
+    return str(item)
+
+
+def _string_method_arg(value):
+    if isinstance(value, (str, bytes)):
+        return value
+    return str(value)
+
+
 def python_string_map(
     value,
     mapper,
@@ -114,7 +126,7 @@ def python_string_map(
 def python_string_predicate(value, predicate):
     return python_string_map(
         value,
-        lambda item: predicate(str(item)),
+        lambda item: predicate(_string_method_target(item)),
         result_kind="bool",
     )
 
@@ -124,12 +136,16 @@ def python_string_search(value, needle, method_name, start=0, end=None):
     needles = python_string_broadcast(needle, len(items))
     return python_string_map(
         value,
-        lambda item, state=iter(needles): getattr(str(item), method_name)(
-            next(state),
+        lambda item, state=iter(needles): getattr(_string_method_target(item), method_name)(
+            _string_method_arg(next(state)),
             start,
         )
         if end is None
-        else getattr(str(item), method_name)(next(state), start, end),
+        else getattr(_string_method_target(item), method_name)(
+            _string_method_arg(next(state)),
+            start,
+            end,
+        ),
         result_kind="int",
     )
 
@@ -144,7 +160,7 @@ def python_string_strip(
     if chars is None:
         return python_string_map(
             value,
-            lambda item: getattr(str(item), method_name)(),
+            lambda item: getattr(_string_method_target(item), method_name)(),
             wrap_chararray=wrap_chararray,
         )
     items, _ = python_string_items(value)
@@ -152,7 +168,9 @@ def python_string_strip(
     chars_iter = iter(chars_values)
     return python_string_map(
         value,
-        lambda item: getattr(str(item), method_name)(next(chars_iter)),
+        lambda item: getattr(_string_method_target(item), method_name)(
+            _string_method_arg(next(chars_iter))
+        ),
         wrap_chararray=wrap_chararray,
     )
 
@@ -168,10 +186,14 @@ def python_string_pad(
     items, _ = python_string_items(value)
     widths = python_string_broadcast(width, len(items))
     width_iter = iter(widths)
-    fill = " " if fillchar is None else fillchar
     return python_string_map(
         value,
-        lambda item: getattr(str(item), method_name)(int(next(width_iter)), fill),
+        lambda item: getattr(_string_method_target(item), method_name)(
+            int(next(width_iter)),
+            b" "
+            if fillchar is None and isinstance(_string_method_target(item), bytes)
+            else (" " if fillchar is None else _string_method_arg(fillchar)),
+        ),
         wrap_chararray=wrap_chararray,
     )
 
@@ -185,16 +207,19 @@ def python_string_replace(value, old, new, count=None, *, wrap_chararray=False):
     if count is None:
         return python_string_map(
             value,
-            lambda item: str(item).replace(next(old_iter), next(new_iter)),
+            lambda item: _string_method_target(item).replace(
+                _string_method_arg(next(old_iter)),
+                _string_method_arg(next(new_iter)),
+            ),
             wrap_chararray=wrap_chararray,
         )
     counts = python_string_broadcast(count, len(items))
     count_iter = iter(counts)
     return python_string_map(
         value,
-        lambda item: str(item).replace(
-            next(old_iter),
-            next(new_iter),
+        lambda item: _string_method_target(item).replace(
+            _string_method_arg(next(old_iter)),
+            _string_method_arg(next(new_iter)),
             int(next(count_iter)),
         ),
         wrap_chararray=wrap_chararray,
@@ -204,7 +229,10 @@ def python_string_replace(value, old, new, count=None, *, wrap_chararray=False):
 def python_string_split(value, sep=None, maxsplit=-1):
     return python_string_map(
         value,
-        lambda item: str(item).split(sep, maxsplit),
+        lambda item: _string_method_target(item).split(
+            None if sep is None else _string_method_arg(sep),
+            maxsplit,
+        ),
         result_kind="object",
     )
 
@@ -212,7 +240,10 @@ def python_string_split(value, sep=None, maxsplit=-1):
 def python_string_rsplit(value, sep=None, maxsplit=-1):
     return python_string_map(
         value,
-        lambda item: str(item).rsplit(sep, maxsplit),
+        lambda item: _string_method_target(item).rsplit(
+            None if sep is None else _string_method_arg(sep),
+            maxsplit,
+        ),
         result_kind="object",
     )
 
@@ -220,7 +251,7 @@ def python_string_rsplit(value, sep=None, maxsplit=-1):
 def python_string_splitlines(value):
     return python_string_map(
         value,
-        lambda item: str(item).splitlines(),
+        lambda item: _string_method_target(item).splitlines(),
         result_kind="object",
     )
 
@@ -235,19 +266,26 @@ def python_string_partition(
     items, _ = python_string_items(value)
     seps = python_string_broadcast(sep, len(items))
     sep_iter = iter(seps)
-    return python_string_map(
-        value,
-        lambda item: list(getattr(str(item), method_name)(next(sep_iter))),
-        result_kind="object",
-        wrap_chararray=wrap_chararray,
-        extra_shape=(3,),
-    )
+    result = [
+        list(
+            getattr(_string_method_target(item), method_name)(
+                _string_method_arg(next(sep_iter))
+            )
+        )
+        for item in items
+    ]
+    out = array(result)
+    if wrap_chararray:
+        from ._string_ops import chararray
+
+        return chararray._from_array(out)
+    return out
 
 
 def python_string_transform(value, method_name, *args, wrap_chararray=False):
     return python_string_map(
         value,
-        lambda item: getattr(str(item), method_name)(*args),
+        lambda item: getattr(_string_method_target(item), method_name)(*args),
         wrap_chararray=wrap_chararray,
     )
 
@@ -258,8 +296,13 @@ def python_string_join(seq, sep, *, wrap_chararray=False):
     sep_iter = iter(seps)
     return python_string_map(
         seq,
-        lambda item: str(next(sep_iter)).join(str(part) for part in item)
-        if isinstance(item, (list, tuple))
-        else str(next(sep_iter)).join(str(item)),
+        lambda item: _string_method_arg(next(sep_iter)).join(
+            [
+                _string_method_target(part)
+                for part in item
+            ]
+            if isinstance(item, (list, tuple))
+            else _string_method_target(item)
+        ),
         wrap_chararray=wrap_chararray,
     ).reshape(shape or (len(items),))
