@@ -38,35 +38,6 @@ def _strip_whitespace(s):
         return s.rstrip(b'\x00 ')
     return s.rstrip('\x00 ')
 
-
-def _to_items(a):
-    """Convert array-like to flat list of items."""
-    if isinstance(a, chararray):
-        return a._arr.flatten().tolist()
-    if isinstance(a, ndarray):
-        return a.flatten().tolist()
-    if isinstance(a, _ObjectArray):
-        return a._data
-    if isinstance(a, (str, bytes)):
-        return [a]
-    if isinstance(a, (list, tuple)):
-        result = []
-        for item in a:
-            if isinstance(item, (list, tuple)):
-                result.extend(item)
-            else:
-                result.append(item)
-        return result
-    return [a]
-
-
-def _to_str(v):
-    """Convert a value to string, decoding bytes if needed."""
-    if isinstance(v, bytes):
-        return v.decode('latin-1')
-    return str(v)
-
-
 def _coerce_native_string_array(a):
     """Delegate native string input normalization to the shared bridge."""
     return normalize_native_string_input(a)[0]
