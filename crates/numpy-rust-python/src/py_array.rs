@@ -328,7 +328,7 @@ fn boxed_temporal_scalar_to_py(
     vm.ctx.none()
 }
 
-fn boxed_scalar_to_py(s: BoxedScalar, vm: &VirtualMachine) -> PyObjectRef {
+pub(crate) fn boxed_scalar_to_py(s: BoxedScalar, vm: &VirtualMachine) -> PyObjectRef {
     match s {
         BoxedScalar::Object(value) => match value {
             BoxedObjectScalar::Bool(v) => vm.ctx.new_bool(v).into(),
@@ -2535,15 +2535,27 @@ impl PyNdArray {
         };
         let self_is_boxed = self.data.read().unwrap().dtype().is_boxed();
         if self_is_boxed {
+            let input_dtype = self.data.read().unwrap().dtype();
+            let temporal_unit = self.data.read().unwrap().temporal_unit().map(str::to_owned);
             let a_min_arr = match &a_min_obj {
                 None => None,
                 Some(obj) if vm.is_none(obj) => None,
-                Some(obj) => Some(obj_to_ndarray(obj, vm)?),
+                Some(obj) => Some(crate::py_creation::object_to_ndarray_with_dtype_and_unit(
+                    obj,
+                    Some(input_dtype),
+                    temporal_unit.as_deref(),
+                    vm,
+                )?),
             };
             let a_max_arr = match &a_max_obj {
                 None => None,
                 Some(obj) if vm.is_none(obj) => None,
-                Some(obj) => Some(obj_to_ndarray(obj, vm)?),
+                Some(obj) => Some(crate::py_creation::object_to_ndarray_with_dtype_and_unit(
+                    obj,
+                    Some(input_dtype),
+                    temporal_unit.as_deref(),
+                    vm,
+                )?),
             };
             let input = if let Some(out_obj) = args.kwargs.get("out") {
                 if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {

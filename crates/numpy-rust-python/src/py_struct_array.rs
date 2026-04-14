@@ -7,9 +7,11 @@ use vm::types::AsMapping;
 use vm::{atomic_func, AsObject, PyObjectRef, PyPayload, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::SliceArg;
-use numpy_rust_core::{FieldSpec, StructArrayData};
+use numpy_rust_core::{FieldSpec, StructArrayData, StructScalar};
 
-use crate::py_array::{numpy_err, py_slice_to_slice_arg, scalar_to_py, PyNdArray};
+use crate::py_array::{
+    boxed_scalar_to_py, logical_scalar_to_py, numpy_err, py_slice_to_slice_arg, PyNdArray,
+};
 
 /// Python-visible structured array class backed by columnar Rust storage.
 /// Each field is stored as a separate NdArray column.
@@ -242,7 +244,10 @@ impl PyStructuredArray {
             }; // lock dropped here
             let values: Vec<PyObjectRef> = row_scalars
                 .into_iter()
-                .map(|s| scalar_to_py(s, vm))
+                .map(|s| match s {
+                    StructScalar::Logical(value) => logical_scalar_to_py(value, vm),
+                    StructScalar::Boxed(value) => boxed_scalar_to_py(value, vm),
+                })
                 .collect();
             return Ok(vm.ctx.new_list(values).into());
         }

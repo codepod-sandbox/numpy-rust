@@ -424,6 +424,12 @@ impl NdArray {
             });
         }
 
+        if indices.is_empty() {
+            let mut out_shape = self.shape().to_vec();
+            out_shape[axis] = 0;
+            return Ok(NdArray::zeros(&out_shape, self.dtype()).with_preserved_dtype(self));
+        }
+
         // Validate indices before using them
         let axis_len = self.shape()[axis];
         for &i in indices {

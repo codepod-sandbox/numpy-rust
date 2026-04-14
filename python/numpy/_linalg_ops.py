@@ -1,7 +1,7 @@
 """Linear algebra operations in the flat numpy namespace."""
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray, AxisError, _builtin_max, _copy_into, _ComplexResultArray
+from ._helpers import _ObjectArray, AxisError, _builtin_max, _copy_into
 from ._creation import array, asarray
 from ._core_types import dtype
 
@@ -60,13 +60,6 @@ def _has_complex(result):
 
 
 def _scimath_wrap(result):
-    """Wrap complex128 ndarray results in _ComplexResultArray for compat.
-    RustPython returns complex scalars as (re, im) tuples; _ComplexResultArray
-    converts them to proper Python complex objects on element access."""
-    if hasattr(result, 'dtype') and result.dtype == dtype('complex128'):
-        flat = result.flatten().tolist()
-        flat_complex = [complex(v[0], v[1]) if isinstance(v, tuple) else complex(v) for v in flat]
-        return _ComplexResultArray(flat_complex, result.shape)
     return result
 
 

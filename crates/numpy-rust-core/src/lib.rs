@@ -17,7 +17,7 @@ pub mod resolver;
 pub mod storage;
 pub mod struct_array;
 pub mod utility;
-pub use struct_array::{FieldSpec, StructArrayData};
+pub use struct_array::{FieldSpec, StructArrayData, StructScalar};
 
 pub use array::{BoxedObjectScalar, BoxedScalar, BoxedStorage, BoxedTemporalScalar, NdArray};
 pub use array_data::ArrayData;

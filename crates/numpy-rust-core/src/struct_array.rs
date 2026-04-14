@@ -1,6 +1,7 @@
 use crate::array::NdArray;
 use crate::error::{NumpyError, Result};
-use crate::indexing::Scalar;
+use crate::indexing::LogicalScalar;
+use crate::BoxedScalar;
 
 /// A single named column in a structured array.
 #[derive(Debug)]
@@ -15,6 +16,12 @@ pub struct FieldSpec {
 pub struct StructArrayData {
     pub fields: Vec<FieldSpec>,
     pub shape: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructScalar {
+    Logical(LogicalScalar),
+    Boxed(BoxedScalar),
 }
 
 impl StructArrayData {
@@ -50,9 +57,9 @@ impl StructArrayData {
         self.len() == 0
     }
 
-    /// Extract one row as a Vec of Scalars (one per field, in field order).
+    /// Extract one row as a Vec of logical/boxed scalars (one per field, in field order).
     /// Supports negative indexing: -1 = last row.
-    pub fn get_row(&self, idx: isize) -> Result<Vec<Scalar>> {
+    pub fn get_row(&self, idx: isize) -> Result<Vec<StructScalar>> {
         let n = self.len();
         if n == 0 {
             return Err(NumpyError::ValueError(
@@ -80,7 +87,11 @@ impl StructArrayData {
         };
         let mut row = Vec::with_capacity(self.fields.len());
         for field in &self.fields {
-            let scalar = field.data.get(&[actual_idx])?;
+            let scalar = if field.data.dtype().is_boxed() {
+                StructScalar::Boxed(field.data.get_boxed(&[actual_idx])?)
+            } else {
+                StructScalar::Logical(field.data.get_logical(&[actual_idx])?)
+            };
             row.push(scalar);
         }
         Ok(row)
@@ -189,9 +200,15 @@ mod tests {
         );
         let row = sa.get_row(0).unwrap();
         assert_eq!(row.len(), 2);
-        assert!(matches!(row[0], Scalar::Int64(10)));
+        assert!(matches!(
+            row[0],
+            StructScalar::Logical(LogicalScalar::Int(10))
+        ));
         let row = sa.get_row(-1).unwrap();
-        assert!(matches!(row[0], Scalar::Int64(30)));
+        assert!(matches!(
+            row[0],
+            StructScalar::Logical(LogicalScalar::Int(30))
+        ));
         assert!(sa.get_row(3).is_err());
         assert!(sa.get_row(-4).is_err());
     }
@@ -215,9 +232,15 @@ mod tests {
         assert_eq!(sliced.len(), 2);
         assert_eq!(sliced.shape, vec![2]);
         let row0 = sliced.get_row(0).unwrap();
-        assert!(matches!(row0[0], Scalar::Int64(20)));
+        assert!(matches!(
+            row0[0],
+            StructScalar::Logical(LogicalScalar::Int(20))
+        ));
         let row1 = sliced.get_row(1).unwrap();
-        assert!(matches!(row1[0], Scalar::Int64(30)));
+        assert!(matches!(
+            row1[0],
+            StructScalar::Logical(LogicalScalar::Int(30))
+        ));
         // empty slice
         let empty = sa.slice_rows(2, 2).unwrap();
         assert_eq!(empty.len(), 0);
@@ -237,10 +260,38 @@ mod tests {
         let new_col = make_int_col(vec![10, 20, 30]);
         sa.set_field("x", new_col).unwrap();
         let row = sa.get_row(0).unwrap();
-        assert!(matches!(row[0], Scalar::Int64(10)));
+        assert!(matches!(
+            row[0],
+            StructScalar::Logical(LogicalScalar::Int(10))
+        ));
         // wrong shape → error
         assert!(sa.set_field("x", make_int_col(vec![1, 2])).is_err());
         // unknown field → error
         assert!(sa.set_field("z", make_int_col(vec![1, 2, 3])).is_err());
+    }
+
+    #[test]
+    fn test_get_row_boxed_field() {
+        let sa = StructArrayData::new(
+            vec![FieldSpec {
+                name: "t".into(),
+                data: NdArray::from_boxed_scalars(
+                    vec![BoxedScalar::Timedelta(crate::BoxedTemporalScalar {
+                        value: 5,
+                        unit: "ns".into(),
+                        is_nat: false,
+                    })],
+                    &[1],
+                    crate::DType::Timedelta64,
+                )
+                .unwrap(),
+            }],
+            vec![1],
+        );
+        let row = sa.get_row(0).unwrap();
+        assert!(matches!(
+            row[0],
+            StructScalar::Boxed(BoxedScalar::Timedelta(_))
+        ));
     }
 }

@@ -82,6 +82,12 @@ def _normalize_math_operand(x):
         return asarray(x)
     return x
 
+
+def _preserve_typed_scalar_for_array_op(v):
+    if hasattr(v, "_numpy_dtype_name"):
+        return array(v, dtype=str(getattr(v, "_numpy_dtype_name"))).reshape(())
+    return v
+
 # --- Save builtin divmod before shadowing -----------------------------------
 _builtin_divmod = __builtins__["divmod"] if isinstance(__builtins__, dict) else __import__("builtins").divmod
 
@@ -351,6 +357,18 @@ def issubclass_(arg1, arg2):
 
 def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
     """Clip array values to [a_min, a_max]."""
+    def _clip_object_fallback(obj_arr):
+        data = obj_arr._data if isinstance(obj_arr, _ObjectArray) else list(obj_arr)
+        clipped = []
+        for v in data:
+            cur = v
+            if a_min is not None and cur < a_min:
+                cur = a_min
+            if a_max is not None and cur > a_max:
+                cur = a_max
+            clipped.append(cur)
+        return _ObjectArray(clipped, "object", shape=obj_arr.shape if isinstance(obj_arr, _ObjectArray) else a.shape)
+
     _conflict_msg = ("Passing `min` or `max` keyword argument when `a_min` and "
                      "`a_max` are provided is forbidden.")
     # Validate casting kwarg
@@ -437,10 +455,7 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
     # _ObjectArray compatibility fallback
     if isinstance(a, _ObjectArray):
         result = a.copy()
-        if a_min is not None:
-            result = maximum(result, a_min)
-        if a_max is not None:
-            result = minimum(result, a_max)
+        result = _clip_object_fallback(result)
         if out is not None:
             _copy_into(out, result)
             return out
@@ -467,7 +482,18 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
         or dt_name.startswith("datetime64")
         or dt_name.startswith("timedelta64")
     ) and isinstance(a, ndarray):
-        return a.clip(a_min, a_max, out=out)
+        try:
+            return a.clip(a_min, a_max, out=out)
+        except TypeError:
+            if dt_name == "object":
+                fallback = _ObjectArray(a.tolist(), "object", shape=a.shape)
+                result = _clip_object_fallback(fallback)
+                if out is not None:
+                    _copy_into(out, result)
+                    return out
+                return result
+            else:
+                raise
     # For integer dtypes, clamp bounds to dtype range to preserve dtype
     _int_dtypes = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
     _int_dtypes = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
@@ -1130,6 +1156,41 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
         result_data = isclose(a_data, b_data, rtol=rtol, atol=atol, equal_nan=equal_nan)
         mask = a.mask if _a_ma else (b.mask if _b_ma else None)
         return _MA(result_data, mask=mask)
+    scalar_input = not isinstance(a, ndarray) and not isinstance(b, ndarray) and not isinstance(a, (list, tuple)) and not isinstance(b, (list, tuple))
+    if isinstance(a, ndarray) or isinstance(b, ndarray):
+        a_arr = a if isinstance(a, ndarray) else asarray(a)
+        b_arr = b if isinstance(b, ndarray) else asarray(b)
+        a_dt = str(a_arr.dtype)
+        b_dt = str(b_arr.dtype)
+        if a_dt.startswith("timedelta64") and b_dt.startswith("timedelta64"):
+            a_vals = a_arr.flatten().tolist()
+            b_vals = b_arr.flatten().tolist()
+            if len(a_vals) == 1 and len(b_vals) > 1:
+                a_vals = a_vals * len(b_vals)
+            if len(b_vals) == 1 and len(a_vals) > 1:
+                b_vals = b_vals * len(a_vals)
+            if isinstance(atol, (list, tuple, ndarray)):
+                atol_vals = asarray(atol).flatten().tolist()
+                if len(atol_vals) == 1 and len(a_vals) > 1:
+                    atol_vals = atol_vals * len(a_vals)
+            else:
+                atol_vals = [atol] * len(a_vals)
+            results = []
+            for av, bv, tol in zip(a_vals, b_vals, atol_vals):
+                av_nat = isinstance(av, _timedelta64_cls) and av._is_nat
+                bv_nat = isinstance(bv, _timedelta64_cls) and bv._is_nat
+                if av_nat or bv_nat:
+                    results.append(bool(equal_nan and av_nat and bv_nat))
+                    continue
+                diff = abs((av - bv)._value)
+                tol_val = tol._value if isinstance(tol, _timedelta64_cls) else int(tol)
+                results.append(diff <= tol_val)
+            result = _native.array(results).astype("bool")
+            if len(a_arr.shape) > 1:
+                result = result.reshape(a_arr.shape)
+            if scalar_input and result.size == 1:
+                return bool(result.flatten()[0])
+            return result
     # Fast path for _ObjectArray (complex, object, temporal dtypes)
     if isinstance(a, _ObjectArray) or isinstance(b, _ObjectArray):
         _babs = __import__("builtins").abs
@@ -1165,7 +1226,6 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
         if len(out_shape) > 1:
             arr = arr.reshape(list(out_shape))
         return arr
-    scalar_input = not isinstance(a, ndarray) and not isinstance(b, ndarray) and not isinstance(a, (list, tuple)) and not isinstance(b, (list, tuple))
     # NEP50: plain Python scalars (int, float, bool) adopt the dtype of the array operand.
     # numpy scalars (np.float32, np.float64, etc.) keep their explicit dtype.
     _is_weak = lambda x: type(x) in (int, float, complex, bool)
@@ -1343,9 +1403,7 @@ def add(x1, x2, out=None):
     if scalar_scalar:
         target = str(result_type(x1, x2))
         val = x1 + x2
-        if target.startswith("complex"):
-            return _ObjectArray([complex(val)], target)
-        return array([val], dtype=target)
+        return array([val], dtype=target).reshape(())
 
     if isinstance(a, _ObjectArray) or isinstance(b, _ObjectArray):
         target = str(result_type(x1, x2))
@@ -1357,25 +1415,12 @@ def add(x1, x2, out=None):
         vals = [a._data[i] + b._data[i] for i in range(n)]
         return _ObjectArray(vals, target)
 
-    def _scalar_for_array_op(v):
-        if hasattr(v, "_numpy_dtype_name"):
-            dn = str(getattr(v, "_numpy_dtype_name"))
-            if dn == "bool":
-                return bool(v)
-            if dn.startswith("int") or dn.startswith("uint"):
-                return int(v)
-            if dn.startswith("float"):
-                return float(v)
-            if dn.startswith("complex"):
-                return complex(v)
-        return v
-
     if isinstance(a, ndarray) and not isinstance(b, ndarray):
-        b = _scalar_for_array_op(b)
+        b = _preserve_typed_scalar_for_array_op(b)
         if not isinstance(b, (int, float, complex, bool)):
             b = asarray(b)
     elif isinstance(b, ndarray) and not isinstance(a, ndarray):
-        a = _scalar_for_array_op(a)
+        a = _preserve_typed_scalar_for_array_op(a)
         if not isinstance(a, (int, float, complex, bool)):
             a = asarray(a)
 
@@ -1399,7 +1444,17 @@ def subtract(x1, x2, out=None):
     return _normalize_math_operand(x1) - _normalize_math_operand(x2)
 
 def multiply(x1, x2, out=None):
-    r = _normalize_math_operand(x1) * _normalize_math_operand(x2)
+    a = _normalize_math_operand(x1)
+    b = _normalize_math_operand(x2)
+    if isinstance(a, ndarray) and not isinstance(b, ndarray):
+        b = _preserve_typed_scalar_for_array_op(b)
+        if not isinstance(b, (int, float, complex, bool)):
+            b = asarray(b)
+    elif isinstance(b, ndarray) and not isinstance(a, ndarray):
+        a = _preserve_typed_scalar_for_array_op(a)
+        if not isinstance(a, (int, float, complex, bool)):
+            a = asarray(a)
+    r = a * b
     if hasattr(r, "dtype"):
         target = str(result_type(x1, x2))
         if str(r.dtype) != target:

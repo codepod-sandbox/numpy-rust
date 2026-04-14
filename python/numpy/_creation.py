@@ -225,31 +225,22 @@ def _concat_object_arrays(arrs, axis):
     return _native_boxed_result_or_fallback(result_data, common_dt, tuple(new_shape))
 
 def _make_complex_array(values, shape):
-    """Create a complex128 ndarray from a list of Python complex/float values.
-    Uses real+imag decomposition since the Rust array() can't handle complex lists directly."""
-    reals = [v.real if isinstance(v, complex) else float(v) for v in values]
-    imags = [v.imag if isinstance(v, complex) else 0.0 for v in values]
-    # Build real and imag arrays, promote both to complex128, then add
-    re_arr = _native.array(reals).reshape(shape).astype("complex128")
-    im_arr = _native.array(imags).reshape(shape).astype("complex128")
-    # im_arr contains real values that should become imaginary parts.
-    # We need to multiply by 1j. The Rust side supports complex arithmetic,
-    # so create a scalar 1j array and multiply.
-    j_scalar = zeros(shape, dtype="complex128")
-    # Workaround: we can construct the complex array correctly by
-    # using the real array as base and adding imag * 1j via Rust ops
-    # re_arr already has imag=0, im_arr has the imag values as real part
-    # We need: result[i] = complex(reals[i], imags[i])
-    # Since Rust complex arrays store (re, im) pairs, and re_arr.astype("complex128")
-    # gives us (reals[i], 0), we need a way to set the imaginary part.
-    # The cleanest way: build via the Rust ops: re_arr + im_arr * 1j
-    # But we need a 1j constant array. Let's try creating one:
-    ones_arr = ones(shape, dtype="complex128")  # (1+0j)
-    # Subtract real part to get (0+0j), then... this doesn't help.
-    # Alternative: use Rust-level subtract and multiply
-    # Actually, the simplest: create the array by putting values into an _ObjectArray
-    # with reshape support, since scimath results are usually small.
-    return _ComplexResultArray(values, shape)
+    """Create a native complex128 ndarray from Python complex/real values."""
+    return _native.array(list(values)).reshape(shape).astype("complex128")
+
+
+def _normalize_shape_arg(shape):
+    if isinstance(shape, int):
+        return (shape,)
+    if isinstance(shape, ndarray):
+        if shape.ndim == 0:
+            return (int(shape.item()),)
+        return tuple(int(v) for v in shape.ravel().tolist())
+    if isinstance(shape, list):
+        return tuple(int(v) for v in shape)
+    if isinstance(shape, tuple):
+        return tuple(int(v) for v in shape)
+    return shape
 
 
 
@@ -893,8 +884,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
 
 
 def zeros(shape, dtype=None, order="C", like=None):
-    if isinstance(shape, int):
-        shape = (shape,)
+    shape = _normalize_shape_arg(shape)
     # Handle structured dtype
     if dtype is not None:
         from ._core_types import dtype as _dtype_cls
@@ -931,8 +921,7 @@ def zeros(shape, dtype=None, order="C", like=None):
     return _apply_order(_native.zeros(shape), order)
 
 def ones(shape, dtype=None, order="C", like=None):
-    if isinstance(shape, int):
-        shape = (shape,)
+    shape = _normalize_shape_arg(shape)
     # Handle structured dtype
     if dtype is not None:
         from ._core_types import dtype as _dtype_cls
@@ -1729,6 +1718,22 @@ def array_equal(a1, a2, equal_nan=False):
             a2 = array(a2)
         if a1.shape != a2.shape:
             return False
+        _a1_dt = str(a1.dtype)
+        _a2_dt = str(a2.dtype)
+        _temporal_compare = _is_temporal_dtype(_a1_dt) and _is_temporal_dtype(_a2_dt)
+        if _temporal_compare:
+            lhs = a1.flatten().tolist()
+            rhs = a2.flatten().tolist()
+            for lv, rv in zip(lhs, rhs):
+                lnat = getattr(lv, "_is_nat", False)
+                rnat = getattr(rv, "_is_nat", False)
+                if lnat or rnat:
+                    if not (equal_nan and lnat and rnat):
+                        return False
+                    continue
+                if lv != rv:
+                    return False
+            return True
         if equal_nan:
             try:
                 import numpy as _np

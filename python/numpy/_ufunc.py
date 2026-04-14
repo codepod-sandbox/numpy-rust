@@ -587,7 +587,7 @@ class ufunc:
         if self.nin != 2:
             raise ValueError("accumulate only supported for binary functions")
         a = self._prepare_reducelike_input(a, None if dtype is None else str(dtype), out)
-        if self._accumulate_fast is not None:
+        if self._accumulate_fast is not None and str(getattr(a, 'dtype', '')) != 'object':
             result = self._accumulate_fast(a, axis=axis)
         else:
             result = self._generic_accumulate(a, axis=axis)

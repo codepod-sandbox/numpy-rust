@@ -784,7 +784,7 @@ def correlate(a, v, mode='valid'):
         elif mode == 'same':
             start = (full_len - na_l) // 2
             result = result[start:start + na_l]
-        return _ObjectArray(result, "complex128")
+        return array(result, dtype="complex128")
     # Reverse v for correlation (correlation = convolution with reversed kernel)
     v_rev = array([v[nv - 1 - i] for i in range(nv)])
     return convolve(a, v_rev, mode=mode)

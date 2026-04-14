@@ -217,7 +217,8 @@ impl NdArray {
         if self.dtype() == DType::Object {
             let mean = self.mean(axis, false)?;
             let centered = (self - &mean)?;
-            let squared = (&centered * &centered)?;
+            let magnitude = centered.abs();
+            let squared = (&magnitude * &magnitude)?;
             let result = squared.mean(axis, false)?;
             if ddof > 0 {
                 let n = match axis {

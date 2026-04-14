@@ -8,7 +8,7 @@ use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::descriptor::descriptor_for_dtype;
 use crate::error::{NumpyError, Result};
 use crate::kernel::ArithmeticKernelOp;
-use crate::ops::comparison::{boxed_execution_dtype, boxed_scalar_for_coord, iter_boxed_coords};
+use crate::ops::comparison::{broadcast_coord, iter_boxed_coords};
 use crate::resolver::{resolve_binary_op, BinaryOp, BinaryOpPlan};
 use crate::NdArray;
 
@@ -61,16 +61,90 @@ fn execute_resolved_binary(op: BinaryOp, lhs: &NdArray, rhs: &NdArray) -> Result
 
 fn execute_boxed_binary(op: BinaryOp, lhs: &NdArray, rhs: &NdArray) -> Result<NdArray> {
     let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
-    let execution_dtype = boxed_execution_dtype(lhs, rhs)?;
     let mut out = Vec::with_capacity(out_shape.iter().product());
 
     for coord in iter_boxed_coords(&out_shape) {
-        let lhs_scalar = boxed_scalar_for_coord(lhs, execution_dtype, &coord, &out_shape)?;
-        let rhs_scalar = boxed_scalar_for_coord(rhs, execution_dtype, &coord, &out_shape)?;
+        let lhs_scalar = boxed_scalar_for_arithmetic_coord(lhs, &coord, &out_shape)?;
+        let rhs_scalar = boxed_scalar_for_arithmetic_coord(rhs, &coord, &out_shape)?;
         out.push(apply_boxed_binary(op, lhs_scalar, rhs_scalar)?);
     }
 
-    NdArray::from_boxed_scalars(out, &out_shape, execution_dtype)
+    let result_dtype = if out.is_empty() {
+        boxed_binary_result_dtype(op, lhs.dtype(), rhs.dtype())?
+    } else {
+        boxed_scalar_dtype(&out[0])
+    };
+    NdArray::from_boxed_scalars(out, &out_shape, result_dtype)
+}
+
+fn boxed_scalar_for_arithmetic_coord(
+    input: &NdArray,
+    coord: &[usize],
+    out_shape: &[usize],
+) -> Result<BoxedScalar> {
+    let input_coord = broadcast_coord(coord, out_shape, input.shape());
+    if input.dtype().is_boxed() {
+        return input.get_boxed(&input_coord);
+    }
+    let scalar = input.get(&input_coord)?;
+    Ok(BoxedScalar::Object(match scalar {
+        crate::indexing::Scalar::Bool(v) => BoxedObjectScalar::Bool(v),
+        crate::indexing::Scalar::Int32(v) => BoxedObjectScalar::Int(v as i64),
+        crate::indexing::Scalar::Int64(v) => BoxedObjectScalar::Int(v),
+        crate::indexing::Scalar::Float32(v) => BoxedObjectScalar::Float(v as f64),
+        crate::indexing::Scalar::Float64(v) => BoxedObjectScalar::Float(v),
+        crate::indexing::Scalar::Complex64(v) => {
+            BoxedObjectScalar::Complex(Complex::new(v.re as f64, v.im as f64))
+        }
+        crate::indexing::Scalar::Complex128(v) => BoxedObjectScalar::Complex(v),
+        crate::indexing::Scalar::Str(v) => BoxedObjectScalar::Text(v),
+    }))
+}
+
+fn boxed_scalar_dtype(value: &BoxedScalar) -> crate::DType {
+    match value {
+        BoxedScalar::Object(_) => crate::DType::Object,
+        BoxedScalar::Datetime(_) => crate::DType::Datetime64,
+        BoxedScalar::Timedelta(_) => crate::DType::Timedelta64,
+    }
+}
+
+fn boxed_binary_result_dtype(
+    op: BinaryOp,
+    lhs: crate::DType,
+    rhs: crate::DType,
+) -> Result<crate::DType> {
+    use crate::DType::{Datetime64, Object, Timedelta64};
+    match (lhs, rhs) {
+        (Datetime64, Datetime64) => match op {
+            BinaryOp::Sub => Ok(Timedelta64),
+            _ => Err(NumpyError::TypeError(format!(
+                "boxed operation {:?} not supported between datetime64 and datetime64",
+                op
+            ))),
+        },
+        (Datetime64, Timedelta64) => match op {
+            BinaryOp::Add | BinaryOp::Sub => Ok(Datetime64),
+            _ => Err(NumpyError::TypeError(format!(
+                "boxed operation {:?} not supported between datetime64 and timedelta64",
+                op
+            ))),
+        },
+        (Timedelta64, Datetime64) => match op {
+            BinaryOp::Add => Ok(Datetime64),
+            _ => Err(NumpyError::TypeError(format!(
+                "boxed operation {:?} not supported between timedelta64 and datetime64",
+                op
+            ))),
+        },
+        (Timedelta64, Timedelta64) => Ok(Timedelta64),
+        (Timedelta64, Object) | (Object, Timedelta64) => Ok(Timedelta64),
+        (Object, Object) => Ok(Object),
+        _ => Err(NumpyError::TypeError(format!(
+            "boxed operation {:?} not supported between {} and {}",
+            op, lhs, rhs
+        ))),
+    }
 }
 
 pub(crate) fn apply_boxed_binary(
@@ -81,6 +155,24 @@ pub(crate) fn apply_boxed_binary(
     match (lhs, rhs) {
         (BoxedScalar::Object(lhs), BoxedScalar::Object(rhs)) => {
             apply_boxed_object_binary(op, lhs, rhs).map(BoxedScalar::Object)
+        }
+        (BoxedScalar::Timedelta(lhs), BoxedScalar::Timedelta(rhs)) => {
+            apply_boxed_timedelta_binary(op, lhs, rhs).map(BoxedScalar::Timedelta)
+        }
+        (BoxedScalar::Datetime(lhs), BoxedScalar::Datetime(rhs)) => {
+            apply_boxed_datetime_binary(op, lhs, rhs)
+        }
+        (BoxedScalar::Datetime(lhs), BoxedScalar::Timedelta(rhs)) => {
+            apply_boxed_datetime_timedelta_binary(op, lhs, rhs)
+        }
+        (BoxedScalar::Timedelta(lhs), BoxedScalar::Datetime(rhs)) => {
+            apply_boxed_timedelta_datetime_binary(op, lhs, rhs)
+        }
+        (BoxedScalar::Timedelta(lhs), BoxedScalar::Object(rhs)) => {
+            apply_boxed_timedelta_numeric_binary(op, lhs, rhs).map(BoxedScalar::Timedelta)
+        }
+        (BoxedScalar::Object(lhs), BoxedScalar::Timedelta(rhs)) => {
+            apply_boxed_numeric_timedelta_binary(op, lhs, rhs).map(BoxedScalar::Timedelta)
         }
         (lhs, rhs) => Err(NumpyError::TypeError(format!(
             "boxed arithmetic {:?} is not supported between {:?} and {:?}",
@@ -126,6 +218,240 @@ fn repeat_text(text: String, times: i64) -> String {
     } else {
         text.repeat(times as usize)
     }
+}
+
+fn common_time_unit<'a>(lhs: &'a str, rhs: &'a str) -> &'a str {
+    const ORDER: [&str; 10] = ["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns"];
+    if lhs == rhs {
+        return lhs;
+    }
+    if lhs == "generic" {
+        return rhs;
+    }
+    if rhs == "generic" {
+        return lhs;
+    }
+    let lhs_idx = ORDER.iter().position(|unit| *unit == lhs).unwrap_or(3);
+    let rhs_idx = ORDER.iter().position(|unit| *unit == rhs).unwrap_or(3);
+    ORDER[lhs_idx.max(rhs_idx)]
+}
+
+fn to_common_unit(value: i64, from_unit: &str, to_unit: &str) -> i64 {
+    if from_unit == to_unit || from_unit == "generic" || to_unit == "generic" {
+        return value;
+    }
+    let days = match from_unit {
+        "Y" => value as f64 * 365.0,
+        "M" => value as f64 * 30.0,
+        "W" => value as f64 * 7.0,
+        "D" => value as f64,
+        "h" => value as f64 / 24.0,
+        "m" => value as f64 / 1440.0,
+        "s" => value as f64 / 86400.0,
+        "ms" => value as f64 / 86_400_000.0,
+        "us" => value as f64 / 86_400_000_000.0,
+        "ns" => value as f64 / 86_400_000_000_000.0,
+        _ => value as f64,
+    };
+    match to_unit {
+        "Y" => (days / 365.0) as i64,
+        "M" => (days / 30.0) as i64,
+        "W" => (days / 7.0) as i64,
+        "D" => days as i64,
+        "h" => (days * 24.0) as i64,
+        "m" => (days * 1440.0) as i64,
+        "s" => (days * 86400.0) as i64,
+        "ms" => (days * 86_400_000.0) as i64,
+        "us" => (days * 86_400_000_000.0) as i64,
+        "ns" => (days * 86_400_000_000_000.0) as i64,
+        _ => days as i64,
+    }
+}
+
+fn temporal_target_unit(lhs: &str, rhs: &str) -> String {
+    common_time_unit(lhs, rhs).to_owned()
+}
+
+fn apply_boxed_timedelta_binary(
+    op: BinaryOp,
+    lhs: crate::array::BoxedTemporalScalar,
+    rhs: crate::array::BoxedTemporalScalar,
+) -> Result<crate::array::BoxedTemporalScalar> {
+    let unit = temporal_target_unit(lhs.unit.as_str(), rhs.unit.as_str());
+    if lhs.is_nat || rhs.is_nat {
+        return Ok(crate::array::BoxedTemporalScalar {
+            value: 0,
+            unit,
+            is_nat: true,
+        });
+    }
+    let lhs_value = to_common_unit(lhs.value, lhs.unit.as_str(), unit.as_str());
+    let rhs_value = to_common_unit(rhs.value, rhs.unit.as_str(), unit.as_str());
+    let value = match op {
+        BinaryOp::Add => lhs_value + rhs_value,
+        BinaryOp::Sub => lhs_value - rhs_value,
+        BinaryOp::Mul
+        | BinaryOp::Div
+        | BinaryOp::FloorDiv
+        | BinaryOp::Remainder
+        | BinaryOp::Pow => {
+            return Err(NumpyError::TypeError(format!(
+                "boxed arithmetic {:?} is not supported between timedelta64 values",
+                op
+            )))
+        }
+    };
+    Ok(crate::array::BoxedTemporalScalar {
+        value,
+        unit,
+        is_nat: false,
+    })
+}
+
+fn apply_boxed_datetime_binary(
+    op: BinaryOp,
+    lhs: crate::array::BoxedTemporalScalar,
+    rhs: crate::array::BoxedTemporalScalar,
+) -> Result<BoxedScalar> {
+    match op {
+        BinaryOp::Sub => {
+            let unit = temporal_target_unit(lhs.unit.as_str(), rhs.unit.as_str());
+            if lhs.is_nat || rhs.is_nat {
+                return Ok(BoxedScalar::Timedelta(crate::array::BoxedTemporalScalar {
+                    value: 0,
+                    unit,
+                    is_nat: true,
+                }));
+            }
+            let lhs_value = to_common_unit(lhs.value, lhs.unit.as_str(), unit.as_str());
+            let rhs_value = to_common_unit(rhs.value, rhs.unit.as_str(), unit.as_str());
+            Ok(BoxedScalar::Timedelta(crate::array::BoxedTemporalScalar {
+                value: lhs_value - rhs_value,
+                unit,
+                is_nat: false,
+            }))
+        }
+        _ => Err(NumpyError::TypeError(format!(
+            "boxed arithmetic {:?} is not supported between datetime64 values",
+            op
+        ))),
+    }
+}
+
+fn apply_boxed_datetime_timedelta_binary(
+    op: BinaryOp,
+    lhs: crate::array::BoxedTemporalScalar,
+    rhs: crate::array::BoxedTemporalScalar,
+) -> Result<BoxedScalar> {
+    match op {
+        BinaryOp::Add | BinaryOp::Sub => {
+            let unit = if lhs.unit == "generic" {
+                rhs.unit.clone()
+            } else {
+                lhs.unit.clone()
+            };
+            if lhs.is_nat || rhs.is_nat {
+                return Ok(BoxedScalar::Datetime(crate::array::BoxedTemporalScalar {
+                    value: 0,
+                    unit,
+                    is_nat: true,
+                }));
+            }
+            let rhs_value = to_common_unit(rhs.value, rhs.unit.as_str(), unit.as_str());
+            let value = if matches!(op, BinaryOp::Add) {
+                lhs.value + rhs_value
+            } else {
+                lhs.value - rhs_value
+            };
+            Ok(BoxedScalar::Datetime(crate::array::BoxedTemporalScalar {
+                value,
+                unit,
+                is_nat: false,
+            }))
+        }
+        _ => Err(NumpyError::TypeError(format!(
+            "boxed arithmetic {:?} is not supported between datetime64 and timedelta64 values",
+            op
+        ))),
+    }
+}
+
+fn apply_boxed_timedelta_datetime_binary(
+    op: BinaryOp,
+    lhs: crate::array::BoxedTemporalScalar,
+    rhs: crate::array::BoxedTemporalScalar,
+) -> Result<BoxedScalar> {
+    match op {
+        BinaryOp::Add => apply_boxed_datetime_timedelta_binary(op, rhs, lhs),
+        _ => Err(NumpyError::TypeError(format!(
+            "boxed arithmetic {:?} is not supported between timedelta64 and datetime64 values",
+            op
+        ))),
+    }
+}
+
+fn object_to_i64_checked(value: &BoxedObjectScalar) -> Result<i64> {
+    use BoxedObjectScalar as O;
+    match value {
+        O::Bool(v) => Ok(if *v { 1 } else { 0 }),
+        O::Int(v) => Ok(*v),
+        O::Float(v) => Ok(*v as i64),
+        O::Complex(_) | O::Text(_) => Err(NumpyError::TypeError(
+            "temporal arithmetic requires a real numeric scalar".into(),
+        )),
+    }
+}
+
+fn apply_boxed_timedelta_numeric_binary(
+    op: BinaryOp,
+    lhs: crate::array::BoxedTemporalScalar,
+    rhs: BoxedObjectScalar,
+) -> Result<crate::array::BoxedTemporalScalar> {
+    let rhs = object_to_i64_checked(&rhs)?;
+    if lhs.is_nat {
+        return Ok(lhs);
+    }
+    let value = match op {
+        BinaryOp::Mul => lhs.value * rhs,
+        BinaryOp::Div => lhs.value / rhs,
+        BinaryOp::FloorDiv => lhs.value / rhs,
+        _ => {
+            return Err(NumpyError::TypeError(format!(
+                "boxed arithmetic {:?} is not supported between timedelta64 and numeric object values",
+                op
+            )))
+        }
+    };
+    Ok(crate::array::BoxedTemporalScalar {
+        value,
+        unit: lhs.unit,
+        is_nat: false,
+    })
+}
+
+fn apply_boxed_numeric_timedelta_binary(
+    op: BinaryOp,
+    lhs: BoxedObjectScalar,
+    rhs: crate::array::BoxedTemporalScalar,
+) -> Result<crate::array::BoxedTemporalScalar> {
+    let lhs = object_to_i64_checked(&lhs)?;
+    if rhs.is_nat {
+        return Ok(rhs);
+    }
+    let value = match op {
+        BinaryOp::Mul => lhs * rhs.value,
+        _ => {
+            return Err(NumpyError::TypeError(format!(
+                "boxed arithmetic {:?} is not supported between numeric object values and timedelta64",
+                op
+            )))
+        }
+    };
+    Ok(crate::array::BoxedTemporalScalar {
+        value,
+        unit: rhs.unit,
+        is_nat: false,
+    })
 }
 
 fn numeric_object_binary(
@@ -390,7 +716,7 @@ impl NdArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoxedObjectScalar, BoxedScalar, DType, NdArray};
+    use crate::{BoxedObjectScalar, BoxedScalar, BoxedTemporalScalar, DType, NdArray};
     use num_complex::Complex;
 
     #[test]
@@ -561,6 +887,134 @@ mod tests {
         assert_eq!(
             out.get_boxed(&[0]).unwrap(),
             BoxedScalar::Object(BoxedObjectScalar::Text("ababab".into()))
+        );
+    }
+
+    #[test]
+    fn test_sub_boxed_timedelta_generic_and_ns() {
+        let a = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 0,
+                unit: "generic".into(),
+                is_nat: false,
+            })],
+            &[1],
+            DType::Timedelta64,
+        )
+        .unwrap();
+        let b = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 1,
+                unit: "ns".into(),
+                is_nat: false,
+            })],
+            &[1],
+            DType::Timedelta64,
+        )
+        .unwrap();
+        let out = (&a - &b).unwrap();
+        assert_eq!(
+            out.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: -1,
+                unit: "ns".into(),
+                is_nat: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_sub_boxed_datetime_yields_timedelta() {
+        let a = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Datetime(BoxedTemporalScalar {
+                value: 10,
+                unit: "D".into(),
+                is_nat: false,
+            })],
+            &[1],
+            DType::Datetime64,
+        )
+        .unwrap();
+        let b = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Datetime(BoxedTemporalScalar {
+                value: 3,
+                unit: "D".into(),
+                is_nat: false,
+            })],
+            &[1],
+            DType::Datetime64,
+        )
+        .unwrap();
+        let out = (&a - &b).unwrap();
+        assert_eq!(
+            out.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 7,
+                unit: "D".into(),
+                is_nat: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_add_boxed_datetime_and_timedelta() {
+        let a = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Datetime(BoxedTemporalScalar {
+                value: 10,
+                unit: "D".into(),
+                is_nat: false,
+            })],
+            &[1],
+            DType::Datetime64,
+        )
+        .unwrap();
+        let b = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 2,
+                unit: "D".into(),
+                is_nat: false,
+            })],
+            &[1],
+            DType::Timedelta64,
+        )
+        .unwrap();
+        let out = (&a + &b).unwrap();
+        assert_eq!(
+            out.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Datetime(BoxedTemporalScalar {
+                value: 12,
+                unit: "D".into(),
+                is_nat: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_mul_boxed_timedelta_by_object_scalar() {
+        let a = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 5,
+                unit: "D".into(),
+                is_nat: false,
+            })],
+            &[1],
+            DType::Timedelta64,
+        )
+        .unwrap();
+        let b = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Object(BoxedObjectScalar::Int(3))],
+            &[1],
+            DType::Object,
+        )
+        .unwrap();
+        let out = (&a * &b).unwrap();
+        assert_eq!(
+            out.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 15,
+                unit: "D".into(),
+                is_nat: false,
+            })
         );
     }
 }

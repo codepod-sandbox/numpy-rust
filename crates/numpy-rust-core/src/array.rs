@@ -332,13 +332,22 @@ impl NdArray {
 
     /// Cast this array to a different dtype, following NumPy's astype semantics.
     pub fn astype(&self, dtype: DType) -> Self {
-        if dtype == DType::Object {
-            if self.dtype() == DType::Object {
+        if dtype.is_boxed() {
+            if self.dtype() == dtype {
                 return self.clone();
             }
             if !self.dtype().is_boxed() {
-                return cast_numeric_array_to_object(self);
+                return match dtype {
+                    DType::Object => cast_numeric_array_to_object(self),
+                    DType::Datetime64 | DType::Timedelta64 => {
+                        cast_numeric_array_to_temporal(self, dtype)
+                    }
+                    _ => unreachable!("boxed cast target must be object or temporal"),
+                };
             }
+        }
+        if self.dtype().is_boxed() {
+            return cast_boxed_array_to_numeric(self, dtype);
         }
         let storage = dtype.storage_dtype();
         let data = crate::casting::cast_array_data(self.data(), storage);
@@ -500,6 +509,187 @@ fn cast_numeric_array_to_object(array: &NdArray) -> NdArray {
     }
     NdArray::from_boxed_scalars(values, array.shape(), DType::Object)
         .expect("numeric object cast must produce boxed object storage")
+}
+
+fn cast_numeric_array_to_temporal(array: &NdArray, dtype: DType) -> NdArray {
+    let mut values = Vec::with_capacity(array.size());
+    for coord in crate::ops::comparison::iter_boxed_coords(array.shape()) {
+        let scalar = array
+            .get(&coord)
+            .expect("numeric temporal cast index must be in bounds");
+        let temporal = match scalar {
+            Scalar::Bool(v) => BoxedTemporalScalar {
+                value: if v { 1 } else { 0 },
+                unit: "generic".into(),
+                is_nat: false,
+            },
+            Scalar::Int32(v) => BoxedTemporalScalar {
+                value: v as i64,
+                unit: "generic".into(),
+                is_nat: false,
+            },
+            Scalar::Int64(v) => BoxedTemporalScalar {
+                value: v,
+                unit: "generic".into(),
+                is_nat: false,
+            },
+            Scalar::Float32(v) => BoxedTemporalScalar {
+                value: if v.is_nan() { 0 } else { v as i64 },
+                unit: "generic".into(),
+                is_nat: v.is_nan(),
+            },
+            Scalar::Float64(v) => BoxedTemporalScalar {
+                value: if v.is_nan() { 0 } else { v as i64 },
+                unit: "generic".into(),
+                is_nat: v.is_nan(),
+            },
+            Scalar::Complex64(_) | Scalar::Complex128(_) | Scalar::Str(_) => {
+                panic!("numeric temporal cast requires real numeric storage")
+            }
+        };
+        values.push(match dtype {
+            DType::Datetime64 => BoxedScalar::Datetime(temporal),
+            DType::Timedelta64 => BoxedScalar::Timedelta(temporal),
+            _ => unreachable!("temporal cast target must be datetime64 or timedelta64"),
+        });
+    }
+    NdArray::from_boxed_scalars(values, array.shape(), dtype)
+        .expect("numeric temporal cast must produce boxed temporal storage")
+}
+
+fn boxed_truthy_scalar(value: &BoxedScalar) -> bool {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(v) => *v,
+            BoxedObjectScalar::Int(v) => *v != 0,
+            BoxedObjectScalar::Float(v) => *v != 0.0,
+            BoxedObjectScalar::Complex(v) => v.re != 0.0 || v.im != 0.0,
+            BoxedObjectScalar::Text(v) => !v.is_empty(),
+        },
+        BoxedScalar::Datetime(value) | BoxedScalar::Timedelta(value) => !value.is_nat,
+    }
+}
+
+fn boxed_scalar_to_string(value: &BoxedScalar) -> String {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(v) => v.to_string(),
+            BoxedObjectScalar::Int(v) => v.to_string(),
+            BoxedObjectScalar::Float(v) => v.to_string(),
+            BoxedObjectScalar::Complex(v) => {
+                format!("{}{}{}j", v.re, if v.im >= 0.0 { "+" } else { "" }, v.im)
+            }
+            BoxedObjectScalar::Text(v) => v.clone(),
+        },
+        BoxedScalar::Datetime(value) => {
+            if value.is_nat {
+                "NaT".into()
+            } else {
+                value.value.to_string()
+            }
+        }
+        BoxedScalar::Timedelta(value) => {
+            if value.is_nat {
+                "NaT".into()
+            } else {
+                value.value.to_string()
+            }
+        }
+    }
+}
+
+fn cast_boxed_array_to_numeric(array: &NdArray, dtype: DType) -> NdArray {
+    let shape = array.shape().to_vec();
+    macro_rules! cast_vec {
+        ($ty:ty, $map:expr) => {{
+            let mut values: Vec<$ty> = Vec::with_capacity(array.size());
+            for coord in crate::ops::comparison::iter_boxed_coords(array.shape()) {
+                let value = array
+                    .get_boxed(&coord)
+                    .expect("boxed cast index must be in bounds");
+                values.push($map(value));
+            }
+            NdArray::from_vec(values)
+                .reshape(&shape)
+                .expect("boxed cast reshape must preserve shape")
+                .with_declared_dtype(dtype)
+        }};
+    }
+    match dtype {
+        DType::Bool => cast_vec!(bool, |value: BoxedScalar| boxed_truthy_scalar(&value)),
+        DType::Int32 => cast_vec!(i32, |value: BoxedScalar| boxed_scalar_to_f64(value) as i32),
+        DType::Int64 => cast_vec!(i64, |value: BoxedScalar| boxed_scalar_to_f64(value) as i64),
+        DType::UInt8 => cast_vec!(i32, |value: BoxedScalar| boxed_scalar_to_f64(value) as u8
+            as i32),
+        DType::UInt16 => cast_vec!(i32, |value: BoxedScalar| boxed_scalar_to_f64(value) as u16
+            as i32),
+        DType::UInt32 => cast_vec!(i64, |value: BoxedScalar| boxed_scalar_to_f64(value) as u32
+            as i64),
+        DType::UInt64 => cast_vec!(i64, |value: BoxedScalar| boxed_scalar_to_f64(value) as u64
+            as i64),
+        DType::Float16 | DType::Float32 => {
+            cast_vec!(f32, |value: BoxedScalar| boxed_scalar_to_f64(value) as f32)
+        }
+        DType::Float64 => cast_vec!(f64, boxed_scalar_to_f64),
+        DType::Complex64 => cast_vec!(Complex<f32>, |value: BoxedScalar| {
+            let z = boxed_scalar_to_complex(value);
+            Complex::new(z.re as f32, z.im as f32)
+        }),
+        DType::Complex128 => cast_vec!(Complex<f64>, boxed_scalar_to_complex),
+        DType::Str => cast_vec!(String, |value: BoxedScalar| boxed_scalar_to_string(&value)),
+        DType::Object | DType::Datetime64 | DType::Timedelta64 => {
+            unreachable!("boxed source cast target should be numeric or string here")
+        }
+        DType::Int8 | DType::Int16 => {
+            cast_vec!(i32, |value: BoxedScalar| boxed_scalar_to_f64(value) as i32)
+                .with_declared_dtype(dtype)
+        }
+    }
+}
+
+fn boxed_scalar_to_f64(value: BoxedScalar) -> f64 {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(v) => {
+                if v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            BoxedObjectScalar::Int(v) => v as f64,
+            BoxedObjectScalar::Float(v) => v,
+            BoxedObjectScalar::Complex(v) => v.re,
+            BoxedObjectScalar::Text(v) => v.parse::<f64>().unwrap_or(f64::NAN),
+        },
+        BoxedScalar::Datetime(value) | BoxedScalar::Timedelta(value) => {
+            if value.is_nat {
+                f64::NAN
+            } else {
+                value.value as f64
+            }
+        }
+    }
+}
+
+fn boxed_scalar_to_complex(value: BoxedScalar) -> Complex<f64> {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(v) => Complex::new(if v { 1.0 } else { 0.0 }, 0.0),
+            BoxedObjectScalar::Int(v) => Complex::new(v as f64, 0.0),
+            BoxedObjectScalar::Float(v) => Complex::new(v, 0.0),
+            BoxedObjectScalar::Complex(v) => v,
+            BoxedObjectScalar::Text(v) => Complex::new(v.parse::<f64>().unwrap_or(f64::NAN), 0.0),
+        },
+        BoxedScalar::Datetime(value) | BoxedScalar::Timedelta(value) => Complex::new(
+            if value.is_nat {
+                f64::NAN
+            } else {
+                value.value as f64
+            },
+            0.0,
+        ),
+    }
 }
 
 fn logical_dtype_override(dtype: DType) -> Option<DType> {
@@ -900,6 +1090,29 @@ mod tests {
         assert_eq!(
             arr.get_boxed(&[0]).unwrap(),
             BoxedScalar::Object(BoxedObjectScalar::Text("hello".into()))
+        );
+    }
+
+    #[test]
+    fn astype_to_timedelta64_uses_boxed_cast_path() {
+        let arr = NdArray::from_vec(vec![1.0_f64, f64::NAN, 3.0]);
+        let cast = arr.astype(DType::Timedelta64);
+        assert_eq!(cast.dtype(), DType::Timedelta64);
+        assert_eq!(
+            cast.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 1,
+                unit: "generic".into(),
+                is_nat: false,
+            })
+        );
+        assert_eq!(
+            cast.get_boxed(&[1]).unwrap(),
+            BoxedScalar::Timedelta(BoxedTemporalScalar {
+                value: 0,
+                unit: "generic".into(),
+                is_nat: true,
+            })
         );
     }
 }

@@ -550,16 +550,26 @@ impl NdArray {
 
     /// Returns a Bool array: true where sign bit is set (negative).
     pub fn signbit(&self) -> NdArray {
+        if self.dtype() == DType::Object {
+            return boxed_object_signbit(self)
+                .expect("object signbit should preserve boxed runtime");
+        }
         execute_value_unary(self, ValueUnaryKernelOp::SignBit, false)
     }
 
     /// Element-wise sign function. Returns -1, 0, or 1.
     pub fn sign(&self) -> NdArray {
+        if self.dtype() == DType::Object {
+            return boxed_object_sign(self).expect("object sign should preserve boxed runtime");
+        }
         execute_value_unary(self, ValueUnaryKernelOp::Sign, false)
     }
 
     /// Element-wise negation. Works on int and float types.
     pub fn neg(&self) -> NdArray {
+        if self.dtype() == DType::Object {
+            return boxed_object_neg(self).expect("object neg should preserve boxed runtime");
+        }
         execute_value_unary(self, ValueUnaryKernelOp::Neg, true)
     }
 }
@@ -617,6 +627,116 @@ fn boxed_object_conj(array: &NdArray) -> Result<NdArray> {
             other => other,
         })
         .collect::<Vec<_>>();
+    NdArray::from_boxed_scalars(elements, array.shape(), DType::Object)
+}
+
+fn boxed_object_signbit(array: &NdArray) -> Result<NdArray> {
+    let storage = array
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("object signbit requires boxed storage".into()))?;
+    let elements = storage
+        .elements()?
+        .into_iter()
+        .map(|value| match value {
+            BoxedScalar::Object(BoxedObjectScalar::Bool(_)) => Ok(false),
+            BoxedScalar::Object(BoxedObjectScalar::Int(v)) => Ok(v < 0),
+            BoxedScalar::Object(BoxedObjectScalar::Float(v)) => Ok(v.is_sign_negative()),
+            BoxedScalar::Object(BoxedObjectScalar::Complex(_)) => Err(NumpyError::TypeError(
+                "ufunc 'signbit' not supported for the input types".into(),
+            )),
+            BoxedScalar::Object(BoxedObjectScalar::Text(_)) => Err(NumpyError::TypeError(
+                "ufunc 'signbit' not supported for the input types".into(),
+            )),
+            other => Err(NumpyError::TypeError(format!(
+                "signbit not supported for boxed scalar {:?}",
+                other
+            ))),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(NdArray::from_vec(elements).reshape(array.shape())?)
+}
+
+fn boxed_object_sign(array: &NdArray) -> Result<NdArray> {
+    let storage = array
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("object sign requires boxed storage".into()))?;
+    let elements = storage
+        .elements()?
+        .into_iter()
+        .map(|value| match value {
+            BoxedScalar::Object(BoxedObjectScalar::Bool(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Int(if v {
+                    1
+                } else {
+                    0
+                })))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Int(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Int(v.signum())))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Float(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Float(if v == 0.0 {
+                    v
+                } else {
+                    v.signum()
+                })))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Complex(v)) => {
+                let result = if v.re == 0.0 && v.im == 0.0 {
+                    Complex::new(0.0, 0.0)
+                } else {
+                    v / v.norm()
+                };
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Complex(result)))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Text(_)) => {
+                Err(NumpyError::TypeError("unorderable types for sign".into()))
+            }
+            other => Err(NumpyError::TypeError(format!(
+                "sign not supported for boxed scalar {:?}",
+                other
+            ))),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    NdArray::from_boxed_scalars(elements, array.shape(), DType::Object)
+}
+
+fn boxed_object_neg(array: &NdArray) -> Result<NdArray> {
+    let storage = array
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("object neg requires boxed storage".into()))?;
+    let elements = storage
+        .elements()?
+        .into_iter()
+        .map(|value| match value {
+            BoxedScalar::Object(BoxedObjectScalar::Bool(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Int(if v {
+                    -1
+                } else {
+                    0
+                })))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Int(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Int(-v)))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Float(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Float(-v)))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Complex(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Complex(-v)))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Text(_)) => Err(NumpyError::TypeError(
+                "bad operand type for unary -: 'str'".into(),
+            )),
+            other => Err(NumpyError::TypeError(format!(
+                "neg not supported for boxed scalar {:?}",
+                other
+            ))),
+        })
+        .collect::<Result<Vec<_>>>()?;
     NdArray::from_boxed_scalars(elements, array.shape(), DType::Object)
 }
 
@@ -1117,6 +1237,58 @@ mod tests {
         assert_eq!(
             conj.get_boxed(&[1]).unwrap(),
             BoxedScalar::Object(BoxedObjectScalar::Complex(Complex::new(3.0, -4.0)))
+        );
+    }
+
+    #[test]
+    fn test_object_sign_neg_and_signbit() {
+        use crate::{BoxedObjectScalar, BoxedScalar};
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Bool(true)),
+                BoxedScalar::Object(BoxedObjectScalar::Int(-2)),
+                BoxedScalar::Object(BoxedObjectScalar::Float(-0.0)),
+            ],
+            &[3],
+            DType::Object,
+        )
+        .unwrap();
+
+        let sign = a.sign();
+        assert_eq!(
+            sign.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Int(1))
+        );
+        assert_eq!(
+            sign.get_boxed(&[1]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Int(-1))
+        );
+        assert_eq!(
+            sign.get_boxed(&[2]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Float(-0.0))
+        );
+
+        let neg = a.neg();
+        assert_eq!(
+            neg.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Int(-1))
+        );
+        assert_eq!(
+            neg.get_boxed(&[1]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Int(2))
+        );
+        assert_eq!(
+            neg.get_boxed(&[2]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Float(0.0))
+        );
+
+        let signbit = a.signbit();
+        let ArrayData::Bool(arr) = signbit.data() else {
+            panic!("signbit should produce bool array");
+        };
+        assert_eq!(
+            arr.iter().copied().collect::<Vec<_>>(),
+            vec![false, true, true]
         );
     }
 
