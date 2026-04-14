@@ -64,18 +64,13 @@ def _sort_complex_axis(a, axis):
 
 def sort(a, axis=-1, kind=None, order=None):
     from ._helpers import _ObjectArray
-    if not isinstance(a, (ndarray, _ObjectArray)):
+    if not isinstance(a, ndarray):
         a = asarray(a)
     if isinstance(a, _ObjectArray):
-        native_a = _coerce_native_boxed_operand(a)
-        if isinstance(native_a, ndarray):
-            a = native_a
-        else:
-            # _ObjectArray.sort() is in-place and returns None — make a copy first
-            import copy
-            a_copy = copy.copy(a)
-            a_copy.sort(axis, kind=kind, order=order)
-            return a_copy
+        import copy
+        a_copy = copy.copy(a)
+        a_copy.sort(axis, kind=kind, order=order)
+        return a_copy
     original_dtype = str(a.dtype)
     if axis is not None and axis < 0:
         axis = a.ndim + axis
@@ -137,16 +132,12 @@ def argsort(a, axis=-1, kind=None, order=None):
         if len(a) == 0:
             return _native.zeros((0,), 'int64')
         a = _native.array([float(x) for x in a])
-    elif isinstance(a, _ObjectArray):
-        native_a = _coerce_native_boxed_operand(a)
-        if isinstance(native_a, ndarray):
-            a = native_a
-        else:
+    else:
+        a = asarray(a)
+        if isinstance(a, _ObjectArray):
             vals = [float(x) if isinstance(x, (int, float)) else 0. for x in (a._data or [])]
             inds = sorted(range(len(vals)), key=lambda i: vals[i])
             return _native.array([float(i) for i in inds]) if inds else _native.zeros((0,), 'int64')
-    else:
-        a = asarray(a)
     if axis is not None and axis < 0:
         axis = a.ndim + axis
     return a.argsort(axis)

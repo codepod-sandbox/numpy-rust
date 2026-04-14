@@ -294,7 +294,14 @@ class _ObjectArray:
     def _mark_fortran(self):
         self._is_fortran = True
 
-    def copy(self): return _ObjectArray(list(self._data), self._dtype, shape=self._shape, is_fortran=self._is_fortran, itemsize=self._itemsize)
+    def copy(self):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.copy()
+            except Exception:
+                pass
+        return _ObjectArray(list(self._data), self._dtype, shape=self._shape, is_fortran=self._is_fortran, itemsize=self._itemsize)
     def reshape(self, *shape):
         if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
             shape = tuple(shape[0])
@@ -305,6 +312,12 @@ class _ObjectArray:
             n *= s
         if n != len(self._data):
             raise ValueError("cannot reshape array of size {} into shape {}".format(len(self._data), shape))
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.reshape(shape)
+            except Exception:
+                pass
         return _ObjectArray(list(self._data), self._dtype, shape=shape, itemsize=self._itemsize)
     def astype(self, dtype):
         dtype_str = str(dtype)
@@ -319,18 +332,62 @@ class _ObjectArray:
         # Convert to temporal types
         if _is_temporal_dtype(dtype_str):
             return _make_temporal_array(self, dtype_str)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.astype(dtype_str)
+            except Exception:
+                pass
         return _ObjectArray(list(self._data), dtype_str, shape=self._shape, is_fortran=self._is_fortran)
-    def flatten(self): return self
-    def ravel(self): return self
+    def flatten(self):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.flatten()
+            except Exception:
+                pass
+        return self
+    def ravel(self):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.ravel()
+            except Exception:
+                pass
+        return self
     def tolist(self):
         if self._shape == ():
             return self._data[0] if self._data else None
         return list(self._data)
-    def all(self): return all(self._data)
-    def any(self): return any(self._data)
+    def all(self):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.all()
+            except Exception:
+                pass
+        return all(self._data)
+    def any(self):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.any()
+            except Exception:
+                pass
+        return any(self._data)
     def __len__(self): return len(self._data)
     def sort(self, axis=-1, kind=None, order=None):
         """Sort in-place. For complex arrays, sort by real part then imag part."""
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                native_self.sort(axis=axis, kind=kind, order=order)
+                self._data = native_self.flatten().tolist()
+                self._shape = native_self.shape
+                self._ndim = len(self._shape)
+                return None
+            except Exception:
+                pass
         def _sort_key(v):
             if isinstance(v, (tuple, list)) and len(v) == 2:
                 return (v[0], v[1])
@@ -384,6 +441,12 @@ class _ObjectArray:
                     except Exception:
                         return _ObjectArray(flat, field_dtype)
             raise IndexError("field %r not found in structured dtype" % key)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self[key]
+            except Exception:
+                pass
         if isinstance(key, tuple):
             _ball = __import__("builtins").all
             if _ball(isinstance(k, int) for k in key):
@@ -565,6 +628,12 @@ class _ObjectArray:
         return None
     def _native_boxed(self):
         return _coerce_native_boxed_operand(self)
+    def _sync_from_native(self, native_arr):
+        self._data = native_arr.flatten().tolist()
+        self._shape = native_arr.shape
+        self._ndim = len(self._shape)
+        self._dtype = str(native_arr.dtype)
+        return self
     def _supports_native_boxed_ops(self):
         return (
             isinstance(self._dtype, str)
@@ -804,6 +873,12 @@ class _ObjectArray:
                 pass
         return self.var(axis, ddof, keepdims) ** 0.5
     def __abs__(self):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return abs(native_self)
+            except Exception:
+                pass
         _babs = __import__("builtins").abs
         result = [_babs(x) for x in self._data]
         # abs of complex returns float, so return a real ndarray
@@ -918,11 +993,23 @@ class _ObjectArray:
             if self._ndim > 1 and len(flat) > 0:
                 arr = arr.reshape(list(self._shape))
             return dtype._from_array(arr)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.view(dtype)
+            except Exception:
+                pass
         # Default: try to return self with new dtype
         return _ObjectArray(list(self._data), str(dtype) if not isinstance(dtype, str) else dtype, shape=self._shape)
 
     def item(self, *args):
         """Return element at given index as a Python scalar."""
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.item(*args)
+            except Exception:
+                pass
         if not args:
             if self.size != 1:
                 raise ValueError("can only convert an array of size 1 to a Python scalar")
@@ -942,6 +1029,12 @@ class _ObjectArray:
 
     def take(self, indices, axis=None, out=None, mode='raise'):
         """Take elements from array along an axis."""
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.take(indices, axis=axis, out=out, mode=mode)
+            except Exception:
+                pass
         import numpy as _np
         if not isinstance(indices, (list, tuple)):
             indices = [int(indices)]

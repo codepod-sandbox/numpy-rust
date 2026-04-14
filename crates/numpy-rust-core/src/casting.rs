@@ -115,4 +115,19 @@ mod tests {
         let b = a.astype(DType::Complex128);
         assert_eq!(b.dtype(), DType::Complex128);
     }
+
+    #[test]
+    fn test_cast_float64_to_object() {
+        let a = NdArray::from_vec(vec![1.5_f64, 2.5]);
+        let b = a.astype(DType::Object);
+        assert_eq!(b.dtype(), DType::Object);
+        let storage = b.storage().boxed_storage().unwrap();
+        assert_eq!(
+            storage.elements().unwrap(),
+            vec![
+                crate::BoxedScalar::Object(crate::BoxedObjectScalar::Float(1.5)),
+                crate::BoxedScalar::Object(crate::BoxedObjectScalar::Float(2.5)),
+            ]
+        );
+    }
 }

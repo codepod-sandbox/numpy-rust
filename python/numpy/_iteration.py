@@ -2,7 +2,7 @@
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
-    AxisError, _ObjectArray,
+    AxisError, _ObjectArray, _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate
@@ -337,11 +337,7 @@ class vectorize:
             # Coerce to specified otype
             _ot = otypes[0] if isinstance(otypes, (list, tuple)) else otypes[0] if isinstance(otypes, str) else otypes
             if _ot is object:
-                from ._helpers import _ObjectArray
-                obj_arr = _ObjectArray(shape)
-                for i, v in enumerate(results):
-                    obj_arr._data[i] = v
-                return obj_arr
+                return array(results, dtype=object).reshape(shape)
             result = array(results).astype(str(asarray([], dtype=_ot).dtype))
         else:
             result = array(results)
@@ -365,7 +361,13 @@ class vectorize:
 
 
 def repeat(a, repeats, axis=None):
-    if not isinstance(a, ndarray):
+    if isinstance(a, _ObjectArray):
+        native_a = _coerce_native_boxed_operand(a)
+        if isinstance(native_a, ndarray):
+            a = native_a
+        else:
+            a = asarray(a)
+    elif not isinstance(a, ndarray):
         a = asarray(a)
     # If repeats is an array or list, implement manually along axis
     if isinstance(repeats, (ndarray, list, tuple)):
@@ -396,13 +398,15 @@ def repeat(a, repeats, axis=None):
 
 def tile(a, reps):
     from numpy.ma import MaskedArray
-    from numpy._helpers import _ObjectArray
     if isinstance(a, MaskedArray):
         # Tile both data and mask
         data_tiled = _native.tile(a.data if isinstance(a.data, ndarray) else asarray(a.data), reps)
         mask_tiled = _native.tile(asarray(a.mask, dtype="bool") if not isinstance(a.mask, ndarray) else a.mask, reps)
         return MaskedArray(data_tiled, mask=mask_tiled, fill_value=a._fill_value)
     if isinstance(a, _ObjectArray):
+        native_a = _coerce_native_boxed_operand(a)
+        if isinstance(native_a, ndarray):
+            return _native.tile(native_a, reps)
         # Tile object array by repeating data
         import itertools as _it
         reps_list = [reps] if isinstance(reps, int) else list(reps)

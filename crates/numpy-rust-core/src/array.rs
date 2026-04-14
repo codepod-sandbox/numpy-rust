@@ -6,6 +6,7 @@ use crate::array_data::ArrayData;
 use crate::descriptor::{descriptor_for_dtype, DTypeDescriptor};
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::indexing::Scalar;
 use crate::resolver::{BinaryOpPlan, CastPlan};
 use crate::storage::ArrayStorage;
 pub use crate::storage::{BoxedObjectScalar, BoxedScalar, BoxedStorage, BoxedTemporalScalar};
@@ -331,6 +332,14 @@ impl NdArray {
 
     /// Cast this array to a different dtype, following NumPy's astype semantics.
     pub fn astype(&self, dtype: DType) -> Self {
+        if dtype == DType::Object {
+            if self.dtype() == DType::Object {
+                return self.clone();
+            }
+            if !self.dtype().is_boxed() {
+                return cast_numeric_array_to_object(self);
+            }
+        }
         let storage = dtype.storage_dtype();
         let data = crate::casting::cast_array_data(self.data(), storage);
         let data = if dtype.is_narrow() {
@@ -468,6 +477,29 @@ impl NdArray {
         self.storage = storage;
         self.apply_runtime_state(runtime);
     }
+}
+
+fn cast_numeric_array_to_object(array: &NdArray) -> NdArray {
+    let mut values = Vec::with_capacity(array.size());
+    for coord in crate::ops::comparison::iter_boxed_coords(array.shape()) {
+        let scalar = array
+            .get(&coord)
+            .expect("numeric object cast index must be in bounds");
+        values.push(BoxedScalar::Object(match scalar {
+            Scalar::Bool(v) => BoxedObjectScalar::Bool(v),
+            Scalar::Int32(v) => BoxedObjectScalar::Int(v as i64),
+            Scalar::Int64(v) => BoxedObjectScalar::Int(v),
+            Scalar::Float32(v) => BoxedObjectScalar::Float(v as f64),
+            Scalar::Float64(v) => BoxedObjectScalar::Float(v),
+            Scalar::Complex64(v) => {
+                BoxedObjectScalar::Complex(Complex::new(v.re as f64, v.im as f64))
+            }
+            Scalar::Complex128(v) => BoxedObjectScalar::Complex(v),
+            Scalar::Str(v) => BoxedObjectScalar::Text(v),
+        }));
+    }
+    NdArray::from_boxed_scalars(values, array.shape(), DType::Object)
+        .expect("numeric object cast must produce boxed object storage")
 }
 
 fn logical_dtype_override(dtype: DType) -> Option<DType> {

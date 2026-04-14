@@ -6402,6 +6402,165 @@ def test_supported_objectarray_selection_uses_native_runtime():
     assert_eq(deleted.tolist(), [1, 3])
     assert_eq(inserted.tolist(), [1, 'x', 2, 3])
 
+def test_supported_objectarray_concatenate_and_stack_use_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    a = _ObjectArray([1, 'x'], "object")
+    b = _ObjectArray([2, 'y'], "object")
+
+    conc = np.concatenate([a, b])
+    stacked = np.stack([a, b])
+    hstacked = np.hstack([a, b])
+
+    assert_eq(type(conc).__name__, "ndarray")
+    assert_eq(type(stacked).__name__, "ndarray")
+    assert_eq(type(hstacked).__name__, "ndarray")
+    assert_eq(conc.tolist(), [1, 'x', 2, 'y'])
+    assert_eq(stacked.tolist(), [[1, 'x'], [2, 'y']])
+    assert_eq(hstacked.tolist(), [1, 'x', 2, 'y'])
+
+def test_supported_objectarray_helper_methods_use_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([3, 1, 2], "object")
+    arr.sort()
+    abs_result = abs(_ObjectArray([-2, 3], "object"))
+    truthy = _ObjectArray([1, 2], "object")
+    falsy = _ObjectArray([0, ""], "object")
+
+    assert_eq(arr.tolist(), [1, 2, 3])
+    assert_eq(type(abs_result).__name__, "ndarray")
+    assert_eq(abs_result.tolist(), [2, 3])
+    assert_eq(truthy.all(), True)
+    assert_eq(truthy.any(), True)
+    assert_eq(falsy.all(), False)
+    assert_eq(falsy.any(), False)
+
+def test_supported_objectarray_container_methods_use_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2, 3, 4], "object")
+    copied = arr.copy()
+    reshaped = arr.reshape((2, 2))
+    flattened = reshaped.flatten()
+    raveled = reshaped.ravel()
+    casted = arr.astype("object")
+
+    assert_eq(type(copied).__name__, "ndarray")
+    assert_eq(type(reshaped).__name__, "ndarray")
+    assert_eq(type(flattened).__name__, "ndarray")
+    assert_eq(type(raveled).__name__, "ndarray")
+    assert_eq(type(casted).__name__, "ndarray")
+    assert_eq(reshaped.tolist(), [[1, 2], [3, 4]])
+    assert_eq(flattened.tolist(), [1, 2, 3, 4])
+    assert_eq(raveled.tolist(), [1, 2, 3, 4])
+    assert_eq(casted.tolist(), [1, 2, 3, 4])
+
+def test_supported_objectarray_array_ingress_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2, 3], "object")
+    as_arr = np.asarray(arr)
+    arrayed = np.array(arr)
+    copied = np.array(arr, copy=True)
+
+    assert_eq(type(as_arr).__name__, "ndarray")
+    assert_eq(type(arrayed).__name__, "ndarray")
+    assert_eq(type(copied).__name__, "ndarray")
+    assert_eq(as_arr.tolist(), [1, 2, 3])
+    assert_eq(arrayed.tolist(), [1, 2, 3])
+    assert_eq(copied.tolist(), [1, 2, 3])
+
+def test_supported_objectarray_indexing_methods_use_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2, 3, 4], "object")
+    elem = arr[1]
+    sliced = arr[1:3]
+    item = arr.item(2)
+    taken = arr.take([3, 0])
+
+    assert_eq(elem, 2)
+    assert_eq(type(sliced).__name__, "ndarray")
+    assert_eq(item, 3)
+    assert_eq(type(taken).__name__, "ndarray")
+    assert_eq(taken.tolist(), [4, 1])
+
+def test_objectarray_mutation_stays_fallback_until_boxed_assignment_is_native():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2, 3, 4], "object")
+    arr.put([0, 3], [9, 8])
+    arr[1] = 7
+
+    assert_eq(type(arr).__name__, "_ObjectArray")
+    assert_eq(arr.tolist(), [9, 7, 3, 8])
+
+def test_supported_objectarray_view_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray(["a", "b"], "object")
+    viewed = arr.view(np.char.chararray)
+
+    assert_eq(type(viewed).__name__, "chararray")
+    assert_eq(viewed.tolist(), ["a", "b"])
+
+def test_supported_objectarray_manipulation_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2], "object")
+    expanded = np.expand_dims(arr, 0)
+    tiled = np.tile(arr, 2)
+    vand = np.vander(arr, 2)
+
+    assert_eq(type(expanded).__name__, "ndarray")
+    assert_eq(type(tiled).__name__, "ndarray")
+    assert_eq(type(vand).__name__, "ndarray")
+    assert_eq(expanded.tolist(), [[1, 2]])
+    assert_eq(tiled.tolist(), [1, 2, 1, 2])
+    assert_eq(vand.tolist(), [[1, 1], [2, 1]])
+
+def test_supported_objectarray_iteration_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2], "object")
+    repeated = np.repeat(arr, 2)
+    vec = np.vectorize(lambda x: x + 1, otypes=[object])(arr)
+
+    assert_eq(type(repeated).__name__, "ndarray")
+    assert_eq(type(vec).__name__, "ndarray")
+    assert_eq(repeated.tolist(), [1, 1, 2, 2])
+    assert_eq(vec.tolist(), [2, 3])
+
+def test_object_creation_paths_use_native_runtime():
+    ar = np.arange(4, dtype=object)
+    ls = np.linspace(0, 3, 4, dtype=object)
+    zs = np.zeros((2, 2), dtype=object)
+    os = np.ones(3, dtype=object)
+    ey = np.eye(3, dtype=object)
+    casted = np.array(np.array([1, 2, 3]), dtype=object)
+    scalar = np.array(5, dtype=object)
+
+    assert_eq(type(ar).__name__, "ndarray")
+    assert_eq(type(ls).__name__, "ndarray")
+    assert_eq(type(zs).__name__, "ndarray")
+    assert_eq(type(os).__name__, "ndarray")
+    assert_eq(type(ey).__name__, "ndarray")
+    assert_eq(type(casted).__name__, "ndarray")
+    assert_eq(type(scalar).__name__, "ndarray")
+    assert_eq(str(zs.dtype), "object")
+    assert_eq(str(os.dtype), "object")
+    assert_eq(str(ey.dtype), "object")
+    assert_eq(str(casted.dtype), "object")
+    assert_eq(str(scalar.dtype), "object")
+    assert_eq(ar.tolist(), [0, 1, 2, 3])
+    assert_eq(ls.tolist(), [0.0, 1.0, 2.0, 3.0])
+    assert_eq(zs.tolist(), [[0, 0], [0, 0]])
+    assert_eq(os.tolist(), [1, 1, 1])
+    assert_eq(ey.tolist(), [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    assert_eq(casted.tolist(), [1, 2, 3])
+    assert_eq(scalar.item(), 5)
+
 def test_datetime64_where_uses_native_runtime():
     cond = np.array([True, False, True], dtype=bool)
     left = np.array([

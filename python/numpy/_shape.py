@@ -3,7 +3,7 @@ import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
-    AxisError, _ObjectArray, _copy_into,
+    AxisError, _ObjectArray, _copy_into, _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
@@ -133,8 +133,10 @@ def expand_dims(a, axis):
         return result
     if isinstance(a, ndarray):
         return a.expand_dims(axis)
-    from ._helpers import _ObjectArray
     if isinstance(a, _ObjectArray):
+        native_a = _coerce_native_boxed_operand(a)
+        if isinstance(native_a, ndarray):
+            return native_a.expand_dims(axis)
         new_shape = list(a.shape)
         if axis < 0:
             axis = len(new_shape) + 1 + axis

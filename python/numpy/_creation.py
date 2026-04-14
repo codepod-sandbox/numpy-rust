@@ -150,8 +150,14 @@ def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
 def _concat_object_arrays(arrs, axis):
     """Concatenate arrays along axis, handling _ObjectArray."""
     from ._helpers import _ObjectArray
+    native_arrs = [
+        _coerce_native_boxed_operand(a) if isinstance(a, _ObjectArray) else a
+        for a in arrs
+    ]
+    if not any(isinstance(a, _ObjectArray) for a in native_arrs):
+        return _native_concatenate(native_arrs, axis)
     # Convert all to _ObjectArray with common dtype
-    dtypes = [str(a.dtype) for a in arrs]
+    dtypes = [str(a.dtype) for a in native_arrs]
     # Use the first complex dtype if any, else first dtype
     common_dt = dtypes[0]
     for d in dtypes:
@@ -159,7 +165,7 @@ def _concat_object_arrays(arrs, axis):
             common_dt = d
             break
     converted = []
-    for a in arrs:
+    for a in native_arrs:
         if isinstance(a, ndarray):
             converted.append(_ObjectArray(a.tolist(), common_dt, shape=a.shape))
         elif isinstance(a, _ObjectArray):
@@ -367,6 +373,12 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
     def _is_numeric_scalar(x):
         return isinstance(x, (bool, int, float, complex))
+
+    def _is_object_target_dtype(value):
+        if value is None:
+            return False
+        dt = str(value)
+        return dt in ("object", "<class 'object'>")
 
     def _native_object_array_or_fallback(value):
         try:
@@ -611,19 +623,33 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 return _create_structured_array(data_seq, parsed)
             return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], dt)
     if isinstance(data, _ObjectArray):
+        native_data = _coerce_native_boxed_operand(data)
+        if isinstance(native_data, ndarray):
+            result = native_data.copy() if copy else native_data
+            if dtype is not None:
+                dt = str(dtype)
+                try:
+                    result = result.astype("object" if _is_object_target_dtype(dt) else dt)
+                except Exception:
+                    return data.copy() if copy else data
+            return result
         return data.copy() if copy else data
     if isinstance(data, ndarray):
         result = data.copy() if copy else data
         if dtype is not None:
             dt = str(dtype)
-            if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+            if _is_object_target_dtype(dt):
+                result = result.astype("object")
+            elif not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                 result = result.astype(dt)
         # subok=False means strip subclass to base ndarray
         if not subok and type(result) is not ndarray:
             result = _native.array(result.tolist())
             if dtype is not None:
                 dt = str(dtype)
-                if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
+                if _is_object_target_dtype(dt):
+                    result = result.astype("object")
+                elif not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                     result = result.astype(dt)
             elif hasattr(data, 'dtype'):
                 result = result.astype(str(data.dtype))
@@ -638,19 +664,27 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             result._mark_c_contiguous()
         return result
     if isinstance(data, bool):
+        if _is_object_target_dtype(dtype):
+            return _native.array_with_dtype([data], "object").reshape([])
         # bool must be checked before int since bool is a subclass of int
         dt_name = str(dtype) if dtype is not None else 'bool'
         result = _native.full([], 1.0 if data else 0.0, 'float64').astype(dt_name)
         return result
     if isinstance(data, int):
+        if _is_object_target_dtype(dtype):
+            return _native.array_with_dtype([data], "object").reshape([])
         dt_name = str(dtype) if dtype is not None else 'int64'
         result = _native.full([], float(data), 'float64').astype(dt_name)
         return result
     if isinstance(data, float):
+        if _is_object_target_dtype(dtype):
+            return _native.array_with_dtype([data], "object").reshape([])
         dt_name = str(dtype) if dtype is not None else 'float64'
         result = _native.full([], data, dt_name)
         return result
     if isinstance(data, complex):
+        if _is_object_target_dtype(dtype):
+            return _native.array_with_dtype([data], "object").reshape([])
         dt_name = str(dtype) if dtype is not None else 'complex128'
         result = _native.zeros([1], dt_name)
         result[0] = (data.real, data.imag)
@@ -858,6 +892,14 @@ def zeros(shape, dtype=None, order="C", like=None):
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=0)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
+    if dt in ("object", "<class 'object'>"):
+        n = 1
+        for s in shape:
+            n *= s
+        try:
+            return _apply_order(_native.array_with_dtype([0] * n, "object").reshape(shape), order)
+        except (TypeError, ValueError):
+            return _apply_order(_ObjectArray([0] * n, "object", shape=shape), order)
     if dt is not None and _unsupported_numeric_dtype(dt):
         n = 1
         for s in shape:
@@ -888,6 +930,14 @@ def ones(shape, dtype=None, order="C", like=None):
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=1)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
+    if dt in ("object", "<class 'object'>"):
+        n = 1
+        for s in shape:
+            n *= s
+        try:
+            return _apply_order(_native.array_with_dtype([1] * n, "object").reshape(shape), order)
+        except (TypeError, ValueError):
+            return _apply_order(_ObjectArray([1] * n, "object", shape=shape), order)
     if dt is not None and _unsupported_numeric_dtype(dt):
         n = 1
         for s in shape:
@@ -911,7 +961,7 @@ def arange(*args, dtype=None, like=None, **kwargs):
             vals = list(range(int(float_args[0]), int(float_args[1])))
         else:
             vals = list(range(int(float_args[0]), int(float_args[1]), int(float_args[2])))
-        return _ObjectArray(vals, "object")
+        return _native.array_with_dtype(vals, "object")
     # Detect if all args are integers (for integer output dtype)
     _all_int = all(isinstance(a, (int, bool)) and not isinstance(a, float) for a in args)
     # Also check for numpy int scalars
@@ -1230,6 +1280,16 @@ def eye(N, M=None, k=0, dtype=None, order="C", like=None):
     if M is None:
         M = N
     dt_str = str(dtype) if dtype is not None else None
+    if dt_str in ("object", "<class 'object'>"):
+        data = []
+        for i in range(N):
+            for j in range(M):
+                data.append(1 if j - i == k else 0)
+        try:
+            return _native.array_with_dtype(data, "object").reshape((N, M))
+        except (TypeError, ValueError):
+            from ._helpers import _ObjectArray
+            return _ObjectArray(data, "object", shape=(N, M))
     # Handle string/bytes dtypes that Rust doesn't support
     if dt_str is not None and (dt_str.startswith('S') or dt_str.startswith('|S') or
                                 dt_str.startswith('U') or dt_str.startswith('<U') or

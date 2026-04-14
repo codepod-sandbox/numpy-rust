@@ -3,6 +3,7 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray,
+    _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
@@ -32,6 +33,8 @@ def _coerce_array_sequence(arrays, transform=None):
     coerced = []
     for arr in seq:
         value = asarray(arr)
+        if isinstance(value, _ObjectArray):
+            value = _coerce_native_boxed_operand(value)
         if transform is not None:
             value = transform(value)
         coerced.append(value)

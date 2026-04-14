@@ -3,7 +3,7 @@ import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
-    AxisError, _ObjectArray, _copy_into,
+    AxisError, _ObjectArray, _copy_into, _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
@@ -68,12 +68,15 @@ __all__ = [
 def vander(x, N=None, increasing=False):
     """Generate a Vandermonde matrix."""
     x = asarray(x).flatten()
+    if isinstance(x, _ObjectArray):
+        native_x = _coerce_native_boxed_operand(x)
+        if isinstance(native_x, ndarray):
+            x = native_x.flatten()
     n = x.size
     if N is None:
         N = n
     if N == 0:
         return empty((n, 0), dtype=x.dtype)
-    from ._helpers import _ObjectArray
     if isinstance(x, _ObjectArray):
         # Build result as list of rows for _ObjectArray (complex etc.)
         rows = []
