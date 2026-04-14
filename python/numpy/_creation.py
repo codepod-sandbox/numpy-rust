@@ -407,6 +407,11 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
     # Handle chararray: unwrap to underlying ndarray (unless subok=True)
     if type(data).__name__ == 'chararray' and hasattr(data, '_arr') and not subok:
         return _array_core(data._arr, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
+    if isinstance(data, _ComplexResultArray):
+        result = _make_complex_array(data._data, data.shape)
+        if dtype is not None:
+            result = result.astype(str(dtype))
+        return result.copy() if copy else result
     # Handle range objects: convert to list
     if isinstance(data, range):
         data = list(data)
@@ -1622,6 +1627,8 @@ def asarray(a, dtype=None, order=None):
         if dtype is not None:
             return a.astype(str(dtype))
         return a
+    if isinstance(a, _ComplexResultArray):
+        return array(a, dtype=dtype)
     if isinstance(a, StructuredArray):
         return a
     # MaskedArray → extract underlying data via filled()
