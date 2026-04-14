@@ -6419,6 +6419,19 @@ def test_supported_objectarray_concatenate_and_stack_use_native_runtime():
     assert_eq(stacked.tolist(), [[1, 'x'], [2, 'y']])
     assert_eq(hstacked.tolist(), [1, 'x', 2, 'y'])
 
+def test_supported_objectarray_where_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    cond = np.array([True, False, True], dtype=bool)
+    left = _ObjectArray([1, "x", 3], "object")
+    right = _ObjectArray([9, "y", 7], "object")
+
+    out = np.where(cond, left, right)
+
+    assert_eq(type(out).__name__, "ndarray")
+    assert_eq(str(out.dtype), "object")
+    assert_eq(out.tolist(), [1, "y", 3])
+
 def test_supported_objectarray_helper_methods_use_native_runtime():
     from numpy._helpers import _ObjectArray
 

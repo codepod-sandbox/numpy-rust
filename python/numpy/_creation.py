@@ -189,7 +189,7 @@ def _concat_object_arrays(arrs, axis):
         all_vals = []
         for c in converted:
             all_vals.extend(c.tolist())
-        return _ObjectArray(all_vals, common_dt, shape=tuple(new_shape))
+        return _native_boxed_result_or_fallback(all_vals, common_dt, tuple(new_shape))
     # For n-d, use nested list manipulation
     all_data = []
     for c in converted:
@@ -201,7 +201,7 @@ def _concat_object_arrays(arrs, axis):
                 combined.extend(d)
             else:
                 combined.append(d)
-        return _ObjectArray(combined, common_dt, shape=tuple(new_shape))
+        return _native_boxed_result_or_fallback(combined, common_dt, tuple(new_shape))
     # General axis - flatten, rearrange, and reshape
     # Simple approach: iterate along axis and collect
     import itertools
@@ -222,7 +222,7 @@ def _concat_object_arrays(arrs, axis):
                 result_data.append(val)
                 break
             offset += shapes[src_i][axis]
-    return _ObjectArray(result_data, common_dt, shape=tuple(new_shape))
+    return _native_boxed_result_or_fallback(result_data, common_dt, tuple(new_shape))
 
 def _make_complex_array(values, shape):
     """Create a complex128 ndarray from a list of Python complex/float values.
@@ -394,6 +394,15 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 except (TypeError, ValueError):
                     return _ObjectArray(flat, "object", shape=(len(value), inner_len))
         return _ObjectArray(value if isinstance(value, (list, tuple)) else [value], "object")
+
+    def _native_boxed_result_or_fallback(flat_values, dtype_name, shape):
+        try:
+            arr = _native.array_with_dtype(flat_values, dtype_name)
+            if arr.shape != shape:
+                arr = arr.reshape(shape)
+            return arr
+        except (TypeError, ValueError):
+            return _ObjectArray(flat_values, dtype_name, shape=shape)
 
     # Handle chararray: unwrap to underlying ndarray (unless subok=True)
     if type(data).__name__ == 'chararray' and hasattr(data, '_arr') and not subok:
@@ -1351,10 +1360,7 @@ def where(condition, x=None, y=None):
             y_flat = y_flat * len(cond_flat)
         result_data = [xv if c else yv for c, xv, yv in zip(cond_flat, x_flat, y_flat)]
         dt = x_arr._dtype if isinstance(x_arr, _ObjectArray) else (y_arr._dtype if isinstance(y_arr, _ObjectArray) else 'object')
-        result = _ObjectArray(result_data, dt)
-        if len(condition.shape) > 1:
-            result._shape = tuple(condition.shape)
-        return result
+        return _native_boxed_result_or_fallback(result_data, dt, tuple(condition.shape))
     if not isinstance(x, ndarray):
         x = full(condition.shape, float(x))
     if not isinstance(y, ndarray):
