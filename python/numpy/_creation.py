@@ -737,14 +737,17 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
         if dtype is None and not __import__("builtins").all(_is_numeric_scalar(x) for x in data):
             return _native_object_array_or_fallback(list(data) if isinstance(data, tuple) else data)
         dt_name = str(dtype) if dtype is not None else "complex128"
-        return _ObjectArray(data if isinstance(data, list) else list(data), dt_name)
+        result = _make_complex_array(list(data) if isinstance(data, tuple) else data, (len(data),))
+        if dt_name != "complex128":
+            result = result.astype(dt_name)
+        return result
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (int, float)):
         if dtype is None and not __import__("builtins").all(_is_numeric_scalar(x) for x in data):
             return _native_object_array_or_fallback(list(data) if isinstance(data, tuple) else data)
         # Check if any element is complex (mixed int/float/complex list)
         _any_complex = __import__("builtins").any(isinstance(x, complex) for x in data)
         if _any_complex:
-            return _ObjectArray([complex(x) for x in data], "complex128")
+            return _make_complex_array([complex(x) for x in data], (len(data),))
         result = _native.array([float(x) for x in data])
         if dtype is not None:
             dt = str(dtype)

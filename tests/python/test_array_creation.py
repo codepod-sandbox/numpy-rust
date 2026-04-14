@@ -98,6 +98,18 @@ def test_array_complex_nested_sequence():
     assert_eq(a.dtype, "complex128")
     assert_eq(a.tolist(), [[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]])
 
+def test_array_complex_sequence_stays_native():
+    a = np.array([1 + 2j, 3 + 4j])
+    assert_eq(a.shape, (2,))
+    assert_eq(a.dtype, "complex128")
+    assert_eq(a.tolist(), [1 + 2j, 3 + 4j])
+
+def test_array_mixed_real_complex_sequence_stays_native():
+    a = np.array([1, 2 + 3j])
+    assert_eq(a.shape, (2,))
+    assert_eq(a.dtype, "complex128")
+    assert_eq(a.tolist(), [1 + 0j, 2 + 3j])
+
 
 # --- np.arange ---
 
