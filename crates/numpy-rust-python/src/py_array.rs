@@ -502,6 +502,23 @@ pub(crate) fn py_obj_to_scalar(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResu
     crate::py_creation::object_to_scalar(obj, vm)
 }
 
+fn object_to_assignment_ndarray(
+    obj: &vm::PyObject,
+    target: &NdArray,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    if target.dtype().is_boxed() {
+        crate::py_creation::object_to_ndarray_with_dtype_and_unit(
+            obj,
+            Some(target.dtype()),
+            target.temporal_unit(),
+            vm,
+        )
+    } else {
+        obj_to_ndarray(obj, vm)
+    }
+}
+
 /// Convert a Python object (int, float, or complex) to f64.
 /// For complex numbers, takes the real part.
 fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
@@ -2899,24 +2916,21 @@ impl PyNdArray {
         let indices = idx_arr_obj
             .downcast::<PyNdArray>()
             .map_err(|_| vm.new_type_error("indices must be array-like".to_owned()))?;
-        let val_arr_obj = asarray_fn.call(vec![args.args[1].clone()], vm)?;
-        let values = val_arr_obj
-            .downcast::<PyNdArray>()
-            .map_err(|_| vm.new_type_error("values must be array-like".to_owned()))?;
         let idx_data = indices.data.read().unwrap();
-        let val_data = values.data.read().unwrap();
+        let target_snapshot = self.data.read().unwrap().clone();
+        let values_arr = object_to_assignment_ndarray(&args.args[1], &target_snapshot, vm)?;
+        let val_flat = values_arr.flatten();
 
         let idx_flat = idx_data.flatten();
-        let val_flat = val_data.flatten();
         let n_idx = idx_flat.size();
         let n_val = val_flat.size();
 
         drop(idx_data);
-        drop(val_data);
 
         let mut write_guard = self.data.write().unwrap();
         let total = write_guard.size();
         let shape = write_guard.shape().to_vec();
+        let target_is_boxed = write_guard.dtype().is_boxed();
 
         // Flatten to work with flat indices
         let mut flat = write_guard.flatten();
@@ -2941,8 +2955,16 @@ impl PyNdArray {
                     idx_val, total
                 )));
             }
-            let val_s = val_flat.get(&[j % n_val]).map_err(|e| numpy_err(e, vm))?;
-            flat.set(&[resolved], val_s).map_err(|e| numpy_err(e, vm))?;
+            if target_is_boxed {
+                let val_s = val_flat
+                    .get_boxed(&[j % n_val])
+                    .map_err(|e| numpy_err(e, vm))?;
+                flat.set_boxed(&[resolved], val_s)
+                    .map_err(|e| numpy_err(e, vm))?;
+            } else {
+                let val_s = val_flat.get(&[j % n_val]).map_err(|e| numpy_err(e, vm))?;
+                flat.set(&[resolved], val_s).map_err(|e| numpy_err(e, vm))?;
+            }
         }
         *write_guard = flat.reshape(&shape).unwrap_or(flat);
         Ok(())
@@ -4444,18 +4466,31 @@ fn setitem_impl(
         } else {
             idx as usize
         };
+        let target_snapshot = zelf.data.read().unwrap().clone();
 
         if ndim == 1 {
             // Scalar assignment: a[i] = value
-            let scalar = py_obj_to_scalar(&value, vm)?;
-            zelf.data
-                .write()
-                .unwrap()
-                .set(&[resolved], scalar)
-                .map_err(|e| numpy_err(e, vm))?;
+            if target_snapshot.dtype().is_boxed() {
+                let value_arr = object_to_assignment_ndarray(&value, &target_snapshot, vm)?;
+                let value_boxed = value_arr
+                    .get_boxed(&vec![0; value_arr.ndim()])
+                    .map_err(|e| numpy_err(e, vm))?;
+                zelf.data
+                    .write()
+                    .unwrap()
+                    .set_boxed(&[resolved], value_boxed)
+                    .map_err(|e| numpy_err(e, vm))?;
+            } else {
+                let scalar = py_obj_to_scalar(&value, vm)?;
+                zelf.data
+                    .write()
+                    .unwrap()
+                    .set(&[resolved], scalar)
+                    .map_err(|e| numpy_err(e, vm))?;
+            }
         } else {
             // Row assignment: a[i] = array_value
-            let value_arr = obj_to_ndarray(&value, vm)?;
+            let value_arr = object_to_assignment_ndarray(&value, &target_snapshot, vm)?;
             zelf.data
                 .write()
                 .unwrap()
@@ -4528,12 +4563,25 @@ fn setitem_impl(
                 }
             })
             .collect();
-        let scalar = py_obj_to_scalar(&value, vm)?;
-        zelf.data
-            .write()
-            .unwrap()
-            .set(&usize_indices, scalar)
-            .map_err(|e| numpy_err(e, vm))?;
+        let target_snapshot = zelf.data.read().unwrap().clone();
+        if target_snapshot.dtype().is_boxed() {
+            let value_arr = object_to_assignment_ndarray(&value, &target_snapshot, vm)?;
+            let value_boxed = value_arr
+                .get_boxed(&vec![0; value_arr.ndim()])
+                .map_err(|e| numpy_err(e, vm))?;
+            zelf.data
+                .write()
+                .unwrap()
+                .set_boxed(&usize_indices, value_boxed)
+                .map_err(|e| numpy_err(e, vm))?;
+        } else {
+            let scalar = py_obj_to_scalar(&value, vm)?;
+            zelf.data
+                .write()
+                .unwrap()
+                .set(&usize_indices, scalar)
+                .map_err(|e| numpy_err(e, vm))?;
+        }
         return Ok(());
     }
 

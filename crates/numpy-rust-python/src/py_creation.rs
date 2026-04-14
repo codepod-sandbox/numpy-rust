@@ -464,7 +464,7 @@ fn nested_sequence_to_ndarray(
         .map_err(|e| vm.new_value_error(e.to_string()))
 }
 
-fn object_to_ndarray_with_dtype_and_unit(
+pub(crate) fn object_to_ndarray_with_dtype_and_unit(
     data: &vm::PyObject,
     dtype: Option<DType>,
     temporal_unit: Option<&str>,

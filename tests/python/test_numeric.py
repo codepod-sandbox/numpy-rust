@@ -6479,21 +6479,14 @@ def test_supported_objectarray_indexing_methods_use_native_runtime():
     sliced = arr[1:3]
     item = arr.item(2)
     taken = arr.take([3, 0])
+    arr.put([0, 3], [9, 8])
+    arr[1] = 7
 
     assert_eq(elem, 2)
     assert_eq(type(sliced).__name__, "ndarray")
     assert_eq(item, 3)
     assert_eq(type(taken).__name__, "ndarray")
     assert_eq(taken.tolist(), [4, 1])
-
-def test_objectarray_mutation_stays_fallback_until_boxed_assignment_is_native():
-    from numpy._helpers import _ObjectArray
-
-    arr = _ObjectArray([1, 2, 3, 4], "object")
-    arr.put([0, 3], [9, 8])
-    arr[1] = 7
-
-    assert_eq(type(arr).__name__, "_ObjectArray")
     assert_eq(arr.tolist(), [9, 7, 3, 8])
 
 def test_supported_objectarray_view_uses_native_runtime():
@@ -6560,6 +6553,15 @@ def test_object_creation_paths_use_native_runtime():
     assert_eq(ey.tolist(), [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
     assert_eq(casted.tolist(), [1, 2, 3])
     assert_eq(scalar.item(), 5)
+
+def test_native_object_assignment_uses_boxed_runtime():
+    arr = np.array([1, 2, 3, 4], dtype=object)
+    arr[1] = "x"
+    arr.put([0, 3], [9, "y"])
+
+    assert_eq(type(arr).__name__, "ndarray")
+    assert_eq(str(arr.dtype), "object")
+    assert_eq(arr.tolist(), [9, "x", 3, "y"])
 
 def test_datetime64_where_uses_native_runtime():
     cond = np.array([True, False, True], dtype=bool)

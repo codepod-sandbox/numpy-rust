@@ -488,6 +488,14 @@ class _ObjectArray:
             return _NumpyComplexScalar(val, dn)
         return val
     def __setitem__(self, key, value):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                native_self[key] = _coerce_native_boxed_operand(value)
+                self._sync_from_native(native_self)
+                return
+            except Exception:
+                pass
         if key is ...:
             # Ellipsis: set all elements to value
             n = len(self._data)
@@ -1064,6 +1072,14 @@ class _ObjectArray:
 
     def put(self, indices, values, mode='raise'):
         """Replace specified elements of the array."""
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                native_self.put(indices, _coerce_native_boxed_operand(values), mode=mode)
+                self._sync_from_native(native_self)
+                return
+            except Exception:
+                pass
         if not isinstance(indices, (list, tuple)):
             indices = [int(indices)]
         if not isinstance(values, (list, tuple)):
