@@ -2239,6 +2239,7 @@ def _structured_nonzero_linear_indices(a):
 
 
 def nonzero(a):
+    a = _coerce_native_boxed_operand(a)
     if isinstance(a, _ObjectArray):
         if len(a.shape) == 0:
             raise ValueError("Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(a).nonzero() instead.")

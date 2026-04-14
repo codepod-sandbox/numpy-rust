@@ -37,6 +37,27 @@ def _normalize_edit_axis(arr, axis, none_message):
     return arr, axis
 
 
+def _flat_index_to_key(shape, flat_index):
+    if len(shape) <= 1:
+        return flat_index
+    strides = [1] * len(shape)
+    for d in _builtin_range(len(shape) - 2, -1, -1):
+        strides[d] = strides[d + 1] * shape[d + 1]
+    key = []
+    rem = flat_index
+    for d in _builtin_range(len(shape)):
+        key.append(rem // strides[d])
+        rem %= strides[d]
+    return tuple(key)
+
+
+def _set_flat_value(arr, flat_index, value):
+    if isinstance(arr, _ObjectArray):
+        arr._data[flat_index] = value
+        return
+    arr[_flat_index_to_key(arr.shape, flat_index)] = value
+
+
 def _delete_index_type_error():
     return IndexError(
         "only integers, slices (`:`), ellipsis (`...`), "
@@ -554,12 +575,14 @@ def copyto(dst, src, casting='same_kind', where=True):
 
 def place(arr, mask, vals):
     """Change elements of an array based on conditional and input values."""
-    if not isinstance(arr, ndarray):
+    wrapper = arr if isinstance(arr, _ObjectArray) else None
+    arr = _coerce_native_boxed_operand(arr)
+    if not isinstance(arr, (ndarray, _ObjectArray)):
         raise TypeError(
             "argument 1 must be numpy.ndarray, not {}".format(type(arr).__name__)
         )
     mask_arr = asarray(mask).flatten()
-    vals_arr = asarray(vals).flatten()
+    vals_arr = asarray(_coerce_native_boxed_operand(vals)).flatten()
     n = arr.size
     nv = vals_arr.size
     # Count True positions to validate
@@ -569,28 +592,14 @@ def place(arr, mask, vals):
             count_true += 1
     if count_true > 0 and nv == 0:
         raise ValueError("Cannot insert from an empty array!")
-    flat_a = arr.flatten()
     vi = 0
     for i in _builtin_range(n):
         if bool(mask_arr[i]):
-            flat_a[i] = vals_arr[vi % nv]
+            value = vals_arr[vi % nv]
+            _set_flat_value(arr, i, value)
             vi += 1
-    # Write back in-place
-    if arr.ndim == 1:
-        for i in _builtin_range(n):
-            arr[i] = flat_a[i]
-    else:
-        _shape = arr.shape
-        _strides = [1] * arr.ndim
-        for _d in _builtin_range(arr.ndim - 2, -1, -1):
-            _strides[_d] = _strides[_d + 1] * _shape[_d + 1]
-        for i in _builtin_range(n):
-            _idx = []
-            _rem = i
-            for _d in _builtin_range(arr.ndim):
-                _idx.append(_rem // _strides[_d])
-                _rem %= _strides[_d]
-            arr[tuple(_idx)] = flat_a[i]
+    if wrapper is not None and isinstance(arr, ndarray):
+        wrapper._sync_from_native(arr)
 
 
 def put(a, ind, v, mode='raise'):
@@ -599,10 +608,12 @@ def put(a, ind, v, mode='raise'):
     Modifies 'a' in-place and returns None.
     """
     from ._helpers import _ObjectArray
+    wrapper = a if isinstance(a, _ObjectArray) else None
+    a = _coerce_native_boxed_operand(a)
     if not isinstance(a, (ndarray, _ObjectArray)):
         raise TypeError("argument 1 must be numpy.ndarray")
     ind_arr = asarray(ind).flatten()
-    v_arr = asarray(v).flatten()
+    v_arr = asarray(_coerce_native_boxed_operand(v)).flatten()
     n = a.size
     ni = ind_arr.size
     nv = v_arr.size
@@ -628,10 +639,10 @@ def put(a, ind, v, mode='raise'):
             if i < 0 or i >= n:
                 raise IndexError("index {} is out of bounds for axis 0 with size {}".format(
                     int(ind_arr[idx]), n))
-        if isinstance(a, _ObjectArray):
-            a._data[i] = v_arr[idx % nv] if isinstance(v_arr, _ObjectArray) else float(v_arr[idx % nv])
-        else:
-            a.flat[i] = float(v_arr[idx % nv])
+        value = v_arr[idx % nv]
+        _set_flat_value(a, i, value)
+    if wrapper is not None and isinstance(a, ndarray):
+        wrapper._sync_from_native(a)
     return None
 
 
@@ -640,8 +651,12 @@ def putmask(a, mask, values):
 
     Modifies 'a' in-place and returns None.
     """
+    wrapper = a if isinstance(a, _ObjectArray) else None
+    a = _coerce_native_boxed_operand(a)
+    if not isinstance(a, (ndarray, _ObjectArray)):
+        raise TypeError("argument 1 must be numpy.ndarray")
     mask = asarray(mask)
-    values = asarray(values)
+    values = asarray(_coerce_native_boxed_operand(values))
     flat_m = mask.flatten()
     flat_v = values.flatten()
     n = a.size
@@ -651,8 +666,11 @@ def putmask(a, mask, values):
     vi = 0
     for i in range(n):
         if flat_m[i]:
-            a.flat[i] = float(flat_v[vi % nv])
+            value = flat_v[vi % nv]
+            _set_flat_value(a, i, value)
             vi += 1
+    if wrapper is not None and isinstance(a, ndarray):
+        wrapper._sync_from_native(a)
     return None
 
 

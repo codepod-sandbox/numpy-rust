@@ -6242,6 +6242,15 @@ def test_object_nonzero_and_count_nonzero_use_native_runtime():
     assert_eq([idx.tolist() for idx in nz], [[0, 1], [1, 1]])
     assert_eq(np.count_nonzero(arr), 2)
 
+def test_supported_objectarray_nonzero_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([[0, 'x'], [False, 3]], "object", shape=(2, 2))
+    nz = np.nonzero(arr)
+
+    assert_eq(type(np.asarray(arr)).__name__, "ndarray")
+    assert_eq([idx.tolist() for idx in nz], [[0, 1], [1, 1]])
+
 def test_object_all_any_use_native_runtime():
     arr = np.array([[0, 'x'], [False, 3]], dtype=object)
     assert_eq(np.all(arr), False)
@@ -6401,6 +6410,17 @@ def test_supported_objectarray_selection_uses_native_runtime():
     assert_eq(taken.tolist(), [3, 1])
     assert_eq(deleted.tolist(), [1, 3])
     assert_eq(inserted.tolist(), [1, 'x', 2, 3])
+
+def test_supported_objectarray_selection_mutation_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2, 3, 4], "object")
+    np.put(arr, [0, 3], ["x", "y"])
+    np.putmask(arr, np.array([False, True, False, True], dtype=bool), ["a", "b"])
+    np.place(arr, np.array([True, False, True, False], dtype=bool), [9, 8])
+
+    assert_eq(type(np.asarray(arr)).__name__, "ndarray")
+    assert_eq(arr.tolist(), [9, "a", 8, "b"])
 
 def test_supported_objectarray_concatenate_and_stack_use_native_runtime():
     from numpy._helpers import _ObjectArray
