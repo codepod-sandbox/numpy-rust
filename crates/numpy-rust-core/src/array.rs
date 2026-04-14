@@ -91,6 +91,7 @@ struct ValidatedRuntimeState {
     shape: Vec<usize>,
     strides: Vec<isize>,
     flags: ArrayFlags,
+    temporal_unit: Option<String>,
 }
 
 impl ValidatedRuntimeState {
@@ -114,6 +115,7 @@ impl ValidatedRuntimeState {
             shape: storage.shape_vec(),
             strides: storage.strides_vec(),
             flags: ArrayFlags::from_storage(storage),
+            temporal_unit: storage.temporal_unit().map(str::to_owned),
         }
     }
 }
@@ -126,6 +128,7 @@ pub struct NdArray {
     strides: Vec<isize>,
     flags: ArrayFlags,
     byteorder: char,
+    temporal_unit: Option<String>,
 }
 
 // --- Constructors ---
@@ -146,6 +149,7 @@ impl NdArray {
             flags: runtime.flags,
             storage,
             byteorder: default_byteorder_for(descriptor.id),
+            temporal_unit: runtime.temporal_unit,
         }
     }
 
@@ -283,6 +287,10 @@ impl NdArray {
 
     pub fn byteorder(&self) -> char {
         self.byteorder
+    }
+
+    pub fn temporal_unit(&self) -> Option<&str> {
+        self.temporal_unit.as_deref()
     }
 
     pub fn is_native_byteorder(&self) -> bool {
@@ -428,6 +436,7 @@ impl NdArray {
         self.shape = runtime.shape;
         self.strides = runtime.strides;
         self.flags = runtime.flags;
+        self.temporal_unit = runtime.temporal_unit;
     }
 
     pub(crate) fn refresh_runtime_state(&mut self) {

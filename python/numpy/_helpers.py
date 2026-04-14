@@ -13,6 +13,7 @@ __all__ = [
     '_copy_into', '_apply_order', '_is_temporal_dtype', '_temporal_dtype_info',
     '_make_temporal_array', '_infer_shape', '_flatten_nested', '_all_bools_nested',
     '_to_float_list', '_unsupported_numeric_dtype', '_CLIP_UNSET',
+    '_coerce_native_boxed_operand',
     '_builtin_min', '_builtin_max', '_builtin_range',
 ]
 
@@ -133,6 +134,17 @@ class _ArrayFlags:
         if k == 'FNC':
             return self.fnc
         return False
+
+def _coerce_native_boxed_operand(x):
+    if not isinstance(x, _ObjectArray):
+        return x
+    try:
+        arr = _native.array_with_dtype(x._data, x._dtype)
+        if arr.shape != x._shape:
+            arr = arr.reshape(x._shape)
+        return arr
+    except (TypeError, ValueError):
+        return x
 
 # Wrap creation functions to accept (and currently ignore) dtype keyword
 class _ObjectArray:
@@ -404,6 +416,9 @@ class _ObjectArray:
     def _wrap_element(self, val):
         """Wrap scalar element in numpy scalar type when appropriate."""
         dt = str(self._dtype) if not isinstance(self._dtype, str) else self._dtype
+        if dt == 'void' or dt.startswith('V'):
+            from numpy._core_types import _NumpyVoidScalar
+            return _NumpyVoidScalar(val)
         if isinstance(val, complex) and 'complex' in dt:
             from numpy._core_types import _NumpyComplexScalar
             dn = 'complex64' if '64' in dt else 'complex128'
@@ -543,9 +558,37 @@ class _ObjectArray:
                 odata = odata * len(self._data)
             return odata
         if isinstance(other, ndarray):
-            return other.flatten().tolist()
+            odata = other.flatten().tolist()
+            if len(odata) == 1 and len(self._data) > 1:
+                odata = odata * len(self._data)
+            return odata
         return None
+    def _native_boxed(self):
+        return _coerce_native_boxed_operand(self)
+    def _supports_native_boxed_ops(self):
+        return (
+            isinstance(self._dtype, str)
+            and (
+                self._dtype == "object"
+                or self._dtype.startswith("datetime64")
+                or self._dtype.startswith("timedelta64")
+            )
+        )
+    def _native_binary(self, other, op_name):
+        if not self._supports_native_boxed_ops():
+            return None
+        native_self = self._native_boxed()
+        if not isinstance(native_self, ndarray):
+            return None
+        native_other = _coerce_native_boxed_operand(other)
+        try:
+            return getattr(native_self, op_name)(native_other)
+        except Exception:
+            return None
     def __eq__(self, other):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            return native_self == _coerce_native_boxed_operand(other)
         odata = self._broadcast_other(other)
         if odata is not None:
             return self._to_bool_array([a == b for a, b in zip(self._data, odata)])
@@ -553,6 +596,9 @@ class _ObjectArray:
             return self._to_bool_array([x == other for x in self._data])
         return NotImplemented
     def __ne__(self, other):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            return native_self != _coerce_native_boxed_operand(other)
         odata = self._broadcast_other(other)
         if odata is not None:
             return self._to_bool_array([a != b for a, b in zip(self._data, odata)])
@@ -588,70 +634,174 @@ class _ObjectArray:
             return self._cmp_complex(a, b) >= 0
         return a >= b
     def __le__(self, other):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            return native_self <= _coerce_native_boxed_operand(other)
         if isinstance(other, _ObjectArray):
             return self._to_bool_array([self._cmp_le(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
             return self._to_bool_array([self._cmp_le(a, b) for a, b in zip(self._data, other.flatten().tolist())])
         return self._to_bool_array([self._cmp_le(x, other) for x in self._data])
     def __lt__(self, other):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            return native_self < _coerce_native_boxed_operand(other)
         if isinstance(other, _ObjectArray):
             return self._to_bool_array([self._cmp_lt(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
             return self._to_bool_array([self._cmp_lt(a, b) for a, b in zip(self._data, other.flatten().tolist())])
         return self._to_bool_array([self._cmp_lt(x, other) for x in self._data])
     def __ge__(self, other):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            return native_self >= _coerce_native_boxed_operand(other)
         if isinstance(other, _ObjectArray):
             return self._to_bool_array([self._cmp_ge(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
             return self._to_bool_array([self._cmp_ge(a, b) for a, b in zip(self._data, other.flatten().tolist())])
         return self._to_bool_array([self._cmp_ge(x, other) for x in self._data])
     def __gt__(self, other):
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            return native_self > _coerce_native_boxed_operand(other)
         if isinstance(other, _ObjectArray):
             return self._to_bool_array([self._cmp_gt(a, b) for a, b in zip(self._data, other._data)])
         if isinstance(other, ndarray):
             return self._to_bool_array([self._cmp_gt(a, b) for a, b in zip(self._data, other.flatten().tolist())])
         return self._to_bool_array([self._cmp_gt(x, other) for x in self._data])
     def __sub__(self, other):
+        native = self._native_binary(other, "__sub__")
+        if native is not None:
+            return native
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a - b for a, b in zip(self._data, other._data)], self._dtype)
         return _ObjectArray([x - other for x in self._data], self._dtype)
     def __rsub__(self, other):
+        if not self._supports_native_boxed_ops():
+            return _ObjectArray([other - x for x in self._data], self._dtype)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            native_other = _coerce_native_boxed_operand(other)
+            try:
+                return native_other - native_self
+            except Exception:
+                pass
         return _ObjectArray([other - x for x in self._data], self._dtype)
     def __mul__(self, other):
+        native = self._native_binary(other, "__mul__")
+        if native is not None:
+            return native
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a * b for a, b in zip(self._data, other._data)], self._dtype)
         if isinstance(other, int) and self._dtype == "object":
             return _ObjectArray(self._data * other, self._dtype)
         return _ObjectArray([x * other for x in self._data], self._dtype)
     def __rmul__(self, other):
+        if not self._supports_native_boxed_ops():
+            return self.__mul__(other)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            native_other = _coerce_native_boxed_operand(other)
+            try:
+                return native_other * native_self
+            except Exception:
+                pass
         return self.__mul__(other)
     def __add__(self, other):
+        native = self._native_binary(other, "__add__")
+        if native is not None:
+            return native
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a + b for a, b in zip(self._data, other._data)], self._dtype)
         return _ObjectArray([x + other for x in self._data], self._dtype)
     def __radd__(self, other):
+        if not self._supports_native_boxed_ops():
+            return self.__add__(other)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            native_other = _coerce_native_boxed_operand(other)
+            try:
+                return native_other + native_self
+            except Exception:
+                pass
         return self.__add__(other)
     def conjugate(self):
+        if not self._supports_native_boxed_ops():
+            return _ObjectArray([x.conjugate() if hasattr(x, 'conjugate') else x for x in self._data], self._dtype)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.conj()
+            except Exception:
+                pass
         return _ObjectArray([x.conjugate() if hasattr(x, 'conjugate') else x for x in self._data], self._dtype)
     def conj(self):
         return self.conjugate()
     def sum(self, axis=None, keepdims=False, **kwargs):
+        if not self._supports_native_boxed_ops():
+            _bsum = __import__("builtins").sum
+            return _bsum(self._data)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.sum(axis=axis, keepdims=keepdims, **kwargs)
+            except Exception:
+                pass
         _bsum = __import__("builtins").sum
         return _bsum(self._data)
     def prod(self, axis=None, keepdims=False, **kwargs):
+        if not self._supports_native_boxed_ops():
+            r = 1
+            for x in self._data:
+                r *= x
+            return r
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.prod(axis=axis, keepdims=keepdims, **kwargs)
+            except Exception:
+                pass
         r = 1
         for x in self._data:
             r *= x
         return r
     def mean(self, axis=None, keepdims=False, **kwargs):
+        if not self._supports_native_boxed_ops():
+            _bsum = __import__("builtins").sum
+            return _bsum(self._data) / len(self._data)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.mean(axis=axis, keepdims=keepdims, **kwargs)
+            except Exception:
+                pass
         _bsum = __import__("builtins").sum
         return _bsum(self._data) / len(self._data)
     def var(self, axis=None, ddof=0, keepdims=False, **kwargs):
+        if not self._supports_native_boxed_ops():
+            m = self.mean()
+            _babs = __import__("builtins").abs
+            _bsum = __import__("builtins").sum
+            return _bsum(_babs(x - m) ** 2 for x in self._data) / (len(self._data) - ddof)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.var(axis=axis, ddof=ddof, keepdims=keepdims, **kwargs)
+            except Exception:
+                pass
         m = self.mean()
         _babs = __import__("builtins").abs
         _bsum = __import__("builtins").sum
         return _bsum(_babs(x - m) ** 2 for x in self._data) / (len(self._data) - ddof)
     def std(self, axis=None, ddof=0, keepdims=False, **kwargs):
+        if not self._supports_native_boxed_ops():
+            return self.var(axis, ddof, keepdims) ** 0.5
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            try:
+                return native_self.std(axis=axis, ddof=ddof, keepdims=keepdims, **kwargs)
+            except Exception:
+                pass
         return self.var(axis, ddof, keepdims) ** 0.5
     def __abs__(self):
         _babs = __import__("builtins").abs
@@ -666,6 +816,9 @@ class _ObjectArray:
             return arr
         return _ObjectArray(result, self._dtype)
     def __pow__(self, other):
+        native = self._native_binary(other, "__pow__")
+        if native is not None:
+            return native
         if isinstance(other, _ObjectArray):
             return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other._data)], self._dtype)
         if isinstance(other, ndarray):
@@ -679,6 +832,23 @@ class _ObjectArray:
             return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other_list)], self._dtype)
         return _ObjectArray([_complex_pow(x, other) for x in self._data], self._dtype)
     def __rpow__(self, other):
+        if not self._supports_native_boxed_ops():
+            if isinstance(other, _ObjectArray):
+                return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other._data)], self._dtype)
+            if isinstance(other, ndarray):
+                if other.ndim == 0:
+                    scalar = other.item() if hasattr(other, 'item') else float(other)
+                    return _ObjectArray([_complex_pow(scalar, x) for x in self._data], self._dtype)
+                other_list = other.flatten().tolist()
+                return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other_list)], self._dtype)
+            return _ObjectArray([_complex_pow(other, x) for x in self._data], self._dtype)
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            native_other = _coerce_native_boxed_operand(other)
+            try:
+                return native_other ** native_self
+            except Exception:
+                pass
         if isinstance(other, _ObjectArray):
             return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other._data)], self._dtype)
         if isinstance(other, ndarray):
@@ -689,6 +859,9 @@ class _ObjectArray:
             return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other_list)], self._dtype)
         return _ObjectArray([_complex_pow(other, x) for x in self._data], self._dtype)
     def __truediv__(self, other):
+        native = self._native_binary(other, "__truediv__")
+        if native is not None:
+            return native
         if isinstance(other, _ObjectArray):
             return _ObjectArray([a / b for a, b in zip(self._data, other._data)], self._dtype)
         return _ObjectArray([x / other for x in self._data], self._dtype)
@@ -698,6 +871,13 @@ class _ObjectArray:
             c = kwargs['casting']
             if c not in _valid_castings:
                 raise ValueError("casting must be one of 'no', 'equiv', 'safe', 'same_kind', or 'unsafe'")
+        native_self = self._native_boxed()
+        if isinstance(native_self, ndarray):
+            return native_self.clip(
+                _coerce_native_boxed_operand(a_min),
+                _coerce_native_boxed_operand(a_max),
+                out=out,
+            )
         data = list(self._data)
         for i, v in enumerate(data):
             if a_min is not None:

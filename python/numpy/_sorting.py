@@ -2,7 +2,7 @@
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
-    AxisError, _ObjectArray,
+    AxisError, _ObjectArray, _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 
@@ -67,11 +67,15 @@ def sort(a, axis=-1, kind=None, order=None):
     if not isinstance(a, (ndarray, _ObjectArray)):
         a = asarray(a)
     if isinstance(a, _ObjectArray):
-        # _ObjectArray.sort() is in-place and returns None — make a copy first
-        import copy
-        a_copy = copy.copy(a)
-        a_copy.sort(axis, kind=kind, order=order)
-        return a_copy
+        native_a = _coerce_native_boxed_operand(a)
+        if isinstance(native_a, ndarray):
+            a = native_a
+        else:
+            # _ObjectArray.sort() is in-place and returns None — make a copy first
+            import copy
+            a_copy = copy.copy(a)
+            a_copy.sort(axis, kind=kind, order=order)
+            return a_copy
     original_dtype = str(a.dtype)
     if axis is not None and axis < 0:
         axis = a.ndim + axis
@@ -91,7 +95,8 @@ def sort(a, axis=-1, kind=None, order=None):
         # Sort along axis
         _sorted = _sort_complex_axis(a, ax)
         return _sorted
-    result = a.sort(axis)
+    result = a.copy()
+    result.sort(axis)
     # Preserve original dtype (Rust sort may convert to float64)
     if original_dtype in ('int32', 'int64') and str(result.dtype) != original_dtype:
         result = result.astype(original_dtype)
@@ -133,9 +138,13 @@ def argsort(a, axis=-1, kind=None, order=None):
             return _native.zeros((0,), 'int64')
         a = _native.array([float(x) for x in a])
     elif isinstance(a, _ObjectArray):
-        vals = [float(x) if isinstance(x, (int, float)) else 0. for x in (a._data or [])]
-        inds = sorted(range(len(vals)), key=lambda i: vals[i])
-        return _native.array([float(i) for i in inds]) if inds else _native.zeros((0,), 'int64')
+        native_a = _coerce_native_boxed_operand(a)
+        if isinstance(native_a, ndarray):
+            a = native_a
+        else:
+            vals = [float(x) if isinstance(x, (int, float)) else 0. for x in (a._data or [])]
+            inds = sorted(range(len(vals)), key=lambda i: vals[i])
+            return _native.array([float(i) for i in inds]) if inds else _native.zeros((0,), 'int64')
     else:
         a = asarray(a)
     if axis is not None and axis < 0:

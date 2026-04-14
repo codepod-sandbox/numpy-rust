@@ -9,7 +9,7 @@ from ._helpers import (
     _copy_into, _apply_order, _infer_shape,
     _flatten_nested, _all_bools_nested, _to_float_list, _is_temporal_dtype,
     _temporal_dtype_info, _make_temporal_array, _CLIP_UNSET, _builtin_range,
-    _unsupported_numeric_dtype,
+    _unsupported_numeric_dtype, _coerce_native_boxed_operand,
 )
 from ._core_types import (
     dtype, _ScalarType, _normalize_dtype, _normalize_dtype_with_size,
@@ -127,11 +127,15 @@ def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
                         "index 0 has size {} and the array at index {} has size {}".format(
                             dim, ref.shape[dim], i, a.shape[dim]))
     from ._helpers import _ObjectArray
-    if any(isinstance(a, _ObjectArray) for a in arrs):
+    native_arrs = [
+        _coerce_native_boxed_operand(a) if isinstance(a, _ObjectArray) else a
+        for a in arrs
+    ]
+    if any(isinstance(a, _ObjectArray) for a in native_arrs):
         # Python-level concatenation for _ObjectArray
-        result = _concat_object_arrays(arrs, axis)
+        result = _concat_object_arrays(native_arrs, axis)
     else:
-        result = _native_concatenate(arrs, axis)
+        result = _native_concatenate(native_arrs, axis)
     if target_dtype is not None:
         result = result.astype(target_dtype)
     if out is not None:
@@ -361,6 +365,24 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
     return result
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
+    def _is_numeric_scalar(x):
+        return isinstance(x, (bool, int, float, complex))
+
+    def _native_object_array_or_fallback(value):
+        try:
+            return _native.array_with_dtype(value, "object")
+        except (TypeError, ValueError):
+            pass
+        if isinstance(value, (list, tuple)) and len(value) > 0 and all(isinstance(row, (list, tuple)) for row in value):
+            inner_len = len(value[0])
+            if all(len(row) == inner_len for row in value):
+                flat = [x for row in value for x in row]
+                try:
+                    return _native.array_with_dtype(flat, "object").reshape((len(value), inner_len))
+                except (TypeError, ValueError):
+                    return _ObjectArray(flat, "object", shape=(len(value), inner_len))
+        return _ObjectArray(value if isinstance(value, (list, tuple)) else [value], "object")
+
     # Handle chararray: unwrap to underlying ndarray (unless subok=True)
     if type(data).__name__ == 'chararray' and hasattr(data, '_arr') and not subok:
         return _array_core(data._arr, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
@@ -514,9 +536,33 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
     # Check if dtype forces a non-numeric path
     if dtype is not None:
         dt = str(dtype)
-        # Temporal dtypes (datetime64 / timedelta64): route to _ObjectArray
+        # Temporal dtypes (datetime64 / timedelta64): route to native boxed arrays
         if _is_temporal_dtype(dt):
-            return _make_temporal_array(data, dt)
+            _is_dt64 = dt.startswith('datetime64')
+            _unit = None
+            if '[' in dt and ']' in dt:
+                _unit = dt[dt.find('[') + 1:dt.rfind(']')]
+
+            def _coerce_temporal_value(v):
+                if hasattr(v, "_numpy_dtype_name"):
+                    return v
+                if _is_dt64:
+                    if isinstance(v, (int, str)):
+                        return datetime64(v, _unit) if _unit is not None else datetime64(v)
+                else:
+                    if isinstance(v, (int, str)):
+                        return timedelta64(v, _unit) if _unit is not None else timedelta64(v)
+                return v
+
+            def _coerce_temporal_data(v):
+                if isinstance(v, list):
+                    return [_coerce_temporal_data(x) for x in v]
+                if isinstance(v, tuple):
+                    return tuple(_coerce_temporal_data(x) for x in v)
+                return _coerce_temporal_value(v)
+
+            data = _coerce_temporal_data(data)
+            return _native.array_with_dtype(data, dt)
         # String dtypes: route to Rust native (S-prefixed, U-prefixed, "str")
         if dt.startswith("S") or dt.startswith("U") or dt == "str":
             if isinstance(data, str):
@@ -531,20 +577,26 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 return _native.array([str(x) for x in data])
             return _native.array(data)
         if dt in ("object", "<class 'object'>"):
-            # Flatten nested list/tuple for object arrays (e.g. [[1,2],[3,4]])
-            # Only flatten if ALL elements are sequences of the same length.
-            if (isinstance(data, (list, tuple)) and len(data) > 0
-                    and all(isinstance(row, (list, tuple)) for row in data)):
-                inner_len = len(data[0])
-                if all(len(row) == inner_len for row in data):
-                    flat = [x for row in data for x in row]
-                    shape = (len(data), inner_len)
-                    return _ObjectArray(flat, "object", shape=shape)
-            return _ObjectArray(data if isinstance(data, (list, tuple)) else [data], "object")
+            try:
+                return _native.array_with_dtype(data, "object")
+            except (TypeError, ValueError):
+                # Keep compatibility scaffolding only for object values the boxed runtime
+                # still cannot represent, such as None.
+                return _native_object_array_or_fallback(data)
         if dt == "void" or dt.startswith("V"):
             data_list = data if isinstance(data, (list, tuple)) else [data]
             kind, itemsize = _string_dtype_info(dt)
-            return _make_void_result((len(data_list),), dt, 0, itemsize=itemsize or 0)
+            size = itemsize or 0
+            void_data = []
+            for item in data_list:
+                if isinstance(item, (bytes, bytearray)):
+                    raw = bytes(item)
+                else:
+                    raw = b""
+                if size:
+                    raw = raw[:size].ljust(size, b"\x00")
+                void_data.append(raw)
+            return _ObjectArray(void_data, dt, shape=(len(data_list),), itemsize=size)
         if dt == "bytes":
             data_list = data if isinstance(data, (list, tuple)) else [data]
             return _ObjectArray([bytes(str(x), 'ascii') if not isinstance(x, bytes) else x for x in data_list], "bytes")
@@ -625,6 +677,8 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
         # List/tuple of strings -> string array
         return _native.array(list(data) if isinstance(data, tuple) else data)
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], bool):
+        if dtype is None and not __import__("builtins").all(_is_numeric_scalar(x) for x in data):
+            return _native_object_array_or_fallback(list(data) if isinstance(data, tuple) else data)
         result = _native.array([1.0 if x else 0.0 for x in data])
         if dtype is not None:
             dt = str(dtype)
@@ -637,9 +691,13 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 result = result.astype("bool")
         return result
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], complex):
+        if dtype is None and not __import__("builtins").all(_is_numeric_scalar(x) for x in data):
+            return _native_object_array_or_fallback(list(data) if isinstance(data, tuple) else data)
         dt_name = str(dtype) if dtype is not None else "complex128"
         return _ObjectArray(data if isinstance(data, list) else list(data), dt_name)
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (int, float)):
+        if dtype is None and not __import__("builtins").all(_is_numeric_scalar(x) for x in data):
+            return _native_object_array_or_fallback(list(data) if isinstance(data, tuple) else data)
         # Check if any element is complex (mixed int/float/complex list)
         _any_complex = __import__("builtins").any(isinstance(x, complex) for x in data)
         if _any_complex:
@@ -775,7 +833,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             result = _native.array(_to_float_list(data))
         except (TypeError, ValueError):
             # Final fallback for non-numeric data
-            return _ObjectArray(data if isinstance(data, (list, tuple)) else [data])
+            return _native_object_array_or_fallback(data)
     if dtype is not None and isinstance(result, ndarray):
         dt = str(dtype)
         if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
@@ -800,11 +858,6 @@ def zeros(shape, dtype=None, order="C", like=None):
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=0)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
-    if dt in ("object", "<class 'object'>"):
-        n = 1
-        for s in shape:
-            n *= s
-        return _apply_order(_ObjectArray([0] * n, "object", shape=shape), order)
     if dt is not None and _unsupported_numeric_dtype(dt):
         n = 1
         for s in shape:
@@ -835,11 +888,6 @@ def ones(shape, dtype=None, order="C", like=None):
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=1)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
-    if dt in ("object", "<class 'object'>"):
-        n = 1
-        for s in shape:
-            n *= s
-        return _apply_order(_ObjectArray([1] * n, "object", shape=shape), order)
     if dt is not None and _unsupported_numeric_dtype(dt):
         n = 1
         for s in shape:
@@ -1221,6 +1269,14 @@ def where(condition, x=None, y=None):
     if str(condition.dtype) != "bool":
         condition = condition.astype("bool")
     from ._helpers import _ObjectArray
+    native_x = _coerce_native_boxed_operand(x) if isinstance(x, _ObjectArray) else x
+    native_y = _coerce_native_boxed_operand(y) if isinstance(y, _ObjectArray) else y
+    # Handle native boxed arrays first; only fall back to _ObjectArray execution
+    # if coercion still failed.
+    if isinstance(native_x, ndarray) or isinstance(native_y, ndarray):
+        x_arr = native_x if isinstance(native_x, ndarray) else asarray(native_x)
+        y_arr = native_y if isinstance(native_y, ndarray) else asarray(native_y)
+        return _native.where_(condition, x_arr, y_arr)
     # Handle _ObjectArray inputs — element-wise selection
     if isinstance(x, _ObjectArray) or isinstance(y, _ObjectArray):
         cond_flat = condition.flatten().tolist()
@@ -1310,7 +1366,14 @@ def _make_void_result(shape, dtype_str, fill_value=0, itemsize=None):
     n = 1
     for s in shape:
         n *= s
-    data = [_NumpyVoidScalar(fill_value)] * n
+    size = itemsize or 0
+    if isinstance(fill_value, (bytes, bytearray)):
+        raw = bytes(fill_value)
+    else:
+        raw = b""
+    if size:
+        raw = raw[:size].ljust(size, b"\x00")
+    data = [raw] * n
     return _ObjectArray(data, dtype_str, shape=shape, itemsize=itemsize)
 
 def full(shape, fill_value, dtype=None, order="C"):
@@ -1334,7 +1397,17 @@ def full(shape, fill_value, dtype=None, order="C"):
         n = 1
         for s in shape:
             n *= s
-        return _apply_order(_ObjectArray([fill_value] * n, "object", shape=shape), order)
+        values = [fill_value] * n
+        try:
+            return _apply_order(_native.array_with_dtype(values, "object").reshape(shape), order)
+        except (TypeError, ValueError):
+            return _apply_order(_ObjectArray(values, "object", shape=shape), order)
+    if dt is not None and _is_temporal_dtype(dt):
+        n = 1
+        for s in shape:
+            n *= s
+        values = [fill_value] * n
+        return _apply_order(_native.array_with_dtype(values, dt).reshape(shape), order)
     if dt is not None and _unsupported_numeric_dtype(dt):
         n = 1
         for s in shape:
@@ -1357,7 +1430,12 @@ def full(shape, fill_value, dtype=None, order="C"):
         n = 1
         for s in (shape if isinstance(shape, (list, tuple)) else (shape,)):
             n *= s
-        return _apply_order(_ObjectArray([fill_value] * n, "object", shape=shape if isinstance(shape, tuple) else tuple(shape)), order)
+        values = [fill_value] * n
+        target_shape = shape if isinstance(shape, tuple) else tuple(shape)
+        try:
+            return _apply_order(_native.array_with_dtype(values, "object").reshape(target_shape), order)
+        except (TypeError, ValueError):
+            return _apply_order(_ObjectArray(values, "object", shape=target_shape), order)
     return _apply_order(_native.full(shape, float(fill_value)), order)
 
 def full_like(a, fill_value, dtype=None, order="K", subok=True, shape=None):
@@ -1505,24 +1583,20 @@ def copy(a, order="K", subok=False):
     return array(a)
 
 def fromiter(iterable, dtype=None, count=-1):
+    resolved_dtype = None
     if dtype is not None:
+        import numpy as _np
+        resolved_dtype = _np.dtype(dtype)
         _dt = _normalize_dtype(str(dtype))
         if _dt in ("str", "bytes") or str(dtype) in ("S", "S0", "V0", "U0"):
             raise ValueError("Must specify length when using variable-length dtypes")
     subarray_len = None
-    if dtype is not None:
-        # Minimal support for subarray dtype validation, e.g. dtype((int, 2)).
-        if isinstance(dtype, tuple) and len(dtype) == 2 and isinstance(dtype[1], int):
-            subarray_len = int(dtype[1])
-        else:
-            _dtype_name = str(getattr(dtype, "name", dtype))
-            if _dtype_name.startswith("(<class '") and _dtype_name.endswith(")"):
-                _comma = _dtype_name.rfind(",")
-                if _comma != -1:
-                    try:
-                        subarray_len = int(_dtype_name[_comma + 1 : -1].strip())
-                    except (TypeError, ValueError):
-                        subarray_len = None
+    if resolved_dtype is not None:
+        subdtype = getattr(resolved_dtype, "subdtype", None)
+        if subdtype is not None:
+            _, subshape = subdtype
+            if len(subshape) == 1:
+                subarray_len = int(subshape[0])
     if count > 0:
         data = []
         for val in iterable:
@@ -1542,7 +1616,7 @@ def fromiter(iterable, dtype=None, count=-1):
             if len(val) != subarray_len:
                 raise ValueError("setting an array element with a sequence")
     import numpy as _np
-    return _np.array(data, dtype=dtype)
+    return _np.array(data, dtype=resolved_dtype if resolved_dtype is not None else dtype)
 
 def fromstring(string, dtype=None, count=-1, sep=''):
     """Parse array from a string."""
@@ -1634,26 +1708,71 @@ def require(a, dtype=None, requirements=None):
         reqs.add(_flag_alias[r_upper])
     if 'C_CONTIGUOUS' in reqs and 'F_CONTIGUOUS' in reqs:
         raise ValueError("Cannot specify both C and Fortran contiguous.")
-    # Convert input
-    order = 'C'
-    if 'F_CONTIGUOUS' in reqs:
-        order = 'F'
-    if dtype is not None:
-        arr = array(a, dtype=dtype, order=order, copy=False)
+
+    def _normalize_req_dtype(dt):
+        import numpy as _np
+        return None if dt is None else str(_np.dtype(dt))
+
+    def _dtype_matches(arr, dt):
+        if dt is None:
+            return True
+        return str(arr.dtype) == _normalize_req_dtype(dt)
+
+    def _meets_requirements(arr):
+        if not _dtype_matches(arr, dtype):
+            return False
+        if 'ENSUREARRAY' in reqs and type(arr) is not ndarray:
+            return False
+        if 'C_CONTIGUOUS' in reqs and not arr.flags['C']:
+            return False
+        if 'F_CONTIGUOUS' in reqs and not arr.flags['F']:
+            return False
+        if 'ALIGNED' in reqs and not arr.flags['A']:
+            return False
+        if 'WRITEABLE' in reqs and not arr.flags['W']:
+            return False
+        if 'OWNDATA' in reqs and not arr.flags['O']:
+            return False
+        return True
+
+    if isinstance(a, ndarray):
+        arr = a
     else:
-        arr = array(a, order=order, copy=False)
-    if not isinstance(arr, ndarray):
-        arr = asarray(arr)
-    # E (ENSUREARRAY) means return base ndarray, not subclass
+        arr = asanyarray(a)
+
+    if _meets_requirements(arr):
+        return arr
+
+    order = 'F' if 'F_CONTIGUOUS' in reqs else 'C'
+    if dtype is not None and not _dtype_matches(arr, dtype):
+        arr = arr.astype(_normalize_req_dtype(dtype))
+
     if 'ENSUREARRAY' in reqs and type(arr) is not ndarray:
-        arr = array(arr, subok=False)
-    # W (WRITEABLE) - ensure writable
-    if 'WRITEABLE' in reqs:
-        if not arr.flags['WRITEABLE']:
+        arr = array(arr, copy=True, order=order, subok=False)
+    elif (
+        'OWNDATA' in reqs
+        or 'WRITEABLE' in reqs
+        or 'ALIGNED' in reqs
+        or 'C_CONTIGUOUS' in reqs
+        or 'F_CONTIGUOUS' in reqs
+        or order == 'F'
+    ):
+        if type(arr) is not ndarray and hasattr(arr, 'copy') and 'ENSUREARRAY' not in reqs:
             arr = arr.copy()
-    # Copy if OWNDATA required (asarray may share memory)
-    if 'OWNDATA' in reqs:
-        arr = arr.copy()
+        else:
+            arr = array(arr, copy=True, order=order, subok=type(arr) is not ndarray and 'ENSUREARRAY' not in reqs)
+
+    if 'F_CONTIGUOUS' in reqs and hasattr(arr, '_mark_fortran'):
+        arr._mark_fortran()
+    elif 'C_CONTIGUOUS' in reqs and hasattr(arr, '_mark_c_contiguous'):
+        arr._mark_c_contiguous()
+
+    if 'ALIGNED' in reqs and hasattr(arr, 'flags') and not arr.flags['A'] and hasattr(arr, '_set_base'):
+        # Copies and re-created arrays are aligned in our runtime.
+        pass
+    if 'WRITEABLE' in reqs and hasattr(arr, 'setflags'):
+        arr.setflags(write=True)
+
     return arr
 
 def identity(n, dtype=None):

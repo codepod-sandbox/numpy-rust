@@ -489,9 +489,10 @@ def test_argsort_1d():
 def test_sort_method():
     a = np.array([3.0, 1.0, 2.0])
     b = a.sort()
-    assert_close(b[0], 1.0)
-    assert_close(b[1], 2.0)
-    assert_close(b[2], 3.0)
+    assert_eq(b, None)
+    assert_close(a[0], 1.0)
+    assert_close(a[1], 2.0)
+    assert_close(a[2], 3.0)
 
 
 def test_keepdims_sum():
@@ -6137,6 +6138,297 @@ def test_isnat():
     d = np.datetime64('2024-01-01')
     assert_eq(np.isnat(d), False)
 
+def test_temporal_array_uses_native_ndarray():
+    arr = np.array([np.datetime64('2024-01-01'), np.datetime64('NaT', 'D')], dtype='datetime64[D]')
+    assert_eq(isinstance(arr, np.ndarray), True)
+    assert_eq(type(arr).__name__, 'ndarray')
+    assert_eq(str(arr.dtype), 'datetime64[D]')
+    assert_eq(isinstance(arr[0], np.datetime64), True)
+    assert_eq(np.isnat(arr[1]), True)
+
+def test_timedelta_array_uses_native_ndarray():
+    arr = np.array([np.timedelta64(5, 'D'), np.timedelta64('NaT', 'D')], dtype='timedelta64[D]')
+    assert_eq(isinstance(arr, np.ndarray), True)
+    assert_eq(str(arr.dtype), 'timedelta64[D]')
+    assert_eq(isinstance(arr[0], np.timedelta64), True)
+    assert_eq(arr[0]._value, 5)
+    assert_eq(arr[0]._unit, 'D')
+    assert_eq(arr[1]._is_nat, True)
+
+def test_object_array_uses_native_ndarray_for_supported_scalars():
+    arr = np.array([1, 'x', True], dtype=object)
+    assert_eq(isinstance(arr, np.ndarray), True)
+    assert_eq(str(arr.dtype), 'object')
+    assert_eq(arr.tolist(), [1, 'x', True])
+
+def test_object_nested_array_uses_native_ndarray_for_supported_scalars():
+    arr = np.array([[1, 'x'], [True, 2]], dtype=object)
+    assert_eq(type(arr).__name__, 'ndarray')
+    assert_eq(str(arr.dtype), 'object')
+    assert_eq(arr.tolist(), [[1, 'x'], [True, 2]])
+
+def test_object_zeros_ones_full_use_native_runtime():
+    zeros_arr = np.zeros((2, 2), dtype=object)
+    ones_arr = np.ones((2, 2), dtype=object)
+    full_arr = np.full((2, 2), 'x', dtype=object)
+    assert_eq(type(zeros_arr).__name__, 'ndarray')
+    assert_eq(type(ones_arr).__name__, 'ndarray')
+    assert_eq(type(full_arr).__name__, 'ndarray')
+    assert_eq(str(zeros_arr.dtype), 'object')
+    assert_eq(str(ones_arr.dtype), 'object')
+    assert_eq(str(full_arr.dtype), 'object')
+    assert_eq(zeros_arr.tolist(), [[0, 0], [0, 0]])
+    assert_eq(ones_arr.tolist(), [[1, 1], [1, 1]])
+    assert_eq(full_arr.tolist(), [['x', 'x'], ['x', 'x']])
+
+def test_temporal_zeros_ones_preserve_unit_metadata():
+    zeros_arr = np.zeros((2,), dtype='datetime64[D]')
+    ones_arr = np.ones((2,), dtype='timedelta64[D]')
+    assert_eq(type(zeros_arr).__name__, 'ndarray')
+    assert_eq(type(ones_arr).__name__, 'ndarray')
+    assert_eq(str(zeros_arr.dtype), 'datetime64[D]')
+    assert_eq(str(ones_arr.dtype), 'timedelta64[D]')
+    assert_eq([str(x) for x in zeros_arr.tolist()], ['1970-01-01', '1970-01-01'])
+    assert_eq([x._value for x in ones_arr.tolist()], [1, 1])
+    assert_eq([x._unit for x in ones_arr.tolist()], ['D', 'D'])
+
+def test_datetime64_maximum_uses_native_runtime():
+    arr = np.array([np.datetime64('2024-01-01'), np.datetime64('NaT', 'D')], dtype='datetime64[D]')
+    other = np.array([np.datetime64('2024-01-15'), np.datetime64('2024-01-20')], dtype='datetime64[D]')
+    out = np.maximum(arr, other)
+    assert_eq(isinstance(out, np.ndarray), True)
+    assert_eq(str(out.dtype), 'datetime64[D]')
+    assert_eq(str(out[0]), '2024-01-15')
+    assert_eq(np.isnat(out[1]), True)
+
+def test_object_maximum_uses_native_runtime():
+    arr = np.array([1, 5], dtype=object)
+    other = np.array([3, 2], dtype=object)
+    out = np.maximum(arr, other)
+    assert_eq(isinstance(out, np.ndarray), True)
+    assert_eq(str(out.dtype), 'object')
+    assert_eq(out.tolist(), [3, 5])
+
+def test_datetime64_clip_uses_native_runtime():
+    arr = np.array([np.datetime64('2024-01-01'), np.datetime64('NaT', 'D')], dtype='datetime64[D]')
+    lower = np.datetime64('2024-01-10')
+    upper = np.datetime64('2024-01-20')
+    out = np.clip(arr, lower, upper)
+    assert_eq(isinstance(out, np.ndarray), True)
+    assert_eq(str(out.dtype), 'datetime64[D]')
+    assert_eq(str(out[0]), '2024-01-10')
+    assert_eq(np.isnat(out[1]), True)
+
+def test_datetime64_maximum_reduce_preserves_unit_metadata():
+    arr = np.array([
+        np.datetime64('2024-01-01', 'D'),
+        np.datetime64('2024-01-03', 'D'),
+        np.datetime64('2024-01-02', 'D'),
+    ], dtype='datetime64[D]')
+    out = np.maximum.reduce(arr)
+    assert_eq(str(out.dtype), 'datetime64[D]')
+    assert_eq(str(out.item()), '2024-01-03')
+
+def test_object_clip_uses_native_runtime():
+    arr = np.array([1, 5, 9], dtype=object)
+    out = np.clip(arr, 2, 7)
+    assert_eq(isinstance(out, np.ndarray), True)
+    assert_eq(str(out.dtype), 'object')
+    assert_eq(out.tolist(), [2, 5, 7])
+
+def test_object_nonzero_and_count_nonzero_use_native_runtime():
+    arr = np.array([[0, 'x'], [False, 3]], dtype=object)
+    nz = np.nonzero(arr)
+    assert_eq([idx.tolist() for idx in nz], [[0, 1], [1, 1]])
+    assert_eq(np.count_nonzero(arr), 2)
+
+def test_object_all_any_use_native_runtime():
+    arr = np.array([[0, 'x'], [False, 3]], dtype=object)
+    assert_eq(np.all(arr), False)
+    assert_eq(np.any(arr), True)
+    assert_eq(np.all(arr, axis=0).tolist(), [False, True])
+    assert_eq(np.any(arr, axis=0).tolist(), [False, True])
+
+def test_object_arithmetic_uses_native_runtime():
+    arr = np.array([1, 2, 3], dtype=object)
+    other = np.array([10, 20, 30], dtype=object)
+    assert_eq((arr + other).tolist(), [11, 22, 33])
+    assert_eq((arr * other).tolist(), [10, 40, 90])
+    assert_eq((other / arr).tolist(), [10.0, 10.0, 10.0])
+
+def test_object_string_and_power_arithmetic_use_native_runtime():
+    words = np.array(['a', 'bc'], dtype=object)
+    counts = np.array([2, 3], dtype=object)
+    nums = np.array([2, 3], dtype=object)
+    exps = np.array([-1, 2], dtype=object)
+    assert_eq((words * counts).tolist(), ['aa', 'bcbcbc'])
+    assert_eq((counts * words).tolist(), ['aa', 'bcbcbc'])
+    assert_eq((nums ** exps).tolist(), [0.5, 9])
+
+def test_object_sum_prod_mean_use_native_runtime():
+    arr = np.array([1, 2, 3], dtype=object)
+    assert_eq(arr.sum(), 6)
+    assert_eq(arr.prod(), 6)
+    assert_eq(arr.mean(), 2.0)
+    assert_eq(arr.sum(axis=0), 6)
+    assert_eq(arr.var(), 2.0 / 3.0)
+    assert_eq(arr.std(), (2.0 / 3.0) ** 0.5)
+
+def test_object_abs_and_conj_use_native_runtime():
+    arr = np.array([-2, 3 + 4j], dtype=object)
+    assert_eq(abs(arr).tolist(), [2, 5.0])
+    assert_eq(arr.conj().tolist(), [-2, 3 - 4j])
+
+def test_object_complex_scalars_with_zero_imag_use_native_runtime():
+    arr = np.array([complex(2, 0), complex(float('nan'), 0.0), complex(3, 4)], dtype=object)
+    assert_eq(type(arr).__name__, 'ndarray')
+    vals = arr.tolist()
+    assert_eq(vals[0], 2 + 0j)
+    assert_eq(str(vals[1]), '(nan+0j)')
+    assert_eq(vals[2], 3 + 4j)
+
+def test_object_predicates_use_native_runtime():
+    arr = np.array([1.0, float('nan'), complex(float('nan'), 0.0), float('inf')], dtype=object)
+    assert_eq(type(arr).__name__, 'ndarray')
+    assert_eq(np.isnan(arr).tolist(), [False, True, True, False])
+    assert_eq(np.isfinite(arr).tolist(), [True, False, False, False])
+    assert_eq(np.isinf(arr).tolist(), [False, False, False, True])
+
+def test_supported_objectarray_math_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    left = _ObjectArray([1, 2, 3], "object")
+    right = _ObjectArray([10, 20, 30], "object")
+    added = np.add(left, right)
+    divided = np.divide(right, left)
+    absolute = np.abs(_ObjectArray([-2, 3 + 4j], "object"))
+    conjugated = np.conj(_ObjectArray([3 + 4j], "object"))
+
+    assert_eq(type(added).__name__, "ndarray")
+    assert_eq(type(divided).__name__, "ndarray")
+    assert_eq(type(absolute).__name__, "ndarray")
+    assert_eq(type(conjugated).__name__, "ndarray")
+    assert_eq(added.tolist(), [11, 22, 33])
+    assert_eq(divided.tolist(), [10.0, 10.0, 10.0])
+    assert_eq(absolute.tolist(), [2, 5.0])
+    assert_eq(conjugated.tolist(), [3 - 4j])
+
+def test_supported_objectarray_predicates_and_isclose_use_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1.0, float('nan'), complex(float('nan'), 0.0), float('inf')], "object")
+    other = _ObjectArray([1.0, float('nan'), complex(float('nan'), 0.0), float('inf')], "object")
+
+    isnan_result = np.isnan(arr)
+    isfinite_result = np.isfinite(arr)
+    isinf_result = np.isinf(arr)
+    isclose_result = np.isclose(arr, other, equal_nan=True)
+
+    assert_eq(type(isnan_result).__name__, "ndarray")
+    assert_eq(type(isfinite_result).__name__, "ndarray")
+    assert_eq(type(isinf_result).__name__, "ndarray")
+    assert_eq(type(isclose_result).__name__, "ndarray")
+    assert_eq(isnan_result.tolist(), [False, True, True, False])
+    assert_eq(isfinite_result.tolist(), [True, False, False, False])
+    assert_eq(isinf_result.tolist(), [False, False, False, True])
+    assert_eq(isclose_result.tolist(), [True, True, True, True])
+
+def test_object_sort_and_argsort_use_native_runtime():
+    arr = np.array([3, 1, 2], dtype=object)
+    assert_eq(type(np.sort(arr)).__name__, "ndarray")
+    assert_eq(type(np.argsort(arr)).__name__, "ndarray")
+    assert_eq(np.sort(arr).tolist(), [1, 2, 3])
+    assert_eq(np.argsort(arr).tolist(), [1, 2, 0])
+
+def test_supported_objectarray_sort_and_argsort_use_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([3, 1, 2], "object")
+    sorted_arr = np.sort(arr)
+    argsorted = np.argsort(arr)
+
+    assert_eq(type(sorted_arr).__name__, "ndarray")
+    assert_eq(type(argsorted).__name__, "ndarray")
+    assert_eq(sorted_arr.tolist(), [1, 2, 3])
+    assert_eq(argsorted.tolist(), [1, 2, 0])
+
+def test_object_setops_use_native_runtime():
+    a = np.array([1, 'a', 3], dtype=object)
+    b = np.array(['a', 4], dtype=object)
+    assert_eq(type(np.intersect1d(a, b)).__name__, "ndarray")
+    assert_eq(type(np.union1d(a, b)).__name__, "ndarray")
+    assert_eq(type(np.setdiff1d(a, b)).__name__, "ndarray")
+    assert_eq(type(np.isin(a, b)).__name__, "ndarray")
+    assert_eq(np.intersect1d(a, b).tolist(), ['a'])
+    assert_eq(np.setdiff1d(a, b).tolist(), [1, 3])
+    assert_eq(np.isin(a, b).tolist(), [False, True, False])
+
+def test_supported_objectarray_setops_use_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    a = _ObjectArray([1, 'a', 3], "object")
+    b = _ObjectArray(['a', 4], "object")
+    inter = np.intersect1d(a, b)
+    union = np.union1d(a, b)
+    diff = np.setdiff1d(a, b)
+    mask = np.isin(a, b)
+
+    assert_eq(type(inter).__name__, "ndarray")
+    assert_eq(type(union).__name__, "ndarray")
+    assert_eq(type(diff).__name__, "ndarray")
+    assert_eq(type(mask).__name__, "ndarray")
+    assert_eq(inter.tolist(), ['a'])
+    assert_eq(diff.tolist(), [1, 3])
+    assert_eq(mask.tolist(), [False, True, False])
+
+def test_supported_objectarray_selection_uses_native_runtime():
+    from numpy._helpers import _ObjectArray
+
+    arr = _ObjectArray([1, 2, 3], "object")
+    cond = _ObjectArray([True, False, True], "object")
+    idx = np.array([2, 0], dtype=np.int64)
+
+    compressed = np.compress(cond, arr)
+    taken = np.take(arr, idx)
+    deleted = np.delete(arr, [1])
+    inserted = np.insert(arr, 1, _ObjectArray(['x'], "object"))
+
+    assert_eq(type(compressed).__name__, "ndarray")
+    assert_eq(type(taken).__name__, "ndarray")
+    assert_eq(type(deleted).__name__, "ndarray")
+    assert_eq(type(inserted).__name__, "ndarray")
+    assert_eq(compressed.tolist(), [1, 3])
+    assert_eq(taken.tolist(), [3, 1])
+    assert_eq(deleted.tolist(), [1, 3])
+    assert_eq(inserted.tolist(), [1, 'x', 2, 3])
+
+def test_datetime64_where_uses_native_runtime():
+    cond = np.array([True, False, True], dtype=bool)
+    left = np.array([
+        np.datetime64('2024-01-01', 'D'),
+        np.datetime64('2024-01-02', 'D'),
+        np.datetime64('2024-01-03', 'D'),
+    ], dtype='datetime64[D]')
+    right = np.array([
+        np.datetime64('2024-02-01', 'D'),
+        np.datetime64('2024-02-02', 'D'),
+        np.datetime64('2024-02-03', 'D'),
+    ], dtype='datetime64[D]')
+    out = np.where(cond, left, right)
+    assert_eq(isinstance(out, np.ndarray), True)
+    assert_eq(str(out.dtype), 'datetime64[D]')
+    assert_eq(str(out[0]), '2024-01-01')
+    assert_eq(str(out[1]), '2024-02-02')
+    assert_eq(str(out[2]), '2024-01-03')
+
+def test_datetime64_concatenate_uses_native_runtime():
+    a = np.array([np.datetime64('2024-01-01', 'D')], dtype='datetime64[D]')
+    b = np.array([np.datetime64('2024-01-02', 'D')], dtype='datetime64[D]')
+    out = np.concatenate([a, b])
+    assert_eq(isinstance(out, np.ndarray), True)
+    assert_eq(str(out.dtype), 'datetime64[D]')
+    assert_eq([str(x) for x in out.tolist()], ['2024-01-01', '2024-01-02'])
+
 # Polynomial submodules
 
 def test_chebval():
@@ -7865,6 +8157,21 @@ def test_t38_dtype_extra_attrs():
     assert dt.isnative == True
     assert dt.hasobject == False
     assert isinstance(dt.descr, list)
+
+def test_t38_astype_preserves_non_native_dtype_metadata():
+    import numpy as np
+    arr = np.array([1.0, 2.0]).astype(np.dtype("float64").newbyteorder(">"))
+    assert arr.dtype.byteorder == ">"
+    assert arr.dtype.isnative is False
+    assert arr.dtype.str == ">f8"
+
+def test_t38_clip_accepts_nonnative_0d_array_bound():
+    import numpy as np
+    arr = np.array([[1.0, -2.0], [0.5, 3.0]])
+    upper = np.asarray(0.6).astype(np.dtype("float64").newbyteorder(">"))
+    result = arr.clip(-0.5, upper)
+    assert_eq(result.dtype.str, "<f8")
+    assert_eq(result.tolist(), [[0.6, -0.5], [0.5, 0.6]])
 
 def test_t38_isinstance_integer():
     """isinstance(3, np.integer) should work."""

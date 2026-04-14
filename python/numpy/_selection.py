@@ -2,7 +2,7 @@
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
-    AxisError, _ObjectArray,
+    AxisError, _ObjectArray, _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate
@@ -131,10 +131,12 @@ def _normalize_insert_obj(obj, n):
 
 
 def choose(a, choices, out=None, mode="raise"):
+    a = _coerce_native_boxed_operand(a)
     if not isinstance(a, ndarray):
         a = asarray(a)
     # Convert choices: complex scalars become float (real part) to match Rust clip behavior
     def _to_choice_array(c):
+        c = _coerce_native_boxed_operand(c)
         if isinstance(c, complex):
             return asarray(c.real)
         if isinstance(c, ndarray):
@@ -151,6 +153,8 @@ def choose(a, choices, out=None, mode="raise"):
 
 
 def compress(condition, a, axis=None):
+    condition = _coerce_native_boxed_operand(condition)
+    a = _coerce_native_boxed_operand(a)
     if not isinstance(a, ndarray):
         a = asarray(a)
     cond = condition if isinstance(condition, ndarray) else asarray(condition)
@@ -159,6 +163,8 @@ def compress(condition, a, axis=None):
 
 def extract(condition, arr):
     """Return elements of arr where condition is True."""
+    condition = _coerce_native_boxed_operand(condition)
+    arr = _coerce_native_boxed_operand(arr)
     condition = asarray(condition).flatten()
     arr = asarray(arr).flatten()
     result = []
@@ -173,6 +179,9 @@ def extract(condition, arr):
 def select(condlist, choicelist, default=0):
     """Return array drawn from elements in choicelist, depending on conditions."""
     from ._shape import broadcast_to
+    condlist = [_coerce_native_boxed_operand(c) for c in condlist]
+    choicelist = [_coerce_native_boxed_operand(c) for c in choicelist]
+    default = _coerce_native_boxed_operand(default)
     if len(condlist) != len(choicelist):
         raise ValueError("condlist and choicelist must be the same length")
     if len(condlist) == 0:
@@ -473,6 +482,7 @@ def _take_structured(a, indices, axis):
 
 
 def take(a, indices, axis=None, out=None, mode="raise"):
+    a = _coerce_native_boxed_operand(a)
     if type(a).__name__ == 'StructuredArray' and hasattr(a, 'shape'):
         if not hasattr(indices, 'tolist'):
             indices = asarray(indices).astype('int64')
@@ -648,6 +658,7 @@ def putmask(a, mask, values):
 
 def delete(arr, obj, axis=None):
     """Return a new array with sub-arrays along an axis deleted."""
+    arr = _coerce_native_boxed_operand(arr)
     # Track original type for subclass preservation
     wrap = None
     if not isinstance(arr, ndarray):
@@ -720,6 +731,8 @@ def insert(arr, obj, values, axis=None):
     """Insert values along the given axis before the given indices."""
     from ._helpers import AxisError
     from ._shape import transpose
+    arr = _coerce_native_boxed_operand(arr)
+    values = _coerce_native_boxed_operand(values)
     arr = asarray(arr)
 
     arr, axis = _normalize_edit_axis(arr, axis, "an integer is required")
@@ -751,6 +764,7 @@ def insert(arr, obj, values, axis=None):
     row_size = 1
     for s in sub_shape:
         row_size *= s
+    object_like = any(token in str(arr.dtype) for token in ('object', 'datetime', 'timedelta'))
 
     val_arr = asarray(values) if not isinstance(values, ndarray) else values
 
@@ -764,6 +778,14 @@ def insert(arr, obj, values, axis=None):
                     return asarray(v)
             return asarray(v)
         v_arr = asarray(v)
+        if object_like:
+            if v_arr.ndim == 0:
+                flat_row = [v_arr[()]] * row_size
+            elif v_arr.size == row_size:
+                flat_row = v_arr.flatten().tolist()
+            else:
+                flat_row = [v_arr.flat[0]] * row_size
+            return array(flat_row, dtype=str(arr.dtype)).reshape(list(sub_shape))
         if v_arr.ndim == 0:
             flat_row = [float(v_arr[()])] * row_size
         elif v_arr.size == row_size:
@@ -841,9 +863,16 @@ def insert(arr, obj, values, axis=None):
         _rsize = r.size if r.size > 0 else (row_size if row_size > 0 else 1)
         for j in _builtin_range(_rsize):
             if r.ndim > 0:
-                flat.append(float(r[j]))
+                flat.append(r[j] if object_like else float(r[j]))
             else:
-                flat.append(float(r[()]))
+                flat.append(r[()] if object_like else float(r[()]))
     new_shape = [len(all_rows)] + list(sub_shape)
-    result = array(flat).reshape(new_shape) if flat else array([]).reshape(new_shape)
+    if flat:
+        result = (
+            array(flat, dtype=str(arr.dtype)).reshape(new_shape)
+            if object_like
+            else array(flat).reshape(new_shape)
+        )
+    else:
+        result = array([], dtype=str(arr.dtype)).reshape(new_shape) if object_like else array([]).reshape(new_shape)
     return transpose(result, inv_perm)

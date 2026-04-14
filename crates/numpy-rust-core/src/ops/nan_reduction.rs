@@ -41,7 +41,7 @@ fn maybe_keepdims(
 }
 
 /// Helper: extract the Float64 inner array from an NdArray that has been cast.
-fn as_f64(arr: &NdArray) -> &ArrayD<f64> {
+fn as_f64(arr: &NdArray) -> ArrayD<f64> {
     match arr.data() {
         ArrayData::Float64(a) => a,
         _ => unreachable!("expected Float64 after astype"),
@@ -66,11 +66,11 @@ where
     let result = match axis {
         None => NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
             IxDyn(&[]),
-            reduce_all(arr),
+            reduce_all(&arr),
         ))),
         Some(ax) => {
             validate_axis(ax, array.ndim())?;
-            NdArray::from_data(ArrayData::Float64(reduce_axis(arr, ax)))
+            NdArray::from_data(ArrayData::Float64(reduce_axis(&arr, ax)))
         }
     };
 
@@ -95,11 +95,11 @@ where
     let result = match axis {
         None => NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
             IxDyn(&[]),
-            reduce_all(arr)?,
+            reduce_all(&arr)?,
         ))),
         Some(ax) => {
             validate_axis(ax, array.ndim())?;
-            NdArray::from_data(ArrayData::Float64(reduce_axis(arr, ax)?))
+            NdArray::from_data(ArrayData::Float64(reduce_axis(&arr, ax)?))
         }
     };
 
@@ -302,14 +302,14 @@ impl NdArray {
         match axis {
             None => Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
                 IxDyn(&[]),
-                reduce_nan_arg_extrema_all(arr, "nanargmin", |x, best| x < best, f64::INFINITY)?
+                reduce_nan_arg_extrema_all(&arr, "nanargmin", |x, best| x < best, f64::INFINITY)?
                     as i64,
             )))),
             Some(ax) => {
                 validate_axis(ax, self.ndim())?;
                 Ok(NdArray::from_data(ArrayData::Int64(
                     reduce_nan_arg_extrema_axis(
-                        arr,
+                        &arr,
                         ax,
                         "nanargmin",
                         |x, best| x < best,
@@ -329,14 +329,18 @@ impl NdArray {
         match axis {
             None => Ok(NdArray::from_data(ArrayData::Int64(ArrayD::from_elem(
                 IxDyn(&[]),
-                reduce_nan_arg_extrema_all(arr, "nanargmax", |x, best| x > best, f64::NEG_INFINITY)?
-                    as i64,
+                reduce_nan_arg_extrema_all(
+                    &arr,
+                    "nanargmax",
+                    |x, best| x > best,
+                    f64::NEG_INFINITY,
+                )? as i64,
             )))),
             Some(ax) => {
                 validate_axis(ax, self.ndim())?;
                 Ok(NdArray::from_data(ArrayData::Int64(
                     reduce_nan_arg_extrema_axis(
-                        arr,
+                        &arr,
                         ax,
                         "nanargmax",
                         |x, best| x > best,

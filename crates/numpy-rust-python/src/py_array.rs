@@ -11,7 +11,9 @@ use vm::types::{AsMapping, AsNumber, AsSequence, IterNext, Iterable, Representab
 use vm::{AsObject, Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
-use numpy_rust_core::{DType, LogicalScalar, NdArray};
+use numpy_rust_core::{
+    BoxedObjectScalar, BoxedScalar, BoxedTemporalScalar, DType, LogicalScalar, NdArray,
+};
 
 /// Python-visible ndarray class wrapping the core NdArray.
 /// Uses `RwLock` for interior mutability so `__setitem__` can work
@@ -22,6 +24,8 @@ pub struct PyNdArray {
     data: RwLock<NdArray>,
     is_fortran: AtomicBool,
     is_aligned: AtomicBool,
+    is_writeable: AtomicBool,
+    force_not_contiguous: AtomicBool,
     /// Reference to the array this view was created from (None if owner).
     base: RwLock<Option<PyObjectRef>>,
 }
@@ -32,6 +36,10 @@ impl Clone for PyNdArray {
             data: RwLock::new(self.data.read().unwrap().clone()),
             is_fortran: AtomicBool::new(self.is_fortran.load(Ordering::Relaxed)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
+            is_writeable: AtomicBool::new(self.is_writeable.load(Ordering::Relaxed)),
+            force_not_contiguous: AtomicBool::new(
+                self.force_not_contiguous.load(Ordering::Relaxed),
+            ),
             base: RwLock::new(None),
         }
     }
@@ -43,6 +51,8 @@ impl PyNdArray {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(false),
             is_aligned: AtomicBool::new(true),
+            is_writeable: AtomicBool::new(true),
+            force_not_contiguous: AtomicBool::new(false),
             base: RwLock::new(None),
         }
     }
@@ -52,6 +62,8 @@ impl PyNdArray {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(true),
             is_aligned: AtomicBool::new(true),
+            is_writeable: AtomicBool::new(true),
+            force_not_contiguous: AtomicBool::new(false),
             base: RwLock::new(None),
         }
     }
@@ -62,6 +74,8 @@ impl PyNdArray {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(false),
             is_aligned: AtomicBool::new(true),
+            is_writeable: AtomicBool::new(true),
+            force_not_contiguous: AtomicBool::new(false),
             base: RwLock::new(Some(parent)),
         }
     }
@@ -99,12 +113,11 @@ impl IterNext for PyNdArrayIter {
         }
         let data = zelf.array.data.read().unwrap();
         if data.ndim() == 1 {
-            let s = data.get(&[idx]).map_err(|e| numpy_err(e, vm))?;
-            Ok(PyIterReturn::Return(typed_scalar_to_py(
-                s,
-                data.dtype(),
+            Ok(PyIterReturn::Return(ndarray_scalar_to_py(
+                &data,
+                &[idx],
                 vm,
-            )))
+            )?))
         } else {
             let result = data
                 .slice(&[SliceArg::Index(idx as isize)])
@@ -141,8 +154,7 @@ impl PyFlatIter {
         let total = data.size();
         let idx = parse_flat_index(&key, total, vm)?;
         let coord = linear_to_coord(idx, data.shape());
-        let s = data.get(&coord).map_err(|e| numpy_err(e, vm))?;
-        Ok(typed_scalar_to_py(s, data.dtype(), vm))
+        ndarray_scalar_to_py(&data, &coord, vm)
     }
 
     #[pymethod]
@@ -167,8 +179,7 @@ impl PyFlatIter {
         let mut out = Vec::with_capacity(total);
         for i in 0..total {
             let coord = linear_to_coord(i, data.shape());
-            let s = data.get(&coord).expect("flat index must be valid");
-            out.push(typed_scalar_to_py(s, data.dtype(), vm));
+            out.push(ndarray_scalar_to_py(&data, &coord, vm).expect("flat index must be valid"));
         }
         vm.ctx.new_list(out).into()
     }
@@ -193,12 +204,9 @@ impl IterNext for PyFlatIter {
             return Ok(PyIterReturn::StopIteration(None));
         }
         let coord = linear_to_coord(idx, data.shape());
-        let s = data.get(&coord).map_err(|e| numpy_err(e, vm))?;
-        Ok(PyIterReturn::Return(typed_scalar_to_py(
-            s,
-            data.dtype(),
-            vm,
-        )))
+        Ok(PyIterReturn::Return(ndarray_scalar_to_py(
+            &data, &coord, vm,
+        )?))
     }
 }
 
@@ -292,17 +300,99 @@ pub(crate) fn scalar_to_py(s: Scalar, vm: &VirtualMachine) -> PyObjectRef {
     }
 }
 
-fn typed_scalar_to_py(s: Scalar, dtype: DType, vm: &VirtualMachine) -> PyObjectRef {
-    let py_val = scalar_to_py(s, vm);
+fn boxed_temporal_scalar_to_py(
+    value: &BoxedTemporalScalar,
+    is_datetime: bool,
+    vm: &VirtualMachine,
+) -> PyObjectRef {
     if let Ok(numpy_mod) = vm.import("numpy", 0) {
         let numpy_obj: PyObjectRef = numpy_mod;
-        if let Ok(dtype_cls) = numpy_obj.get_attr(numpy_scalar_attr_name(dtype), vm) {
-            if let Ok(result) = dtype_cls.call(vec![py_val.clone()], vm) {
+        let dtype_cls = if is_datetime {
+            numpy_obj.get_attr("datetime64", vm)
+        } else {
+            numpy_obj.get_attr("timedelta64", vm)
+        };
+        if let Ok(dtype_cls) = dtype_cls {
+            let raw = if value.is_nat {
+                vm.ctx.new_str("NaT".to_owned()).into()
+            } else {
+                vm.ctx.new_int(value.value).into()
+            };
+            if let Ok(result) =
+                dtype_cls.call(vec![raw, vm.ctx.new_str(value.unit.clone()).into()], vm)
+            {
                 return result;
             }
         }
     }
-    py_val
+    vm.ctx.none()
+}
+
+fn boxed_scalar_to_py(s: BoxedScalar, vm: &VirtualMachine) -> PyObjectRef {
+    match s {
+        BoxedScalar::Object(value) => match value {
+            BoxedObjectScalar::Bool(v) => vm.ctx.new_bool(v).into(),
+            BoxedObjectScalar::Int(v) => vm.ctx.new_int(v).into(),
+            BoxedObjectScalar::Float(v) => vm.ctx.new_float(v).into(),
+            BoxedObjectScalar::Complex(v) => vm.ctx.new_complex(v).into(),
+            BoxedObjectScalar::Text(v) => vm.ctx.new_str(v).into(),
+        },
+        BoxedScalar::Datetime(value) => boxed_temporal_scalar_to_py(&value, true, vm),
+        BoxedScalar::Timedelta(value) => boxed_temporal_scalar_to_py(&value, false, vm),
+    }
+}
+
+fn format_boxed_scalar(s: &BoxedScalar) -> String {
+    match s {
+        BoxedScalar::Object(value) => match value {
+            BoxedObjectScalar::Bool(v) => {
+                if *v {
+                    "True".to_owned()
+                } else {
+                    "False".to_owned()
+                }
+            }
+            BoxedObjectScalar::Int(v) => v.to_string(),
+            BoxedObjectScalar::Float(v) => format_float(*v),
+            BoxedObjectScalar::Complex(v) => {
+                if v.im >= 0.0 {
+                    format!("({}+{}j)", v.re, v.im)
+                } else {
+                    format!("({}{}j)", v.re, v.im)
+                }
+            }
+            BoxedObjectScalar::Text(v) => format!("'{v}'"),
+        },
+        BoxedScalar::Datetime(value) => {
+            if value.is_nat {
+                format!("numpy.datetime64('NaT', '{}')", value.unit)
+            } else {
+                format!("numpy.datetime64({}, '{}')", value.value, value.unit)
+            }
+        }
+        BoxedScalar::Timedelta(value) => {
+            if value.is_nat {
+                format!("numpy.timedelta64('NaT', '{}')", value.unit)
+            } else {
+                format!("numpy.timedelta64({}, '{}')", value.value, value.unit)
+            }
+        }
+    }
+}
+
+fn ndarray_scalar_to_py(
+    data: &NdArray,
+    index: &[usize],
+    vm: &VirtualMachine,
+) -> PyResult<PyObjectRef> {
+    if data.dtype().is_boxed() {
+        return data
+            .get_boxed(index)
+            .map(|value| boxed_scalar_to_py(value, vm))
+            .map_err(|e| numpy_err(e, vm));
+    }
+    let logical = data.get_logical(index).map_err(|e| numpy_err(e, vm))?;
+    Ok(typed_logical_scalar_to_py(logical, data.dtype(), vm))
 }
 
 pub(crate) fn logical_scalar_to_py(s: LogicalScalar, vm: &VirtualMachine) -> PyObjectRef {
@@ -333,6 +423,9 @@ fn numpy_scalar_attr_name(dtype: DType) -> &'static str {
         DType::Complex64 => "complex64",
         DType::Complex128 => "complex128",
         DType::Str => "str_",
+        DType::Object => "object_",
+        DType::Datetime64 => "datetime64",
+        DType::Timedelta64 => "timedelta64",
     }
 }
 
@@ -418,6 +511,23 @@ fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
     if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
         return Ok(i as f64);
     }
+    if let Some(arr) = obj.downcast_ref::<PyNdArray>() {
+        let data = arr.data.read().unwrap();
+        if data.ndim() == 0 {
+            if data.dtype().is_boxed() {
+                return Err(vm.new_type_error("expected a numeric scalar".to_owned()));
+            }
+            return match data.get_logical(&[]) {
+                Ok(LogicalScalar::Bool(v)) => Ok(if v { 1.0 } else { 0.0 }),
+                Ok(LogicalScalar::Int(v)) => Ok(v as f64),
+                Ok(LogicalScalar::UInt(v)) => Ok(v as f64),
+                Ok(LogicalScalar::Float(v)) => Ok(v),
+                Ok(LogicalScalar::Complex(re, _)) => Ok(re),
+                Ok(LogicalScalar::Str(_)) => Err(vm.new_type_error("expected a number".to_owned())),
+                Err(e) => Err(numpy_err(e, vm)),
+            };
+        }
+    }
     // Complex number: take the real part
     if let Some(c) = obj.downcast_ref::<vm::builtins::PyComplex>() {
         return Ok(c.to_complex().re);
@@ -428,8 +538,7 @@ fn py_obj_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
 /// Convert an NdArray result to PyObjectRef, returning a scalar for 0-D arrays.
 pub fn ndarray_or_scalar(arr: NdArray, vm: &VirtualMachine) -> PyObjectRef {
     if arr.ndim() == 0 {
-        let s = arr.get_logical(&[]).unwrap();
-        typed_logical_scalar_to_py(s, arr.dtype(), vm)
+        ndarray_scalar_to_py(&arr, &[], vm).unwrap_or_else(|_| vm.ctx.none())
     } else {
         PyNdArray::from_core(arr).into_pyobject(vm)
     }
@@ -465,10 +574,27 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "float16" | "f2" => Ok(DType::Float16),
         "float32" | "f32" | "f4" => Ok(DType::Float32),
         "float64" | "f64" | "f8" | "float" | "<class 'float'>" => Ok(DType::Float64),
-        // Compatibility fallback: map temporal dtypes to float64 until native
-        // datetime/timedelta storage exists in the Rust core.
         "timedelta64" | "datetime64" | "m8" | "M8" | "<m8" | ">m8" | "<M8" | ">M8" => {
-            Ok(DType::Float64)
+            Ok(if s.contains("timedelta") || s.contains("m8") {
+                DType::Timedelta64
+            } else {
+                DType::Datetime64
+            })
+        }
+        _ if s.starts_with("timedelta64[")
+            || s.starts_with("datetime64[")
+            || s.starts_with("m8[")
+            || s.starts_with("M8[")
+            || s.starts_with("<m8[")
+            || s.starts_with(">m8[")
+            || s.starts_with("<M8[")
+            || s.starts_with(">M8[") =>
+        {
+            Ok(if s.contains("timedelta64") || s.contains("m8[") {
+                DType::Timedelta64
+            } else {
+                DType::Datetime64
+            })
         }
         "complex64" | "c64" | "c8" => Ok(DType::Complex64),
         "complex128" | "c128" | "c16" | "complex" | "<class 'complex'>" => Ok(DType::Complex128),
@@ -476,8 +602,7 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         "longdouble" | "longfloat" | "g" => Ok(DType::Float64),
         "clongdouble" | "clongfloat" | "G" => Ok(DType::Complex128),
         "str" | "U" | "<class 'str'>" | "bytes" | "<class 'bytes'>" | "bytes_" => Ok(DType::Str),
-        // object dtype: map to Float64 as fallback (no true object array support)
-        "object" | "O" | "<class 'object'>" => Ok(DType::Float64),
+        "object" | "O" | "<class 'object'>" => Ok(DType::Object),
         _ if s.starts_with('S') || s.starts_with('U') || s.starts_with("|S") => Ok(DType::Str),
         // Void dtype: map to UInt8 as fallback (raw bytes)
         "void" | "V" | "V0" => Ok(DType::UInt8),
@@ -493,6 +618,47 @@ pub fn parse_dtype(s: &str, vm: &VirtualMachine) -> PyResult<DType> {
         }
         _ => Err(vm.new_type_error(format!("unsupported dtype: {s}"))),
     }
+}
+
+fn requested_byteorder(s: &str) -> Option<char> {
+    match s.chars().next() {
+        Some('<' | '>' | '=' | '|') => s.chars().next(),
+        _ => None,
+    }
+}
+
+fn dtype_typestr(dtype: DType, byteorder: char, temporal_unit: Option<&str>) -> String {
+    let code = match dtype {
+        DType::Bool => return "|b1".to_owned(),
+        DType::Int8 => "i1",
+        DType::Int16 => "i2",
+        DType::Int32 => "i4",
+        DType::Int64 => "i8",
+        DType::UInt8 => "u1",
+        DType::UInt16 => "u2",
+        DType::UInt32 => "u4",
+        DType::UInt64 => "u8",
+        DType::Float16 => "f2",
+        DType::Float32 => "f4",
+        DType::Float64 => "f8",
+        DType::Complex64 => "c8",
+        DType::Complex128 => "c16",
+        DType::Str => return "str".to_owned(),
+        DType::Object => return "|O".to_owned(),
+        DType::Datetime64 => {
+            return match temporal_unit {
+                Some(unit) if unit != "generic" => format!("{byteorder}M8[{unit}]"),
+                _ => format!("{byteorder}M8"),
+            }
+        }
+        DType::Timedelta64 => {
+            return match temporal_unit {
+                Some(unit) if unit != "generic" => format!("{byteorder}m8[{unit}]"),
+                _ => format!("{byteorder}m8"),
+            }
+        }
+    };
+    format!("{byteorder}{code}")
 }
 
 /// Extract a shape tuple from a Python object as raw i64 values (allows -1).
@@ -636,7 +802,8 @@ impl PyNdArray {
 
     #[pygetset]
     fn dtype(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-        let dtype_str = self.data.read().unwrap().dtype().to_string();
+        let data = self.data.read().unwrap();
+        let dtype_str = dtype_typestr(data.dtype(), data.byteorder(), data.temporal_unit());
         // Import numpy.dtype and construct a dtype object
         let numpy_mod = vm.import("numpy", 0)?;
         let dtype_cls = numpy_mod.get_attr("dtype", vm)?;
@@ -806,6 +973,9 @@ impl PyNdArray {
             DType::Complex64 => "<c8",
             DType::Complex128 => "<c16",
             DType::Str => "|U1",
+            DType::Object => "|O",
+            DType::Datetime64 => "<M8",
+            DType::Timedelta64 => "<m8",
         };
 
         // Build shape tuple
@@ -911,6 +1081,10 @@ impl PyNdArray {
             data: RwLock::new(result_data),
             is_fortran: AtomicBool::new(order_str == "F" || (order_str == "A" && is_f)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
+            is_writeable: AtomicBool::new(self.is_writeable.load(Ordering::Relaxed)),
+            force_not_contiguous: AtomicBool::new(
+                self.force_not_contiguous.load(Ordering::Relaxed),
+            ),
             base: RwLock::new(None),
         };
 
@@ -1022,7 +1196,11 @@ impl PyNdArray {
                 )));
             }
         }
-        Ok(PyNdArray::from_core(inner.astype(dt)).into_pyobject(vm))
+        let mut result = inner.astype(dt);
+        if let Some(byteorder) = requested_byteorder(dtype_str.as_str()) {
+            result.set_byteorder(byteorder);
+        }
+        Ok(PyNdArray::from_core(result).into_pyobject(vm))
     }
 
     /// Returns a view of the array sharing the same underlying buffer.
@@ -1038,6 +1216,16 @@ impl PyNdArray {
         };
         let data = self.data.read().unwrap();
         let is_f = self.is_fortran.load(Ordering::Relaxed);
+        let source_aligned = self.is_aligned.load(Ordering::Relaxed);
+        let source_byte_offset = data.byte_offset_bytes();
+        let wrap_dtype_view = |result: NdArray, target_dt: DType| {
+            let py = PyNdArray::from_core(result);
+            let target_itemsize = target_dt.itemsize();
+            let is_aligned = source_aligned
+                && (target_itemsize <= 1 || source_byte_offset.is_multiple_of(target_itemsize));
+            py.is_aligned.store(is_aligned, Ordering::Relaxed);
+            py
+        };
         if let Some(dtype_obj) = dtype_opt {
             // If it's a Python type/class (e.g. MyNDArray subclass), check if it's
             // actually an ndarray subclass vs a scalar type like np.int8
@@ -1054,7 +1242,7 @@ impl PyNdArray {
                             let result = data
                                 .view_as_dtype(target_dt)
                                 .map_err(|e| vm.new_value_error(e.to_string()))?;
-                            return Ok(PyNdArray::from_core(result).into_pyobject(vm));
+                            return Ok(wrap_dtype_view(result, target_dt).into_pyobject(vm));
                         }
                         Err(_) => return Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm)),
                     }
@@ -1069,7 +1257,7 @@ impl PyNdArray {
                         let result = data
                             .view_as_dtype(target_dt)
                             .map_err(|e| vm.new_value_error(e.to_string()))?;
-                        return Ok(PyNdArray::from_core(result).into_pyobject(vm));
+                        return Ok(wrap_dtype_view(result, target_dt).into_pyobject(vm));
                     }
                 }
                 // It's likely an ndarray subclass – create instance of that type
@@ -1077,6 +1265,10 @@ impl PyNdArray {
                     data: RwLock::new(data.clone()),
                     is_fortran: AtomicBool::new(is_f),
                     is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
+                    is_writeable: AtomicBool::new(self.is_writeable.load(Ordering::Relaxed)),
+                    force_not_contiguous: AtomicBool::new(
+                        self.force_not_contiguous.load(Ordering::Relaxed),
+                    ),
                     base: RwLock::new(None),
                 };
                 // Try into_ref_with_type first; if it fails (not a real ndarray subclass),
@@ -1114,7 +1306,7 @@ impl PyNdArray {
                     let result = data
                         .view_as_dtype(target_dt)
                         .map_err(|e| vm.new_value_error(e.to_string()))?;
-                    Ok(PyNdArray::from_core(result).into_pyobject(vm))
+                    Ok(wrap_dtype_view(result, target_dt).into_pyobject(vm))
                 }
                 Err(_) => Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm)),
             }
@@ -1252,13 +1444,35 @@ impl PyNdArray {
     }
 
     #[pymethod]
-    fn all(&self) -> bool {
-        self.data.read().unwrap().all()
+    fn all(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims(&args, vm);
+        let inner = self.data.read().unwrap();
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.all_reduce(None, kd),
+            AxisArg::Single(a) => inner.all_reduce(Some(a), kd),
+            AxisArg::Multi(axes) => {
+                reduce_multi_axis(&inner, &axes, |arr, a| arr.all_reduce(a, false))
+            }
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     #[pymethod]
-    fn any(&self) -> bool {
-        self.data.read().unwrap().any()
+    fn any(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let (axis_arg, kd) = extract_axis_keepdims(&args, vm);
+        let inner = self.data.read().unwrap();
+        let ax = parse_axis_arg(axis_arg, inner.ndim(), vm)?;
+        match ax {
+            AxisArg::None => inner.any_reduce(None, kd),
+            AxisArg::Single(a) => inner.any_reduce(Some(a), kd),
+            AxisArg::Multi(axes) => {
+                reduce_multi_axis(&inner, &axes, |arr, a| arr.any_reduce(a, false))
+            }
+        }
+        .map(|arr| ndarray_or_scalar(arr, vm))
+        .map_err(|e| numpy_err(e, vm))
     }
 
     // --- Unary math ---
@@ -1654,14 +1868,27 @@ impl PyNdArray {
         &self,
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
-    ) -> PyResult<PyNdArray> {
-        let ax = parse_optional_axis(axis, vm)?;
-        self.data
+    ) -> PyResult<()> {
+        let ndim = self.data.read().unwrap().ndim();
+        let ax = match axis {
+            vm::function::OptionalArg::Missing => Some(ndim.saturating_sub(1)),
+            vm::function::OptionalArg::Present(obj) => {
+                if vm.is_none(&obj) {
+                    None
+                } else {
+                    let axis: i64 = obj.try_into_value(vm)?;
+                    Some(axis as usize)
+                }
+            }
+        };
+        let sorted = self
+            .data
             .read()
             .unwrap()
             .sort(ax)
-            .map(PyNdArray::from_core)
-            .map_err(|e| numpy_err(e, vm))
+            .map_err(|e| numpy_err(e, vm))?;
+        *self.data.write().unwrap() = sorted;
+        Ok(())
     }
 
     #[pymethod]
@@ -1670,7 +1897,18 @@ impl PyNdArray {
         axis: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
-        let ax = parse_optional_axis(axis, vm)?;
+        let ndim = self.data.read().unwrap().ndim();
+        let ax = match axis {
+            vm::function::OptionalArg::Missing => Some(ndim.saturating_sub(1)),
+            vm::function::OptionalArg::Present(obj) => {
+                if vm.is_none(&obj) {
+                    None
+                } else {
+                    let axis: i64 = obj.try_into_value(vm)?;
+                    Some(axis as usize)
+                }
+            }
+        };
         self.data
             .read()
             .unwrap()
@@ -1765,10 +2003,7 @@ impl PyNdArray {
             };
 
             if data.ndim() == 1 {
-                let s = data
-                    .get_logical(&[resolved])
-                    .map_err(|e| numpy_err(e, vm))?;
-                return Ok(typed_logical_scalar_to_py(s, data.dtype(), vm));
+                return ndarray_scalar_to_py(&data, &[resolved], vm);
             } else {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
@@ -1956,10 +2191,7 @@ impl PyNdArray {
                     let result = scalar_to_0d_ndarray(s);
                     return Ok(PyNdArray::from_core(result).to_py(vm));
                 }
-                let logical = data
-                    .get_logical(&usize_indices)
-                    .map_err(|e| numpy_err(e, vm))?;
-                return Ok(typed_logical_scalar_to_py(logical, data.dtype(), vm));
+                return ndarray_scalar_to_py(&data, &usize_indices, vm);
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
@@ -2044,23 +2276,6 @@ impl PyNdArray {
                 ))
             }
         };
-        // Ordering comparisons (lt/le/gt/ge) with complex arrays are not supported.
-        let is_ordering_op = matches!(
-            op,
-            vm::types::PyComparisonOp::Lt
-                | vm::types::PyComparisonOp::Le
-                | vm::types::PyComparisonOp::Gt
-                | vm::types::PyComparisonOp::Ge
-        );
-        if is_ordering_op {
-            let other_dtype = other.dtype();
-            let zelf_dtype_check = zelf.data.read().unwrap().dtype();
-            if zelf_dtype_check.is_complex() || other_dtype.is_complex() {
-                return Err(vm.new_type_error(
-                    "type error: '<', '<=', '>', '>=' not supported for complex arrays".to_owned(),
-                ));
-            }
-        }
         let data = zelf.data.read().unwrap();
         let result = match op {
             vm::types::PyComparisonOp::Eq => data.eq(&other),
@@ -2108,6 +2323,9 @@ impl PyNdArray {
         if let Ok(arr) = arr_obj.clone().downcast::<PyNdArray>() {
             let data = arr.data.read().unwrap();
             if return_scalar && data.ndim() == 0 && data.size() == 1 {
+                if data.dtype().is_boxed() {
+                    return ndarray_scalar_to_py(&data, &[], vm);
+                }
                 let s = data.get(&[]).map_err(|e| numpy_err(e, vm))?;
                 let dname = data.dtype().to_string();
                 drop(data);
@@ -2152,10 +2370,7 @@ impl PyNdArray {
                     "can only convert an array of size 1 to a Python scalar".to_owned(),
                 ));
             }
-            let logical = data
-                .get_logical(&vec![0; data.ndim()])
-                .map_err(|e| numpy_err(e, vm))?;
-            return Ok(typed_logical_scalar_to_py(logical, data.dtype(), vm));
+            return ndarray_scalar_to_py(&data, &vec![0; data.ndim()], vm);
         }
         let mut indices: Vec<usize> = Vec::new();
         if args.args.len() == 1 {
@@ -2218,8 +2433,7 @@ impl PyNdArray {
                 indices.push(r as usize);
             }
         }
-        let logical = data.get_logical(&indices).map_err(|e| numpy_err(e, vm))?;
-        Ok(typed_logical_scalar_to_py(logical, data.dtype(), vm))
+        ndarray_scalar_to_py(&data, &indices, vm)
     }
 
     /// as_integer_ratio() for 0-d float arrays.
@@ -2258,6 +2472,21 @@ impl PyNdArray {
 
     #[pymethod]
     fn clip(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        fn write_result_into_out(
+            out_arr: &PyNdArray,
+            values: &NdArray,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            let ndim = out_arr.data.read().unwrap().ndim();
+            let full_slice = vec![SliceArg::Full; ndim];
+            out_arr
+                .data
+                .write()
+                .unwrap()
+                .set_slice(&full_slice, values)
+                .map_err(|e| numpy_err(e, vm))
+        }
+
         // Parse casting kwarg; None means default ("same_kind")
         let casting_rule: String = if let Some(casting_obj) = args.kwargs.get("casting") {
             if vm.is_none(casting_obj) {
@@ -2287,6 +2516,47 @@ impl PyNdArray {
         } else {
             args.kwargs.get("max").or(args.kwargs.get("a_max")).cloned()
         };
+        let self_is_boxed = self.data.read().unwrap().dtype().is_boxed();
+        if self_is_boxed {
+            let a_min_arr = match &a_min_obj {
+                None => None,
+                Some(obj) if vm.is_none(obj) => None,
+                Some(obj) => Some(obj_to_ndarray(obj, vm)?),
+            };
+            let a_max_arr = match &a_max_obj {
+                None => None,
+                Some(obj) if vm.is_none(obj) => None,
+                Some(obj) => Some(obj_to_ndarray(obj, vm)?),
+            };
+            let input = if let Some(out_obj) = args.kwargs.get("out") {
+                if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                    let self_data = self.data.read().unwrap();
+                    let out_data = out_arr.data.read().unwrap();
+                    if self_data.shares_memory_with(&out_data) {
+                        self_data.copy()
+                    } else {
+                        self_data.clone()
+                    }
+                } else {
+                    self.data.read().unwrap().clone()
+                }
+            } else {
+                self.data.read().unwrap().clone()
+            };
+            let result = PyNdArray::from_core(
+                input
+                    .clip_boxed(a_min_arr.as_ref(), a_max_arr.as_ref())
+                    .map_err(|e| numpy_err(e, vm))?,
+            );
+            if let Some(out_obj) = args.kwargs.get("out") {
+                if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                    let core_data = result.data.read().unwrap().clone();
+                    write_result_into_out(&out_arr, &core_data, vm)?;
+                    return Ok((*out_arr).clone());
+                }
+            }
+            return Ok(result);
+        }
         // Check if input is integer and bounds are explicitly float-typed.
         // Used to enforce same_kind casting when writing to integer out array.
         let self_is_integer = self.data.read().unwrap().dtype().is_integer();
@@ -2349,10 +2619,7 @@ impl PyNdArray {
             if let Some(out_obj) = args.kwargs.get("out") {
                 if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
                     let core_data = result.data.read().unwrap().clone();
-                    {
-                        let mut out_data = out_arr.data.write().unwrap();
-                        *out_data = core_data;
-                    }
+                    write_result_into_out(&out_arr, &core_data, vm)?;
                     return Ok((*out_arr).clone());
                 }
             }
@@ -2380,10 +2647,7 @@ impl PyNdArray {
                     if let Some(out_obj) = args.kwargs.get("out") {
                         if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
                             let core_data = out_result.data.read().unwrap().clone();
-                            {
-                                let mut out_data = out_arr.data.write().unwrap();
-                                *out_data = core_data;
-                            }
+                            write_result_into_out(&out_arr, &core_data, vm)?;
                             return Ok((*out_arr).clone());
                         }
                     }
@@ -2405,16 +2669,28 @@ impl PyNdArray {
             if let Some(out_obj) = args.kwargs.get("out") {
                 if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
                     let core_data = result.data.read().unwrap().clone();
-                    {
-                        let mut out_data = out_arr.data.write().unwrap();
-                        *out_data = core_data;
-                    }
+                    write_result_into_out(&out_arr, &core_data, vm)?;
                     return Ok((*out_arr).clone());
                 }
             }
             return Ok(result);
         }
-        let result = PyNdArray::from_core(self.data.read().unwrap().clip(min_val, max_val));
+        let input = if let Some(out_obj) = args.kwargs.get("out") {
+            if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
+                let self_data = self.data.read().unwrap();
+                let out_data = out_arr.data.read().unwrap();
+                if self_data.shares_memory_with(&out_data) {
+                    self_data.copy()
+                } else {
+                    self_data.clone()
+                }
+            } else {
+                self.data.read().unwrap().clone()
+            }
+        } else {
+            self.data.read().unwrap().clone()
+        };
+        let result = PyNdArray::from_core(input.clip(min_val, max_val));
 
         // If 'out' is provided, check casting compatibility then copy data into it
         if let Some(out_obj) = args.kwargs.get("out") {
@@ -2432,10 +2708,7 @@ impl PyNdArray {
                 }
                 let core_data = result.data.read().unwrap().clone();
                 drop(result);
-                {
-                    let mut out_data = out_arr.data.write().unwrap();
-                    *out_data = core_data;
-                }
+                write_result_into_out(&out_arr, &core_data, vm)?;
                 let cloned: PyNdArray = (*out_arr).clone();
                 return Ok(cloned);
             }
@@ -2677,6 +2950,21 @@ impl PyNdArray {
 
     #[pymethod]
     fn choose(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        fn write_result_into_out(
+            out_arr: &PyNdArray,
+            values: &NdArray,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            let ndim = out_arr.data.read().unwrap().ndim();
+            let full_slice = vec![SliceArg::Full; ndim];
+            out_arr
+                .data
+                .write()
+                .unwrap()
+                .set_slice(&full_slice, values)
+                .map_err(|e| numpy_err(e, vm))
+        }
+
         let choices_obj = args
             .args
             .first()
@@ -2731,10 +3019,7 @@ impl PyNdArray {
             if let Ok(out_arr) = out_obj.clone().downcast::<PyNdArray>() {
                 let core_data = result.data.read().unwrap().clone();
                 drop(result);
-                {
-                    let mut out_data = out_arr.data.write().unwrap();
-                    *out_data = core_data;
-                }
+                write_result_into_out(&out_arr, &core_data, vm)?;
                 let cloned: PyNdArray = (*out_arr).clone();
                 return Ok(cloned);
             }
@@ -2746,9 +3031,12 @@ impl PyNdArray {
     fn flags(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         let data = self.data.read().unwrap();
         let marked_fortran = self.is_fortran.load(Ordering::Relaxed);
+        let forced_noncontig = self.force_not_contiguous.load(Ordering::Relaxed);
         let ndim = data.ndim();
         let runtime_flags = data.flags();
-        let (is_c, is_f) = if marked_fortran && ndim > 1 {
+        let (is_c, is_f) = if forced_noncontig {
+            (false, false)
+        } else if marked_fortran && ndim > 1 {
             // Array was marked Fortran-order at creation
             (false, true)
         } else {
@@ -2756,19 +3044,20 @@ impl PyNdArray {
         };
         drop(data);
         let is_aligned = self.is_aligned.load(Ordering::Relaxed);
+        let is_writeable = self.is_writeable.load(Ordering::Relaxed);
         let mut map = HashMap::new();
         map.insert("C_CONTIGUOUS".into(), is_c);
         map.insert("F_CONTIGUOUS".into(), is_f);
         let owns_data = self.base.read().unwrap().is_none();
         map.insert("OWNDATA".into(), owns_data);
-        map.insert("WRITEABLE".into(), true);
+        map.insert("WRITEABLE".into(), is_writeable);
         map.insert("ALIGNED".into(), is_aligned);
         map.insert("WRITEBACKIFCOPY".into(), false);
         // Short aliases
         map.insert("C".into(), is_c);
         map.insert("F".into(), is_f);
         map.insert("O".into(), owns_data);
-        map.insert("W".into(), true);
+        map.insert("W".into(), is_writeable);
         map.insert("A".into(), is_aligned);
         // Additional aliases
         map.insert("CONTIGUOUS".into(), is_c);
@@ -2802,6 +3091,16 @@ impl PyNdArray {
     #[pymethod]
     fn _set_unaligned(&self) {
         self.is_aligned.store(false, Ordering::Relaxed);
+    }
+
+    #[pymethod]
+    fn _set_writeable(&self, value: bool) {
+        self.is_writeable.store(value, Ordering::Relaxed);
+    }
+
+    #[pymethod]
+    fn _set_noncontiguous(&self) {
+        self.force_not_contiguous.store(true, Ordering::Relaxed);
     }
 
     /// Check if this array shares its underlying buffer with another ndarray.
@@ -2877,9 +3176,16 @@ impl PyNdArray {
 
     #[pymethod]
     #[allow(unused_variables)]
-    fn setflags(&self, args: vm::function::FuncArgs) {
-        // No-op: flags are fixed in our implementation
-        // Accepts any combination of write=, align=, uic= kwargs
+    fn setflags(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) {
+        if let Some(write) = args.kwargs.get("write") {
+            if let Ok(value) = write.clone().try_into_value::<bool>(vm) {
+                self.is_writeable.store(value, Ordering::Relaxed);
+            }
+        } else if let Some(first) = args.args.first() {
+            if let Ok(value) = first.clone().try_into_value::<bool>(vm) {
+                self.is_writeable.store(value, Ordering::Relaxed);
+            }
+        }
     }
 
     #[pymethod]
@@ -2934,6 +3240,9 @@ fn check_invalid_errstate(result_obj: &PyObjectRef, vm: &VirtualMachine) -> PyRe
                     if let Ok(s) = val.try_into_value::<String>(vm) {
                         if let Some(arr) = result_obj.downcast_ref::<PyNdArray>() {
                             let data = arr.data.read().unwrap();
+                            if data.dtype().is_boxed() {
+                                return Ok(());
+                            }
                             let has_nan = data.has_nan();
                             if has_nan {
                                 if s == "raise" {
@@ -2977,6 +3286,9 @@ fn check_division_errstate(result_obj: &PyObjectRef, vm: &VirtualMachine) -> PyR
                         if s == "raise" {
                             if let Some(arr) = result_obj.downcast_ref::<PyNdArray>() {
                                 let data = arr.data.read().unwrap();
+                                if data.dtype().is_boxed() {
+                                    return Ok(());
+                                }
                                 if data.has_inf() || data.has_nan() {
                                     return Err(vm.new_exception_msg(
                                         vm.ctx.exceptions.floating_point_error.to_owned(),
@@ -3117,26 +3429,62 @@ fn number_float(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
             vm.new_type_error("only size-1 arrays can be converted to Python scalars".to_owned())
         );
     }
-    let s = data
-        .get(&vec![0; data.ndim()])
-        .map_err(|e| numpy_err(e, vm))?;
-    let v = match s {
-        Scalar::Bool(v) => {
-            if v {
-                1.0
-            } else {
-                0.0
+    let v = if data.dtype().is_boxed() {
+        match data
+            .get_boxed(&vec![0; data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?
+        {
+            BoxedScalar::Object(value) => match value {
+                BoxedObjectScalar::Bool(v) => {
+                    if v {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
+                BoxedObjectScalar::Int(v) => v as f64,
+                BoxedObjectScalar::Float(v) => v,
+                BoxedObjectScalar::Complex(v) => {
+                    if v.im != 0.0 {
+                        return Err(vm.new_type_error(
+                            "float() argument must be a string or a real number, not 'complex'"
+                                .to_owned(),
+                        ));
+                    }
+                    v.re
+                }
+                BoxedObjectScalar::Text(v) => v.parse::<f64>().map_err(|_| {
+                    vm.new_value_error(format!("could not convert string to float: '{v}'"))
+                })?,
+            },
+            BoxedScalar::Datetime(_) | BoxedScalar::Timedelta(_) => {
+                return Err(vm.new_type_error(
+                    "float() argument must be a string or a real number".to_owned(),
+                ))
             }
         }
-        Scalar::Int32(v) => v as f64,
-        Scalar::Int64(v) => v as f64,
-        Scalar::Float32(v) => v as f64,
-        Scalar::Float64(v) => v,
-        Scalar::Complex64(v) => v.re as f64,
-        Scalar::Complex128(v) => v.re,
-        Scalar::Str(v) => v
-            .parse::<f64>()
-            .map_err(|_| vm.new_value_error(format!("could not convert string to float: '{v}'")))?,
+    } else {
+        let s = data
+            .get(&vec![0; data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?;
+        match s {
+            Scalar::Bool(v) => {
+                if v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Scalar::Int32(v) => v as f64,
+            Scalar::Int64(v) => v as f64,
+            Scalar::Float32(v) => v as f64,
+            Scalar::Float64(v) => v,
+            Scalar::Complex64(v) => v.re as f64,
+            Scalar::Complex128(v) => v.re,
+            Scalar::Str(v) => v.parse::<f64>().map_err(|_| {
+                vm.new_value_error(format!("could not convert string to float: '{v}'"))
+            })?,
+        }
     };
     Ok(vm.ctx.new_float(v).into())
 }
@@ -3151,26 +3499,63 @@ fn number_int(num: vm::protocol::PyNumber, vm: &VirtualMachine) -> PyResult {
             vm.new_type_error("only size-1 arrays can be converted to Python scalars".to_owned())
         );
     }
-    let s = data
-        .get(&vec![0; data.ndim()])
-        .map_err(|e| numpy_err(e, vm))?;
-    let v = match s {
-        Scalar::Bool(v) => {
-            if v {
-                1i64
-            } else {
-                0
+    let v = if data.dtype().is_boxed() {
+        match data
+            .get_boxed(&vec![0; data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?
+        {
+            BoxedScalar::Object(value) => match value {
+                BoxedObjectScalar::Bool(v) => {
+                    if v {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                BoxedObjectScalar::Int(v) => v,
+                BoxedObjectScalar::Float(v) => v as i64,
+                BoxedObjectScalar::Complex(v) => {
+                    if v.im != 0.0 {
+                        return Err(vm.new_type_error(
+                            "int() argument must be a string, a bytes-like object or a real number, not 'complex'"
+                                .to_owned(),
+                        ));
+                    }
+                    v.re as i64
+                }
+                BoxedObjectScalar::Text(v) => v.parse::<i64>().map_err(|_| {
+                    vm.new_value_error(format!("could not convert string to int: '{v}'"))
+                })?,
+            },
+            BoxedScalar::Datetime(_) | BoxedScalar::Timedelta(_) => {
+                return Err(vm.new_type_error(
+                    "int() argument must be a string, a bytes-like object or a real number"
+                        .to_owned(),
+                ))
             }
         }
-        Scalar::Int32(v) => v as i64,
-        Scalar::Int64(v) => v,
-        Scalar::Float32(v) => v as i64,
-        Scalar::Float64(v) => v as i64,
-        Scalar::Complex64(v) => v.re as i64,
-        Scalar::Complex128(v) => v.re as i64,
-        Scalar::Str(v) => v
-            .parse::<i64>()
-            .map_err(|_| vm.new_value_error(format!("could not convert string to int: '{v}'")))?,
+    } else {
+        let s = data
+            .get(&vec![0; data.ndim()])
+            .map_err(|e| numpy_err(e, vm))?;
+        match s {
+            Scalar::Bool(v) => {
+                if v {
+                    1i64
+                } else {
+                    0
+                }
+            }
+            Scalar::Int32(v) => v as i64,
+            Scalar::Int64(v) => v,
+            Scalar::Float32(v) => v as i64,
+            Scalar::Float64(v) => v as i64,
+            Scalar::Complex64(v) => v.re as i64,
+            Scalar::Complex128(v) => v.re as i64,
+            Scalar::Str(v) => v.parse::<i64>().map_err(|_| {
+                vm.new_value_error(format!("could not convert string to int: '{v}'"))
+            })?,
+        }
     };
     Ok(vm.ctx.new_int(v).into())
 }
@@ -4234,17 +4619,13 @@ fn ndarray_to_pylist(data: &NdArray, vm: &VirtualMachine) -> PyObjectRef {
 
     if ndim == 0 {
         // 0-D: return plain scalar
-        let s = data.get(&[]).unwrap();
-        return typed_scalar_to_py(s, data.dtype(), vm);
+        return ndarray_scalar_to_py(data, &[], vm).unwrap();
     }
 
     if ndim == 1 {
         // 1-D: build flat list
         let items: Vec<PyObjectRef> = (0..shape[0])
-            .map(|i| {
-                let s = data.get(&[i]).unwrap();
-                typed_scalar_to_py(s, data.dtype(), vm)
-            })
+            .map(|i| ndarray_scalar_to_py(data, &[i], vm).unwrap())
             .collect();
         return PyList::from(items).into_ref(&vm.ctx).into();
     }
@@ -4322,6 +4703,17 @@ fn format_array(data: &NdArray, with_array_prefix: bool) -> String {
     let ndim = data.ndim();
 
     if ndim == 0 {
+        if data.dtype().is_boxed() {
+            let val = data
+                .get_boxed(&[])
+                .map(|s| format_boxed_scalar(&s))
+                .unwrap_or_else(|_| "object".to_owned());
+            return if with_array_prefix {
+                format!("array({val})")
+            } else {
+                val
+            };
+        }
         let s = data.get(&[]).unwrap();
         let val = format_scalar(&s);
         return if with_array_prefix {
@@ -4352,18 +4744,33 @@ fn format_array_inner(data: &NdArray, depth: usize) -> String {
         let mut parts = Vec::new();
         if truncate {
             for i in 0..EDGE_ITEMS {
-                let s = data.get(&[i]).unwrap();
-                parts.push(format_scalar(&s));
+                parts.push(if data.dtype().is_boxed() {
+                    data.get_boxed(&[i])
+                        .map(|s| format_boxed_scalar(&s))
+                        .unwrap_or_else(|_| "object".to_owned())
+                } else {
+                    format_scalar(&data.get(&[i]).unwrap())
+                });
             }
             parts.push("...".to_owned());
             for i in (n - EDGE_ITEMS)..n {
-                let s = data.get(&[i]).unwrap();
-                parts.push(format_scalar(&s));
+                parts.push(if data.dtype().is_boxed() {
+                    data.get_boxed(&[i])
+                        .map(|s| format_boxed_scalar(&s))
+                        .unwrap_or_else(|_| "object".to_owned())
+                } else {
+                    format_scalar(&data.get(&[i]).unwrap())
+                });
             }
         } else {
             for i in 0..n {
-                let s = data.get(&[i]).unwrap();
-                parts.push(format_scalar(&s));
+                parts.push(if data.dtype().is_boxed() {
+                    data.get_boxed(&[i])
+                        .map(|s| format_boxed_scalar(&s))
+                        .unwrap_or_else(|_| "object".to_owned())
+                } else {
+                    format_scalar(&data.get(&[i]).unwrap())
+                });
             }
         }
         return format!("[{}]", parts.join(", "));

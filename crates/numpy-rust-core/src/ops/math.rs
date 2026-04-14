@@ -1,5 +1,6 @@
 use num_complex::Complex;
 
+use crate::array::{BoxedObjectScalar, BoxedScalar};
 use crate::array_data::ArrayData;
 use crate::broadcasting::{broadcast_array_data, broadcast_shape};
 use crate::casting::cast_array_data;
@@ -10,14 +11,17 @@ use crate::kernel::{
     DecomposeUnaryKernelOp, MathBinaryKernelOp, MathUnaryKernelOp, RealBinaryKernelOp,
     RealUnaryKernelOp, ValueUnaryKernelOp,
 };
+use crate::ops::comparison::{
+    boxed_execution_dtype, boxed_scalar_for_coord, compare_boxed_scalars, iter_boxed_coords,
+};
 use crate::NdArray;
 
 fn map_complex_data<R>(
-    data: &ArrayData,
+    data: impl AsRef<ArrayData>,
     on64: impl FnOnce(&ndarray::ArcArray<Complex<f32>, ndarray::IxDyn>) -> R,
     on128: impl FnOnce(&ndarray::ArcArray<Complex<f64>, ndarray::IxDyn>) -> R,
 ) -> Option<R> {
-    match data {
+    match data.as_ref() {
         ArrayData::Complex64(a) => Some(on64(a)),
         ArrayData::Complex128(a) => Some(on128(a)),
         _ => None,
@@ -84,7 +88,8 @@ fn update_complex128_component(
 
 /// Helper: ensure array is floating-point (cast int/bool to f64, matching NumPy behavior).
 /// Complex types are kept as-is.
-fn ensure_float(data: &ArrayData) -> ArrayData {
+fn ensure_float(data: impl AsRef<ArrayData>) -> ArrayData {
+    let data = data.as_ref();
     if data.dtype().is_string() {
         // Cast string to float64 — non-numeric strings become NaN
         return cast_array_data(data, DType::Float64);
@@ -143,6 +148,13 @@ fn execute_real_math_binary(
     op: MathBinaryKernelOp,
     op_name: &'static str,
 ) -> Result<NdArray> {
+    if matches!(
+        op,
+        MathBinaryKernelOp::Maximum | MathBinaryKernelOp::Minimum
+    ) && (lhs.dtype().is_boxed() || rhs.dtype().is_boxed())
+    {
+        return execute_boxed_extrema(lhs, rhs, op);
+    }
     if lhs.dtype().is_complex() || rhs.dtype().is_complex() {
         return Err(NumpyError::TypeError(format!(
             "{op_name} not supported for complex arrays"
@@ -168,6 +180,54 @@ fn execute_real_math_binary(
     Ok(NdArray::from_data(
         kernel(lhs_data, rhs_data).expect("math binary kernel dtype mismatch"),
     ))
+}
+
+fn choose_boxed_extrema(
+    lhs: BoxedScalar,
+    rhs: BoxedScalar,
+    choose_max: bool,
+) -> Result<BoxedScalar> {
+    match (&lhs, &rhs) {
+        (BoxedScalar::Datetime(a), BoxedScalar::Datetime(b))
+        | (BoxedScalar::Timedelta(a), BoxedScalar::Timedelta(b)) => {
+            if a.is_nat {
+                return Ok(lhs);
+            }
+            if b.is_nat {
+                return Ok(rhs);
+            }
+        }
+        _ => {}
+    }
+
+    let cmp = compare_boxed_scalars(&lhs, &rhs)?;
+    let pick_lhs = if choose_max {
+        matches!(
+            cmp,
+            Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
+        )
+    } else {
+        matches!(
+            cmp,
+            Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
+        )
+    };
+    Ok(if pick_lhs { lhs } else { rhs })
+}
+
+fn execute_boxed_extrema(lhs: &NdArray, rhs: &NdArray, op: MathBinaryKernelOp) -> Result<NdArray> {
+    let out_shape = broadcast_shape(lhs.shape(), rhs.shape())?;
+    let execution_dtype = boxed_execution_dtype(lhs, rhs)?;
+    let choose_max = matches!(op, MathBinaryKernelOp::Maximum);
+    let mut out = Vec::with_capacity(out_shape.iter().product());
+
+    for coord in iter_boxed_coords(&out_shape) {
+        let lhs_scalar = boxed_scalar_for_coord(lhs, execution_dtype, &coord, &out_shape)?;
+        let rhs_scalar = boxed_scalar_for_coord(rhs, execution_dtype, &coord, &out_shape)?;
+        out.push(choose_boxed_extrema(lhs_scalar, rhs_scalar, choose_max)?);
+    }
+
+    NdArray::from_boxed_scalars(out, &out_shape, execution_dtype)
 }
 
 fn execute_real_unary(
@@ -355,6 +415,9 @@ impl NdArray {
     /// Element-wise absolute value. Works on int and float types.
     /// For complex types, returns the magnitude (norm) as a float.
     pub fn abs(&self) -> NdArray {
+        if self.dtype() == DType::Object {
+            return boxed_object_abs(self).expect("object abs should preserve boxed runtime");
+        }
         let result = match self.data() {
             ArrayData::Bool(a) => ArrayData::Bool(a.clone()),
             ArrayData::Int32(a) => ArrayData::Int32(a.mapv(|x| x.abs()).into_shared()),
@@ -398,14 +461,14 @@ impl NdArray {
         match self.data() {
             ArrayData::Complex64(a) => {
                 if let Some(new_data) =
-                    update_complex32_component(a, real_values, |c, re| Complex::new(re, c.im))
+                    update_complex32_component(&a, real_values, |c, re| Complex::new(re, c.im))
                 {
                     self.replace_data_with_dtype(new_data, DType::Complex64);
                 }
             }
             ArrayData::Complex128(a) => {
                 if let Some(new_data) =
-                    update_complex128_component(a, real_values, |c, re| Complex::new(re, c.im))
+                    update_complex128_component(&a, real_values, |c, re| Complex::new(re, c.im))
                 {
                     self.replace_data_with_dtype(new_data, DType::Complex128);
                 }
@@ -422,14 +485,14 @@ impl NdArray {
         match self.data() {
             ArrayData::Complex64(a) => {
                 if let Some(new_data) =
-                    update_complex32_component(a, imag_values, |c, im| Complex::new(c.re, im))
+                    update_complex32_component(&a, imag_values, |c, im| Complex::new(c.re, im))
                 {
                     self.replace_data_with_dtype(new_data, DType::Complex64);
                 }
             }
             ArrayData::Complex128(a) => {
                 if let Some(new_data) =
-                    update_complex128_component(a, imag_values, |c, im| Complex::new(c.re, im))
+                    update_complex128_component(&a, imag_values, |c, im| Complex::new(c.re, im))
                 {
                     self.replace_data_with_dtype(new_data, DType::Complex128);
                 }
@@ -442,6 +505,10 @@ impl NdArray {
 
     /// Return the complex conjugate.
     pub fn conj(&self) -> NdArray {
+        if self.dtype() == DType::Object {
+            return boxed_object_conj(self)
+                .expect("object conjugate should preserve boxed runtime");
+        }
         map_complex_data(
             self.data(),
             |a| NdArray::from_data(ArrayData::Complex64(a.mapv(|c| c.conj()).into_shared())),
@@ -497,12 +564,84 @@ impl NdArray {
     }
 }
 
+fn boxed_object_abs(array: &NdArray) -> Result<NdArray> {
+    let storage = array
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("object abs requires boxed storage".into()))?;
+    let elements = storage
+        .elements()?
+        .into_iter()
+        .map(|value| match value {
+            BoxedScalar::Object(BoxedObjectScalar::Bool(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Int(if v {
+                    1
+                } else {
+                    0
+                })))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Int(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Int(v.abs())))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Float(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Float(v.abs())))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Complex(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Float(v.norm())))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Text(_)) => Err(NumpyError::TypeError(
+                "bad operand type for abs(): 'str'".into(),
+            )),
+            other => Err(NumpyError::TypeError(format!(
+                "abs not supported for boxed scalar {:?}",
+                other
+            ))),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    NdArray::from_boxed_scalars(elements, array.shape(), DType::Object)
+}
+
+fn boxed_object_conj(array: &NdArray) -> Result<NdArray> {
+    let storage = array
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("object conjugate requires boxed storage".into()))?;
+    let elements = storage
+        .elements()?
+        .into_iter()
+        .map(|value| match value {
+            BoxedScalar::Object(BoxedObjectScalar::Complex(v)) => {
+                BoxedScalar::Object(BoxedObjectScalar::Complex(v.conj()))
+            }
+            BoxedScalar::Object(other) => BoxedScalar::Object(other),
+            other => other,
+        })
+        .collect::<Vec<_>>();
+    NdArray::from_boxed_scalars(elements, array.shape(), DType::Object)
+}
+
 impl NdArray {
     /// Element-wise arctan2(self, other) — the angle of (other, self) from the positive x-axis.
     /// self=y, other=x. Result is in [-pi, pi].
     /// Not supported for complex arrays.
     pub fn arctan2(&self, other: &NdArray) -> Result<NdArray> {
         execute_real_binary(self, other, RealBinaryKernelOp::ArcTan2, "arctan2")
+    }
+
+    pub fn clip_boxed(&self, a_min: Option<&NdArray>, a_max: Option<&NdArray>) -> Result<NdArray> {
+        if !self.dtype().is_boxed() {
+            return Err(NumpyError::TypeError(
+                "clip_boxed requires boxed dtype input".into(),
+            ));
+        }
+        let mut result = self.clone();
+        if let Some(min_arr) = a_min {
+            result = result.maximum(min_arr)?;
+        }
+        if let Some(max_arr) = a_max {
+            result = result.minimum(max_arr)?;
+        }
+        Ok(result)
     }
 
     /// Clip (limit) array values to [a_min, a_max].
@@ -954,6 +1093,34 @@ mod tests {
     }
 
     #[test]
+    fn test_object_abs_and_conj() {
+        use crate::{BoxedObjectScalar, BoxedScalar};
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Int(-2)),
+                BoxedScalar::Object(BoxedObjectScalar::Complex(Complex::new(3.0, 4.0))),
+            ],
+            &[2],
+            DType::Object,
+        )
+        .unwrap();
+        let abs = a.abs();
+        assert_eq!(
+            abs.get_boxed(&[0]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Int(2))
+        );
+        assert_eq!(
+            abs.get_boxed(&[1]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Float(5.0))
+        );
+        let conj = a.conj();
+        assert_eq!(
+            conj.get_boxed(&[1]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Complex(Complex::new(3.0, -4.0)))
+        );
+    }
+
+    #[test]
     fn test_angle() {
         let a = NdArray::from_complex128_vec(vec![Complex::new(1.0, 0.0)]);
         let ang = a.angle();
@@ -1211,6 +1378,60 @@ mod tests {
         assert!(vals[0].is_nan()); // NAN propagates
         assert!(vals[1].is_nan()); // NAN propagates
         assert_eq!(vals[2], 3.0);
+    }
+
+    #[test]
+    fn test_maximum_object_uses_boxed_runtime() {
+        use crate::array::{BoxedObjectScalar, BoxedScalar};
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Int(1)),
+                BoxedScalar::Object(BoxedObjectScalar::Int(5)),
+            ],
+            &[2],
+            DType::Object,
+        )
+        .unwrap();
+        let b = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Int(3)),
+                BoxedScalar::Object(BoxedObjectScalar::Int(2)),
+            ],
+            &[2],
+            DType::Object,
+        )
+        .unwrap();
+        let r = a.maximum(&b).unwrap();
+        assert_eq!(
+            vec![r.get_boxed(&[0]).unwrap(), r.get_boxed(&[1]).unwrap()],
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Int(3)),
+                BoxedScalar::Object(BoxedObjectScalar::Int(5)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_minimum_datetime_nat_propagates_in_boxed_runtime() {
+        use crate::array::{BoxedScalar, BoxedTemporalScalar};
+        let a = NdArray::from_boxed_scalars(
+            vec![BoxedScalar::Datetime(BoxedTemporalScalar {
+                value: 1,
+                unit: "D".into(),
+                is_nat: false,
+            })],
+            &[],
+            DType::Datetime64,
+        )
+        .unwrap();
+        let nat = BoxedScalar::Datetime(BoxedTemporalScalar {
+            value: 0,
+            unit: "D".into(),
+            is_nat: true,
+        });
+        let b = NdArray::from_boxed_scalars(vec![nat.clone()], &[], DType::Datetime64).unwrap();
+        let r = a.minimum(&b).unwrap();
+        assert_eq!(r.get_boxed(&[]).unwrap(), nat);
     }
 
     #[test]

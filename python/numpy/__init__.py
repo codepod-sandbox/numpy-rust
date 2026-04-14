@@ -173,6 +173,7 @@ class StructuredArray:
         object.__setattr__(self, 'dtype', dt)
         # _py_shape: None = use Rust 1D shape; tuple = Python-tracked multi-D shape
         object.__setattr__(self, '_py_shape', tuple(py_shape) if py_shape is not None else None)
+        object.__setattr__(self, '_writeable', True)
 
     def __getitem__(self, key):
         native = object.__getattribute__(self, '_native_arr')
@@ -238,6 +239,12 @@ class StructuredArray:
             # Structured field views are unaligned (interleaved memory semantics)
             if hasattr(result, '_set_unaligned'):
                 result._set_unaligned()
+            if hasattr(result, '_set_noncontiguous'):
+                result._set_noncontiguous()
+            if hasattr(result, '_set_base'):
+                result._set_base(self)
+            if hasattr(result, '_set_writeable'):
+                result._set_writeable(bool(self.flags.writeable))
             return result
 
         # Integer key (1D) → void scalar
@@ -310,7 +317,9 @@ class StructuredArray:
     @property
     def flags(self):
         from ._helpers import _ArrayFlags
-        return _ArrayFlags(c_contiguous=True, f_contiguous=False)
+        flags = _ArrayFlags(c_contiguous=True, f_contiguous=False)
+        flags.writeable = bool(object.__getattribute__(self, '_writeable'))
+        return flags
 
     def copy(self):
         """Return a deep copy of this structured array."""
@@ -334,8 +343,9 @@ class StructuredArray:
         return result
 
     def setflags(self, write=None, align=None, uic=None):
-        """Set array flags (stub for compatibility)."""
-        pass
+        """Set array flags (minimal compatibility)."""
+        if write is not None:
+            object.__setattr__(self, '_writeable', bool(write))
 
     def astype(self, dtype):
         """Return a copy with the given dtype (stub — returns self for same dtype)."""

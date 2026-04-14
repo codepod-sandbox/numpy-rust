@@ -17,7 +17,8 @@ pub fn narrow_truncate(data: ArrayData, dtype: DType) -> ArrayData {
 /// Cast an ArrayData to a different dtype.
 /// If already the target dtype, returns a clone.
 /// For narrow dtypes, casts to the storage type instead.
-pub fn cast_array_data(data: &ArrayData, target: DType) -> ArrayData {
+pub fn cast_array_data(data: impl AsRef<ArrayData>, target: DType) -> ArrayData {
+    let data = data.as_ref();
     let plan = resolve_cast(data.dtype(), target, CastingRule::Unsafe)
         .expect("resolver must approve unsafe backend casts");
 

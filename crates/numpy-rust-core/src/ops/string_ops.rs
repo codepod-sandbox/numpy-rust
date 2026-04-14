@@ -4,7 +4,7 @@ use crate::error::{NumpyError, Result};
 use crate::NdArray;
 
 /// Helper: ensure the array is of string dtype.
-fn require_string_data(arr: &NdArray) -> Result<&ArrayD<String>> {
+fn require_string_data(arr: &NdArray) -> Result<ArrayD<String>> {
     match arr.data() {
         ArrayData::Str(a) => Ok(a),
         _ => Err(NumpyError::TypeError(

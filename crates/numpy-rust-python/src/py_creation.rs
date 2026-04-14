@@ -4,7 +4,7 @@ use vm::builtins::{PyList, PyStr, PyTuple};
 use vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine};
 
 use numpy_rust_core::indexing::Scalar;
-use numpy_rust_core::{DType, NdArray};
+use numpy_rust_core::{BoxedObjectScalar, BoxedScalar, BoxedTemporalScalar, DType, NdArray};
 
 use crate::py_array::{extract_shape, parse_dtype, PyNdArray};
 
@@ -13,11 +13,146 @@ enum SequenceKind {
     Bools,
     Floats,
     Complexes,
+    Objects,
+    Datetimes,
+    Timedeltas,
+}
+
+fn extract_temporal_boxed_scalar(
+    obj: &vm::PyObject,
+    dtype: DType,
+    unit_hint: Option<&str>,
+    vm: &VirtualMachine,
+) -> PyResult<BoxedScalar> {
+    if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+        if let Ok(value) = i.try_to_primitive::<i64>(vm) {
+            let scalar = BoxedTemporalScalar {
+                value,
+                unit: unit_hint.unwrap_or("ns").to_owned(),
+                is_nat: false,
+            };
+            return Ok(match dtype {
+                DType::Datetime64 => BoxedScalar::Datetime(scalar),
+                DType::Timedelta64 => BoxedScalar::Timedelta(scalar),
+                _ => unreachable!("temporal boxed scalar requires temporal dtype"),
+            });
+        }
+    }
+    let value = obj.get_attr("_value", vm)?.try_into_value::<i64>(vm)?;
+    let unit = obj.get_attr("_unit", vm)?.try_into_value::<String>(vm)?;
+    let is_nat = obj.get_attr("_is_nat", vm)?.try_into_value::<bool>(vm)?;
+    let scalar = BoxedTemporalScalar {
+        value,
+        unit,
+        is_nat,
+    };
+    Ok(match dtype {
+        DType::Datetime64 => BoxedScalar::Datetime(scalar),
+        DType::Timedelta64 => BoxedScalar::Timedelta(scalar),
+        _ => unreachable!("temporal boxed scalar requires temporal dtype"),
+    })
+}
+
+fn object_scalar_to_boxed(obj: &vm::PyObject, vm: &VirtualMachine) -> PyResult<BoxedScalar> {
+    if obj.class().is(vm.ctx.types.bool_type) {
+        return Ok(BoxedScalar::Object(BoxedObjectScalar::Bool(
+            obj.to_owned().try_into_value::<bool>(vm)?,
+        )));
+    }
+    if let Some(c) = obj.downcast_ref::<vm::builtins::PyComplex>() {
+        let value = c.to_complex();
+        return Ok(BoxedScalar::Object(BoxedObjectScalar::Complex(
+            Complex::new(value.re, value.im),
+        )));
+    }
+    if let Some(s) = obj.downcast_ref::<PyStr>() {
+        return Ok(BoxedScalar::Object(BoxedObjectScalar::Text(
+            s.as_str().to_owned(),
+        )));
+    }
+    if let Ok(c) = obj
+        .to_owned()
+        .try_into_value::<vm::function::ArgIntoComplex>(vm)
+    {
+        let value = c.into_complex();
+        if value.im != 0.0 {
+            return Ok(BoxedScalar::Object(BoxedObjectScalar::Complex(
+                Complex::new(value.re, value.im),
+            )));
+        }
+    }
+    if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
+        if let Ok(value) = i.try_to_primitive::<i64>(vm) {
+            return Ok(BoxedScalar::Object(BoxedObjectScalar::Int(value)));
+        }
+    }
+    if let Ok(f) = obj.to_owned().try_into_value::<f64>(vm) {
+        return Ok(BoxedScalar::Object(BoxedObjectScalar::Float(f)));
+    }
+    Err(vm.new_type_error(format!(
+        "object dtype does not yet support values of type {}",
+        obj.class().name()
+    )))
+}
+
+fn boxed_scalar_for_dtype(
+    obj: &vm::PyObject,
+    dtype: DType,
+    temporal_unit: Option<&str>,
+    vm: &VirtualMachine,
+) -> PyResult<BoxedScalar> {
+    match dtype {
+        DType::Object => object_scalar_to_boxed(obj, vm),
+        DType::Datetime64 => {
+            extract_temporal_boxed_scalar(obj, DType::Datetime64, temporal_unit, vm)
+        }
+        DType::Timedelta64 => {
+            extract_temporal_boxed_scalar(obj, DType::Timedelta64, temporal_unit, vm)
+        }
+        _ => Err(vm.new_type_error(format!(
+            "boxed scalar conversion requires boxed dtype, got {dtype}"
+        ))),
+    }
+}
+
+fn infer_temporal_dtype(obj: &vm::PyObject, vm: &VirtualMachine) -> Option<DType> {
+    if obj
+        .get_attr("_is_datetime64", vm)
+        .ok()
+        .and_then(|v| v.try_into_value::<bool>(vm).ok())
+        == Some(true)
+    {
+        return Some(DType::Datetime64);
+    }
+    if obj
+        .get_attr("_is_timedelta64", vm)
+        .ok()
+        .and_then(|v| v.try_into_value::<bool>(vm).ok())
+        == Some(true)
+    {
+        return Some(DType::Timedelta64);
+    }
+    None
+}
+
+fn boxed_scalar_ndarray_with_dtype(
+    obj: &vm::PyObject,
+    dtype: DType,
+    temporal_unit: Option<&str>,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    NdArray::from_boxed_scalars(
+        vec![boxed_scalar_for_dtype(obj, dtype, temporal_unit, vm)?],
+        &[],
+        dtype,
+    )
+    .map_err(|e| vm.new_type_error(e.to_string()))
 }
 
 fn scalar_ndarray_with_dtype(
     obj: &vm::PyObject,
     dtype: Option<DType>,
+    temporal_unit: Option<&str>,
     vm: &VirtualMachine,
 ) -> PyResult<NdArray> {
     let dtype = if let Some(dtype) = dtype {
@@ -28,6 +163,14 @@ fn scalar_ndarray_with_dtype(
     } else {
         None
     };
+
+    if let Some(dtype) = dtype {
+        if dtype.is_boxed() {
+            return boxed_scalar_ndarray_with_dtype(obj, dtype, temporal_unit, vm);
+        }
+    } else if let Some(temporal) = infer_temporal_dtype(obj, vm) {
+        return boxed_scalar_ndarray_with_dtype(obj, temporal, temporal_unit, vm);
+    }
 
     if obj.class().is(vm.ctx.types.bool_type) {
         let value = obj.to_owned().try_into_value::<bool>(vm)?;
@@ -70,7 +213,9 @@ fn scalar_ndarray_with_dtype(
 
     if let Some(i) = obj.downcast_ref::<vm::builtins::PyInt>() {
         if let Ok(value) = i.try_to_primitive::<i64>(vm) {
-            let arr = NdArray::from_scalar(value as f64);
+            let arr = NdArray::from_vec(vec![value])
+                .reshape(&[])
+                .map_err(|e| vm.new_type_error(e.to_string()))?;
             return Ok(match dtype {
                 Some(dt) => arr.astype(dt),
                 None => arr,
@@ -89,9 +234,36 @@ fn scalar_ndarray_with_dtype(
     Err(vm.new_type_error(format!("cannot convert {} to array", obj.class().name())))
 }
 
-fn classify_sequence(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<SequenceKind> {
+fn classify_sequence(
+    items: &[PyObjectRef],
+    forced_dtype: Option<DType>,
+    vm: &VirtualMachine,
+) -> PyResult<SequenceKind> {
+    if let Some(dtype) = forced_dtype {
+        return match dtype {
+            DType::Object => Ok(SequenceKind::Objects),
+            DType::Datetime64 => Ok(SequenceKind::Datetimes),
+            DType::Timedelta64 => Ok(SequenceKind::Timedeltas),
+            _ => classify_sequence(items, None, vm),
+        };
+    }
+
     if items.is_empty() {
         return Ok(SequenceKind::Floats);
+    }
+
+    if items
+        .iter()
+        .all(|item| infer_temporal_dtype(item, vm) == Some(DType::Datetime64))
+    {
+        return Ok(SequenceKind::Datetimes);
+    }
+
+    if items
+        .iter()
+        .all(|item| infer_temporal_dtype(item, vm) == Some(DType::Timedelta64))
+    {
+        return Ok(SequenceKind::Timedeltas);
     }
 
     let has_string = items
@@ -132,6 +304,8 @@ fn classify_sequence(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<Seq
 fn build_sequence_array(
     items: &[PyObjectRef],
     kind: SequenceKind,
+    forced_dtype: Option<DType>,
+    temporal_unit: Option<&str>,
     vm: &VirtualMachine,
 ) -> PyResult<NdArray> {
     match kind {
@@ -198,12 +372,50 @@ fn build_sequence_array(
                 .collect::<PyResult<Vec<_>>>()?;
             Ok(NdArray::from_complex128_vec(values))
         }
+        SequenceKind::Objects => NdArray::from_boxed_scalars(
+            items
+                .iter()
+                .map(|item| boxed_scalar_for_dtype(item, DType::Object, temporal_unit, vm))
+                .collect::<PyResult<Vec<_>>>()?,
+            &[items.len()],
+            DType::Object,
+        )
+        .map_err(|e| vm.new_type_error(e.to_string())),
+        SequenceKind::Datetimes => {
+            let dtype = forced_dtype.unwrap_or(DType::Datetime64);
+            NdArray::from_boxed_scalars(
+                items
+                    .iter()
+                    .map(|item| boxed_scalar_for_dtype(item, DType::Datetime64, temporal_unit, vm))
+                    .collect::<PyResult<Vec<_>>>()?,
+                &[items.len()],
+                dtype,
+            )
+            .map_err(|e| vm.new_type_error(e.to_string()))
+        }
+        SequenceKind::Timedeltas => {
+            let dtype = forced_dtype.unwrap_or(DType::Timedelta64);
+            NdArray::from_boxed_scalars(
+                items
+                    .iter()
+                    .map(|item| boxed_scalar_for_dtype(item, DType::Timedelta64, temporal_unit, vm))
+                    .collect::<PyResult<Vec<_>>>()?,
+                &[items.len()],
+                dtype,
+            )
+            .map_err(|e| vm.new_type_error(e.to_string()))
+        }
     }
 }
 
-fn flat_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
-    let kind = classify_sequence(items, vm)?;
-    build_sequence_array(items, kind, vm)
+fn flat_sequence_to_ndarray(
+    items: &[PyObjectRef],
+    dtype: Option<DType>,
+    temporal_unit: Option<&str>,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    let kind = classify_sequence(items, dtype, vm)?;
+    build_sequence_array(items, kind, dtype, temporal_unit, vm)
 }
 
 fn flatten_nested_sequence(
@@ -239,17 +451,30 @@ fn flatten_nested_sequence(
     Ok((flat, nrows, ncols.unwrap_or(0)))
 }
 
-fn nested_sequence_to_ndarray(items: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<NdArray> {
+fn nested_sequence_to_ndarray(
+    items: &[PyObjectRef],
+    dtype: Option<DType>,
+    temporal_unit: Option<&str>,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
     let (flat, nrows, ncols) = flatten_nested_sequence(items, vm)?;
-    let kind = classify_sequence(&flat, vm)?;
-    build_sequence_array(&flat, kind, vm)?
+    let kind = classify_sequence(&flat, dtype, vm)?;
+    build_sequence_array(&flat, kind, dtype, temporal_unit, vm)?
         .reshape(&[nrows, ncols])
         .map_err(|e| vm.new_value_error(e.to_string()))
 }
 
-pub fn object_to_ndarray(data: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
+fn object_to_ndarray_with_dtype_and_unit(
+    data: &vm::PyObject,
+    dtype: Option<DType>,
+    temporal_unit: Option<&str>,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
     if let Some(arr) = data.downcast_ref::<PyNdArray>() {
-        return Ok(arr.inner().clone());
+        return Ok(match dtype {
+            Some(target) if target != arr.inner().dtype() => arr.inner().astype(target),
+            _ => arr.inner().clone(),
+        });
     }
 
     if let Some(list) = data.downcast_ref::<PyList>() {
@@ -258,9 +483,9 @@ pub fn object_to_ndarray(data: &vm::PyObject, vm: &VirtualMachine) -> PyResult<N
             && (items[0].downcast_ref::<PyList>().is_some()
                 || items[0].downcast_ref::<PyTuple>().is_some())
         {
-            return nested_sequence_to_ndarray(&items, vm);
+            return nested_sequence_to_ndarray(&items, dtype, temporal_unit, vm);
         }
-        return flat_sequence_to_ndarray(&items, vm);
+        return flat_sequence_to_ndarray(&items, dtype, temporal_unit, vm);
     }
 
     if let Some(tuple) = data.downcast_ref::<PyTuple>() {
@@ -269,12 +494,24 @@ pub fn object_to_ndarray(data: &vm::PyObject, vm: &VirtualMachine) -> PyResult<N
             && (items[0].downcast_ref::<PyList>().is_some()
                 || items[0].downcast_ref::<PyTuple>().is_some())
         {
-            return nested_sequence_to_ndarray(items, vm);
+            return nested_sequence_to_ndarray(items, dtype, temporal_unit, vm);
         }
-        return flat_sequence_to_ndarray(items, vm);
+        return flat_sequence_to_ndarray(items, dtype, temporal_unit, vm);
     }
 
-    scalar_ndarray_with_dtype(data, None, vm)
+    scalar_ndarray_with_dtype(data, dtype, temporal_unit, vm)
+}
+
+pub fn object_to_ndarray_with_dtype(
+    data: &vm::PyObject,
+    dtype: Option<DType>,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    object_to_ndarray_with_dtype_and_unit(data, dtype, None, vm)
+}
+
+pub fn object_to_ndarray(data: &vm::PyObject, vm: &VirtualMachine) -> PyResult<NdArray> {
+    object_to_ndarray_with_dtype(data, None, vm)
 }
 
 pub fn is_array_like_object(obj: &vm::PyObject, vm: &VirtualMachine) -> bool {
@@ -286,6 +523,9 @@ pub fn object_to_ndarray_weak(
     target_dtype: DType,
     vm: &VirtualMachine,
 ) -> PyResult<NdArray> {
+    if target_dtype.is_boxed() {
+        return object_to_ndarray_with_dtype(obj, Some(target_dtype), vm);
+    }
     if is_array_like_object(obj, vm) || obj.class().is(vm.ctx.types.bool_type) {
         return object_to_ndarray(obj, vm);
     }
@@ -335,33 +575,111 @@ pub fn object_to_scalar(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Scal
 }
 
 /// numpy.array(data) — convert a Python list to an NdArray.
-pub fn py_array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-    object_to_ndarray(&data, vm).map(PyNdArray::from_core)
+pub fn py_array(
+    data: PyObjectRef,
+    dtype: Option<DType>,
+    vm: &VirtualMachine,
+) -> PyResult<PyNdArray> {
+    object_to_ndarray_with_dtype(&data, dtype, vm).map(PyNdArray::from_core)
+}
+
+fn extract_temporal_unit(dtype_name: &str) -> Option<&str> {
+    let start = dtype_name.find('[')?;
+    let end = dtype_name[start + 1..].find(']')?;
+    Some(&dtype_name[start + 1..start + 1 + end])
+}
+
+pub fn py_array_with_dtype_name(
+    data: PyObjectRef,
+    dtype_name: &str,
+    vm: &VirtualMachine,
+) -> PyResult<PyNdArray> {
+    let dtype = parse_dtype(dtype_name, vm)?;
+    let temporal_unit = if matches!(dtype, DType::Datetime64 | DType::Timedelta64) {
+        extract_temporal_unit(dtype_name)
+    } else {
+        None
+    };
+    object_to_ndarray_with_dtype_and_unit(&data, Some(dtype), temporal_unit, vm)
+        .map(PyNdArray::from_core)
+}
+
+fn temporal_fill_array(
+    shape: &[usize],
+    dtype: DType,
+    unit: Option<&str>,
+    value: i64,
+    vm: &VirtualMachine,
+) -> PyResult<NdArray> {
+    let total = shape.iter().product::<usize>();
+    let scalar = BoxedTemporalScalar {
+        value,
+        unit: unit.unwrap_or("generic").to_owned(),
+        is_nat: false,
+    };
+    let elements = match dtype {
+        DType::Datetime64 => vec![BoxedScalar::Datetime(scalar); total],
+        DType::Timedelta64 => vec![BoxedScalar::Timedelta(scalar); total],
+        _ => unreachable!("temporal fill array requires temporal dtype"),
+    };
+    NdArray::from_boxed_scalars(elements, shape, dtype)
+        .map_err(|e| vm.new_type_error(e.to_string()))
 }
 
 /// numpy.zeros(shape, dtype)
 pub fn py_zeros(
     shape_obj: &PyObjectRef,
-    dtype: Option<DType>,
+    dtype_name: Option<&str>,
     vm: &VirtualMachine,
 ) -> PyResult<PyNdArray> {
     let shape = extract_shape(shape_obj, vm)?;
-    Ok(PyNdArray::from_core(NdArray::zeros(
-        &shape,
-        dtype.unwrap_or(DType::Float64),
-    )))
+    let (dtype, temporal_unit) = match dtype_name {
+        Some(name) => {
+            let parsed = parse_dtype(name, vm)?;
+            let unit = if matches!(parsed, DType::Datetime64 | DType::Timedelta64) {
+                extract_temporal_unit(name)
+            } else {
+                None
+            };
+            (parsed, unit)
+        }
+        None => (DType::Float64, None),
+    };
+    let arr = match dtype {
+        DType::Datetime64 | DType::Timedelta64 => {
+            temporal_fill_array(&shape, dtype, temporal_unit, 0, vm)?
+        }
+        _ => NdArray::zeros(&shape, dtype),
+    };
+    Ok(PyNdArray::from_core(arr))
 }
 
 /// numpy.ones(shape, dtype)
 pub fn py_ones(
     shape_obj: &PyObjectRef,
-    dtype: Option<DType>,
+    dtype_name: Option<&str>,
     vm: &VirtualMachine,
 ) -> PyResult<PyNdArray> {
-    Ok(PyNdArray::from_core(NdArray::ones(
-        &extract_shape(shape_obj, vm)?,
-        dtype.unwrap_or(DType::Float64),
-    )))
+    let shape = extract_shape(shape_obj, vm)?;
+    let (dtype, temporal_unit) = match dtype_name {
+        Some(name) => {
+            let parsed = parse_dtype(name, vm)?;
+            let unit = if matches!(parsed, DType::Datetime64 | DType::Timedelta64) {
+                extract_temporal_unit(name)
+            } else {
+                None
+            };
+            (parsed, unit)
+        }
+        None => (DType::Float64, None),
+    };
+    let arr = match dtype {
+        DType::Datetime64 | DType::Timedelta64 => {
+            temporal_fill_array(&shape, dtype, temporal_unit, 1, vm)?
+        }
+        _ => NdArray::ones(&shape, dtype),
+    };
+    Ok(PyNdArray::from_core(arr))
 }
 
 /// numpy.concatenate(arrays, axis)

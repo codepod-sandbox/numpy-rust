@@ -489,6 +489,16 @@ def resize(a, new_shape):
     if isinstance(a, StructuredArray):
         return _resize_structured(a, new_shape)
     a = asarray(a)
+    def _preserve_subclass(result):
+        if type(a) is ndarray or not isinstance(a, ndarray):
+            return result
+        try:
+            result = result.view(type(a))
+            if hasattr(result, '__array_finalize__'):
+                result.__array_finalize__(a)
+        except Exception:
+            pass
+        return result
     if isinstance(new_shape, int):
         new_shape = (new_shape,)
     total = 1
@@ -496,15 +506,15 @@ def resize(a, new_shape):
         total *= s
     dt = a.dtype
     if total == 0:
-        return zeros(new_shape, dtype=dt)
+        return _preserve_subclass(zeros(new_shape, dtype=dt))
     flat = a.flatten().tolist()
     n = len(flat)
     if n == 0:
-        return zeros(new_shape, dtype=dt)
+        return _preserve_subclass(zeros(new_shape, dtype=dt))
     result = []
     for i in range(total):
         result.append(flat[i % n])
-    return array(result, dtype=dt).reshape(new_shape)
+    return _preserve_subclass(array(result, dtype=dt).reshape(new_shape))
 
 
 def roll(a, shift, axis=None):

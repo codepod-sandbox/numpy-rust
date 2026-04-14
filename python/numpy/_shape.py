@@ -75,61 +75,13 @@ def _transpose_with_axes(a, axes):
         return result
     if not isinstance(a, ndarray):
         a = asarray(a)
-    shape = a.shape
-    ndim_a = len(shape)
     if axes is None:
         return a.T
     axes = list(axes)
+    ndim_a = a.ndim
     if len(axes) != ndim_a:
         raise ValueError("axes don't match array")
-    # Fast-paths
-    if axes == list(range(ndim_a)):
-        return a.copy() if hasattr(a, 'copy') else array(a.tolist())
-    if ndim_a == 2 and axes == [1, 0]:
-        return a.T
-    # Generic: walk every index of the output and pick from source
-    new_shape = tuple(shape[ax] for ax in axes)
-    size = 1
-    for s in new_shape:
-        size *= s
-    flat_data = a.flatten()
-    # Build strides of original array (row-major)
-    src_strides = [0] * ndim_a
-    s = 1
-    for i in range(ndim_a - 1, -1, -1):
-        src_strides[i] = s
-        s *= shape[i]
-    result = [None] * size
-    # Iterate over every multi-index of the *output*
-    out_idx = [0] * ndim_a
-    for flat_i in range(size):
-        # Map output index -> source index
-        src_flat = 0
-        for d in range(ndim_a):
-            src_flat += out_idx[d] * src_strides[axes[d]]
-        result[flat_i] = flat_data[src_flat]
-        # Increment out_idx (rightmost first)
-        for d in range(ndim_a - 1, -1, -1):
-            out_idx[d] += 1
-            if out_idx[d] < new_shape[d]:
-                break
-            out_idx[d] = 0
-    # Complex scalars may be (re, im) tuples or _NumpyComplexScalar
-    # Build proper ndarray via real+imag to avoid _ObjectArray
-    if hasattr(a, 'dtype') and 'complex' in str(a.dtype):
-        def _re(v):
-            if isinstance(v, tuple): return v[0]
-            if isinstance(v, complex): return v.real
-            return float(v)
-        def _im(v):
-            if isinstance(v, tuple): return v[1]
-            if isinstance(v, complex): return v.imag
-            return 0.0
-        reals = array([_re(v) for v in result], dtype='float64')
-        imags = array([_im(v) for v in result], dtype='float64')
-        out = reals + imags * array(1j)
-        return out.astype(a.dtype).reshape(list(new_shape))
-    return array(result, dtype=a.dtype).reshape(list(new_shape))
+    return a.transpose(tuple(axes))
 
 
 def transpose(a, axes=None):

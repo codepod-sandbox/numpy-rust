@@ -10,7 +10,7 @@ from ._scalar_types import (
     complex64, complex128,
     bool_, str_, bytes_, void, object_,
 )
-from ._dtype import dtype, _normalize_dtype
+from ._dtype import dtype, _normalize_dtype, _normalize_dtype_with_size
 
 __all__ = [
     'can_cast',
@@ -192,6 +192,11 @@ def can_cast(from_=None, to=None, casting="safe"):
     from_name, from_raw = _to_name(from_)
     to_name, to_raw = _to_name(to)
 
+    if "rational" in str(to_name):
+        return from_name in {"bool", "int8", "int16", "int32", "int64"} or from_name == to_name
+    if "rational" in str(from_name):
+        return to_name in {"float64", "double", "complex128"} or from_name == to_name
+
     # --- String/bytes dtype handling ---
     def _is_string_dtype(name, raw):
         """Check if dtype is a string (U) or bytes (S) type, return (True, length) or (False, 0)."""
@@ -342,7 +347,11 @@ def _parse_us_dtype(raw):
     if isinstance(raw, str):
         s = raw.lstrip('<>=|')
     elif isinstance(raw, dtype):
-        # For S types, name preserves size; U types lose size (become 'str')
+        if getattr(raw, 'kind', None) == 'S':
+            return ('S', int(getattr(raw, 'itemsize', 0) or 0))
+        if getattr(raw, 'kind', None) == 'U':
+            itemsize = int(getattr(raw, 'itemsize', 0) or 0)
+            return ('U', itemsize // 4 if itemsize else 0)
         s = raw.name
     else:
         s = str(raw).lstrip('<>=|')
@@ -386,8 +395,60 @@ def promote_types(type1, type2):
         except (TypeError, ValueError):
             raise
 
+    def _is_non_native(dt):
+        return isinstance(dt, dtype) and not getattr(dt, 'isnative', True)
+
+    def _promote_structured_fields(dt1, dt2):
+        n1 = getattr(dt1, 'names', None)
+        n2 = getattr(dt2, 'names', None)
+        if n1 is None or n2 is None or len(n1) != len(n2):
+            raise TypeError("invalid type promotion")
+        if dt1 == dt2:
+            result = dtype(dt1)
+            if getattr(dt1, 'metadata', None) is not None and getattr(dt1, 'metadata', None) == getattr(dt2, 'metadata', None):
+                result.metadata = dt1.metadata
+            else:
+                result.metadata = None
+            return result
+        fields = []
+        for name1, name2 in zip(n1, n2):
+            if name1 != name2:
+                raise TypeError("invalid type promotion")
+            field1 = dt1.fields[name1][0]
+            field2 = dt2.fields[name2][0]
+            fields.append((name1, promote_types(field1, field2)))
+        return dtype(fields)
+
     t1_meta = getattr(type1, 'metadata', None)
     t2_meta = getattr(type2, 'metadata', None)
+
+    if "rational" in str(getattr(type1, 'name', type1)) or "rational" in str(getattr(type2, 'name', type2)):
+        rational_dt = type1 if "rational" in str(getattr(type1, 'name', type1)) else type2
+        other = type2 if rational_dt is type1 else type1
+        other_name = getattr(other, 'name', str(other))
+        if getattr(rational_dt, 'name', None) == other_name:
+            result = dtype(getattr(rational_dt, 'name'))
+            if t1_meta is not None and t1_meta == t2_meta and not (_is_non_native(type1) or _is_non_native(type2)):
+                result.metadata = t1_meta
+            return result
+        if other_name in {"bool", "int8", "int16", "int32", "int64"}:
+            if getattr(rational_dt, 'metadata', None) is None:
+                return rational_dt
+            return dtype(getattr(rational_dt, 'name'))
+        if other_name in {"float64", "double"}:
+            if getattr(other, 'metadata', None) is None:
+                return other
+            return dtype(other_name)
+        raise TypeError("invalid type promotion")
+
+    if getattr(type1, 'names', None) is not None and getattr(type2, 'names', None) is not None:
+        return _promote_structured_fields(type1, type2)
+
+    def _new_string_result(spec, source=None):
+        result = dtype(spec)
+        if source is not None and getattr(source, 'metadata', None) is not None:
+            result.metadata = source.metadata
+        return result
 
     # Fast-path: identical types -> return directly (preserves metadata for V, O, etc.)
     if type1.name == type2.name:
@@ -403,11 +464,27 @@ def promote_types(type1, type2):
         t2_is = getattr(type2, 'itemsize', 0)
         if type1.kind == 'V' and t1_is != t2_is:
             raise TypeError("invalid type promotion")
-        result = dtype(type1.name)
-        # Only preserve metadata when both are identical
-        if t1_meta is not None and t1_meta == t2_meta:
-            result.metadata = t1_meta
-        return result
+        if type1.kind in ('S', 'U') and t1_is != t2_is:
+            pass
+        else:
+            if type1.kind in ('S', 'U', 'V') and not (_is_non_native(type1) or _is_non_native(type2)):
+                return type1
+            if (type1.kind == 'U' and (_is_non_native(type1) or _is_non_native(type2))):
+                result = _new_string_result('U{}'.format(t1_is // 4 if t1_is else 0), type1)
+            elif type1.kind in ('S', 'U', 'V') or t1_names is not None:
+                result = dtype(type1)
+            else:
+                result = dtype(type1.name)
+            # Byte-swapped identical types promote to native dtype and usually lose metadata
+            if t1_meta is not None and t1_meta == t2_meta:
+                if _is_non_native(type1) or _is_non_native(type2):
+                    if getattr(result, 'char', None) == 'U' or getattr(result, 'name', None) == 'str':
+                        result.metadata = t1_meta
+                    else:
+                        result.metadata = None
+                else:
+                    result.metadata = t1_meta
+            return result
 
     # Strip endian prefixes for Rust backend
     s1 = type1.name
@@ -420,7 +497,7 @@ def promote_types(type1, type2):
     s2 = _DTYPE_CHAR_MAP.get(s2, s2)
 
     # If names match after normalization
-    if s1 == s2:
+    if s1 == s2 and _us1 is None and _us2 is None:
         result = dtype(s1)
         if t1_meta is not None and t1_meta == t2_meta:
             result.metadata = t1_meta
@@ -438,20 +515,41 @@ def promote_types(type1, type2):
             # U wins over S (unicode is wider)
             out_char = 'U' if ('U' in (c1, c2)) else 'S'
             out_size = max(n1, n2)
-            return dtype(out_char + str(out_size))
+            out_spec = out_char + str(out_size)
+            t1_matches = _normalize_dtype_with_size(type1) == out_spec
+            t2_matches = _normalize_dtype_with_size(type2) == out_spec
+            if t1_matches and not _is_non_native(type1):
+                return type1
+            if t2_matches and not _is_non_native(type2):
+                return type2
+            if t1_matches:
+                return _new_string_result(out_spec, type1 if out_char == 'U' else None)
+            if t2_matches:
+                return _new_string_result(out_spec, type2 if out_char == 'U' else None)
+            return dtype(out_spec)
         # One is string/bytes, other is numeric
         if _us1 is not None:
             us_char, us_size = _us1
             numeric_name = s2
+            us_dt = type1
         else:
             us_char, us_size = _us2
             numeric_name = s1
+            us_dt = type2
         needed = _numeric_to_str_len(numeric_name)
         if needed is None:
             # Unknown numeric type - can't promote
             raise TypeError("Cannot promote string dtype with numeric dtype")
         out_size = max(us_size, needed)
-        return dtype(us_char + str(out_size))
+        out_spec = us_char + str(out_size)
+        if _is_non_native(us_dt):
+            result = dtype(out_spec)
+            if us_char == 'U' and getattr(us_dt, 'metadata', None) is not None and _normalize_dtype_with_size(us_dt) == out_spec:
+                result.metadata = us_dt.metadata
+            return result
+        if str(us_dt) == out_spec or _normalize_dtype_with_size(us_dt) == out_spec:
+            return us_dt
+        return dtype(out_spec)
 
     _int_bits = {
         "bool": 1,

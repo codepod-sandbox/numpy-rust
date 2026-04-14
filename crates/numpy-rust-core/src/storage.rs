@@ -169,6 +169,13 @@ impl ArrayStorage {
         }
     }
 
+    pub(crate) fn temporal_unit(&self) -> Option<&str> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => storage.temporal_unit(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn string_width(&self) -> Option<usize> {
         self.string_width
     }
@@ -258,6 +265,99 @@ impl ArrayStorage {
                     }),
                     string_width: self.string_width,
                 })
+            }
+        }
+    }
+
+    pub(crate) fn reshape_clone(&self, shape: &[usize]) -> Result<Self> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => Ok(Self {
+                kind: StorageKind::Boxed(storage.reshape_clone(shape)?),
+                string_width: self.string_width,
+            }),
+            _ => Ok(Self::from_array_data_with_string_width(
+                self.data().reshape_clone(IxDyn(shape))?,
+                self.string_width,
+            )),
+        }
+    }
+
+    pub(crate) fn deep_copy(&self) -> Result<Self> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => Ok(Self {
+                kind: StorageKind::Boxed(BoxedStorage::from_scalars(
+                    storage.elements()?,
+                    storage.shape(),
+                    storage.dtype(),
+                )?),
+                string_width: self.string_width,
+            }),
+            _ => Ok(Self::from_array_data_with_string_width(
+                self.data().deep_copy(),
+                self.string_width,
+            )),
+        }
+    }
+
+    pub(crate) fn reversed_axes_like(&self) -> Result<Self> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => Ok(Self {
+                kind: StorageKind::Boxed(storage.reversed_axes_clone()?),
+                string_width: self.string_width,
+            }),
+            _ => Ok(Self::from_array_data_with_string_width(
+                self.data().reversed_axes_view(),
+                self.string_width,
+            )),
+        }
+    }
+
+    pub(crate) fn permuted_axes_like(&self, axes: &[usize]) -> Result<Self> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => Ok(Self {
+                kind: StorageKind::Boxed(storage.permuted_axes_clone(axes)?),
+                string_width: self.string_width,
+            }),
+            _ => Ok(Self::from_array_data_with_string_width(
+                self.data().permuted_axes_view(axes.to_vec()),
+                self.string_width,
+            )),
+        }
+    }
+
+    pub(crate) fn flip_axis_like(&self, axis: usize) -> Result<Self> {
+        match &self.kind {
+            StorageKind::Boxed(storage) => Ok(Self {
+                kind: StorageKind::Boxed(storage.flip_axis_clone(axis)?),
+                string_width: self.string_width,
+            }),
+            _ => {
+                use ndarray::{Axis, Slice};
+
+                macro_rules! do_flip {
+                    ($arr:expr, $variant:ident) => {
+                        ArrayData::$variant(
+                            $arr.slice_axis(Axis(axis), Slice::new(0, None, -1))
+                                .to_owned()
+                                .into_shared(),
+                        )
+                    };
+                }
+
+                let data = match self.data() {
+                    ArrayData::Bool(a) => do_flip!(a, Bool),
+                    ArrayData::Int32(a) => do_flip!(a, Int32),
+                    ArrayData::Int64(a) => do_flip!(a, Int64),
+                    ArrayData::Float32(a) => do_flip!(a, Float32),
+                    ArrayData::Float64(a) => do_flip!(a, Float64),
+                    ArrayData::Complex64(a) => do_flip!(a, Complex64),
+                    ArrayData::Complex128(a) => do_flip!(a, Complex128),
+                    ArrayData::Str(a) => do_flip!(a, Str),
+                };
+                Ok(Self::from_array_data_with_string_width(
+                    data,
+                    self.string_width,
+                ))
             }
         }
     }
@@ -376,26 +476,44 @@ impl ArrayStorage {
     }
 
     pub fn zeros(shape: &[usize], descriptor: &'static DTypeDescriptor) -> Self {
-        assert!(
-            !descriptor.id.is_boxed(),
-            "boxed dtypes require boxed storage constructors"
-        );
+        if descriptor.id.is_boxed() {
+            return Self {
+                kind: StorageKind::Boxed(BoxedStorage::filled(
+                    shape,
+                    descriptor.id,
+                    boxed_fill_scalar(descriptor.id, FillValue::Zero),
+                )),
+                string_width: None,
+            };
+        }
         Self::from_array_data(fill(shape, descriptor.id.storage_dtype(), FillValue::Zero))
     }
 
     pub fn ones(shape: &[usize], descriptor: &'static DTypeDescriptor) -> Self {
-        assert!(
-            !descriptor.id.is_boxed(),
-            "boxed dtypes require boxed storage constructors"
-        );
+        if descriptor.id.is_boxed() {
+            return Self {
+                kind: StorageKind::Boxed(BoxedStorage::filled(
+                    shape,
+                    descriptor.id,
+                    boxed_fill_scalar(descriptor.id, FillValue::One),
+                )),
+                string_width: None,
+            };
+        }
         Self::from_array_data(fill(shape, descriptor.id.storage_dtype(), FillValue::One))
     }
 
     pub fn full_f64(shape: &[usize], descriptor: &'static DTypeDescriptor, value: f64) -> Self {
-        assert!(
-            !descriptor.id.is_boxed(),
-            "boxed dtypes require boxed storage constructors"
-        );
+        if descriptor.id.is_boxed() {
+            return Self {
+                kind: StorageKind::Boxed(BoxedStorage::filled(
+                    shape,
+                    descriptor.id,
+                    boxed_scalar_from_f64(descriptor.id, value),
+                )),
+                string_width: None,
+            };
+        }
         let data = fill_f64(shape, descriptor.id, value);
         Self::from_array_data(data)
     }
@@ -473,11 +591,18 @@ enum BoxedStorageKind {
 pub struct BoxedStorage {
     kind: BoxedStorageKind,
     dtype: DType,
+    temporal_unit: Option<String>,
     shape: Vec<usize>,
     strides: Vec<isize>,
 }
 
 impl BoxedStorage {
+    pub fn filled(shape: &[usize], dtype: DType, value: BoxedScalar) -> Self {
+        let total = shape.iter().product::<usize>();
+        let elements = vec![value; total];
+        Self::from_scalars(elements, shape, dtype).expect("boxed fill scalar must match dtype")
+    }
+
     pub fn from_scalars(elements: Vec<BoxedScalar>, shape: &[usize], dtype: DType) -> Result<Self> {
         let total = shape
             .iter()
@@ -497,12 +622,14 @@ impl BoxedStorage {
                 )));
             }
         }
+        let temporal_unit = infer_temporal_unit(dtype, &elements)?;
         Ok(Self {
             kind: BoxedStorageKind::Backend(SharedBoxedBackend {
                 data: Arc::new(RwLock::new(elements)),
                 version: Arc::new(AtomicUsize::new(0)),
             }),
             dtype,
+            temporal_unit,
             shape: shape.to_vec(),
             strides: row_major_strides(shape),
         })
@@ -514,6 +641,10 @@ impl BoxedStorage {
 
     pub fn shape(&self) -> &[usize] {
         &self.shape
+    }
+
+    pub fn temporal_unit(&self) -> Option<&str> {
+        self.temporal_unit.as_deref()
     }
 
     pub fn strides(&self) -> &[isize] {
@@ -536,9 +667,78 @@ impl BoxedStorage {
                 info: info.to_vec(),
             }),
             dtype: self.dtype,
+            temporal_unit: self.temporal_unit.clone(),
             shape,
             strides,
         })
+    }
+
+    pub fn reshape_clone(&self, shape: &[usize]) -> Result<Self> {
+        let total = shape
+            .iter()
+            .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+            .ok_or_else(|| NumpyError::ValueError(format!("shape {:?} would overflow", shape)))?;
+        if total != self.size() {
+            return Err(NumpyError::ReshapeError {
+                from: self.size(),
+                to: shape.to_vec(),
+            });
+        }
+        Self::from_scalars(self.elements()?, shape, self.dtype)
+    }
+
+    pub fn reversed_axes_clone(&self) -> Result<Self> {
+        let axes = (0..self.ndim()).rev().collect::<Vec<_>>();
+        self.permuted_axes_clone(&axes)
+    }
+
+    pub fn permuted_axes_clone(&self, axes: &[usize]) -> Result<Self> {
+        if axes.len() != self.ndim() {
+            return Err(NumpyError::ValueError(format!(
+                "axes don't match array: expected {} axes, got {}",
+                self.ndim(),
+                axes.len()
+            )));
+        }
+        let mut seen = vec![false; self.ndim()];
+        for &axis in axes {
+            if axis >= self.ndim() || seen[axis] {
+                return Err(NumpyError::ValueError("invalid axis permutation".into()));
+            }
+            seen[axis] = true;
+        }
+
+        let out_shape = axes
+            .iter()
+            .map(|&axis| self.shape[axis])
+            .collect::<Vec<_>>();
+        let mut values = Vec::with_capacity(self.size());
+        for out_coord in iter_boxed_coords(&out_shape) {
+            let mut source_coord = vec![0usize; self.ndim()];
+            for (out_axis, &source_axis) in axes.iter().enumerate() {
+                source_coord[source_axis] = out_coord[out_axis];
+            }
+            values.push(self.get(&source_coord)?);
+        }
+        Self::from_scalars(values, &out_shape, self.dtype)
+    }
+
+    pub fn flip_axis_clone(&self, axis: usize) -> Result<Self> {
+        if axis >= self.ndim() {
+            return Err(NumpyError::ValueError(format!(
+                "axis {} out of bounds for array of dimension {}",
+                axis,
+                self.ndim()
+            )));
+        }
+        let out_shape = self.shape.clone();
+        let mut values = Vec::with_capacity(self.size());
+        for out_coord in iter_boxed_coords(&out_shape) {
+            let mut source_coord = out_coord.clone();
+            source_coord[axis] = out_shape[axis] - 1 - source_coord[axis];
+            values.push(self.get(&source_coord)?);
+        }
+        Self::from_scalars(values, &out_shape, self.dtype)
     }
 
     pub fn get(&self, index: &[usize]) -> Result<BoxedScalar> {
@@ -554,7 +754,8 @@ impl BoxedStorage {
                     .ok_or_else(|| NumpyError::ValueError("index out of bounds".into()))
             }
             BoxedStorageKind::View(view) => {
-                let mapped = boxed_map_index_through_view(view.info.as_slice(), index)?;
+                let mapped =
+                    boxed_map_index_through_view(view.base.shape(), view.info.as_slice(), index)?;
                 view.base.get(&mapped)
             }
         }
@@ -579,7 +780,8 @@ impl BoxedStorage {
                 Ok(())
             }
             BoxedStorageKind::View(view) => {
-                let mapped = boxed_map_index_through_view(view.info.as_slice(), index)?;
+                let mapped =
+                    boxed_map_index_through_view(view.base.shape(), view.info.as_slice(), index)?;
                 view.base.set(&mapped, value)
             }
         }
@@ -650,6 +852,79 @@ fn boxed_scalar_matches_dtype(value: &BoxedScalar, dtype: DType) -> bool {
     )
 }
 
+fn boxed_fill_scalar(dtype: DType, fill: FillValue) -> BoxedScalar {
+    match dtype {
+        DType::Object => BoxedScalar::Object(match fill {
+            FillValue::Zero => BoxedObjectScalar::Int(0),
+            FillValue::One => BoxedObjectScalar::Int(1),
+        }),
+        DType::Datetime64 => BoxedScalar::Datetime(BoxedTemporalScalar {
+            value: match fill {
+                FillValue::Zero => 0,
+                FillValue::One => 1,
+            },
+            unit: "generic".to_owned(),
+            is_nat: false,
+        }),
+        DType::Timedelta64 => BoxedScalar::Timedelta(BoxedTemporalScalar {
+            value: match fill {
+                FillValue::Zero => 0,
+                FillValue::One => 1,
+            },
+            unit: "generic".to_owned(),
+            is_nat: false,
+        }),
+        _ => panic!("boxed fill scalar requires boxed dtype, got {dtype:?}"),
+    }
+}
+
+fn boxed_scalar_from_f64(dtype: DType, value: f64) -> BoxedScalar {
+    match dtype {
+        DType::Object => BoxedScalar::Object(BoxedObjectScalar::Float(value)),
+        DType::Datetime64 => BoxedScalar::Datetime(BoxedTemporalScalar {
+            value: value as i64,
+            unit: "generic".to_owned(),
+            is_nat: false,
+        }),
+        DType::Timedelta64 => BoxedScalar::Timedelta(BoxedTemporalScalar {
+            value: value as i64,
+            unit: "generic".to_owned(),
+            is_nat: false,
+        }),
+        _ => panic!("boxed scalar conversion requires boxed dtype, got {dtype:?}"),
+    }
+}
+
+fn infer_temporal_unit(dtype: DType, elements: &[BoxedScalar]) -> Result<Option<String>> {
+    if !dtype.is_temporal() {
+        return Ok(None);
+    }
+
+    let mut unit: Option<&str> = None;
+    for element in elements {
+        let scalar_unit = match element {
+            BoxedScalar::Datetime(value) if dtype == DType::Datetime64 => Some(value.unit.as_str()),
+            BoxedScalar::Timedelta(value) if dtype == DType::Timedelta64 => {
+                Some(value.unit.as_str())
+            }
+            _ => None,
+        };
+        if let Some(scalar_unit) = scalar_unit {
+            match unit {
+                None => unit = Some(scalar_unit),
+                Some(current) if current == scalar_unit => {}
+                Some(current) => {
+                    return Err(NumpyError::TypeError(format!(
+                        "temporal boxed storage requires a single unit, got '{}' and '{}'",
+                        current, scalar_unit
+                    )));
+                }
+            }
+        }
+    }
+    Ok(Some(unit.unwrap_or("generic").to_owned()))
+}
+
 fn row_major_strides(shape: &[usize]) -> Vec<isize> {
     if shape.is_empty() {
         return vec![];
@@ -687,22 +962,38 @@ fn row_major_flat_index(shape: &[usize], index: &[usize]) -> Result<usize> {
     Ok(flat)
 }
 
-fn boxed_map_index_through_view(info: &[SliceInfoElem], index: &[usize]) -> Result<Vec<usize>> {
+fn boxed_map_index_through_view(
+    base_shape: &[usize],
+    info: &[SliceInfoElem],
+    index: &[usize],
+) -> Result<Vec<usize>> {
     let mut mapped = Vec::with_capacity(info.len());
     let mut view_axis = 0usize;
+    let mut base_axis = 0usize;
     for elem in info {
         match elem {
-            SliceInfoElem::Index(idx) => mapped.push(*idx as usize),
+            SliceInfoElem::Index(idx) => {
+                let dim = base_shape[base_axis];
+                let resolved = if *idx < 0 {
+                    (*idx + dim as isize) as usize
+                } else {
+                    *idx as usize
+                };
+                mapped.push(resolved);
+                base_axis += 1;
+            }
             SliceInfoElem::Slice { start, step, .. } => {
                 let coord = index.get(view_axis).ok_or_else(|| {
                     NumpyError::ValueError("view index rank does not match destination".into())
                 })?;
-                let mapped_idx = *start + (*coord as isize) * *step;
-                if mapped_idx < 0 {
-                    return Err(NumpyError::ValueError("negative mapped index".into()));
-                }
-                mapped.push(mapped_idx as usize);
+                let axis_indices =
+                    boxed_axis_indices(base_shape[base_axis], *start, elem_end(elem), *step)?;
+                let mapped_idx = axis_indices
+                    .get(*coord)
+                    .ok_or_else(|| NumpyError::ValueError("view index out of bounds".into()))?;
+                mapped.push(*mapped_idx);
                 view_axis += 1;
+                base_axis += 1;
             }
             SliceInfoElem::NewAxis => {}
         }
@@ -738,20 +1029,17 @@ fn boxed_slice_shape_and_strides(
                 if step == 0 {
                     return Err(NumpyError::ValueError("slice step cannot be zero".into()));
                 }
-                let dim = shape[axis] as isize;
-                let start = normalize_slice_bound(start, dim);
-                let end = normalize_slice_end(end.unwrap_or(dim), dim);
-                let len = if step > 0 {
-                    if end <= start {
-                        0
-                    } else {
-                        ((end - start - 1) / step + 1) as usize
-                    }
-                } else {
-                    0
-                };
+                let axis_indices = boxed_axis_indices(shape[axis], start, end, step)?;
+                let len = axis_indices.len();
                 out_shape.push(len);
-                out_strides.push(strides[axis] * step);
+                let stride = if axis_indices.len() >= 2 {
+                    (axis_indices[1] as isize - axis_indices[0] as isize) * strides[axis]
+                } else if len == 1 {
+                    strides[axis] * step.signum()
+                } else {
+                    strides[axis] * step
+                };
+                out_strides.push(stride);
                 axis += 1;
             }
             SliceInfoElem::NewAxis => {
@@ -770,16 +1058,30 @@ fn boxed_slice_shape_and_strides(
     Ok((out_shape, out_strides))
 }
 
-fn normalize_slice_bound(bound: isize, dim: isize) -> isize {
-    if bound < 0 {
-        (bound + dim).max(0).min(dim)
-    } else {
-        bound.min(dim)
+fn elem_end(elem: &SliceInfoElem) -> Option<isize> {
+    match elem {
+        SliceInfoElem::Slice { end, .. } => *end,
+        _ => None,
     }
 }
 
-fn normalize_slice_end(bound: isize, dim: isize) -> isize {
-    normalize_slice_bound(bound, dim)
+fn boxed_axis_indices(
+    dim: usize,
+    start: isize,
+    end: Option<isize>,
+    step: isize,
+) -> Result<Vec<usize>> {
+    let base = ArrayD::from_shape_vec(IxDyn(&[dim]), (0..dim).collect()).unwrap();
+    let info = vec![SliceInfoElem::Slice { start, end, step }];
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        base.slice_move(info.as_slice())
+    }));
+    match result {
+        Ok(values) => Ok(values.iter().copied().collect()),
+        Err(_) => Err(NumpyError::ValueError(
+            "invalid slice for boxed array".into(),
+        )),
+    }
 }
 
 fn iter_boxed_coords(shape: &[usize]) -> impl Iterator<Item = Vec<usize>> + '_ {

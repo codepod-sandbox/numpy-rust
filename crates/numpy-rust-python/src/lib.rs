@@ -176,7 +176,17 @@ pub mod _numpy_native {
 
     #[pyfunction]
     fn array(data: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
-        py_creation::py_array(data, vm)
+        py_creation::py_array(data, None, vm)
+    }
+
+    #[pyfunction]
+    fn array_with_dtype(
+        data: PyObjectRef,
+        dtype: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let s = dtype.str(vm)?.as_str().to_owned();
+        py_creation::py_array_with_dtype_name(data, &s, vm)
     }
 
     #[pyfunction]
@@ -185,11 +195,8 @@ pub mod _numpy_native {
         dtype: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
-        let dt = match dtype.into_option() {
-            Some(s) => Some(py_array::parse_dtype(s.as_str(), vm)?),
-            None => None,
-        };
-        py_creation::py_zeros(&shape, dt, vm)
+        let dtype_name = dtype.into_option().map(|s| s.as_str().to_owned());
+        py_creation::py_zeros(&shape, dtype_name.as_deref(), vm)
     }
 
     #[pyfunction]
@@ -198,11 +205,8 @@ pub mod _numpy_native {
         dtype: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
-        let dt = match dtype.into_option() {
-            Some(s) => Some(py_array::parse_dtype(s.as_str(), vm)?),
-            None => None,
-        };
-        py_creation::py_ones(&shape, dt, vm)
+        let dtype_name = dtype.into_option().map(|s| s.as_str().to_owned());
+        py_creation::py_ones(&shape, dtype_name.as_deref(), vm)
     }
 
     #[pyfunction]

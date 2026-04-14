@@ -4,7 +4,7 @@ import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
-    _ObjectArray, _copy_into, _CLIP_UNSET,
+    _ObjectArray, _copy_into, _CLIP_UNSET, _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._core_types import (
@@ -74,6 +74,14 @@ def _ma_unary(func_name, x, fill=0.0):
     import numpy.ma as ma
     return getattr(ma, func_name)(x)
 
+def _normalize_math_operand(x):
+    x = _coerce_native_boxed_operand(x)
+    if isinstance(x, ndarray):
+        return x
+    if isinstance(x, (list, tuple, _ObjectArray)):
+        return asarray(x)
+    return x
+
 # --- Save builtin divmod before shadowing -----------------------------------
 _builtin_divmod = __builtins__["divmod"] if isinstance(__builtins__, dict) else __import__("builtins").divmod
 
@@ -110,6 +118,7 @@ def _cmath_isfinite(v):
 
 def isnan(x):
     """Check for NaN element-wise."""
+    x = _coerce_native_boxed_operand(x)
     if isinstance(x, _ObjectArray):
         return array([_cmath_isnan(v) for v in x._data])
     if not isinstance(x, ndarray):
@@ -123,6 +132,7 @@ def isnan(x):
     return _native.isnan(x)
 
 def isfinite(x):
+    x = _coerce_native_boxed_operand(x)
     if isinstance(x, _ObjectArray):
         return array([_cmath_isfinite(v) for v in x._data])
     if not isinstance(x, ndarray):
@@ -136,6 +146,7 @@ def isfinite(x):
     return _native.isfinite(x)
 
 def isinf(x):
+    x = _coerce_native_boxed_operand(x)
     if isinstance(x, _ObjectArray):
         return array([_cmath_isinf(v) for v in x._data])
     if not isinstance(x, ndarray):
@@ -417,34 +428,32 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
                         "Cannot cast ufunc 'clip' output from dtype('{}') to "
                         "dtype('{}') with casting rule '{}'".format(
                             _bound_dt, out_dt, _clip_casting))
-    # _ObjectArray (complex) fallback
     if isinstance(a, _ObjectArray):
-        data = list(a._data)
-        for i, v in enumerate(data):
-            if a_min is not None:
-                try:
-                    if v < a_min:
-                        data[i] = a_min
-                except TypeError:
-                    pass
-            if a_max is not None:
-                try:
-                    if v > a_max:
-                        data[i] = a_max
-                except TypeError:
-                    pass
-        return _ObjectArray(data, a._dtype)
+        native_a = _coerce_native_boxed_operand(a)
+        native_min = _coerce_native_boxed_operand(a_min) if isinstance(a_min, _ObjectArray) else a_min
+        native_max = _coerce_native_boxed_operand(a_max) if isinstance(a_max, _ObjectArray) else a_max
+        if isinstance(native_a, ndarray):
+            return native_a.clip(native_min, native_max, out=out)
+    # _ObjectArray compatibility fallback
+    if isinstance(a, _ObjectArray):
+        result = a.copy()
+        if a_min is not None:
+            result = maximum(result, a_min)
+        if a_max is not None:
+            result = minimum(result, a_max)
+        if out is not None:
+            _copy_into(out, result)
+            return out
+        return result
     # Check if min/max are arrays — need element-wise clipping
     min_is_array = isinstance(a_min, ndarray)
     max_is_array = isinstance(a_max, ndarray)
     if min_is_array or max_is_array:
         result = a.copy()
         if a_min is not None:
-            a_min_arr = a_min if min_is_array else full(a.shape, float(a_min))
-            result = maximum(result, a_min_arr)
+            result = maximum(result, a_min)
         if a_max is not None:
-            a_max_arr = a_max if max_is_array else full(a.shape, float(a_max))
-            result = minimum(result, a_max_arr)
+            result = minimum(result, a_max)
         if out is not None:
             _copy_into(out, result)
             return out
@@ -452,6 +461,12 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
     # Complex dtype: delegate to ndarray.clip which has Rust-level complex support
     dt_name = str(a.dtype) if isinstance(a, ndarray) else ""
     if "complex" in dt_name and isinstance(a, ndarray):
+        return a.clip(a_min, a_max, out=out)
+    if (
+        dt_name == "object"
+        or dt_name.startswith("datetime64")
+        or dt_name.startswith("timedelta64")
+    ) and isinstance(a, ndarray):
         return a.clip(a_min, a_max, out=out)
     # For integer dtypes, clamp bounds to dtype range to preserve dtype
     _int_dtypes = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
@@ -511,6 +526,14 @@ def clip(a, a_min=_CLIP_UNSET, a_max=_CLIP_UNSET, out=None, **kwargs):
 def abs(x, out=None):
     if _is_masked_array(x):
         return _ma_unary('absolute', x)
+    if isinstance(x, _ObjectArray):
+        native_x = _coerce_native_boxed_operand(x)
+        if isinstance(native_x, ndarray):
+            result = native_x.abs()
+            if out is not None:
+                _copy_into(out, result)
+                return out
+            return result
     if isinstance(x, ndarray):
         result = x.abs()
         if out is not None:
@@ -877,8 +900,8 @@ def logaddexp2(x1, x2):
 # --- Power / square / cbrt / reciprocal -------------------------------------
 
 def power(x1, x2):
-    a1 = asarray(x1)
-    a2 = asarray(x2)
+    a1 = _normalize_math_operand(x1)
+    a2 = _normalize_math_operand(x2)
     # Handle _ObjectArray (complex, object dtypes)
     if isinstance(a1, _ObjectArray) or isinstance(a2, _ObjectArray):
         return a1 ** a2
@@ -1082,6 +1105,8 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
     """Return boolean array where two arrays are element-wise equal within tolerance."""
     import numpy as _np
     import warnings as _warnings
+    a = _coerce_native_boxed_operand(a)
+    b = _coerce_native_boxed_operand(b)
     # Warn if atol or rtol is not finite
     def _is_not_valid_tol(t):
         try:
@@ -1206,30 +1231,89 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
 # --- Comparison operators ----------------------------------------------------
 
 def greater(x1, x2):
-    return asarray(x1) > asarray(x2)
+    return asarray(_coerce_native_boxed_operand(x1)) > asarray(_coerce_native_boxed_operand(x2))
 
 def less(x1, x2):
-    return asarray(x1) < asarray(x2)
+    return asarray(_coerce_native_boxed_operand(x1)) < asarray(_coerce_native_boxed_operand(x2))
 
 def equal(x1, x2):
-    return asarray(x1) == asarray(x2)
+    return asarray(_coerce_native_boxed_operand(x1)) == asarray(_coerce_native_boxed_operand(x2))
 
 def not_equal(x1, x2):
-    return asarray(x1) != asarray(x2)
+    return asarray(_coerce_native_boxed_operand(x1)) != asarray(_coerce_native_boxed_operand(x2))
 
 def greater_equal(x1, x2):
-    return asarray(x1) >= asarray(x2)
+    return asarray(_coerce_native_boxed_operand(x1)) >= asarray(_coerce_native_boxed_operand(x2))
 
 def less_equal(x1, x2):
-    return asarray(x1) <= asarray(x2)
+    return asarray(_coerce_native_boxed_operand(x1)) <= asarray(_coerce_native_boxed_operand(x2))
 
 # --- Extrema -----------------------------------------------------------------
 
 def maximum(x1, x2):
-    return _native.maximum(asarray(x1), asarray(x2))
+    x1 = _coerce_native_boxed_operand(x1)
+    x2 = _coerce_native_boxed_operand(x2)
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    if isinstance(x1, _ObjectArray) or isinstance(x2, _ObjectArray):
+        return _object_array_extrema(x1, x2, choose_max=True)
+    return _native.maximum(x1, x2)
 
 def minimum(x1, x2):
-    return _native.minimum(asarray(x1), asarray(x2))
+    x1 = _coerce_native_boxed_operand(x1)
+    x2 = _coerce_native_boxed_operand(x2)
+    x1 = asarray(x1)
+    x2 = asarray(x2)
+    if isinstance(x1, _ObjectArray) or isinstance(x2, _ObjectArray):
+        return _object_array_extrema(x1, x2, choose_max=False)
+    return _native.minimum(x1, x2)
+
+
+def _object_array_extrema(x1, x2, *, choose_max):
+    def _shape_and_data(x):
+        if isinstance(x, _ObjectArray):
+            return x._shape, list(x._data), x._dtype
+        if isinstance(x, ndarray):
+            return x.shape, x.flatten().tolist(), str(x.dtype)
+        return (), [x], None
+
+    shape1, data1, dt1 = _shape_and_data(x1)
+    shape2, data2, dt2 = _shape_and_data(x2)
+    out_shape = shape1 if shape1 != () else shape2
+    target_len = 1
+    for dim in out_shape:
+        target_len *= dim
+    if target_len == 0:
+        target_len = 1
+    if len(data1) == 1 and target_len > 1:
+        data1 = data1 * target_len
+    if len(data2) == 1 and target_len > 1:
+        data2 = data2 * target_len
+    if len(data1) != len(data2):
+        raise ValueError("operands could not be broadcast together")
+
+    out_dtype = dt1 or dt2 or "object"
+    results = []
+    for a, b in zip(data1, data2):
+        if getattr(a, "_is_nat", False):
+            results.append(a)
+            continue
+        if getattr(b, "_is_nat", False):
+            results.append(b)
+            continue
+        try:
+            pick_left = a >= b if choose_max else a <= b
+        except TypeError:
+            if isinstance(a, complex) or isinstance(b, complex):
+                cmp = _ObjectArray._cmp_complex(a, b)
+                pick_left = cmp >= 0 if choose_max else cmp <= 0
+            else:
+                raise
+        results.append(a if pick_left else b)
+
+    if out_shape == ():
+        return results[0]
+    return _ObjectArray(results, out_dtype, shape=out_shape)
 
 def fmax(x1, x2):
     """Element-wise maximum, ignoring NaNs."""
@@ -1249,8 +1333,8 @@ def signbit(x):
 # --- Arithmetic operators ----------------------------------------------------
 
 def add(x1, x2, out=None):
-    a = x1 if isinstance(x1, ndarray) else (asarray(x1) if isinstance(x1, (list, tuple, _ObjectArray)) else x1)
-    b = x2 if isinstance(x2, ndarray) else (asarray(x2) if isinstance(x2, (list, tuple, _ObjectArray)) else x2)
+    a = _normalize_math_operand(x1)
+    b = _normalize_math_operand(x2)
 
     scalar_scalar = (
         not isinstance(x1, (ndarray, list, tuple, _ObjectArray))
@@ -1309,13 +1393,13 @@ def add(x1, x2, out=None):
     return r
 
 def divide(x1, x2, out=None):
-    return asarray(x1) / asarray(x2)
+    return _normalize_math_operand(x1) / _normalize_math_operand(x2)
 
 def subtract(x1, x2, out=None):
-    return asarray(x1) - asarray(x2)
+    return _normalize_math_operand(x1) - _normalize_math_operand(x2)
 
 def multiply(x1, x2, out=None):
-    r = asarray(x1) * asarray(x2)
+    r = _normalize_math_operand(x1) * _normalize_math_operand(x2)
     if hasattr(r, "dtype"):
         target = str(result_type(x1, x2))
         if str(r.dtype) != target:
@@ -1326,13 +1410,13 @@ def multiply(x1, x2, out=None):
     return r
 
 def true_divide(x1, x2, out=None):
-    return asarray(x1) / asarray(x2)
+    return _normalize_math_operand(x1) / _normalize_math_operand(x2)
 
 def floor_divide(x1, x2, out=None):
-    return asarray(x1) // asarray(x2)
+    return _normalize_math_operand(x1) // _normalize_math_operand(x2)
 
 def remainder(x1, x2, out=None):
-    return asarray(x1) % asarray(x2)
+    return _normalize_math_operand(x1) % _normalize_math_operand(x2)
 
 mod = remainder
 
@@ -1455,6 +1539,9 @@ def imag(a):
 def conj(a):
     """Return the complex conjugate."""
     if isinstance(a, _ObjectArray):
+        native_a = _coerce_native_boxed_operand(a)
+        if isinstance(native_a, ndarray):
+            return native_a.conj()
         result = [v.conjugate() if isinstance(v, complex) else v for v in a._data]
         return _ObjectArray(result, a._dtype)
     if isinstance(a, ndarray):

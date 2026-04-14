@@ -124,6 +124,8 @@ def _as_list(arr):
                 result.append(complex(v[0], v[1] if len(v) > 1 else 0))
             elif isinstance(v, complex):
                 result.append(complex(v))
+            elif getattr(v, '_is_datetime64', False) or getattr(v, '_is_timedelta64', False):
+                result.append(v)
             elif isinstance(v, (str, bytes)):
                 result.append(v)
             else:

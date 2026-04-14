@@ -1,11 +1,14 @@
 use crate::array_data::ArrayD;
-use ndarray::IxDyn;
+use ndarray::{Axis, IxDyn};
 
+use crate::array::{BoxedObjectScalar, BoxedScalar};
 use crate::array_data::ArrayData;
 use crate::descriptor::descriptor_for_dtype;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::kernel::{ArgReductionKernelOp, ReductionKernelOp, TruthReduceKernelOp};
+use crate::ops::comparison::{compare_boxed_scalars, iter_boxed_coords};
+use crate::resolver::BinaryOp;
 use crate::resolver::ReductionOp;
 use crate::NdArray;
 
@@ -43,6 +46,43 @@ fn maybe_keepdims(
     }
 }
 
+fn choose_boxed_extrema(
+    lhs: BoxedScalar,
+    rhs: BoxedScalar,
+    reduce_max: bool,
+) -> Result<BoxedScalar> {
+    match (&lhs, &rhs) {
+        (BoxedScalar::Datetime(a), BoxedScalar::Datetime(b))
+        | (BoxedScalar::Timedelta(a), BoxedScalar::Timedelta(b)) => {
+            if a.is_nat {
+                return Ok(lhs);
+            }
+            if b.is_nat {
+                return Ok(rhs);
+            }
+        }
+        _ => {}
+    }
+
+    let cmp = compare_boxed_scalars(&lhs, &rhs)?;
+    let pick_lhs = if reduce_max {
+        matches!(
+            cmp,
+            Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
+        )
+    } else {
+        matches!(
+            cmp,
+            Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
+        )
+    };
+    Ok(if pick_lhs { lhs } else { rhs })
+}
+
+fn empty_extrema_error() -> NumpyError {
+    NumpyError::ValueError("zero-size array to reduction operation has no identity".into())
+}
+
 impl NdArray {
     /// Sum of array elements over a given axis, or all elements if axis is None.
     pub fn sum(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
@@ -50,6 +90,15 @@ impl NdArray {
             return Err(NumpyError::TypeError(
                 "sum not supported for string arrays".into(),
             ));
+        }
+        if self.dtype() == DType::Object {
+            let result = match axis {
+                None => self.reduce_all_boxed_object(BinaryOp::Add, BoxedObjectScalar::Int(0)),
+                Some(ax) => {
+                    self.reduce_axis_boxed_object(ax, BinaryOp::Add, BoxedObjectScalar::Int(0))
+                }
+            }?;
+            return Ok(maybe_keepdims(result, axis, keepdims, self.ndim()));
         }
         let result = match axis {
             None => self.reduce_all_sum(),
@@ -64,6 +113,23 @@ impl NdArray {
             return Err(NumpyError::TypeError(
                 "mean not supported for string arrays".into(),
             ));
+        }
+        if self.dtype() == DType::Object {
+            let sum = self.sum(axis, false)?;
+            let count = match axis {
+                None => self.size(),
+                Some(ax) => {
+                    validate_axis(ax, self.ndim())?;
+                    self.shape()[ax]
+                }
+            } as i64;
+            let divisor = NdArray::from_boxed_scalars(
+                vec![BoxedScalar::Object(BoxedObjectScalar::Int(count))],
+                &[],
+                DType::Object,
+            )?;
+            let result = (&sum / &divisor)?;
+            return Ok(maybe_keepdims(result, axis, keepdims, self.ndim()));
         }
         let target_dtype = if self.dtype().is_complex() {
             DType::Complex128
@@ -103,6 +169,15 @@ impl NdArray {
 
     /// Product of array elements over a given axis, or all elements if axis is None.
     pub fn prod(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        if self.dtype() == DType::Object {
+            let result = match axis {
+                None => self.reduce_all_boxed_object(BinaryOp::Mul, BoxedObjectScalar::Int(1)),
+                Some(ax) => {
+                    self.reduce_axis_boxed_object(ax, BinaryOp::Mul, BoxedObjectScalar::Int(1))
+                }
+            }?;
+            return Ok(maybe_keepdims(result, axis, keepdims, self.ndim()));
+        }
         let result = match axis {
             None => self.reduce_all_prod(),
             Some(ax) => self.reduce_axis_prod(ax),
@@ -116,6 +191,11 @@ impl NdArray {
             return Err(NumpyError::TypeError(
                 "std not supported for string arrays".into(),
             ));
+        }
+        if self.dtype() == DType::Object {
+            let var = self.var(axis, ddof, false)?;
+            let result = sqrt_boxed_object_array(var)?;
+            return Ok(maybe_keepdims(result, axis, keepdims, self.ndim()));
         }
         if self.dtype().is_complex() {
             return Err(NumpyError::TypeError(
@@ -133,6 +213,39 @@ impl NdArray {
             return Err(NumpyError::TypeError(
                 "var not supported for string arrays".into(),
             ));
+        }
+        if self.dtype() == DType::Object {
+            let mean = self.mean(axis, false)?;
+            let centered = (self - &mean)?;
+            let squared = (&centered * &centered)?;
+            let result = squared.mean(axis, false)?;
+            if ddof > 0 {
+                let n = match axis {
+                    None => self.size(),
+                    Some(ax) => {
+                        validate_axis(ax, self.ndim())?;
+                        self.shape()[ax]
+                    }
+                };
+                if ddof >= n {
+                    let nan = NdArray::from_boxed_scalars(
+                        vec![BoxedScalar::Object(BoxedObjectScalar::Float(f64::NAN))],
+                        result.shape(),
+                        DType::Object,
+                    )?;
+                    return Ok(maybe_keepdims(nan, axis, keepdims, self.ndim()));
+                }
+                let correction = NdArray::from_boxed_scalars(
+                    vec![BoxedScalar::Object(BoxedObjectScalar::Float(
+                        n as f64 / (n - ddof) as f64,
+                    ))],
+                    &[],
+                    DType::Object,
+                )?;
+                let corrected = (&result * &correction)?;
+                return Ok(maybe_keepdims(corrected, axis, keepdims, self.ndim()));
+            }
+            return Ok(maybe_keepdims(result, axis, keepdims, self.ndim()));
         }
         if self.dtype().is_complex() {
             return Err(NumpyError::TypeError(
@@ -213,29 +326,126 @@ impl NdArray {
         }
     }
 
-    /// True if all elements are truthy.
-    pub fn all(&self) -> bool {
+    fn all_scalar(&self) -> bool {
+        if self.dtype().is_boxed() {
+            return iter_boxed_coords(self.shape()).all(|coord| {
+                boxed_truthy(&self.get_boxed(&coord).expect("boxed reduction index"))
+            });
+        }
         let descriptor = descriptor_for_dtype(self.dtype());
         let kernel = descriptor
             .truth_reduce_kernel(TruthReduceKernelOp::AllTruthy)
             .unwrap_or_else(|| {
                 panic!("truth reduction kernel not registered for {}", self.dtype())
             });
-        kernel(self.data()).expect("truth reduction kernel dtype mismatch")
+        kernel(&self.data()).expect("truth reduction kernel dtype mismatch")
     }
 
-    /// True if any element is truthy.
-    pub fn any(&self) -> bool {
+    fn any_scalar(&self) -> bool {
+        if self.dtype().is_boxed() {
+            return iter_boxed_coords(self.shape()).any(|coord| {
+                boxed_truthy(&self.get_boxed(&coord).expect("boxed reduction index"))
+            });
+        }
         let descriptor = descriptor_for_dtype(self.dtype());
         let kernel = descriptor
             .truth_reduce_kernel(TruthReduceKernelOp::AnyTruthy)
             .unwrap_or_else(|| {
                 panic!("truth reduction kernel not registered for {}", self.dtype())
             });
-        kernel(self.data()).expect("truth reduction kernel dtype mismatch")
+        kernel(&self.data()).expect("truth reduction kernel dtype mismatch")
+    }
+
+    pub fn all(&self) -> bool {
+        self.all_scalar()
+    }
+
+    pub fn any(&self) -> bool {
+        self.any_scalar()
+    }
+
+    pub fn all_reduce(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        match axis {
+            None => Ok(maybe_keepdims(
+                bool_scalar_array(self.all_scalar()),
+                None,
+                keepdims,
+                self.ndim(),
+            )),
+            Some(axis) => self.truth_reduce_axis(axis, keepdims, true),
+        }
+    }
+
+    pub fn any_reduce(&self, axis: Option<usize>, keepdims: bool) -> Result<NdArray> {
+        match axis {
+            None => Ok(maybe_keepdims(
+                bool_scalar_array(self.any_scalar()),
+                None,
+                keepdims,
+                self.ndim(),
+            )),
+            Some(axis) => self.truth_reduce_axis(axis, keepdims, false),
+        }
     }
 
     // --- Internal helpers ---
+
+    fn truth_reduce_axis(&self, axis: usize, keepdims: bool, reduce_all: bool) -> Result<NdArray> {
+        validate_axis(axis, self.ndim())?;
+        let result = if self.dtype().is_boxed() {
+            let mut out_shape = self.shape().to_vec();
+            out_shape.remove(axis);
+            let mut out = Vec::with_capacity(out_shape.iter().product());
+
+            for out_coord in iter_boxed_coords(&out_shape) {
+                let mut full_coord = vec![0usize; self.ndim()];
+                let mut out_axis = 0usize;
+                for (axis_idx, slot) in full_coord.iter_mut().enumerate().take(self.ndim()) {
+                    if axis_idx == axis {
+                        continue;
+                    }
+                    *slot = out_coord[out_axis];
+                    out_axis += 1;
+                }
+
+                let mut acc = reduce_all;
+                for reduce_index in 0..self.shape()[axis] {
+                    full_coord[axis] = reduce_index;
+                    let truth =
+                        boxed_truthy(&self.get_boxed(&full_coord).expect("boxed reduction index"));
+                    if reduce_all {
+                        acc &= truth;
+                    } else {
+                        acc |= truth;
+                    }
+                }
+                out.push(acc);
+            }
+
+            NdArray::from_data(ArrayData::Bool(
+                ArrayD::from_shape_vec(IxDyn(&out_shape), out)
+                    .expect("truth reduce axis shape must match")
+                    .into_shared(),
+            ))
+        } else {
+            let descriptor = descriptor_for_dtype(self.dtype());
+            let kernel = descriptor
+                .truth_kernel(crate::kernel::TruthKernelOp::ToBool)
+                .ok_or_else(|| NumpyError::TypeError("truth kernel not registered".into()))?;
+            let ArrayData::Bool(values) = kernel(self.data())? else {
+                unreachable!("truth kernel must produce bool arrays");
+            };
+            let reduced = values.map_axis(Axis(axis), |lane| {
+                if reduce_all {
+                    lane.iter().all(|&value| value)
+                } else {
+                    lane.iter().any(|&value| value)
+                }
+            });
+            NdArray::from_data(ArrayData::Bool(reduced.into_dyn().into_shared()))
+        };
+        Ok(maybe_keepdims(result, Some(axis), keepdims, self.ndim()))
+    }
 
     fn prepare_sum_reduction(&self) -> Result<(ArrayData, DType)> {
         let plan = self.descriptor().reduction_plan(ReductionOp::Sum)?;
@@ -331,6 +541,16 @@ impl NdArray {
         plan_op: ReductionOp,
         kernel_op: ReductionKernelOp,
     ) -> Result<NdArray> {
+        if self.dtype().is_boxed() {
+            let reduce_max = matches!(plan_op, ReductionOp::Max);
+            let mut coords = iter_boxed_coords(self.shape());
+            let first_coord = coords.next().ok_or_else(empty_extrema_error)?;
+            let first = self.get_boxed(&first_coord)?;
+            let acc = coords.try_fold(first, |acc, coord| {
+                choose_boxed_extrema(acc, self.get_boxed(&coord)?, reduce_max)
+            })?;
+            return NdArray::from_boxed_scalars(vec![acc], &[], self.dtype());
+        }
         let plan = self.descriptor().reduction_plan(plan_op)?;
         let data = self.cast_for_execution(plan.input_cast());
         let descriptor = descriptor_for_dtype(plan.result_dtype());
@@ -351,6 +571,37 @@ impl NdArray {
         kernel_op: ReductionKernelOp,
     ) -> Result<NdArray> {
         validate_axis(axis, self.ndim())?;
+        if self.dtype().is_boxed() {
+            if self.shape()[axis] == 0 {
+                return Err(empty_extrema_error());
+            }
+            let reduce_max = matches!(plan_op, ReductionOp::Max);
+            let mut out_shape = self.shape().to_vec();
+            out_shape.remove(axis);
+            let mut out = Vec::with_capacity(out_shape.iter().product());
+
+            for out_coord in iter_boxed_coords(&out_shape) {
+                let mut full_coord = vec![0usize; self.ndim()];
+                let mut out_axis = 0usize;
+                for (axis_idx, slot) in full_coord.iter_mut().enumerate().take(self.ndim()) {
+                    if axis_idx == axis {
+                        continue;
+                    }
+                    *slot = out_coord[out_axis];
+                    out_axis += 1;
+                }
+
+                full_coord[axis] = 0;
+                let mut acc = self.get_boxed(&full_coord)?;
+                for reduce_index in 1..self.shape()[axis] {
+                    full_coord[axis] = reduce_index;
+                    acc = choose_boxed_extrema(acc, self.get_boxed(&full_coord)?, reduce_max)?;
+                }
+                out.push(acc);
+            }
+
+            return NdArray::from_boxed_scalars(out, &out_shape, self.dtype());
+        }
         let plan = self.descriptor().reduction_plan(plan_op)?;
         let data = self.cast_for_execution(plan.input_cast());
         let descriptor = descriptor_for_dtype(plan.result_dtype());
@@ -395,6 +646,143 @@ impl NdArray {
     }
 }
 
+impl NdArray {
+    fn reduce_all_boxed_object(
+        &self,
+        op: BinaryOp,
+        identity: BoxedObjectScalar,
+    ) -> Result<NdArray> {
+        let storage = self.storage().boxed_storage().ok_or_else(|| {
+            NumpyError::TypeError("boxed object reduction requires boxed storage".into())
+        })?;
+        let elements = storage.elements()?;
+        let reduced = reduce_boxed_object_elements(elements, op, identity)?;
+        NdArray::from_boxed_scalars(vec![reduced], &[], DType::Object)
+    }
+
+    fn reduce_axis_boxed_object(
+        &self,
+        axis: usize,
+        op: BinaryOp,
+        identity: BoxedObjectScalar,
+    ) -> Result<NdArray> {
+        validate_axis(axis, self.ndim())?;
+        let shape = self.shape();
+        let mut out_shape = shape.to_vec();
+        out_shape.remove(axis);
+        let axis_len = shape[axis];
+        let mut out = Vec::with_capacity(out_shape.iter().product::<usize>().max(1));
+
+        for out_coord in iter_boxed_coords(&out_shape) {
+            let mut lane = Vec::with_capacity(axis_len);
+            for axis_idx in 0..axis_len {
+                let full_coord = expand_axis_coord(&out_coord, axis, axis_idx, self.ndim());
+                lane.push(self.get_boxed(&full_coord)?);
+            }
+            out.push(reduce_boxed_object_elements(lane, op, identity.clone())?);
+        }
+
+        NdArray::from_boxed_scalars(out, &out_shape, DType::Object)
+    }
+}
+
+fn expand_axis_coord(base: &[usize], axis: usize, axis_idx: usize, ndim: usize) -> Vec<usize> {
+    let mut full = Vec::with_capacity(ndim);
+    let mut base_i = 0usize;
+    for dim in 0..ndim {
+        if dim == axis {
+            full.push(axis_idx);
+        } else {
+            full.push(base[base_i]);
+            base_i += 1;
+        }
+    }
+    full
+}
+
+fn reduce_boxed_object_elements(
+    elements: Vec<BoxedScalar>,
+    op: BinaryOp,
+    identity: BoxedObjectScalar,
+) -> Result<BoxedScalar> {
+    let mut iter = elements.into_iter();
+    let Some(first) = iter.next() else {
+        return Ok(BoxedScalar::Object(identity));
+    };
+    iter.try_fold(first, |acc, value| {
+        boxed_object_binary_reduce(acc, value, op)
+    })
+}
+
+fn boxed_object_binary_reduce(
+    lhs: BoxedScalar,
+    rhs: BoxedScalar,
+    op: BinaryOp,
+) -> Result<BoxedScalar> {
+    match op {
+        BinaryOp::Add => crate::ops::arithmetic::apply_boxed_binary(op, lhs, rhs),
+        BinaryOp::Mul => crate::ops::arithmetic::apply_boxed_binary(op, lhs, rhs),
+        _ => Err(NumpyError::TypeError(
+            "unsupported boxed object reduction op".into(),
+        )),
+    }
+}
+
+fn sqrt_boxed_object_array(array: NdArray) -> Result<NdArray> {
+    let storage = array
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("boxed object std requires boxed storage".into()))?;
+    let elements = storage
+        .elements()?
+        .into_iter()
+        .map(|value| match value {
+            BoxedScalar::Object(BoxedObjectScalar::Bool(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Float(if v {
+                    1.0
+                } else {
+                    0.0
+                })))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Int(v)) => Ok(BoxedScalar::Object(
+                BoxedObjectScalar::Float((v as f64).sqrt()),
+            )),
+            BoxedScalar::Object(BoxedObjectScalar::Float(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Float(v.sqrt())))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Complex(v)) => {
+                Ok(BoxedScalar::Object(BoxedObjectScalar::Complex(v.sqrt())))
+            }
+            BoxedScalar::Object(BoxedObjectScalar::Text(_)) => Err(NumpyError::TypeError(
+                "std/var not supported for string object scalars".into(),
+            )),
+            _ => Err(NumpyError::TypeError(
+                "std/var boxed sqrt requires object boxed scalars".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    NdArray::from_boxed_scalars(elements, array.shape(), DType::Object)
+}
+
+fn boxed_truthy(value: &BoxedScalar) -> bool {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(v) => *v,
+            BoxedObjectScalar::Int(v) => *v != 0,
+            BoxedObjectScalar::Float(v) => *v != 0.0,
+            BoxedObjectScalar::Complex(v) => v.re != 0.0 || v.im != 0.0,
+            BoxedObjectScalar::Text(v) => !v.is_empty(),
+        },
+        BoxedScalar::Datetime(value) | BoxedScalar::Timedelta(value) => !value.is_nat,
+    }
+}
+
+fn bool_scalar_array(value: bool) -> NdArray {
+    NdArray::from_data(ArrayData::Bool(
+        ArrayD::from_elem(IxDyn(&[]), value).into_shared(),
+    ))
+}
+
 #[derive(Clone, Copy)]
 enum ReduceOp {
     Min,
@@ -403,7 +791,7 @@ enum ReduceOp {
 
 #[cfg(test)]
 mod tests {
-    use crate::{DType, NdArray};
+    use crate::{BoxedObjectScalar, BoxedScalar, DType, NdArray};
 
     #[test]
     fn test_sum_all() {
@@ -463,6 +851,78 @@ mod tests {
         let a = NdArray::ones(&[3, 4], DType::Int32);
         let mn = a.min(Some(0), false).unwrap();
         assert_eq!(mn.shape(), &[4]);
+    }
+
+    #[test]
+    fn test_boxed_max_all() {
+        use crate::array::{BoxedScalar, BoxedTemporalScalar};
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Datetime(BoxedTemporalScalar {
+                    value: 3,
+                    unit: "D".into(),
+                    is_nat: false,
+                }),
+                BoxedScalar::Datetime(BoxedTemporalScalar {
+                    value: 5,
+                    unit: "D".into(),
+                    is_nat: false,
+                }),
+                BoxedScalar::Datetime(BoxedTemporalScalar {
+                    value: 1,
+                    unit: "D".into(),
+                    is_nat: false,
+                }),
+            ],
+            &[3],
+            DType::Datetime64,
+        )
+        .unwrap();
+        let mx = a.max(None, false).unwrap();
+        assert_eq!(
+            mx.get_boxed(&[]).unwrap(),
+            BoxedScalar::Datetime(BoxedTemporalScalar {
+                value: 5,
+                unit: "D".into(),
+                is_nat: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_boxed_min_axis_nat_propagates() {
+        use crate::array::{BoxedScalar, BoxedTemporalScalar};
+        let nat = BoxedScalar::Datetime(BoxedTemporalScalar {
+            value: 0,
+            unit: "D".into(),
+            is_nat: true,
+        });
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Datetime(BoxedTemporalScalar {
+                    value: 3,
+                    unit: "D".into(),
+                    is_nat: false,
+                }),
+                nat.clone(),
+                BoxedScalar::Datetime(BoxedTemporalScalar {
+                    value: 5,
+                    unit: "D".into(),
+                    is_nat: false,
+                }),
+                BoxedScalar::Datetime(BoxedTemporalScalar {
+                    value: 7,
+                    unit: "D".into(),
+                    is_nat: false,
+                }),
+            ],
+            &[2, 2],
+            DType::Datetime64,
+        )
+        .unwrap();
+        let mn = a.min(Some(1), false).unwrap();
+        assert_eq!(mn.shape(), &[2]);
+        assert_eq!(mn.get_boxed(&[0]).unwrap(), nat);
     }
 
     #[test]
@@ -564,6 +1024,36 @@ mod tests {
         let a = NdArray::ones(&[3, 4], DType::Float64);
         let m = a.mean(Some(1), true).unwrap();
         assert_eq!(m.shape(), &[3, 1]);
+    }
+
+    #[test]
+    fn test_object_sum_prod_mean() {
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Int(1)),
+                BoxedScalar::Object(BoxedObjectScalar::Int(2)),
+                BoxedScalar::Object(BoxedObjectScalar::Int(3)),
+            ],
+            &[3],
+            DType::Object,
+        )
+        .unwrap();
+        assert_eq!(
+            a.sum(None, false).unwrap().get_boxed(&[]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Int(6))
+        );
+        assert_eq!(
+            a.prod(None, false).unwrap().get_boxed(&[]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Int(6))
+        );
+        assert_eq!(
+            a.mean(None, false).unwrap().get_boxed(&[]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Float(2.0))
+        );
+        assert_eq!(
+            a.var(None, 0, false).unwrap().get_boxed(&[]).unwrap(),
+            BoxedScalar::Object(BoxedObjectScalar::Float(2.0 / 3.0))
+        );
     }
 
     #[test]

@@ -1162,6 +1162,8 @@ class _NumpyVoidScalar:
         self._is_void = True
     def __bool__(self):
         return False
+    def __eq__(self, other):
+        return isinstance(other, _NumpyVoidScalar) and self._value == other._value
     def __repr__(self):
         return "numpy.void()"
 

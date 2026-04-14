@@ -6,6 +6,7 @@ use ndarray::IxDyn;
 use crate::array_data::ArrayData;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
+use crate::ops::comparison::{compare_boxed_scalars, iter_boxed_coords};
 use crate::NdArray;
 use num_complex::Complex;
 
@@ -112,6 +113,75 @@ fn prepare_complex128_choice_vecs(
         .collect()
 }
 
+fn flatten_boxed_scalars(array: &NdArray) -> Result<Vec<crate::array::BoxedScalar>> {
+    let flat = array.flatten();
+    let mut values = Vec::with_capacity(flat.size());
+    for coord in crate::ops::comparison::iter_boxed_coords(flat.shape()) {
+        values.push(flat.get_boxed(&coord)?);
+    }
+    Ok(values)
+}
+
+fn boxed_truthy(value: &crate::array::BoxedScalar) -> bool {
+    match value {
+        crate::array::BoxedScalar::Object(object) => match object {
+            crate::array::BoxedObjectScalar::Bool(v) => *v,
+            crate::array::BoxedObjectScalar::Int(v) => *v != 0,
+            crate::array::BoxedObjectScalar::Float(v) => *v != 0.0,
+            crate::array::BoxedObjectScalar::Complex(v) => v.re != 0.0 || v.im != 0.0,
+            crate::array::BoxedObjectScalar::Text(v) => !v.is_empty(),
+        },
+        crate::array::BoxedScalar::Datetime(value)
+        | crate::array::BoxedScalar::Timedelta(value) => !value.is_nat,
+    }
+}
+
+fn compress_mask(condition: &NdArray) -> Result<Vec<bool>> {
+    if condition.dtype().is_boxed() {
+        let flat = condition.flatten();
+        let mut out = Vec::with_capacity(flat.size());
+        for coord in iter_boxed_coords(flat.shape()) {
+            out.push(boxed_truthy(&flat.get_boxed(&coord)?));
+        }
+        return Ok(out);
+    }
+
+    let cond = condition.astype(DType::Bool);
+    let ArrayData::Bool(mask) = cond.data() else {
+        unreachable!()
+    };
+    Ok(mask.iter().copied().collect())
+}
+
+fn boxed_eq(lhs: &crate::array::BoxedScalar, rhs: &crate::array::BoxedScalar) -> bool {
+    compare_boxed_scalars(lhs, rhs)
+        .ok()
+        .flatten()
+        .map(|ord| ord == std::cmp::Ordering::Equal)
+        .unwrap_or(false)
+}
+
+fn boxed_cmp_or_equal(
+    lhs: &crate::array::BoxedScalar,
+    rhs: &crate::array::BoxedScalar,
+) -> std::cmp::Ordering {
+    compare_boxed_scalars(lhs, rhs)
+        .ok()
+        .flatten()
+        .unwrap_or(std::cmp::Ordering::Equal)
+}
+
+fn boxed_unique_sorted(values: Vec<crate::array::BoxedScalar>) -> Vec<crate::array::BoxedScalar> {
+    let mut result: Vec<_> = Vec::new();
+    for value in values {
+        if !result.iter().any(|existing| boxed_eq(existing, &value)) {
+            result.push(value);
+        }
+    }
+    result.sort_by(boxed_cmp_or_equal);
+    result
+}
+
 impl NdArray {
     /// Binary search in a sorted 1-D array. Returns Int64 array of insertion indices.
     /// side="left": leftmost insertion point. side="right": rightmost.
@@ -152,14 +222,15 @@ impl NdArray {
 
     /// Select slices along `axis` where `condition` is true.
     pub fn compress(&self, condition: &NdArray, axis: Option<usize>) -> Result<NdArray> {
-        let cond = condition.astype(DType::Bool);
-        let ArrayData::Bool(mask) = cond.data() else {
-            unreachable!()
-        };
+        let flat_mask = compress_mask(condition)?;
 
         match axis {
             None => {
                 // Flatten self, apply mask
+                let cond = NdArray::from_data(ArrayData::Bool(
+                    ArrayD::from_shape_vec(IxDyn(condition.shape()), flat_mask)
+                        .expect("compress mask shape must match condition shape"),
+                ));
                 let flat = self.flatten();
                 flat.mask_select(&cond)
             }
@@ -170,7 +241,7 @@ impl NdArray {
                         ndim: self.ndim(),
                     });
                 }
-                let indices: Vec<usize> = mask
+                let indices: Vec<usize> = flat_mask
                     .iter()
                     .enumerate()
                     .filter(|(_, &b)| b)
@@ -214,6 +285,19 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
 
 /// Return sorted unique values present in both arrays.
 pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
+    if a.dtype().is_boxed() || b.dtype().is_boxed() {
+        let a_values = flatten_boxed_scalars(a).expect("boxed intersect1d should flatten");
+        let b_values = flatten_boxed_scalars(b).expect("boxed intersect1d should flatten");
+        let mut result = Vec::new();
+        for value in a_values {
+            if b_values.iter().any(|other| boxed_eq(&value, other)) {
+                result.push(value);
+            }
+        }
+        let result = boxed_unique_sorted(result);
+        return NdArray::from_boxed_scalars(result.clone(), &[result.len()], a.dtype())
+            .expect("boxed intersect1d output should stay boxed");
+    }
     let a_values = flatten_to_float64_vec(a);
     let b_values = flatten_to_float64_vec(b);
 
@@ -234,6 +318,13 @@ pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted unique values from either array.
 pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
+    if a.dtype().is_boxed() || b.dtype().is_boxed() {
+        let mut values = flatten_boxed_scalars(a).expect("boxed union1d should flatten");
+        values.extend(flatten_boxed_scalars(b).expect("boxed union1d should flatten"));
+        let result = boxed_unique_sorted(values);
+        return NdArray::from_boxed_scalars(result.clone(), &[result.len()], a.dtype())
+            .expect("boxed union1d output should stay boxed");
+    }
     let a_values = flatten_to_float64_vec(a);
     let b_values = flatten_to_float64_vec(b);
 
@@ -248,6 +339,19 @@ pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return sorted values in `a` that are NOT in `b`.
 pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
+    if a.dtype().is_boxed() || b.dtype().is_boxed() {
+        let a_values = flatten_boxed_scalars(a).expect("boxed setdiff1d should flatten");
+        let b_values = flatten_boxed_scalars(b).expect("boxed setdiff1d should flatten");
+        let mut result = Vec::new();
+        for value in a_values {
+            if !b_values.iter().any(|other| boxed_eq(&value, other)) {
+                result.push(value);
+            }
+        }
+        let result = boxed_unique_sorted(result);
+        return NdArray::from_boxed_scalars(result.clone(), &[result.len()], a.dtype())
+            .expect("boxed setdiff1d output should stay boxed");
+    }
     let a_values = flatten_to_float64_vec(a);
     let b_values = flatten_to_float64_vec(b);
 
@@ -267,6 +371,19 @@ pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
 
 /// Return boolean array with same shape as `element`, true where value exists in `test_elements`.
 pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
+    if element.dtype().is_boxed() || test_elements.dtype().is_boxed() {
+        let elem_arr = flatten_boxed_scalars(element).expect("boxed isin should flatten element");
+        let test_arr =
+            flatten_boxed_scalars(test_elements).expect("boxed isin should flatten test_elements");
+        let shape: Vec<usize> = element.shape().to_vec();
+        let result: Vec<bool> = elem_arr
+            .iter()
+            .map(|value| test_arr.iter().any(|other| boxed_eq(value, other)))
+            .collect();
+        return NdArray::from_data(ArrayData::Bool(
+            ArrayD::from_shape_vec(IxDyn(&shape), result).expect("shape matches"),
+        ));
+    }
     let elem_arr = to_float64(element);
     let test_arr = flatten_to_float64_vec(test_elements);
 
@@ -285,6 +402,7 @@ pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array::{BoxedObjectScalar, BoxedScalar};
     use crate::NdArray;
 
     #[test]
@@ -449,5 +567,44 @@ mod tests {
         assert!(arr[[1, 0]]); // 4.0
         assert!(!arr[[1, 1]]); // 5.0
         assert!(arr[[1, 2]]); // 6.0
+    }
+
+    #[test]
+    fn test_boxed_object_set_ops() {
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Int(1)),
+                BoxedScalar::Object(BoxedObjectScalar::Text("a".to_string())),
+                BoxedScalar::Object(BoxedObjectScalar::Int(3)),
+            ],
+            &[3],
+            crate::DType::Object,
+        )
+        .unwrap();
+        let b = NdArray::from_boxed_scalars(
+            vec![
+                BoxedScalar::Object(BoxedObjectScalar::Text("a".to_string())),
+                BoxedScalar::Object(BoxedObjectScalar::Int(4)),
+            ],
+            &[2],
+            crate::DType::Object,
+        )
+        .unwrap();
+
+        let inter = intersect1d(&a, &b);
+        let union = union1d(&a, &b);
+        let diff = setdiff1d(&a, &b);
+        let mask = isin(&a, &b);
+
+        assert_eq!(inter.shape(), &[1]);
+        assert_eq!(union.dtype(), crate::DType::Object);
+        assert_eq!(diff.dtype(), crate::DType::Object);
+        let ArrayData::Bool(mask_arr) = mask.data() else {
+            panic!("expected bool mask");
+        };
+        assert_eq!(
+            mask_arr.iter().copied().collect::<Vec<_>>(),
+            vec![false, true, false]
+        );
     }
 }

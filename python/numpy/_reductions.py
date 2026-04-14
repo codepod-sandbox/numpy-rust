@@ -3,7 +3,7 @@ import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
-    AxisError, _ObjectArray, _copy_into,
+    AxisError, _ObjectArray, _copy_into, _coerce_native_boxed_operand,
     _builtin_range, _builtin_min, _builtin_max,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
@@ -55,6 +55,8 @@ def _scalar_result(result, input_arr, force_dtype=None):
             pass
     if dt is not None:
         try:
+            if _is_boxed_dtype_name(dt):
+                return array(result, dtype=dt).reshape(())
             return array(result).astype(dt).reshape(())
         except Exception:
             pass
@@ -168,6 +170,14 @@ def _preserve_inexact_result_dtype(result, input_arr):
     return result
 
 
+def _is_boxed_dtype_name(dt):
+    return (
+        dt == "object"
+        or dt.startswith("datetime64")
+        or dt.startswith("timedelta64")
+    )
+
+
 def _apply_where_mask(a, where, *, false_fill=None, true_identity=False):
     if where is True:
         return a
@@ -181,15 +191,26 @@ def _apply_where_mask(a, where, *, false_fill=None, true_identity=False):
     return array(masked).reshape(a.shape)
 
 
+def _call_reduction_method(a, name, *, axis=None, dtype=None, out=None, keepdims=False):
+    method = getattr(a, name)
+    kwargs = {}
+    if axis is not None:
+        kwargs['axis'] = axis
+    if dtype is not None:
+        kwargs['dtype'] = dtype
+    if out is not None:
+        kwargs['out'] = out
+    if keepdims:
+        kwargs['keepdims'] = keepdims
+    return method(**kwargs)
+
+
 def sum(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where=True):
     a = _ensure_reduction_array(a, fallback_builtin=_builtin_sum)
     if not isinstance(a, ndarray):
         return a
     a = _apply_where_mask(a, where)
-    if axis is not None:
-        result = a.sum(axis, keepdims)
-    else:
-        result = a.sum(None, keepdims)
+    result = _call_reduction_method(a, 'sum', axis=axis, keepdims=keepdims)
     if dtype is not None:
         result = _dtype_cast(result, dtype)
     else:
@@ -2088,7 +2109,7 @@ def max(a, axis=None, out=None, keepdims=False, initial=None, where=True):
     else:
         result = a.max(None, keepdims)
     result = _scalar_result(result, a) if not isinstance(result, ndarray) else result
-    if isinstance(result, ndarray) and str(result.dtype) != input_dt:
+    if isinstance(result, ndarray) and str(result.dtype) != input_dt and not _is_boxed_dtype_name(input_dt):
         try:
             result = result.astype(input_dt)
         except Exception:
@@ -2096,7 +2117,7 @@ def max(a, axis=None, out=None, keepdims=False, initial=None, where=True):
     if initial is not None:
         import numpy as _np
         result = _np.maximum(result, initial)
-        if isinstance(result, ndarray) and str(result.dtype) != input_dt:
+        if isinstance(result, ndarray) and str(result.dtype) != input_dt and not _is_boxed_dtype_name(input_dt):
             try:
                 result = result.astype(input_dt)
             except Exception:
@@ -2119,7 +2140,7 @@ def min(a, axis=None, out=None, keepdims=False, initial=None, where=True):
     else:
         result = a.min(None, keepdims)
     result = _scalar_result(result, a) if not isinstance(result, ndarray) else result
-    if isinstance(result, ndarray) and str(result.dtype) != input_dt:
+    if isinstance(result, ndarray) and str(result.dtype) != input_dt and not _is_boxed_dtype_name(input_dt):
         try:
             result = result.astype(input_dt)
         except Exception:
@@ -2127,7 +2148,7 @@ def min(a, axis=None, out=None, keepdims=False, initial=None, where=True):
     if initial is not None:
         import numpy as _np
         result = _np.minimum(result, initial)
-        if isinstance(result, ndarray) and str(result.dtype) != input_dt:
+        if isinstance(result, ndarray) and str(result.dtype) != input_dt and not _is_boxed_dtype_name(input_dt):
             try:
                 result = result.astype(input_dt)
             except Exception:
@@ -2168,32 +2189,81 @@ def ptp(a, axis=None, keepdims=False):
 def argwhere(a):
     if not isinstance(a, ndarray):
         a = asarray(a)
-    # Rust argwhere only handles float64; cast integer/bool arrays
-    dt = str(a.dtype)
-    if dt in ("int32", "int64", "int8", "int16", "uint8", "uint16", "uint32", "uint64", "bool"):
-        a = a.astype("float64")
     return _native.argwhere(a)
+
+
+def _unravel_linear_indices(indices, shape):
+    if not shape:
+        return (array(indices, dtype="int64"),)
+    coords = [[] for _ in shape]
+    for linear_idx in indices:
+        rem = int(linear_idx)
+        coord = [0] * len(shape)
+        for axis in range(len(shape) - 1, -1, -1):
+            dim = shape[axis]
+            coord[axis] = rem % dim
+            rem //= dim
+        for axis, value in enumerate(coord):
+            coords[axis].append(value)
+    return tuple(array(values, dtype="int64") for values in coords)
+
+
+def _flatten_truth_values(values):
+    if isinstance(values, (list, tuple)):
+        result = []
+        for value in values:
+            result.extend(_flatten_truth_values(value))
+        return result
+    return [values]
+
+
+def _stable_truth_vector(values):
+    flat_values = _flatten_truth_values(values)
+    first_pass = [bool(v) for v in flat_values]
+    second_pass = [bool(v) for v in flat_values]
+    if first_pass != second_pass:
+        raise RuntimeError("number of non-zero array elements changed during function execution")
+    return first_pass
+
+
+def _structured_nonzero_linear_indices(a):
+    flat_size = 1
+    for dim in a.shape:
+        flat_size *= dim
+    truth = [False] * flat_size
+    for name in a.dtype.names:
+        field_values = a[name].flatten().tolist()
+        for idx, value in enumerate(field_values):
+            truth[idx] = truth[idx] or bool(value)
+    return [idx for idx, value in enumerate(truth) if value]
 
 
 def nonzero(a):
     if isinstance(a, _ObjectArray):
-        indices = []
-        for i, v in enumerate(a._data):
-            if bool(v):
-                indices.append(i)
-        return (array(indices, dtype="int64"),) if indices else (array([], dtype="int64"),)
+        if len(a.shape) == 0:
+            raise ValueError("Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(a).nonzero() instead.")
+        truth = _stable_truth_vector(a.flatten().tolist())
+        indices = [i for i, value in enumerate(truth) if value]
+        return _unravel_linear_indices(indices, a.shape)
+    import numpy as _np
+    if isinstance(a, _np.StructuredArray):
+        if len(a.shape) == 0:
+            raise ValueError("Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(a).nonzero() instead.")
+        return _unravel_linear_indices(_structured_nonzero_linear_indices(a), a.shape)
     if not isinstance(a, ndarray):
         a = asarray(a)
     if a.ndim == 0:
         raise ValueError("Calling nonzero on 0d arrays is not allowed. Use np.atleast_1d(a).nonzero() instead.")
-    # Rust nonzero only handles float64; cast integer/bool arrays
-    dt = str(a.dtype)
-    if dt in ("int32", "int64", "int8", "int16", "uint8", "uint16", "uint32", "uint64", "bool"):
-        a = a.astype("float64")
     return _native.nonzero(a)
 
 
 def count_nonzero(a, axis=None, *, keepdims=False):
+    import numpy as _np
+    if isinstance(a, _np.StructuredArray) and axis is None:
+        result = len(_structured_nonzero_linear_indices(a))
+        if keepdims:
+            return array([float(result)]).reshape((1,) * len(a.shape)).astype("int64")
+        return result
     if not isinstance(a, ndarray):
         a = asarray(a)
     # Empty tuple axis means element-wise (no reduction)
@@ -2228,15 +2298,12 @@ def count_nonzero(a, axis=None, *, keepdims=False):
             return v != 0
         # Arbitrary Python objects (void, datetime64, etc.) — use __bool__
         return bool(v)
-    # Rust count_nonzero only handles float64; cast integer/bool arrays
-    dt = str(a.dtype)
-    if dt in ("int32", "int64", "int8", "int16", "uint8", "uint16", "uint32", "uint64", "bool"):
-        a = a.astype("float64")
     if axis is None:
         if not isinstance(a, ndarray):
             # _ObjectArray (strings, bytes, etc.) — iterate Python-side
             flat = a.flatten().tolist() if hasattr(a, 'flatten') else list(a)
-            result = sum(1 for v in flat if _is_nonzero(v))
+            truth = _stable_truth_vector(flat)
+            result = sum(1 for v in truth if v)
             if keepdims:
                 return array([float(result)]).reshape((1,) * len(a.shape)).astype("int64")
             return result
@@ -2518,6 +2585,8 @@ def cumulative_trapezoid(y, x=None, dx=1.0, axis=-1, initial=None):
 
 def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
     import numpy as _np
+    ar1 = _coerce_native_boxed_operand(ar1)
+    ar2 = _coerce_native_boxed_operand(ar2)
     if not isinstance(ar1, (ndarray, _ObjectArray)):
         ar1 = asarray(ar1)
     if not isinstance(ar2, (ndarray, _ObjectArray)):
@@ -2547,6 +2616,8 @@ def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
 
 
 def union1d(ar1, ar2):
+    ar1 = _coerce_native_boxed_operand(ar1)
+    ar2 = _coerce_native_boxed_operand(ar2)
     if not isinstance(ar1, ndarray):
         ar1 = array(ar1)
     if not isinstance(ar2, ndarray):
@@ -2563,6 +2634,8 @@ def union1d(ar1, ar2):
 
 def setdiff1d(ar1, ar2, assume_unique=False):
     import numpy as _np
+    ar1 = _coerce_native_boxed_operand(ar1)
+    ar2 = _coerce_native_boxed_operand(ar2)
     if not isinstance(ar1, ndarray):
         ar1 = array(ar1)
     if not isinstance(ar2, ndarray):
@@ -2606,6 +2679,8 @@ def setxor1d(ar1, ar2, assume_unique=False):
 
 
 def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
+    element = _coerce_native_boxed_operand(element)
+    test_elements = _coerce_native_boxed_operand(test_elements)
     # Validate kind
     if kind is not None and kind not in ('sort', 'table'):
         raise ValueError(
@@ -2708,9 +2783,11 @@ def in1d(ar1, ar2, assume_unique=False, invert=False):
 def all(a, axis=None, out=None, keepdims=False, where=True):
     a = _ensure_reduction_array(a)
     a = _apply_where_mask(a, where, true_identity=True)
+    if isinstance(a, ndarray):
+        return a.all(axis=axis, keepdims=keepdims)
     if axis is None:
         return a.all()
-    # Reduce along specific axis: all elements nonzero iff min != 0
+    # Compatibility fallback for _ObjectArray-like arrays until they are deleted.
     m = a.min(axis, keepdims)
     if not isinstance(m, ndarray):
         return bool(m != 0.0)
@@ -2722,9 +2799,11 @@ def all(a, axis=None, out=None, keepdims=False, where=True):
 def any(a, axis=None, out=None, keepdims=False, where=True):
     a = _ensure_reduction_array(a)
     a = _apply_where_mask(a, where)
+    if isinstance(a, ndarray):
+        return a.any(axis=axis, keepdims=keepdims)
     if axis is None:
         return a.any()
-    # Reduce along specific axis: any element nonzero iff max != 0
+    # Compatibility fallback for _ObjectArray-like arrays until they are deleted.
     m = a.max(axis, keepdims)
     if not isinstance(m, ndarray):
         return bool(m != 0.0)

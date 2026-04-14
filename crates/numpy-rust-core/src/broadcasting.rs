@@ -32,7 +32,8 @@ pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>> {
 
 /// Broadcast an ArrayData to the given target shape using ndarray's stride tricks.
 /// Panics if the shapes are not broadcast-compatible (caller must validate first).
-pub fn broadcast_array_data(data: &ArrayData, target_shape: &[usize]) -> ArrayData {
+pub fn broadcast_array_data(data: impl AsRef<ArrayData>, target_shape: &[usize]) -> ArrayData {
+    let data = data.as_ref();
     if data.shape() == target_shape {
         return data.clone();
     }

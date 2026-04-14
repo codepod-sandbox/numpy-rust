@@ -27,6 +27,12 @@ pub enum ArrayData {
     Str(SharedArrayD<String>),
 }
 
+impl AsRef<ArrayData> for ArrayData {
+    fn as_ref(&self) -> &ArrayData {
+        self
+    }
+}
+
 impl ArrayData {
     pub fn dtype(&self) -> DType {
         match self {

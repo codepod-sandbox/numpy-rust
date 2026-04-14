@@ -9,8 +9,9 @@ use crate::error::{NumpyError, Result};
 use crate::kernel::{
     DotKernelOp, PredicateKernelOp, PredicatePresenceOp, TruthKernelOp, WhereKernelOp,
 };
+use crate::ops::comparison::{boxed_execution_dtype, boxed_scalar_for_coord, iter_boxed_coords};
 use crate::resolver::{resolve_dot_op, resolve_where_op, DotOp, DotOpPlan, WhereOp, WhereOpPlan};
-use crate::{DType, NdArray};
+use crate::{BoxedObjectScalar, BoxedScalar, DType, NdArray};
 
 /// Convert IEEE 754 half-precision (16-bit) bit pattern to f32.
 fn half_bits_to_f32(h: u16) -> f32 {
@@ -87,6 +88,9 @@ fn f32_to_half_bits(f: f32) -> u16 {
 /// Element-wise ternary: select from `x` where `cond` is true, else from `y`.
 /// Like `numpy.where(cond, x, y)`.
 pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
+    if x.dtype().is_boxed() || y.dtype().is_boxed() {
+        return execute_boxed_where(cond, x, y);
+    }
     let (cond, x, y, plan) = prepare_where_execution(cond, x, y)?;
     let descriptor = descriptor_for_dtype(plan.execution_dtype());
     let kernel = descriptor
@@ -98,6 +102,33 @@ pub fn where_cond(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
         result.set_declared_dtype(plan.execution_dtype());
     }
     Ok(result)
+}
+
+fn execute_boxed_where(cond: &NdArray, x: &NdArray, y: &NdArray) -> Result<NdArray> {
+    let ArrayData::Bool(bool_cond) = cond.data() else {
+        return Err(NumpyError::TypeError("condition must be boolean".into()));
+    };
+    let execution_dtype = boxed_execution_dtype(x, y)?;
+    let shape_xy = broadcast_shape(x.shape(), y.shape())?;
+    let out_shape = broadcast_shape(cond.shape(), &shape_xy)?;
+    let cond = broadcast_array_data(ArrayData::Bool(bool_cond), &out_shape);
+    let ArrayData::Bool(cond) = cond else {
+        unreachable!("boolean condition broadcast must preserve bool storage");
+    };
+
+    let mut values = Vec::with_capacity(out_shape.iter().product());
+    for coord in iter_boxed_coords(&out_shape) {
+        let pick_x = *cond.get(ndarray::IxDyn(&coord)).ok_or_else(|| {
+            NumpyError::ValueError("condition broadcast index out of bounds".into())
+        })?;
+        let scalar = if pick_x {
+            boxed_scalar_for_coord(x, execution_dtype, &coord, &out_shape)?
+        } else {
+            boxed_scalar_for_coord(y, execution_dtype, &coord, &out_shape)?
+        };
+        values.push(scalar);
+    }
+    NdArray::from_boxed_scalars(values, &out_shape, execution_dtype)
 }
 
 fn prepare_where_execution(
@@ -187,7 +218,13 @@ impl NdArray {
 
     /// Deep copy of the array.
     pub fn copy(&self) -> NdArray {
-        NdArray::from_data(self.data().deep_copy()).with_preserved_dtype(self)
+        NdArray::from_parts(
+            self.storage()
+                .deep_copy()
+                .expect("copy must preserve valid storage"),
+            self.descriptor(),
+        )
+        .with_preserved_dtype(self)
     }
 
     /// Check if this array shares its underlying buffer with another.
@@ -480,6 +517,10 @@ fn reinterpret_bytes_le(bytes: &[u8], target: DType, shape: &[usize]) -> Result<
 }
 
 fn execute_predicate(input: &NdArray, op: PredicateKernelOp) -> NdArray {
+    if input.dtype().is_boxed() {
+        return boxed_predicate_array(input, op)
+            .expect("boxed predicate execution should not fail for boxed dtype");
+    }
     let descriptor = descriptor_for_dtype(input.dtype());
     let kernel = descriptor
         .predicate_kernel(op)
@@ -488,6 +529,10 @@ fn execute_predicate(input: &NdArray, op: PredicateKernelOp) -> NdArray {
 }
 
 fn execute_predicate_presence(input: &NdArray, op: PredicatePresenceOp) -> bool {
+    if input.dtype().is_boxed() {
+        return boxed_predicate_presence(input, op)
+            .expect("boxed predicate presence should not fail for boxed dtype");
+    }
     let descriptor = descriptor_for_dtype(input.dtype());
     let kernel = descriptor.predicate_presence_kernel(op).unwrap_or_else(|| {
         panic!(
@@ -498,11 +543,76 @@ fn execute_predicate_presence(input: &NdArray, op: PredicatePresenceOp) -> bool 
     kernel(&input.data()).expect("predicate presence kernel dtype mismatch")
 }
 
+fn boxed_predicate_array(input: &NdArray, op: PredicateKernelOp) -> Result<NdArray> {
+    let storage = input
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("boxed predicate requires boxed storage".into()))?;
+    let values = storage
+        .elements()?
+        .into_iter()
+        .map(|scalar| boxed_scalar_predicate(&scalar, op))
+        .collect::<Vec<_>>();
+    Ok(NdArray::from_data(ArrayData::Bool(
+        ArrayD::from_shape_vec(ndarray::IxDyn(input.shape()), values)
+            .expect("boxed predicate shape must match input")
+            .into_shared(),
+    )))
+}
+
+fn boxed_predicate_presence(input: &NdArray, op: PredicatePresenceOp) -> Result<bool> {
+    let storage = input
+        .storage()
+        .boxed_storage()
+        .ok_or_else(|| NumpyError::TypeError("boxed predicate requires boxed storage".into()))?;
+    Ok(storage.elements()?.iter().any(|scalar| match op {
+        PredicatePresenceOp::HasNaN => boxed_scalar_predicate(scalar, PredicateKernelOp::IsNaN),
+        PredicatePresenceOp::HasInf => boxed_scalar_predicate(scalar, PredicateKernelOp::IsInf),
+    }))
+}
+
+fn boxed_scalar_predicate(value: &BoxedScalar, op: PredicateKernelOp) -> bool {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(_) | BoxedObjectScalar::Int(_) | BoxedObjectScalar::Text(_) => {
+                matches!(op, PredicateKernelOp::IsFinite)
+            }
+            BoxedObjectScalar::Float(v) => match op {
+                PredicateKernelOp::IsNaN => v.is_nan(),
+                PredicateKernelOp::IsFinite => v.is_finite(),
+                PredicateKernelOp::IsInf => v.is_infinite(),
+            },
+            BoxedObjectScalar::Complex(v) => match op {
+                PredicateKernelOp::IsNaN => v.re.is_nan() || v.im.is_nan(),
+                PredicateKernelOp::IsFinite => v.re.is_finite() && v.im.is_finite(),
+                PredicateKernelOp::IsInf => v.re.is_infinite() || v.im.is_infinite(),
+            },
+        },
+        BoxedScalar::Datetime(_) | BoxedScalar::Timedelta(_) => {
+            matches!(op, PredicateKernelOp::IsFinite)
+        }
+    }
+}
+
 fn flattened_float64(array: &NdArray) -> ArrayD<f64> {
     array.flatten().to_float64_data()
 }
 
 fn nonzero_linear_indices(array: &NdArray) -> Vec<usize> {
+    if array.dtype() == DType::Object {
+        let storage = array
+            .storage()
+            .boxed_storage()
+            .expect("object dtype must use boxed storage");
+        return storage
+            .elements()
+            .expect("boxed object storage must materialize")
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, scalar)| boxed_object_truthy(&scalar).then_some(idx))
+            .collect();
+    }
+
     let input = array.data();
     let descriptor = descriptor_for_dtype(input.dtype());
     let kernel = descriptor
@@ -516,6 +626,19 @@ fn nonzero_linear_indices(array: &NdArray) -> Vec<usize> {
             .filter_map(|(idx, &val)| val.then_some(idx))
             .collect(),
         _ => unreachable!("truth kernel must produce bool storage"),
+    }
+}
+
+fn boxed_object_truthy(value: &BoxedScalar) -> bool {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(v) => *v,
+            BoxedObjectScalar::Int(v) => *v != 0,
+            BoxedObjectScalar::Float(v) => *v != 0.0,
+            BoxedObjectScalar::Complex(v) => v.re != 0.0 || v.im != 0.0,
+            BoxedObjectScalar::Text(v) => !v.is_empty(),
+        },
+        BoxedScalar::Datetime(value) | BoxedScalar::Timedelta(value) => !value.is_nat,
     }
 }
 
@@ -768,6 +891,30 @@ mod tests {
         let b = a.copy();
         assert_eq!(b.shape(), a.shape());
         assert_eq!(b.dtype(), a.dtype());
+    }
+
+    #[test]
+    fn test_copy_boxed_object() {
+        let a = NdArray::from_boxed_scalars(
+            vec![
+                crate::BoxedScalar::Object(crate::BoxedObjectScalar::Int(1)),
+                crate::BoxedScalar::Object(crate::BoxedObjectScalar::Text("x".into())),
+            ],
+            &[2],
+            DType::Object,
+        )
+        .unwrap();
+        let b = a.copy();
+        assert_eq!(b.shape(), a.shape());
+        assert_eq!(b.dtype(), a.dtype());
+        let storage = b.storage().boxed_storage().unwrap();
+        assert_eq!(
+            storage.elements().unwrap(),
+            vec![
+                crate::BoxedScalar::Object(crate::BoxedObjectScalar::Int(1)),
+                crate::BoxedScalar::Object(crate::BoxedObjectScalar::Text("x".into())),
+            ]
+        );
     }
 
     #[test]

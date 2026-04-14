@@ -1,13 +1,15 @@
 use ndarray::{IxDyn, SliceInfoElem};
 use num_complex::Complex;
 
-use crate::array_data::ArrayData;
+use crate::array_data::{ArrayD, ArrayData};
 use crate::error::{NumpyError, Result};
+use crate::ops::comparison::iter_boxed_coords;
 use crate::resolver::resolve_assignment_cast;
 use crate::storage::ArrayStorage;
 use crate::storage::{array_data_to_scalar, normalize_string_assignment, scalar_to_array_data};
 use crate::DType;
 use crate::NdArray;
+use crate::{BoxedObjectScalar, BoxedScalar};
 
 /// Describes how to slice one axis.
 #[derive(Debug, Clone)]
@@ -189,6 +191,13 @@ impl NdArray {
     /// Slice the array using SliceArg descriptors for each axis.
     /// Axes not specified are treated as Full.
     pub fn slice(&self, args: &[SliceArg]) -> Result<NdArray> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, SliceArg::Range { step, .. } if *step < 0))
+        {
+            return self.materialize_slice(args);
+        }
+
         let ndim = self.ndim();
         let shape = self.shape();
 
@@ -222,11 +231,12 @@ impl NdArray {
                         return Err(NumpyError::ValueError("slice step cannot be zero".into()));
                     }
                     let n = shape[i] as isize;
-                    // Clamp start and stop to valid range following Python slice semantics
-                    let clamp = |v: isize, default: isize| -> isize {
-                        let v = if v < 0 { (v + n).max(0) } else { v.min(n) };
-                        let _ = default; // only used for None case
-                        v
+                    let clamp = |v: isize, _default: isize| -> isize {
+                        if v < 0 {
+                            (v + n).max(0)
+                        } else {
+                            v.min(n)
+                        }
                     };
                     let s = start.map(|v| clamp(v, 0)).unwrap_or(0);
                     let e = stop.map(|v| clamp(v, n)).unwrap_or(n);
@@ -251,6 +261,160 @@ impl NdArray {
         Ok(NdArray::from_parts(storage, self.descriptor()))
     }
 
+    fn materialize_slice(&self, args: &[SliceArg]) -> Result<NdArray> {
+        #[derive(Clone)]
+        enum AxisSelection {
+            Index(usize),
+            Take(Vec<usize>),
+        }
+
+        fn axis_indices(
+            len: usize,
+            start: Option<isize>,
+            stop: Option<isize>,
+            step: isize,
+        ) -> Vec<usize> {
+            debug_assert_ne!(step, 0);
+            let len_i = len as isize;
+            let mut out = Vec::new();
+            if step > 0 {
+                let clamp = |v: isize| {
+                    if v < 0 {
+                        (v + len_i).max(0).min(len_i)
+                    } else {
+                        v.min(len_i)
+                    }
+                };
+                let mut i = start.map(clamp).unwrap_or(0);
+                let stop = stop.map(clamp).unwrap_or(len_i);
+                while i < stop {
+                    out.push(i as usize);
+                    i += step;
+                }
+            } else {
+                let clamp_start = |v: isize| {
+                    let adjusted = if v < 0 { v + len_i } else { v };
+                    adjusted.max(-1).min(len_i - 1)
+                };
+                let clamp_stop = |v: isize| {
+                    let adjusted = if v < 0 { v + len_i } else { v };
+                    adjusted.max(-1).min(len_i - 1)
+                };
+                let mut i = start.map(clamp_start).unwrap_or(len_i - 1);
+                let stop = stop.map(clamp_stop).unwrap_or(-1);
+                while i > stop {
+                    out.push(i as usize);
+                    i += step;
+                }
+            }
+            out
+        }
+
+        fn collect_source_coords(
+            selections: &[AxisSelection],
+            axis: usize,
+            current: &mut Vec<usize>,
+            out: &mut Vec<Vec<usize>>,
+        ) {
+            if axis == selections.len() {
+                out.push(current.clone());
+                return;
+            }
+            match &selections[axis] {
+                AxisSelection::Index(i) => {
+                    current.push(*i);
+                    collect_source_coords(selections, axis + 1, current, out);
+                    current.pop();
+                }
+                AxisSelection::Take(indices) => {
+                    for &i in indices {
+                        current.push(i);
+                        collect_source_coords(selections, axis + 1, current, out);
+                        current.pop();
+                    }
+                }
+            }
+        }
+
+        let ndim = self.ndim();
+        if args.len() > ndim {
+            return Err(NumpyError::ValueError(format!(
+                "too many indices for array: array is {}-dimensional, but {} were indexed",
+                ndim,
+                args.len()
+            )));
+        }
+
+        let mut selections = Vec::with_capacity(ndim);
+        let mut out_shape = Vec::new();
+        for axis in 0..ndim {
+            let arg = if axis < args.len() {
+                &args[axis]
+            } else {
+                &SliceArg::Full
+            };
+            match arg {
+                SliceArg::Index(idx) => {
+                    selections.push(AxisSelection::Index(resolve_index(
+                        *idx,
+                        self.shape()[axis],
+                    )?));
+                }
+                SliceArg::Range { start, stop, step } => {
+                    if *step == 0 {
+                        return Err(NumpyError::ValueError("slice step cannot be zero".into()));
+                    }
+                    let indices = axis_indices(self.shape()[axis], *start, *stop, *step);
+                    out_shape.push(indices.len());
+                    selections.push(AxisSelection::Take(indices));
+                }
+                SliceArg::Full => {
+                    let indices = (0..self.shape()[axis]).collect::<Vec<_>>();
+                    out_shape.push(indices.len());
+                    selections.push(AxisSelection::Take(indices));
+                }
+            }
+        }
+
+        let mut coords = Vec::new();
+        collect_source_coords(&selections, 0, &mut Vec::new(), &mut coords);
+
+        if self.dtype().is_boxed() {
+            let mut values = Vec::with_capacity(coords.len());
+            for coord in &coords {
+                values.push(self.get_boxed(coord)?);
+            }
+            return NdArray::from_boxed_scalars(values, &out_shape, self.dtype())
+                .map(|arr| arr.with_preserved_dtype(self));
+        }
+
+        macro_rules! materialize_numeric {
+            ($arr:expr, $variant:ident) => {{
+                let values = coords
+                    .iter()
+                    .map(|coord| $arr[IxDyn(coord.as_slice())].clone())
+                    .collect::<Vec<_>>();
+                let data = ArrayData::$variant(
+                    ArrayD::from_shape_vec(IxDyn(out_shape.as_slice()), values)
+                        .unwrap()
+                        .into_shared(),
+                );
+                Ok(NdArray::from_data(data).with_preserved_dtype(self))
+            }};
+        }
+
+        match self.data() {
+            ArrayData::Bool(arr) => materialize_numeric!(arr, Bool),
+            ArrayData::Int32(arr) => materialize_numeric!(arr, Int32),
+            ArrayData::Int64(arr) => materialize_numeric!(arr, Int64),
+            ArrayData::Float32(arr) => materialize_numeric!(arr, Float32),
+            ArrayData::Float64(arr) => materialize_numeric!(arr, Float64),
+            ArrayData::Complex64(arr) => materialize_numeric!(arr, Complex64),
+            ArrayData::Complex128(arr) => materialize_numeric!(arr, Complex128),
+            ArrayData::Str(arr) => materialize_numeric!(arr, Str),
+        }
+    }
+
     /// Select elements along an axis by integer indices.
     pub fn index_select(&self, axis: usize, indices: &[usize]) -> Result<NdArray> {
         if axis >= self.ndim() {
@@ -269,6 +433,17 @@ impl NdArray {
                     i, axis, axis_len
                 )));
             }
+        }
+
+        if self.dtype().is_boxed() {
+            let mut out_shape = self.shape().to_vec();
+            out_shape[axis] = indices.len();
+            let mut values = Vec::with_capacity(out_shape.iter().product());
+            for mut coord in iter_boxed_coords(&out_shape) {
+                coord[axis] = indices[coord[axis]];
+                values.push(self.get_boxed(&coord)?);
+            }
+            return NdArray::from_boxed_scalars(values, &out_shape, self.dtype());
         }
 
         let data = self.data().index_select(axis, indices)?;
@@ -325,6 +500,9 @@ impl NdArray {
                     slice_elems.push(SliceInfoElem::Index(resolved as isize));
                 }
                 SliceArg::Range { start, stop, step } => {
+                    if *step == 0 {
+                        return Err(NumpyError::ValueError("slice step cannot be zero".into()));
+                    }
                     let s = start.unwrap_or(0);
                     let e = stop.unwrap_or(shape[i] as isize);
                     slice_elems.push(SliceInfoElem::Slice {
@@ -387,22 +565,30 @@ impl NdArray {
     /// Select elements where mask is true, returning a 1-D array.
     /// Like `a[mask]` in NumPy where mask is a boolean array.
     pub fn mask_select(&self, mask: &NdArray) -> Result<NdArray> {
-        // Mask must be Bool dtype
-        let bool_mask = match mask.data() {
-            ArrayData::Bool(m) => m,
-            _ => return Err(NumpyError::TypeError("mask must be a boolean array".into())),
-        };
+        let flat_mask = flatten_truth_mask(mask)?;
 
-        // Flatten both to 1-D for element-wise selection
-        if bool_mask.len() != self.size() {
+        if flat_mask.len() != self.size() {
             return Err(NumpyError::ShapeMismatch(format!(
                 "mask size {} does not match array size {}",
-                bool_mask.len(),
+                flat_mask.len(),
                 self.size()
             )));
         }
 
-        let flat_mask: Vec<bool> = bool_mask.iter().copied().collect();
+        if self.dtype().is_boxed() {
+            let flat = self.flatten();
+            let mut values = Vec::new();
+            for (i, coord) in iter_boxed_coords(flat.shape()).enumerate() {
+                if flat_mask[i] {
+                    values.push(flat.get_boxed(&coord)?);
+                }
+            }
+            return NdArray::from_boxed_scalars(
+                values,
+                &[flat_mask.iter().filter(|&&b| b).count()],
+                self.dtype(),
+            );
+        }
 
         let data = self.data().select_masked(&flat_mask);
         Ok(NdArray::from_parts(
@@ -413,6 +599,36 @@ impl NdArray {
             self.descriptor(),
         ))
     }
+}
+
+fn boxed_truthy(value: &BoxedScalar) -> bool {
+    match value {
+        BoxedScalar::Object(object) => match object {
+            BoxedObjectScalar::Bool(v) => *v,
+            BoxedObjectScalar::Int(v) => *v != 0,
+            BoxedObjectScalar::Float(v) => *v != 0.0,
+            BoxedObjectScalar::Complex(v) => v.re != 0.0 || v.im != 0.0,
+            BoxedObjectScalar::Text(v) => !v.is_empty(),
+        },
+        BoxedScalar::Datetime(value) | BoxedScalar::Timedelta(value) => !value.is_nat,
+    }
+}
+
+fn flatten_truth_mask(mask: &NdArray) -> Result<Vec<bool>> {
+    if mask.dtype().is_boxed() {
+        let flat = mask.flatten();
+        let mut out = Vec::with_capacity(flat.size());
+        for coord in iter_boxed_coords(flat.shape()) {
+            out.push(boxed_truthy(&flat.get_boxed(&coord)?));
+        }
+        return Ok(out);
+    }
+
+    let bool_mask = match mask.data() {
+        ArrayData::Bool(m) => m,
+        _ => return Err(NumpyError::TypeError("mask must be a boolean array".into())),
+    };
+    Ok(bool_mask.iter().copied().collect())
 }
 
 /// Convert flat indices to multi-dimensional indices (C-order).
@@ -599,6 +815,22 @@ mod tests {
             }])
             .unwrap();
         assert_eq!(b.shape(), &[3]);
+    }
+
+    #[test]
+    fn test_slice_negative_step_defaults() {
+        let a = NdArray::from_vec(vec![10_i64, 20, 30]);
+        let b = a
+            .slice(&[SliceArg::Range {
+                start: None,
+                stop: None,
+                step: -1,
+            }])
+            .unwrap();
+        let ArrayData::Int64(arr) = b.data() else {
+            panic!("expected int64");
+        };
+        assert_eq!(arr.as_slice().unwrap(), &[30, 20, 10]);
     }
 
     #[test]

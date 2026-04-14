@@ -3,7 +3,7 @@ use crate::casting::cast_array_data;
 use crate::dtype::DType;
 use crate::error::{NumpyError, Result};
 use crate::NdArray;
-use ndarray::{Axis, IxDyn, Slice};
+use ndarray::{Axis, IxDyn};
 
 impl NdArray {
     /// Return a new array with the given shape. Total size must match.
@@ -15,14 +15,17 @@ impl NdArray {
                 to: shape.to_vec(),
             });
         }
-        let data = self.data().reshape_clone(IxDyn(shape))?;
-        Ok(NdArray::from_data(data).with_preserved_dtype(self))
+        let storage = self.storage().reshape_clone(shape)?;
+        Ok(NdArray::from_parts(storage, self.descriptor()).with_preserved_dtype(self))
     }
 
     /// Transpose the array (reverse axes). Returns a view sharing the same data.
     pub fn transpose(&self) -> NdArray {
-        let data = self.data().reversed_axes_view();
-        NdArray::from_data(data).with_preserved_dtype(self)
+        let storage = self
+            .storage()
+            .reversed_axes_like()
+            .expect("transpose should not fail");
+        NdArray::from_parts(storage, self.descriptor()).with_preserved_dtype(self)
     }
 
     /// Transpose the array with a given permutation of axes.
@@ -45,8 +48,8 @@ impl NdArray {
         }
         let perm: Vec<usize> = axes.to_vec();
 
-        let data = self.data().permuted_axes_view(perm);
-        Ok(NdArray::from_data(data).with_preserved_dtype(self))
+        let storage = self.storage().permuted_axes_like(&perm)?;
+        Ok(NdArray::from_parts(storage, self.descriptor()).with_preserved_dtype(self))
     }
 
     /// Swap two axes of the array.
@@ -63,8 +66,8 @@ impl NdArray {
         }
         let mut perm: Vec<usize> = (0..ndim).collect();
         perm.swap(axis1, axis2);
-        let data = self.data().permuted_axes_view(perm);
-        Ok(NdArray::from_data(data).with_preserved_dtype(self))
+        let storage = self.storage().permuted_axes_like(&perm)?;
+        Ok(NdArray::from_parts(storage, self.descriptor()).with_preserved_dtype(self))
     }
 
     /// Return a 1-D copy of the array.
@@ -107,25 +110,8 @@ impl NdArray {
                     )));
                 }
 
-                macro_rules! do_flip {
-                    ($arr:expr) => {
-                        $arr.slice_axis(Axis(ax), Slice::new(0, None, -1))
-                            .to_owned()
-                            .into_shared()
-                    };
-                }
-
-                let data = match self.data() {
-                    ArrayData::Bool(a) => ArrayData::Bool(do_flip!(a)),
-                    ArrayData::Int32(a) => ArrayData::Int32(do_flip!(a)),
-                    ArrayData::Int64(a) => ArrayData::Int64(do_flip!(a)),
-                    ArrayData::Float32(a) => ArrayData::Float32(do_flip!(a)),
-                    ArrayData::Float64(a) => ArrayData::Float64(do_flip!(a)),
-                    ArrayData::Complex64(a) => ArrayData::Complex64(do_flip!(a)),
-                    ArrayData::Complex128(a) => ArrayData::Complex128(do_flip!(a)),
-                    ArrayData::Str(a) => ArrayData::Str(do_flip!(a)),
-                };
-                Ok(NdArray::from_data(data).with_preserved_dtype(self))
+                let storage = self.storage().flip_axis_like(ax)?;
+                Ok(NdArray::from_parts(storage, self.descriptor()).with_preserved_dtype(self))
             }
         }
     }
@@ -290,6 +276,23 @@ pub fn concatenate(arrays: &[&NdArray], axis: usize) -> Result<NdArray> {
         .iter()
         .skip(1)
         .fold(arrays[0].dtype(), |acc, a| acc.promote(a.dtype()));
+
+    if common_dtype.is_boxed() {
+        if arrays.iter().any(|a| a.dtype() != common_dtype) {
+            return Err(NumpyError::TypeError(
+                "boxed concatenate currently requires matching dtypes".into(),
+            ));
+        }
+        let mut out_shape = arrays[0].shape().to_vec();
+        out_shape[axis] = arrays.iter().map(|a| a.shape()[axis]).sum();
+        let mut out = Vec::with_capacity(out_shape.iter().product());
+        for array in arrays {
+            for coord in crate::ops::comparison::iter_boxed_coords(array.shape()) {
+                out.push(array.get_boxed(&coord)?);
+            }
+        }
+        return NdArray::from_boxed_scalars(out, &out_shape, common_dtype);
+    }
 
     let promoted: Vec<_> = arrays
         .iter()

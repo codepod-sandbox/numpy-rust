@@ -123,6 +123,40 @@ def _parse_comma_dtype(s):
     return StructuredDtype(fields)
 
 
+def _native_byteorder_char():
+    import sys as _sys
+    return '<' if _sys.byteorder == 'little' else '>'
+
+
+def _normalize_byteorder(byteorder, itemsize):
+    if itemsize <= 1:
+        return '|'
+    if byteorder == '=':
+        return _native_byteorder_char()
+    if byteorder in ('<', '>', '|'):
+        return byteorder
+    return _native_byteorder_char()
+
+
+def _byteorder_ignored(name, kind=None):
+    return name in ('bool', 'bytes', 'void', 'object') or kind in ('b', 'S', 'V', 'O')
+
+
+def _typestr_for(name, byteorder):
+    _typestr = {
+        "float64": "f8", "float32": "f4", "float16": "f2",
+        "int64": "i8", "int32": "i4", "int16": "i2", "int8": "i1",
+        "uint64": "u8", "uint32": "u4", "uint16": "u2", "uint8": "u1",
+        "bool": "b1",
+        "complex128": "c16", "complex64": "c8",
+        "object": "O", "str": "U", "bytes": "S0", "void": "V0",
+    }
+    suffix = _typestr.get(name, "f8")
+    if byteorder == '|':
+        return '|' + suffix
+    return byteorder + suffix
+
+
 # ---------------------------------------------------------------------------
 # dtype class
 # ---------------------------------------------------------------------------
@@ -141,7 +175,8 @@ class dtype:
                 # Comma-separated dtype strings like 'i4,f8' -> structured dtype
                 if ',' in tp:
                     return object.__new__(cls)
-                name = _DTYPE_CHAR_MAP.get(tp, tp)
+                raw_name = tp[1:] if tp and tp[0] in '<>=|' else tp
+                name = _DTYPE_CHAR_MAP.get(raw_name, raw_name)
                 # Handle arbitrary |Sn/Sn -> 'bytes', |Vn/Vn -> 'void', <Un/Un -> 'str'
                 if isinstance(name, str):
                     if name.startswith('|S') and len(name) > 2 and name[2:].isdigit():
@@ -180,6 +215,8 @@ class dtype:
         return object.__new__(cls)
 
     def __init__(self, tp=None, metadata=None, align=False):
+        requested_byteorder = None
+        raw_string_spec = None
         if isinstance(tp, list):
             # List-of-tuples structured dtype: delegate to StructuredDtype
             sd = StructuredDtype(tp)
@@ -210,6 +247,22 @@ class dtype:
                 self.fields = tp.fields
                 self._structured = tp._structured
                 self.descr = tp.descr
+            else:
+                self.names = None
+                self.fields = None
+            self.byteorder = tp.byteorder
+            self.str = tp.str
+            self.type = tp.type
+            self.metadata = metadata if metadata is not None else tp.metadata
+            self.alignment = tp.alignment
+            self.isalignedstruct = tp.isalignedstruct
+            self.isnative = tp.isnative
+            self.hasobject = tp.hasobject
+            self.num = tp.num
+            self.subdtype = getattr(tp, 'subdtype', None)
+            self.base = getattr(tp, 'base', self)
+            self.shape = getattr(tp, 'shape', ())
+            return
         elif isinstance(tp, tuple):
             # Subarray dtype: (base_dtype, shape)
             base_dt = dtype(tp[0])
@@ -253,6 +306,10 @@ class dtype:
             self._structured = sd
             self.descr = sd.descr
         elif isinstance(tp, str):
+            if tp and tp[0] in '<>=|':
+                requested_byteorder = tp[0]
+                tp = tp[1:]
+            raw_string_spec = tp
             tp = _DTYPE_CHAR_MAP.get(tp, tp)
             # Handle arbitrary |Sn or Sn byte strings -> 'bytes'
             if tp.startswith('|S') and len(tp) > 2 and tp[2:].isdigit():
@@ -363,11 +420,7 @@ class dtype:
         if not hasattr(self, 'fields'):
             self.fields = None
         # byteorder
-        self.byteorder = '=' if self.name in ('bool',) else '<'
-        if self.kind == 'b':
-            self.byteorder = '|'
-        elif self.itemsize == 1:
-            self.byteorder = '|'
+        self.byteorder = '|' if _byteorder_ignored(self.name, self.kind) or self.itemsize == 1 else '<'
         self.subdtype = None
         self.base = self
         self.shape = ()  # shape of each element (empty tuple for non-structured)
@@ -390,6 +443,58 @@ class dtype:
         else:
             self.descr = [('', self.str)]
 
+        if raw_string_spec is not None:
+            spec = raw_string_spec
+            if spec.startswith('S') and (len(spec) == 1 or spec[1:].isdigit()):
+                size = int(spec[1:]) if len(spec) > 1 else 1
+                self.name = 'bytes'
+                self.kind = 'S'
+                self.itemsize = size
+                self.char = 'S'
+                self.type = bytes_
+                self.byteorder = '|'
+                self.isnative = True
+                self.str = '|S{}'.format(size)
+                self.alignment = 1
+            elif spec.startswith('U') and (len(spec) == 1 or spec[1:].isdigit()):
+                size = int(spec[1:]) if len(spec) > 1 else 1
+                self.name = 'str'
+                self.kind = 'U'
+                self.itemsize = 4 * size
+                self.char = 'U'
+                self.type = str_
+                self.byteorder = _normalize_byteorder(requested_byteorder or _native_byteorder_char(), self.itemsize)
+                self.isnative = self.byteorder in ('|', _native_byteorder_char())
+                self.str = '{}U{}'.format(self.byteorder, size)
+                self.alignment = 4
+            elif spec.startswith('V') and (len(spec) == 1 or spec[1:].isdigit()):
+                size = int(spec[1:]) if len(spec) > 1 else 0
+                self.name = 'void'
+                self.kind = 'V'
+                self.itemsize = size
+                self.char = 'V'
+                self.type = void
+                self.byteorder = '|'
+                self.isnative = True
+                self.str = '|V{}'.format(size)
+                self.alignment = 1
+            if spec.startswith(('S', 'U', 'V')):
+                self.descr = [('', self.str)]
+
+        if requested_byteorder is not None:
+            if _byteorder_ignored(self.name, self.kind):
+                self.byteorder = '|'
+                self.isnative = True
+            else:
+                self.byteorder = _normalize_byteorder(requested_byteorder, self.itemsize)
+                self.isnative = self.byteorder in ('|', _native_byteorder_char())
+            if not (raw_string_spec is not None and raw_string_spec.startswith(('S', 'U', 'V'))):
+                self.str = _typestr_for(self.name, self.byteorder)
+            if hasattr(self, '_structured') and self._structured is not None:
+                self.descr = [(n, str(self.fields[n][0])) for n in self.names]
+            else:
+                self.descr = [('', self.str)]
+
     def _init_from_name(self, name):
         _info = {
             "float64": ("f", 8, "d"), "float32": ("f", 4, "f"),
@@ -409,11 +514,13 @@ class dtype:
     def __repr__(self):
         if hasattr(self, '_structured') and self._structured is not None:
             return repr(self._structured)
-        return f"dtype('{self.name}')"
+        return f"dtype('{str(self)}')"
 
     def __str__(self):
         if hasattr(self, '_structured') and self._structured is not None:
             return str(self._structured)
+        if self.byteorder not in ('|', _native_byteorder_char()):
+            return self.str
         return self.name
 
     @staticmethod
@@ -445,7 +552,23 @@ class dtype:
             os = o_struct or dtype._parse_structured_name(getattr(other, 'name', ''))
             if ss is not None and os is not None:
                 return ss == os
-            return self.name == other.name
+            if getattr(self, 'kind', None) in ('S', 'U', 'V') or getattr(other, 'kind', None) in ('S', 'U', 'V'):
+                if getattr(self, 'kind', None) == 'U' and getattr(other, 'kind', None) == 'U':
+                    return (
+                        self.name == other.name and
+                        getattr(self, 'itemsize', None) == getattr(other, 'itemsize', None)
+                    )
+                return (
+                    self.name == other.name and
+                    getattr(self, 'itemsize', None) == getattr(other, 'itemsize', None) and
+                    _normalize_byteorder(self.byteorder, self.itemsize) ==
+                    _normalize_byteorder(other.byteorder, other.itemsize)
+                )
+            return (
+                self.name == other.name and
+                _normalize_byteorder(self.byteorder, self.itemsize) ==
+                _normalize_byteorder(other.byteorder, other.itemsize)
+            )
         if isinstance(other, str):
             return self.name == other or self.name == _normalize_dtype(other)
         if isinstance(other, type) and isinstance(other, _ScalarTypeMeta):
@@ -459,11 +582,22 @@ class dtype:
         return NotImplemented
 
     def __hash__(self):
-        return hash(self.name)
+        return hash((self.name, self.byteorder, getattr(self, 'itemsize', None)))
 
     def newbyteorder(self, new_order="S"):
-        d = dtype(self.name)
-        d.metadata = self.metadata
+        d = dtype(self)
+        if _byteorder_ignored(d.name, getattr(d, 'kind', None)) or d.byteorder == '|':
+            return d
+        current = _normalize_byteorder(d.byteorder, d.itemsize)
+        if new_order in ('S', 's'):
+            target = '>' if current == '<' else '<'
+        elif new_order == '=':
+            target = _native_byteorder_char()
+        else:
+            target = new_order
+        d.byteorder = _normalize_byteorder(target, d.itemsize)
+        d.isnative = d.byteorder in ('|', _native_byteorder_char())
+        d.str = _typestr_for(d.name, d.byteorder)
         return d
 
 

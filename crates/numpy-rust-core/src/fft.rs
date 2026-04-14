@@ -16,7 +16,8 @@ mod inner {
     use crate::NdArray;
 
     /// Convert a 1-D NdArray to Vec<Complex<f64>>.
-    fn to_complex(data: &ArrayData) -> Result<Vec<Complex<f64>>> {
+    fn to_complex(data: impl AsRef<ArrayData>) -> Result<Vec<Complex<f64>>> {
+        let data = data.as_ref();
         let f64_data = cast_array_data(data, DType::Float64);
         match f64_data {
             ArrayData::Float64(a) => {
