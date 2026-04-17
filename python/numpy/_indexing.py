@@ -785,6 +785,14 @@ def unravel_index(indices, shape, order='C'):
     indices, scalar_input, _was_ndarray = _normalize_integral_index_array(indices)
     if indices.size == 0:
         return tuple([array([], dtype='int64') for _ in shape])
+    if order == 'C':
+        result = _native.unravel_index(indices, shape)
+        orig_shape = indices.shape
+        if len(orig_shape) > 1:
+            result = tuple(r.reshape(list(orig_shape)) for r in result)
+        if scalar_input:
+            return tuple(int(r.tolist()[0]) if hasattr(r, 'tolist') else int(r) for r in result)
+        return result
     # Validate bounds
     total_size = 1
     for s in shape:
@@ -887,6 +895,14 @@ def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
                 if _dt.startswith('float'):
                     raise TypeError("only int indices permitted")
         return array([], dtype='int64')
+    if order == 'C' and mode == 'raise':
+        result = _native.ravel_multi_index(arrays, dims)
+        if not was_2d_array and all_scalar_inputs:
+            if hasattr(result, 'tolist'):
+                vals = result.tolist()
+                return int(vals[0] if isinstance(vals, list) else vals)
+            return int(result)
+        return result
     if order == 'F':
         # F-order: result = idx[0] + d[0]*idx[1] + d[0]*d[1]*idx[2] + ...
         result_vals = [0] * n
