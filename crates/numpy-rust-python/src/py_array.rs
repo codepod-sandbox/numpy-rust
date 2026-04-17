@@ -22,6 +22,8 @@ pub struct PyNdArray {
     is_aligned: AtomicBool,
     /// Reference to the array this view was created from (None if owner).
     base: RwLock<Option<PyObjectRef>>,
+    /// Slice/index prefix used to create this view from its base array.
+    view_prefix: RwLock<Option<Vec<SliceArg>>>,
 }
 
 impl Clone for PyNdArray {
@@ -31,6 +33,7 @@ impl Clone for PyNdArray {
             is_fortran: AtomicBool::new(self.is_fortran.load(Ordering::Relaxed)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
             base: RwLock::new(None),
+            view_prefix: RwLock::new(None),
         }
     }
 }
@@ -42,6 +45,7 @@ impl PyNdArray {
             is_fortran: AtomicBool::new(false),
             is_aligned: AtomicBool::new(true),
             base: RwLock::new(None),
+            view_prefix: RwLock::new(None),
         }
     }
 
@@ -51,16 +55,26 @@ impl PyNdArray {
             is_fortran: AtomicBool::new(true),
             is_aligned: AtomicBool::new(true),
             base: RwLock::new(None),
+            view_prefix: RwLock::new(None),
         }
     }
 
     /// Create a view that references a parent array.
     pub fn from_core_with_base(data: NdArray, parent: PyObjectRef) -> Self {
+        Self::from_core_with_base_and_prefix(data, parent, None)
+    }
+
+    pub fn from_core_with_base_and_prefix(
+        data: NdArray,
+        parent: PyObjectRef,
+        prefix: Option<Vec<SliceArg>>,
+    ) -> Self {
         Self {
             data: RwLock::new(data),
             is_fortran: AtomicBool::new(false),
             is_aligned: AtomicBool::new(true),
             base: RwLock::new(Some(parent)),
+            view_prefix: RwLock::new(prefix),
         }
     }
 
@@ -235,6 +249,45 @@ fn parse_flat_index(key: &PyObjectRef, total: usize, vm: &VirtualMachine) -> PyR
         );
     }
     Ok(resolved as usize)
+}
+
+fn slice_arg_to_pyobject(arg: &SliceArg, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+    match arg {
+        SliceArg::Index(idx) => Ok(vm.ctx.new_int(*idx).into()),
+        SliceArg::Range { start, stop, step } => {
+            let slice_type: PyObjectRef = vm.ctx.types.slice_type.to_owned().into();
+            let start_obj = start
+                .map(|v| vm.ctx.new_int(v).into())
+                .unwrap_or_else(|| vm.ctx.none());
+            let stop_obj = stop
+                .map(|v| vm.ctx.new_int(v).into())
+                .unwrap_or_else(|| vm.ctx.none());
+            let step_obj = vm.ctx.new_int(*step).into();
+            slice_type.call(vec![start_obj, stop_obj, step_obj], vm)
+        }
+        SliceArg::Full => {
+            let slice_type: PyObjectRef = vm.ctx.types.slice_type.to_owned().into();
+            let none_obj = vm.ctx.none();
+            slice_type.call(vec![none_obj.clone(), none_obj.clone(), vm.ctx.none()], vm)
+        }
+    }
+}
+
+fn compose_view_key(
+    prefix: &[SliceArg],
+    key: &PyObjectRef,
+    vm: &VirtualMachine,
+) -> PyResult<PyObjectRef> {
+    let mut items: Vec<PyObjectRef> = prefix
+        .iter()
+        .map(|arg| slice_arg_to_pyobject(arg, vm))
+        .collect::<PyResult<Vec<_>>>()?;
+    if let Some(tuple) = key.downcast_ref::<PyTuple>() {
+        items.extend(tuple.as_slice().iter().cloned());
+    } else {
+        items.push(key.clone());
+    }
+    Ok(PyTuple::new_ref(items, &vm.ctx).into())
 }
 
 fn linear_to_coord(mut idx: usize, shape: &[usize]) -> Vec<usize> {
@@ -830,6 +883,7 @@ impl PyNdArray {
             is_fortran: AtomicBool::new(order_str == "F" || (order_str == "A" && is_f)),
             is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
             base: RwLock::new(None),
+            view_prefix: RwLock::new(None),
         };
 
         Ok(result)
@@ -996,6 +1050,7 @@ impl PyNdArray {
                     is_fortran: AtomicBool::new(is_f),
                     is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
                     base: RwLock::new(None),
+                    view_prefix: RwLock::new(None),
                 };
                 // Try into_ref_with_type first; if it fails (not a real ndarray subclass),
                 // try calling the type's _from_array classmethod as a fallback.
@@ -1689,15 +1744,27 @@ impl PyNdArray {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
                     .map_err(|e| numpy_err(e, vm))?;
-                return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
+                return Ok(PyNdArray::from_core_with_base_and_prefix(
+                    result,
+                    parent_obj.clone(),
+                    Some(vec![SliceArg::Index(idx as isize)]),
+                )
+                .to_py(vm));
             }
         }
 
         // Single slice -> e.g. a[0:3], a[::2], a[:]
         if let Some(slice) = key.downcast_ref::<PySlice>() {
             let arg = py_slice_to_slice_arg(slice, vm)?;
-            let result = data.slice(&[arg]).map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
+            let result = data
+                .slice(std::slice::from_ref(&arg))
+                .map_err(|e| numpy_err(e, vm))?;
+            return Ok(PyNdArray::from_core_with_base_and_prefix(
+                result,
+                parent_obj.clone(),
+                Some(vec![arg]),
+            )
+            .to_py(vm));
         }
 
         // Tuple index -> multi-dimensional indexing (integers and/or slices)
@@ -1832,13 +1899,23 @@ impl PyNdArray {
                     if let Ok(reshaped) = result.reshape(&shape) {
                         result = reshaped;
                     }
-                    return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
+                    return Ok(PyNdArray::from_core_with_base_and_prefix(
+                        result,
+                        parent_obj.clone(),
+                        Some(args.clone()),
+                    )
+                    .to_py(vm));
                 }
                 // Return view if ndim > 0, scalar otherwise
                 if result.ndim() == 0 {
                     return Ok(ndarray_or_scalar(result, vm));
                 }
-                return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
+                return Ok(PyNdArray::from_core_with_base_and_prefix(
+                    result,
+                    parent_obj.clone(),
+                    Some(args.clone()),
+                )
+                .to_py(vm));
             }
 
             // All integers (with possible newaxis insertions)
@@ -1876,7 +1953,12 @@ impl PyNdArray {
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core_with_base(result, parent_obj.clone()).to_py(vm));
+            return Ok(PyNdArray::from_core_with_base_and_prefix(
+                result,
+                parent_obj.clone(),
+                Some(args),
+            )
+            .to_py(vm));
         }
 
         // NdArray index: boolean mask or integer fancy indexing
@@ -4026,6 +4108,15 @@ fn setitem_impl(
     value: PyObjectRef,
     vm: &VirtualMachine,
 ) -> PyResult<()> {
+    let base_obj = zelf.base.read().unwrap().clone();
+    let view_prefix = zelf.view_prefix.read().unwrap().clone();
+    if let (Some(base_obj), Some(prefix)) = (base_obj, view_prefix) {
+        if let Some(base_array) = base_obj.downcast_ref::<PyNdArray>() {
+            let composed = compose_view_key(&prefix, &key, vm)?;
+            return setitem_impl(base_array, composed, value, vm);
+        }
+    }
+
     // Integer key → set single element or row
     if let Ok(idx) = key.clone().try_into_value::<i64>(vm) {
         let data = zelf.data.read().unwrap();

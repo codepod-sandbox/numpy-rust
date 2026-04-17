@@ -40,6 +40,33 @@ __all__ = [
 ]
 
 
+def _is_fraction_scalar(value):
+    return type(value).__name__ == 'Fraction' and type(value).__module__ == 'fractions'
+
+
+def _contains_fraction_values(value):
+    if _is_fraction_scalar(value):
+        return True
+    if isinstance(value, _ObjectArray):
+        return any(_contains_fraction_values(v) for v in value.flatten().tolist())
+    if isinstance(value, ndarray):
+        if str(value.dtype) != 'object':
+            return False
+        return any(_contains_fraction_values(v) for v in value.flatten().tolist())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_fraction_values(v) for v in value)
+    return False
+
+
+def _flatten_object_nested(value):
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            out.extend(_flatten_object_nested(item))
+        return out
+    return [value]
+
+
 def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
     """Wrapper around native concatenate that handles tuples and auto-converts to arrays."""
     from ._core_types import can_cast
@@ -511,6 +538,20 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 else:
                     converted.append(x)
             data = converted
+    if dtype is None and _contains_fraction_values(data):
+        if isinstance(data, _ObjectArray):
+            return data.copy() if copy else data
+        if isinstance(data, (list, tuple)):
+            shape = _infer_shape(data)
+            if shape is not None:
+                flat = _flatten_object_nested(data)
+                expected = 1
+                for dim in shape:
+                    expected *= dim
+                if flat is not None and len(flat) == expected:
+                    return _ObjectArray(flat, "object", shape=shape)
+            return _ObjectArray(list(data), "object")
+        return _ObjectArray([data], "object", shape=())
     # Check if dtype forces a non-numeric path
     if dtype is not None:
         dt = str(dtype)
@@ -864,6 +905,14 @@ def arange(*args, dtype=None, like=None, **kwargs):
         else:
             vals = list(range(int(float_args[0]), int(float_args[1]), int(float_args[2])))
         return _ObjectArray(vals, "object")
+    if dt is not None and _is_temporal_dtype(dt):
+        float_args = [float(a) for a in args]
+        if len(float_args) == 1:
+            float_args = [0.0, float_args[0], 1.0]
+        elif len(float_args) == 2:
+            float_args = [float_args[0], float_args[1], 1.0]
+        vals = list(range(int(float_args[0]), int(float_args[1]), int(float_args[2])))
+        return _make_temporal_array(vals, dt)
     # Detect if all args are integers (for integer output dtype)
     _all_int = all(isinstance(a, (int, bool)) and not isinstance(a, float) for a in args)
     # Also check for numpy int scalars

@@ -61,6 +61,33 @@ def _scalar_result(result, input_arr, force_dtype=None):
     return result
 
 
+def _extract_zero_dim_scalar(result):
+    """Convert a 0-d array result into the corresponding scalar value."""
+    if isinstance(result, _ObjectArray):
+        try:
+            if result.size == 1:
+                return result.item()
+        except Exception:
+            return result
+        return result
+    if not isinstance(result, ndarray) or getattr(result, 'ndim', None) != 0:
+        return result
+    try:
+        value = result.item()
+    except Exception:
+        return result
+    dt = getattr(result, 'dtype', None)
+    if dt is None or str(dt) == 'object':
+        return value
+    ctor = getattr(dt, 'type', None)
+    if ctor is not None:
+        try:
+            return ctor(value)
+        except Exception:
+            pass
+    return value
+
+
 def _mean_result_dtype(input_arr):
     """Get the result dtype for mean/var/std operations (int → float64)."""
     try:
@@ -1086,26 +1113,186 @@ _VALID_QUANTILE_METHODS = frozenset([
 ])
 
 
+def _is_fraction_scalar(value):
+    return type(value).__name__ == 'Fraction' and type(value).__module__ == 'fractions'
+
+
+def _is_integral_scalar(value):
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return True
+    dtype_name = getattr(value, '_numpy_dtype_name', None)
+    return dtype_name in (
+        'bool', 'int8', 'int16', 'int32', 'int64',
+        'uint8', 'uint16', 'uint32', 'uint64',
+    )
+
+
+def _is_strong_float64_q(q):
+    if isinstance(q, ndarray):
+        return str(q.dtype) == 'float64'
+    dtype_name = getattr(q, '_numpy_dtype_name', None)
+    return dtype_name == 'float64'
+
+
+def _is_zero_one_integral_q(q):
+    if isinstance(q, ndarray):
+        try:
+            vals = q.flatten().tolist()
+        except Exception:
+            return False
+        return all(_is_zero_one_integral_q(v) for v in vals)
+    if isinstance(q, (list, tuple)):
+        return all(_is_zero_one_integral_q(v) for v in q)
+    if isinstance(q, bool):
+        return True
+    if _is_integral_scalar(q):
+        return int(q) in (0, 1)
+    return False
+
+
+def _quantile_preserve_exact_result(q):
+    if _is_fraction_scalar(q):
+        return True
+    if isinstance(q, ndarray):
+        try:
+            for qi in q.flatten().tolist():
+                if _is_fraction_scalar(qi):
+                    return True
+        except Exception:
+            return False
+        return False
+    if isinstance(q, (list, tuple)):
+        for qi in q:
+            if _quantile_preserve_exact_result(qi):
+                return True
+    return False
+
+
+def _contains_fraction_data(values):
+    if _is_fraction_scalar(values):
+        return True
+    if isinstance(values, _ObjectArray):
+        try:
+            return any(_contains_fraction_data(v) for v in values.flatten().tolist())
+        except Exception:
+            return False
+    if isinstance(values, ndarray):
+        if str(values.dtype) != 'object':
+            return False
+        try:
+            return any(_contains_fraction_data(v) for v in values.flatten().tolist())
+        except Exception:
+            return False
+    if isinstance(values, (list, tuple)):
+        return any(_contains_fraction_data(v) for v in values)
+    return False
+
+
+def _scale_quantile_scalar(q, scale):
+    if _is_fraction_scalar(q):
+        if scale == 1.0:
+            return q
+        if scale == 0.01:
+            from fractions import Fraction as _Fraction
+            return q * _Fraction(1, 100)
+    if _is_integral_scalar(q):
+        if scale == 1.0 and q in (0, 1):
+            return int(q)
+        if scale == 0.01:
+            if q == 0:
+                return 0
+            if q == 100:
+                return 1
+    return float(q) * scale
+
+
+def _quantile_sort_key(value):
+    if isinstance(value, str) and value == 'NaT':
+        return (1, 0)
+    if getattr(value, '_is_datetime64', False) or getattr(value, '_is_timedelta64', False):
+        return (0, value)
+    try:
+        return (1 if value != value else 0, value)
+    except Exception:
+        return (0, value)
+
+
 def _compute_quantile_1d(sorted_vals, q, method='linear'):
     """Compute quantile on a sorted 1D list (NaN already at end) using H&F method."""
     _max = _builtin_max
     _min = _builtin_min
+    if len(sorted_vals) == 1:
+        only = sorted_vals[0]
+        if isinstance(only, (ndarray, _ObjectArray)):
+            sorted_vals = only.flatten().tolist()
+        elif isinstance(only, (list, tuple)):
+            sorted_vals = list(only)
+    if sorted_vals and isinstance(sorted_vals[0], complex):
+        raise TypeError("a must be an array of real numbers")
     n = len(sorted_vals)
     if n == 0:
         return float('nan')
+
+    def _is_nan_like(value):
+        if isinstance(value, str) and value == 'NaT':
+            return True
+        if getattr(value, '_is_datetime64', False) or getattr(value, '_is_timedelta64', False):
+            import numpy as _np
+            try:
+                return bool(_np.isnat(value))
+            except Exception:
+                return False
+        return value != value
+
+    def _make_temporal_nat():
+        import numpy as _np
+        for value in sorted_vals:
+            if getattr(value, '_is_datetime64', False):
+                return _np.datetime64('NaT', value._unit)
+            if getattr(value, '_is_timedelta64', False):
+                return _np.timedelta64('NaT', value._unit)
+        return 'NaT'
+
+    has_temporal_values = False
+    for v in sorted_vals:
+        if isinstance(v, str):
+            if v == 'NaT':
+                has_temporal_values = True
+                break
+        elif getattr(v, '_is_datetime64', False) or getattr(v, '_is_timedelta64', False):
+            has_temporal_values = True
+            break
+
     # Check for NaN (sorted to end)
-    n_nan = sum(1 for v in sorted_vals if v != v)
+    try:
+        n_nan = _builtin_sum(1 for v in sorted_vals if _is_nan_like(v))
+    except Exception as exc:
+        raise TypeError("a must be an array of real numbers") from exc
     n_valid = n - n_nan
     if n_valid == 0:
+        if has_temporal_values:
+            return _make_temporal_nat()
         return float('nan')
     # NaN propagation: if any NaN exists → result is NaN
     if n_nan > 0:
+        if has_temporal_values:
+            return _make_temporal_nat()
         return float('nan')
 
+    temporal_mode = any(
+        getattr(v, '_is_datetime64', False) or getattr(v, '_is_timedelta64', False)
+        for v in sorted_vals
+    )
+    exact_mode = _is_fraction_scalar(q) or (
+        n_valid > 0 and _is_fraction_scalar(sorted_vals[0]) and _is_integral_scalar(q)
+    )
+
     if q <= 0.0:
-        return float(sorted_vals[0])
+        return sorted_vals[0] if exact_mode else float(sorted_vals[0])
     if q >= 1.0:
-        return float(sorted_vals[n_valid - 1])
+        return sorted_vals[n_valid - 1] if exact_mode else float(sorted_vals[n_valid - 1])
 
     def _lerp(a, b, t):
         return a + t * (b - a)
@@ -1115,20 +1302,24 @@ def _compute_quantile_1d(sorted_vals, q, method='linear'):
         lo = int(_math.floor(h))
         hi = int(_math.ceil(h))
         if lo == hi:
-            return float(sorted_vals[lo])
+            return sorted_vals[lo] if (exact_mode or temporal_mode) else float(sorted_vals[lo])
+        if exact_mode or temporal_mode:
+            return _lerp(sorted_vals[lo], sorted_vals[hi], h - lo)
         return _lerp(float(sorted_vals[lo]), float(sorted_vals[hi]), h - lo)
 
     if method == 'linear':
         return _interp_at(q * (n_valid - 1))
     elif method == 'lower':
         i = _min(int(_math.floor(q * (n_valid - 1))), n_valid - 1)
-        return float(sorted_vals[i])
+        return sorted_vals[i] if (exact_mode or temporal_mode) else float(sorted_vals[i])
     elif method == 'higher':
         i = _min(int(_math.ceil(q * (n_valid - 1))), n_valid - 1)
-        return float(sorted_vals[i])
+        return sorted_vals[i] if (exact_mode or temporal_mode) else float(sorted_vals[i])
     elif method == 'midpoint':
         lo = int(_math.floor(q * (n_valid - 1)))
         hi = _min(int(_math.ceil(q * (n_valid - 1))), n_valid - 1)
+        if exact_mode or temporal_mode:
+            return _lerp(sorted_vals[lo], sorted_vals[hi], 0.5)
         return _lerp(float(sorted_vals[lo]), float(sorted_vals[hi]), 0.5)
     elif method == 'nearest':
         h = q * (n_valid - 1)
@@ -1136,40 +1327,37 @@ def _compute_quantile_1d(sorted_vals, q, method='linear'):
         hi = int(_math.ceil(h))
         frac = h - lo
         if frac < 0.5:
-            return float(sorted_vals[lo])
+            return sorted_vals[lo] if (exact_mode or temporal_mode) else float(sorted_vals[lo])
         elif frac > 0.5:
-            return float(sorted_vals[hi])
+            return sorted_vals[hi] if (exact_mode or temporal_mode) else float(sorted_vals[hi])
         else:  # tie: round half to even
-            return float(sorted_vals[lo if lo % 2 == 0 else hi])
+            value = sorted_vals[lo if lo % 2 == 0 else hi]
+            return value if (exact_mode or temporal_mode) else float(value)
     elif method == 'inverted_cdf':
         # H&F 1: 0-indexed = ceil(q*n) - 1
         idx = _max(int(_math.ceil(q * n_valid)) - 1, 0)
-        return float(sorted_vals[_min(idx, n_valid - 1)])
+        value = sorted_vals[_min(idx, n_valid - 1)]
+        return value if (exact_mode or temporal_mode) else float(value)
     elif method == 'averaged_inverted_cdf':
         # H&F 2: if q*n integer → average neighbors; else like inverted_cdf
         h = q * n_valid
         h_floor = _math.floor(h)
         if h != h_floor:
             idx = _max(int(_math.ceil(h)) - 1, 0)
-            return float(sorted_vals[_min(idx, n_valid - 1)])
+            value = sorted_vals[_min(idx, n_valid - 1)]
+            return value if (exact_mode or temporal_mode) else float(value)
         else:
             i_lo = _max(int(h) - 1, 0)
             i_hi = _min(int(h), n_valid - 1)
+            if exact_mode or temporal_mode:
+                return _lerp(sorted_vals[i_lo], sorted_vals[i_hi], 0.5)
             return _lerp(float(sorted_vals[i_lo]), float(sorted_vals[i_hi]), 0.5)
     elif method == 'closest_observation':
-        # H&F 3: round half to odd
+        # H&F 3: choose the nearest even 1-indexed order statistic.
         h = q * n_valid
-        h_floor = int(_math.floor(h))
-        frac = h - h_floor
-        if frac == 0.5:
-            # prefer odd (1-indexed): h_floor is the lower 1-indexed value
-            if h_floor % 2 == 1:  # h_floor is odd (1-indexed) → 0-indexed = h_floor-1
-                idx = h_floor - 1
-            else:
-                idx = h_floor
-        else:
-            idx = _max(int(_math.ceil(h)) - 1, 0)
-        return float(sorted_vals[_min(_max(idx, 0), n_valid - 1)])
+        idx = int(round(h)) - 1
+        value = sorted_vals[_min(_max(idx, 0), n_valid - 1)]
+        return value if (exact_mode or temporal_mode) else float(value)
     elif method == 'interpolated_inverted_cdf':
         # H&F 4: h (0-indexed) = q*n - 1
         return _interp_at(_max(q * n_valid - 1, 0))
@@ -1193,8 +1381,30 @@ def _quantile_along_axis(a, q, axis, method):
     """Apply quantile computation along a single axis using Python implementation."""
     from ._manipulation import moveaxis
     import numpy as _np
+    import itertools as _it
 
     n = a.shape[axis]
+    if isinstance(a, _ObjectArray):
+        orig_shape = tuple(s for i, s in enumerate(a.shape) if i != axis)
+        if len(orig_shape) == 0:
+            vals = [a[(i,)] if a.ndim == 1 else a[tuple([i if j == axis else 0 for j in range(a.ndim)])] for i in range(n)]
+            vals.sort(key=_quantile_sort_key)
+            return _compute_quantile_1d(vals, q, method)
+        results = []
+        for base_idx in _it.product(*(range(s) for s in orig_shape)):
+            row = []
+            for i in range(n):
+                full_idx = []
+                base_iter = iter(base_idx)
+                for dim in range(a.ndim):
+                    full_idx.append(i if dim == axis else next(base_iter))
+                row.append(a[tuple(full_idx)])
+            row.sort(key=_quantile_sort_key)
+            results.append(_compute_quantile_1d(row, q, method))
+        if str(a.dtype).startswith(("datetime64", "timedelta64")):
+            from ._helpers import _make_temporal_array
+            return _make_temporal_array(results, str(a.dtype)).reshape(orig_shape)
+        return asarray(results).reshape(orig_shape)
     # Move reduction axis to last position
     a_moved = moveaxis(a, axis, -1)
     orig_shape = a_moved.shape[:-1]
@@ -1202,15 +1412,18 @@ def _quantile_along_axis(a, q, axis, method):
     if len(orig_shape) == 0:
         # Result is scalar
         vals = a_moved.flatten().tolist()
-        vals.sort(key=lambda x: (x != x, x))  # NaN to end
-        return asarray(_compute_quantile_1d(vals, q, method))
+        vals.sort(key=_quantile_sort_key)
+        return _compute_quantile_1d(vals, q, method)
     a_2d = a_moved.reshape(-1, n)
     m = a_2d.shape[0]
     results = []
     for i in range(m):
         row = a_2d[i].tolist()
-        row.sort(key=lambda x: (x != x, x))  # NaN to end
+        row.sort(key=_quantile_sort_key)
         results.append(_compute_quantile_1d(row, q, method))
+    if str(a.dtype).startswith(("datetime64", "timedelta64")):
+        from ._helpers import _make_temporal_array
+        return _make_temporal_array(results, str(a.dtype)).reshape(orig_shape)
     return asarray(results).reshape(orig_shape)
 
 
@@ -1233,16 +1446,19 @@ def _quantile_tuple_axis(a, q, axes, method):
 
     if len(result_shape) == 0:
         vals = a_t.flatten().tolist()
-        vals.sort(key=lambda x: (x != x, x))
-        return asarray(_compute_quantile_1d(vals, q, method))
+        vals.sort(key=_quantile_sort_key)
+        return _compute_quantile_1d(vals, q, method)
 
     a_2d = a_t.reshape(-1, n_reduce)
     m = a_2d.shape[0]
     results = []
     for i in range(m):
         row = a_2d[i].tolist()
-        row.sort(key=lambda x: (x != x, x))
+        row.sort(key=_quantile_sort_key)
         results.append(_compute_quantile_1d(row, q, method))
+    if str(a.dtype).startswith(("datetime64", "timedelta64")):
+        from ._helpers import _make_temporal_array
+        return _make_temporal_array(results, str(a.dtype)).reshape(result_shape)
     return asarray(results).reshape(result_shape)
 
 
@@ -1251,8 +1467,15 @@ _NON_INTERPOLATING_METHODS = frozenset([
 ])
 
 
-def _get_quantile_result_dtype(a, method):
+def _get_quantile_result_dtype(a, method, q=None):
     """Get the expected output dtype for quantile given input array and method."""
+    if q is not None and (
+        _quantile_preserve_exact_result(q)
+        or (_contains_fraction_data(a) and _is_integral_scalar(q))
+    ):
+        return None
+    if str(a.dtype) == 'bool' and q is not None and _is_zero_one_integral_q(q):
+        return 'bool'
     if method in _NON_INTERPOLATING_METHODS:
         # Preserve input dtype (object → float64)
         if a.dtype.kind == 'O':
@@ -1264,22 +1487,26 @@ def _get_quantile_result_dtype(a, method):
         if a.dtype.kind in ('i', 'u'):
             return 'float64'
         elif a.dtype.kind == 'f':
+            if q is not None and _is_strong_float64_q(q):
+                return 'float64'
             return str(a.dtype)
         else:
             return 'float64'
 
 
-def _quantile_core(a, q, axis, method, keepdims, orig_axis_for_keepdims=None):
+def _quantile_core(a, q, axis, method, keepdims, orig_axis_for_keepdims=None, target_dtype=None):
     """Core quantile computation dispatching to Rust (linear) or Python (other methods).
     axis can be None, int (already normalized), or list of ints (already normalized)."""
     import numpy as _np
+    if str(a.dtype).startswith("complex"):
+        raise TypeError("a must be an array of real numbers")
 
     is_tuple_axis = isinstance(axis, list)
 
     if is_tuple_axis:
         # Tuple axis: must collapse all axes at once (sequential reduction is wrong)
         result = _quantile_tuple_axis(a, q, axis, method)
-    elif method == 'linear':
+    elif method == 'linear' and not _is_fraction_scalar(q) and isinstance(a, ndarray):
         # Use Rust backend for linear interpolation (fast path)
         result = _native.quantile(a, q, axis)
         if not isinstance(result, ndarray):
@@ -1291,19 +1518,21 @@ def _quantile_core(a, q, axis, method, keepdims, orig_axis_for_keepdims=None):
         # Python implementation for non-linear methods
         if axis is None:
             vals = a.flatten().tolist()
-            vals.sort(key=lambda x: (x != x, x))
-            result = asarray(_compute_quantile_1d(vals, q, method))
+            vals.sort(key=_quantile_sort_key)
+            result = _compute_quantile_1d(vals, q, method)
         else:
             result = _quantile_along_axis(a, q, axis, method)
 
     # Apply result dtype based on method and input dtype
-    target_dtype = _get_quantile_result_dtype(a, method)
-    if not isinstance(result, ndarray):
+    if target_dtype is None:
+        target_dtype = _get_quantile_result_dtype(a, method, q)
+    if target_dtype is not None and not isinstance(result, ndarray):
         result = asarray(result)
-    try:
-        result = result.astype(target_dtype)
-    except Exception:
-        pass
+    if target_dtype is not None:
+        try:
+            result = result.astype(target_dtype)
+        except Exception:
+            pass
 
     if keepdims:
         kd_axis = orig_axis_for_keepdims if orig_axis_for_keepdims is not None else axis
@@ -1351,12 +1580,20 @@ def _validate_q_range(q, is_percentile=False):
         v = float(v)
         if _m.isnan(v) or v < lo or v > hi:
             raise ValueError("{} must be in the range {}".format(label, rng))
+    def _walk(values):
+        if isinstance(values, ndarray):
+            for qi in values.flatten().tolist():
+                _walk(qi)
+            return
+        if isinstance(values, (list, tuple)):
+            for item in values:
+                _walk(item)
+            return
+        _check(values)
     if hasattr(q, '__iter__') and not isinstance(q, ndarray):
-        for qi in q:
-            _check(qi)
+        _walk(q)
     elif isinstance(q, ndarray):
-        for qi in q.flatten().tolist():
-            _check(qi)
+        _walk(q)
     else:
         _check(q)
 
@@ -1371,13 +1608,42 @@ def _normalize_quantile_axis(axis, ndim):
 
 
 def _normalize_q_array(q, *, scale=1.0):
+    preserve_exact = _quantile_preserve_exact_result(q)
+    if preserve_exact:
+        q_arr = asarray(q, dtype=object) if not isinstance(q, ndarray) else q
+        q_flat = [_scale_quantile_scalar(qi, scale) for qi in q_arr.flatten().tolist()]
+        return q_arr, q_flat
     q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-    q_flat = [float(qi) * scale for qi in q_arr.flatten().tolist()]
+    q_flat = [_scale_quantile_scalar(qi, scale) for qi in q_arr.flatten().tolist()]
     return q_arr, q_flat
 
 
 def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dtype):
     import numpy as _np
+
+    if str(a.dtype).startswith(("datetime64", "timedelta64")):
+        from ._helpers import _make_temporal_array
+        values = []
+        for r in results:
+            if isinstance(r, _ObjectArray):
+                values.extend(r.flatten().tolist())
+            elif isinstance(r, ndarray):
+                values.extend(r.flatten().tolist())
+            else:
+                values.append(r)
+        stacked = _make_temporal_array(values, str(a.dtype))
+        if q_arr.ndim > 1:
+            stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
+        return stacked
+
+    if target_dtype is None and all(not isinstance(r, (ndarray, _ObjectArray)) for r in results):
+        stacked = asarray([
+            float(r) if _is_fraction_scalar(r) else r
+            for r in results
+        ])
+        if q_arr.ndim > 1:
+            stacked = stacked.reshape(q_arr.shape)
+        return stacked
 
     results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
     if keepdims:
@@ -1395,10 +1661,11 @@ def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dt
 
 def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dtype):
     axis, orig_axis = _normalize_quantile_axis(axis, a.ndim)
+    preserve_exact = _quantile_preserve_exact_result(q)
 
     if isinstance(q, (list, tuple, ndarray)):
         q_arr, q_flat = _normalize_q_array(q, scale=q_scale)
-        results = [_quantile_core(a, qi, axis, method, keepdims=False) for qi in q_flat]
+        results = [_quantile_core(a, qi, axis, method, keepdims=False, target_dtype=result_dtype) for qi in q_flat]
         stacked = _stack_quantile_results(
             a, q_arr, results, keepdims=keepdims, orig_axis=orig_axis, target_dtype=result_dtype
         )
@@ -1407,9 +1674,37 @@ def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dty
             return out
         return stacked
 
+    scaled_q = _scale_quantile_scalar(q, q_scale)
+    if isinstance(a, ndarray) and not _contains_fraction_data(a) and _is_integral_scalar(scaled_q):
+        scaled_q = float(scaled_q)
     result = _quantile_core(
-        a, float(q) * q_scale, axis, method, keepdims=keepdims, orig_axis_for_keepdims=orig_axis
+        a, scaled_q, axis, method, keepdims=keepdims,
+        orig_axis_for_keepdims=orig_axis, target_dtype=result_dtype
     )
+    if not keepdims and out is None:
+        scalar = _extract_zero_dim_scalar(result)
+        if scalar is not result:
+            if (
+                getattr(scalar, '_is_datetime64', False)
+                or getattr(scalar, '_is_timedelta64', False)
+                or scalar == 'NaT'
+            ):
+                return _ObjectArray([scalar], str(a.dtype), shape=())
+            return scalar
+        if not isinstance(result, (ndarray, _ObjectArray)):
+            if (
+                getattr(result, '_is_datetime64', False)
+                or getattr(result, '_is_timedelta64', False)
+                or result == 'NaT'
+            ):
+                return _ObjectArray([result], str(a.dtype), shape=())
+            return result
+    if (
+        isinstance(result, _ObjectArray)
+        and str(a.dtype).startswith(("datetime64", "timedelta64"))
+        and str(result.dtype) == "object"
+    ):
+        result = _ObjectArray(result.flatten().tolist(), str(a.dtype), shape=result.shape)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
@@ -1419,8 +1714,13 @@ def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dty
 
 
 def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
-    if not isinstance(a, ndarray):
-        a = array(a)
+    if not isinstance(a, (ndarray, _ObjectArray)):
+        if _quantile_preserve_exact_result(q) or _contains_fraction_data(a):
+            a = array(a, dtype=object)
+        else:
+            a = array(a)
+    if str(a.dtype).startswith("complex"):
+        raise TypeError("a must be an array of real numbers")
 
     # Validate method
     if method not in _VALID_QUANTILE_METHODS:
@@ -1433,16 +1733,28 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
-    return _quantile_dispatch(
+    result = _quantile_dispatch(
         a, q, axis, out, method, keepdims,
         q_scale=1.0,
-        result_dtype=_get_quantile_result_dtype(a, method),
+        result_dtype=_get_quantile_result_dtype(a, method, q),
     )
+    if (
+        isinstance(result, _ObjectArray)
+        and str(a.dtype).startswith(("datetime64", "timedelta64"))
+        and str(result.dtype) == "object"
+    ):
+        return _ObjectArray(result.flatten().tolist(), str(a.dtype), shape=result.shape)
+    return result
 
 
 def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
-    if not isinstance(a, ndarray):
-        a = array(a)
+    if not isinstance(a, (ndarray, _ObjectArray)):
+        if _quantile_preserve_exact_result(q) or _contains_fraction_data(a):
+            a = array(a, dtype=object)
+        else:
+            a = array(a)
+    if str(a.dtype).startswith("complex"):
+        raise TypeError("a must be an array of real numbers")
 
     # Validate method
     if method not in _VALID_QUANTILE_METHODS:
@@ -1455,11 +1767,18 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
-    return _quantile_dispatch(
+    result = _quantile_dispatch(
         a, q, axis, out, method, keepdims,
         q_scale=0.01,
-        result_dtype=_get_quantile_result_dtype(a, method),
+        result_dtype=_get_quantile_result_dtype(a, method, q),
     )
+    if (
+        isinstance(result, _ObjectArray)
+        and str(a.dtype).startswith(("datetime64", "timedelta64"))
+        and str(result.dtype) == "object"
+    ):
+        return _ObjectArray(result.flatten().tolist(), str(a.dtype), shape=result.shape)
+    return result
 
 
 def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):

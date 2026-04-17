@@ -135,7 +135,9 @@ def _get_numpy_dtype_name(x):
 
 def _wrap_scalar_result(value, dtype_name):
     """Wrap a Python value in the appropriate numpy scalar type for the given dtype."""
-    if dtype_name in ('bool', 'int8', 'int16', 'int32', 'int64',
+    if dtype_name == 'bool':
+        return bool_(value)
+    if dtype_name in ('int8', 'int16', 'int32', 'int64',
                       'uint8', 'uint16', 'uint32', 'uint64'):
         # Handle integer overflow wrapping
         try:
@@ -520,7 +522,7 @@ def _scalar_cmp_result(self_val, self_dn, other, op_name):
         result = op_func(self_val, other_val)
     except TypeError:
         return NotImplemented
-    return _NumpyIntScalar(1 if result else 0, 'bool')
+    return bool_(result)
 
 
 class _NumpyIntScalar(int):
@@ -1266,11 +1268,17 @@ class _ScalarTypeMeta(type):
                     return str(value).encode('ascii')
                 return value
             return base_value
+        if scalar_name == 'bool':
+            try:
+                base_value = cls._python_type(value)
+            except (ValueError, TypeError):
+                return value
+            return cls.__new__(cls, base_value)
         try:
             base_value = cls._python_type(value)
         except (ValueError, TypeError):
             return value
-        if scalar_name in ('bool', 'int8', 'int16', 'int32', 'int64',
+        if scalar_name in ('int8', 'int16', 'int32', 'int64',
                            'uint8', 'uint16', 'uint32', 'uint64'):
             return _NumpyIntScalar(base_value, scalar_name)
         if scalar_name in ('float16', 'float32', 'float64'):
@@ -1518,9 +1526,22 @@ class flexible(generic, metaclass=_ScalarTypeMeta, scalar_name="flexible"):
     """Base class for flexible types (string, void)."""
     pass
 
-class bool_(generic, metaclass=_ScalarTypeMeta, scalar_name="bool", python_type=bool):
+class bool_(_NumpyIntScalar, generic, metaclass=_ScalarTypeMeta, scalar_name="bool", python_type=bool):
     """Boolean scalar type."""
-    pass
+    _TRUE_SINGLETON = None
+    _FALSE_SINGLETON = None
+
+    def __new__(cls, value=0, dtype_name="bool"):
+        truth = 1 if bool(value) else 0
+        if truth:
+            if cls._TRUE_SINGLETON is None:
+                obj = _NumpyIntScalar.__new__(cls, 1, 'bool')
+                cls._TRUE_SINGLETON = obj
+            return cls._TRUE_SINGLETON
+        if cls._FALSE_SINGLETON is None:
+            obj = _NumpyIntScalar.__new__(cls, 0, 'bool')
+            cls._FALSE_SINGLETON = obj
+        return cls._FALSE_SINGLETON
 
 # Specific signed integer types
 class int8(signedinteger, metaclass=_ScalarTypeMeta, scalar_name="int8", python_type=int):
@@ -1602,8 +1623,8 @@ ulong = uint64
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-True_ = True
-False_ = False
+True_ = bool_(True)
+False_ = bool_(False)
 
 # ---------------------------------------------------------------------------
 # sctypes and sctypeDict

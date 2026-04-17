@@ -85,7 +85,7 @@ def _transpose_with_axes(a, axes):
     # Fast-paths
     if axes == list(range(ndim_a)):
         return a.copy() if hasattr(a, 'copy') else array(a.tolist())
-    if ndim_a == 2 and axes == [1, 0]:
+    if ndim_a == 2 and axes == [1, 0] and type(a).__name__ != '_ObjectArray':
         return a.T
     # Generic: walk every index of the output and pick from source
     new_shape = tuple(shape[ax] for ax in axes)

@@ -212,7 +212,11 @@ class _ObjectArray:
             n *= s
         return n
     @property
-    def T(self): return self
+    def T(self):
+        if len(self._shape) <= 1:
+            return self
+        from ._shape import _transpose_with_axes
+        return _transpose_with_axes(self, list(range(len(self._shape) - 1, -1, -1)))
     @property
     def real(self):
         """Return real part of each element."""
@@ -288,9 +292,23 @@ class _ObjectArray:
             shape = tuple(shape[0])
         else:
             shape = tuple(shape)
+        infer_idx = None
         n = 1
-        for s in shape:
+        for i, s in enumerate(shape):
+            if s == -1:
+                if infer_idx is not None:
+                    raise ValueError("can only specify one unknown dimension")
+                infer_idx = i
+                continue
             n *= s
+        if infer_idx is not None:
+            size = len(self._data)
+            if n == 0 or size % n != 0:
+                raise ValueError("cannot reshape array of size {} into shape {}".format(len(self._data), shape))
+            shape = list(shape)
+            shape[infer_idx] = size // n
+            shape = tuple(shape)
+            n *= shape[infer_idx]
         if n != len(self._data):
             raise ValueError("cannot reshape array of size {} into shape {}".format(len(self._data), shape))
         return _ObjectArray(list(self._data), self._dtype, shape=shape, itemsize=self._itemsize)
