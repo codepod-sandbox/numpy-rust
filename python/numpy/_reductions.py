@@ -1819,19 +1819,14 @@ def _finalize_nan_multi_q_results(a, q_arr, results, *, q_is_scalar, keepdims, a
 
 
 def _validate_weight_vector(weights):
-    _any = __import__("builtins").any
+    import numpy as _np
     w = asarray(weights, dtype='float64') if not isinstance(weights, ndarray) else weights.astype('float64')
-    vals = w.flatten().tolist()
-    if _any(v < 0 for v in vals):
+    if bool(_np.any(w < 0)):
         raise ValueError("Weights must be non-negative")
-    total = 0.0
-    for v in vals:
-        total += v
-    bad = _any((v != v) or v == float("inf") or v == float("-inf") for v in vals)
-    total_bad = total != total or total == float("inf") or total == float("-inf")
-    if bad or total_bad or total <= 0:
+    total = float(sum(w))
+    if bool(_np.any(~_np.isfinite(w))) or not _math.isfinite(total) or total <= 0:
         raise ValueError("Weights included NaN, inf or were all zero")
-    return vals
+    return w.flatten().tolist()
 
 
 def _weighted_inverted_cdf_1d(vals, weights, q):
@@ -2206,7 +2201,8 @@ def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
         has_nan = False
         try:
             if getattr(a.dtype, "kind", "") == "f":
-                has_nan = any(_math.isnan(float(v)) for v in a.flatten().tolist())
+                import numpy as _np
+                has_nan = bool(_np.any(_np.isnan(a)))
         except Exception:
             has_nan = False
         if not has_nan and axis is not None and not isinstance(axis, list):
