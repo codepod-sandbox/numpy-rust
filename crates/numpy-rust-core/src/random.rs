@@ -147,9 +147,7 @@ mod inner {
 
         pub fn exponential(&mut self, scale: f64, shape: &[usize]) -> Result<NdArray> {
             if scale < 0.0 {
-                return Err(NumpyError::ValueError(
-                    "scale < 0".into(),
-                ));
+                return Err(NumpyError::ValueError("scale < 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
@@ -161,9 +159,7 @@ mod inner {
 
         pub fn weibull(&mut self, a: f64, shape: &[usize]) -> Result<NdArray> {
             if a <= 0.0 {
-                return Err(NumpyError::ValueError(
-                    "a <= 0".into(),
-                ));
+                return Err(NumpyError::ValueError("a <= 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
@@ -175,9 +171,7 @@ mod inner {
 
         pub fn rayleigh(&mut self, scale: f64, shape: &[usize]) -> Result<NdArray> {
             if scale < 0.0 {
-                return Err(NumpyError::ValueError(
-                    "scale < 0".into(),
-                ));
+                return Err(NumpyError::ValueError("scale < 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
@@ -189,9 +183,7 @@ mod inner {
 
         pub fn power(&mut self, a: f64, shape: &[usize]) -> Result<NdArray> {
             if a <= 0.0 {
-                return Err(NumpyError::ValueError(
-                    "a <= 0".into(),
-                ));
+                return Err(NumpyError::ValueError("a <= 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
@@ -203,9 +195,7 @@ mod inner {
 
         pub fn pareto(&mut self, a: f64, shape: &[usize]) -> Result<NdArray> {
             if a <= 0.0 {
-                return Err(NumpyError::ValueError(
-                    "a <= 0".into(),
-                ));
+                return Err(NumpyError::ValueError("a <= 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
@@ -217,9 +207,7 @@ mod inner {
 
         pub fn laplace(&mut self, loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
             if scale < 0.0 {
-                return Err(NumpyError::ValueError(
-                    "scale < 0".into(),
-                ));
+                return Err(NumpyError::ValueError("scale < 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
@@ -239,14 +227,14 @@ mod inner {
 
         pub fn logistic(&mut self, loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
             if scale < 0.0 {
-                return Err(NumpyError::ValueError(
-                    "scale < 0".into(),
-                ));
+                return Err(NumpyError::ValueError("scale < 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
                 .map(|_| {
-                    let u = self.random_scalar().clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+                    let u = self
+                        .random_scalar()
+                        .clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
                     loc + scale * (u / (1.0 - u)).ln()
                 })
                 .collect();
@@ -256,14 +244,14 @@ mod inner {
 
         pub fn gumbel(&mut self, loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
             if scale < 0.0 {
-                return Err(NumpyError::ValueError(
-                    "scale < 0".into(),
-                ));
+                return Err(NumpyError::ValueError("scale < 0".into()));
             }
             let size: usize = shape.iter().product();
             let data: Vec<f64> = (0..size)
                 .map(|_| {
-                    let u = self.random_scalar().clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+                    let u = self
+                        .random_scalar()
+                        .clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
                     loc - scale * (-(u.ln())).ln()
                 })
                 .collect();
@@ -424,7 +412,9 @@ mod inner {
             if !(0.0 < p && p <= 1.0) {
                 return Err(NumpyError::ValueError("p <= 0, p > 1 or p is NaN".into()));
             }
-            let u = self.random_scalar().clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+            let u = self
+                .random_scalar()
+                .clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
             Ok((u.ln() / (1.0 - p).ln()).ceil())
         }
 
@@ -451,7 +441,9 @@ mod inner {
                 return Err(NumpyError::ValueError("pvals must not be empty".into()));
             }
             if pvals.iter().any(|&p| p < 0.0 || p.is_nan()) {
-                return Err(NumpyError::ValueError("pvals < 0, pvals > 1 or pvals contains NaNs".into()));
+                return Err(NumpyError::ValueError(
+                    "pvals < 0, pvals > 1 or pvals contains NaNs".into(),
+                ));
             }
 
             let samples: usize = if sample_shape.is_empty() {
@@ -522,7 +514,9 @@ mod inner {
             shape: &[usize],
         ) -> Result<NdArray> {
             if ngood < 0 || nbad < 0 || nsample < 0 {
-                return Err(NumpyError::ValueError("parameters must be non-negative".into()));
+                return Err(NumpyError::ValueError(
+                    "parameters must be non-negative".into(),
+                ));
             }
             if nsample > ngood + nbad {
                 return Err(NumpyError::ValueError("nsample > ngood + nbad".into()));
@@ -622,7 +616,9 @@ mod inner {
             let mut out = Vec::with_capacity(size);
             if kappa < 1e-6 {
                 for _ in 0..size {
-                    out.push(-std::f64::consts::PI + 2.0 * std::f64::consts::PI * self.random_scalar());
+                    out.push(
+                        -std::f64::consts::PI + 2.0 * std::f64::consts::PI * self.random_scalar(),
+                    );
                 }
             } else {
                 let tau = 1.0 + (1.0 + 4.0 * kappa * kappa).sqrt();
@@ -636,8 +632,7 @@ mod inner {
                     let u2 = self.random_scalar();
                     if u2 < c * (2.0 - c) || u2 <= c * (1.0 - c).exp() {
                         let u3 = self.random_scalar();
-                        let theta = mu
-                            + if u3 > 0.5 { 1.0 } else { -1.0 } * f.acos();
+                        let theta = mu + if u3 > 0.5 { 1.0 } else { -1.0 } * f.acos();
                         out.push(theta);
                     }
                 }
@@ -655,8 +650,7 @@ mod inner {
             for _ in 0..size {
                 let v = self.standard_normal_scalar();
                 let y = v * v;
-                let x = mean
-                    + (mean * mean * y) / (2.0 * scale)
+                let x = mean + (mean * mean * y) / (2.0 * scale)
                     - (mean / (2.0 * scale))
                         * (4.0 * mean * scale * y + mean * mean * y * y).sqrt();
                 let u = self.random_scalar();
@@ -871,12 +865,7 @@ mod inner {
         with_rng(|rng| rng.negative_binomial(n, p, shape))
     }
 
-    pub fn hypergeometric(
-        ngood: i64,
-        nbad: i64,
-        nsample: i64,
-        shape: &[usize],
-    ) -> Result<NdArray> {
+    pub fn hypergeometric(ngood: i64, nbad: i64, nsample: i64, shape: &[usize]) -> Result<NdArray> {
         with_rng(|rng| rng.hypergeometric(ngood, nbad, nsample, shape))
     }
 

@@ -69,10 +69,7 @@ fn weighted_inverted_cdf_1d(values: &[f64], weights: &[f64], q: f64) -> Result<f
             return Ok(value);
         }
     }
-    Ok(pairs
-        .last()
-        .map(|(value, _)| *value)
-        .unwrap_or(f64::NAN))
+    Ok(pairs.last().map(|(value, _)| *value).unwrap_or(f64::NAN))
 }
 
 fn prepare_numeric_float64_input(
@@ -233,7 +230,9 @@ impl NdArray {
                     }
                     let shared_weights: Vec<f64> = w_arr.iter().copied().collect();
                     validate_weights(&shared_weights)?;
-                    for (lane, result_elem) in arr.lanes(Axis(ax)).into_iter().zip(result.iter_mut()) {
+                    for (lane, result_elem) in
+                        arr.lanes(Axis(ax)).into_iter().zip(result.iter_mut())
+                    {
                         let vals: Vec<f64> = lane.iter().copied().collect();
                         *result_elem = weighted_inverted_cdf_1d(&vals, &shared_weights, q)?;
                     }

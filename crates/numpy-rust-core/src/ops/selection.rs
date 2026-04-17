@@ -166,7 +166,10 @@ fn union_ord<T: Ord + Copy>(a_values: Vec<T>, b_values: Vec<T>) -> Vec<T> {
 
 fn setdiff_ord<T: Ord + Copy + Hash>(a_values: Vec<T>, b_values: Vec<T>) -> Vec<T> {
     let b_set: HashSet<T> = b_values.into_iter().collect();
-    let mut result: Vec<T> = a_values.into_iter().filter(|v| !b_set.contains(v)).collect();
+    let mut result: Vec<T> = a_values
+        .into_iter()
+        .filter(|v| !b_set.contains(v))
+        .collect();
     result.sort();
     result.dedup();
     result
@@ -210,7 +213,10 @@ fn setdiff_float64(a_values: Vec<f64>, b_values: Vec<f64>) -> Vec<f64> {
 
 fn isin_float64(element: &[f64], test_elements: &[f64]) -> Vec<bool> {
     let test_set: HashSet<u64> = test_elements.iter().map(|v| v.to_bits()).collect();
-    element.iter().map(|v| test_set.contains(&v.to_bits())).collect()
+    element
+        .iter()
+        .map(|v| test_set.contains(&v.to_bits()))
+        .collect()
 }
 
 fn intersect_float32(a_values: Vec<f32>, b_values: Vec<f32>) -> Vec<f32> {
@@ -246,7 +252,10 @@ fn setdiff_float32(a_values: Vec<f32>, b_values: Vec<f32>) -> Vec<f32> {
 
 fn isin_float32(element: &[f32], test_elements: &[f32]) -> Vec<bool> {
     let test_set: HashSet<u32> = test_elements.iter().map(|v| v.to_bits()).collect();
-    element.iter().map(|v| test_set.contains(&v.to_bits())).collect()
+    element
+        .iter()
+        .map(|v| test_set.contains(&v.to_bits()))
+        .collect()
 }
 
 fn intersect_string(a_values: Vec<String>, b_values: Vec<String>) -> Vec<String> {
@@ -266,7 +275,10 @@ fn union_string(a_values: Vec<String>, b_values: Vec<String>) -> Vec<String> {
 
 fn setdiff_string(a_values: Vec<String>, b_values: Vec<String>) -> Vec<String> {
     let b_set: HashSet<String> = b_values.into_iter().collect();
-    let mut result: Vec<String> = a_values.into_iter().filter(|v| !b_set.contains(v)).collect();
+    let mut result: Vec<String> = a_values
+        .into_iter()
+        .filter(|v| !b_set.contains(v))
+        .collect();
     result.sort();
     result.dedup();
     result
@@ -525,25 +537,34 @@ pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
 pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
     let shape: Vec<usize> = element.shape().to_vec();
     let result = match (element.data(), test_elements.data()) {
-        (ArrayData::Bool(_), ArrayData::Bool(_)) => {
-            isin_hashable(&flatten_to_bool_vec(element), &flatten_to_bool_vec(test_elements))
-        }
-        (ArrayData::Int32(_), ArrayData::Int32(_)) => {
-            isin_hashable(&flatten_to_int32_vec(element), &flatten_to_int32_vec(test_elements))
-        }
-        (ArrayData::Int64(_), ArrayData::Int64(_)) => {
-            isin_hashable(&flatten_to_int64_vec(element), &flatten_to_int64_vec(test_elements))
-        }
-        (ArrayData::Float32(_), ArrayData::Float32(_)) => {
-            isin_float32(&flatten_to_float32_vec(element), &flatten_to_float32_vec(test_elements))
-        }
-        (ArrayData::Float64(_), ArrayData::Float64(_)) => {
-            isin_float64(&flatten_to_float64_vec(element), &flatten_to_float64_vec(test_elements))
-        }
-        (ArrayData::Str(_), ArrayData::Str(_)) => {
-            isin_string(&flatten_to_string_vec(element), &flatten_to_string_vec(test_elements))
-        }
-        _ => isin_float64(&flatten_to_float64_vec(element), &flatten_to_float64_vec(test_elements)),
+        (ArrayData::Bool(_), ArrayData::Bool(_)) => isin_hashable(
+            &flatten_to_bool_vec(element),
+            &flatten_to_bool_vec(test_elements),
+        ),
+        (ArrayData::Int32(_), ArrayData::Int32(_)) => isin_hashable(
+            &flatten_to_int32_vec(element),
+            &flatten_to_int32_vec(test_elements),
+        ),
+        (ArrayData::Int64(_), ArrayData::Int64(_)) => isin_hashable(
+            &flatten_to_int64_vec(element),
+            &flatten_to_int64_vec(test_elements),
+        ),
+        (ArrayData::Float32(_), ArrayData::Float32(_)) => isin_float32(
+            &flatten_to_float32_vec(element),
+            &flatten_to_float32_vec(test_elements),
+        ),
+        (ArrayData::Float64(_), ArrayData::Float64(_)) => isin_float64(
+            &flatten_to_float64_vec(element),
+            &flatten_to_float64_vec(test_elements),
+        ),
+        (ArrayData::Str(_), ArrayData::Str(_)) => isin_string(
+            &flatten_to_string_vec(element),
+            &flatten_to_string_vec(test_elements),
+        ),
+        _ => isin_float64(
+            &flatten_to_float64_vec(element),
+            &flatten_to_float64_vec(test_elements),
+        ),
     };
 
     NdArray::from_data(ArrayData::Bool(
