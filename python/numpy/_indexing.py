@@ -509,9 +509,8 @@ def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
 
     Delegates to histogramdd for the actual computation.
     """
-    import numpy as _np
-    x = _np.asarray(x)
-    y = _np.asarray(y)
+    x = asarray(x)
+    y = asarray(y)
 
     if x.size != y.size:
         raise ValueError('x and y must have the same length.')
@@ -524,11 +523,9 @@ def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
     else:
         dd_bins = [bins, bins]
 
-    # Stack x, y into (N, 2) sample
-    sample = _np.column_stack([x.flatten(), y.flatten()])
-
-    hist, edges = _np.histogramdd(sample, bins=dd_bins, range=range,
-                                  density=density, weights=weights)
+    hist, edges = histogramdd(
+        (x, y), bins=dd_bins, range=range, density=density, weights=weights
+    )
     return hist, edges[0], edges[1]
 
 
