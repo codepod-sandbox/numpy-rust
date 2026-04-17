@@ -1739,12 +1739,11 @@ def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dt
         from ._helpers import _make_temporal_array
         values = []
         for r in results:
-            if isinstance(r, _ObjectArray):
-                values.extend(r.flatten().tolist())
-            elif isinstance(r, ndarray):
-                values.extend(r.flatten().tolist())
-            else:
+            flat = _flat_arraylike_data(r)
+            if flat is None:
                 values.append(r)
+            else:
+                values.extend(flat)
         stacked = _make_temporal_array(values, str(a.dtype))
         if q_arr.ndim > 1:
             stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
@@ -1816,6 +1815,19 @@ def _finalize_nan_multi_q_results(a, q_arr, results, *, q_is_scalar, keepdims, a
         _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
         return out
     return result
+
+
+def _warn_all_nan_slices(a, result, *, stacklevel):
+    import warnings as _w
+    import numpy as _npw
+    try:
+        _nan_mask = _npw.isnan(result)
+        _nan_count = int(_npw.count_nonzero(_nan_mask))
+    except TypeError:
+        _nan_count = 0
+    _warn_count = 1 if (a.size == 0 and _nan_count > 0) else _nan_count
+    for _ in range(_warn_count):
+        _w.warn("All-NaN slice encountered", RuntimeWarning, stacklevel=stacklevel)
 
 
 def _validate_weight_vector(weights):
@@ -2668,15 +2680,7 @@ def nanmedian(a, axis=None, out=None, overwrite_input=False, keepdims=False):
                 result = _scalar_result(_v, a, _result_dt)
     else:
         # array result - emit one warning per all-NaN slice
-        # For empty arrays, emit at most 1 warning (numpy semantics)
-        try:
-            _nan_mask = _npw.isnan(result)
-            _nan_count = int(_npw.count_nonzero(_nan_mask))
-        except TypeError:
-            _nan_count = 0
-        _warn_count = 1 if (a.size == 0 and _nan_count > 0) else _nan_count
-        for _ in range(_warn_count):
-            _warnings.warn("All-NaN slice encountered", RuntimeWarning, stacklevel=2)
+        _warn_all_nan_slices(a, result, stacklevel=2)
         if str(result.dtype) != _result_dt:
             try:
                 result = result.astype(_result_dt)
@@ -2720,16 +2724,7 @@ def _nanq_warn_and_wrap(result, a, _nan_result_dtype, axis=None):
             else:
                 result = _scalar_result(_v, a, _nan_result_dtype)
     else:
-        # array result - emit one warning per all-NaN slice
-        # For empty input arrays, emit at most 1 warning (numpy semantics)
-        try:
-            _nan_mask = _npw.isnan(result)
-            _nan_count = int(_npw.count_nonzero(_nan_mask))
-        except TypeError:
-            _nan_count = 0
-        _warn_count = 1 if (a.size == 0 and _nan_count > 0) else _nan_count
-        for _ in range(_warn_count):
-            _w.warn("All-NaN slice encountered", RuntimeWarning, stacklevel=3)
+        _warn_all_nan_slices(a, result, stacklevel=3)
         if str(result.dtype) != _nan_result_dtype:
             try:
                 result = result.astype(_nan_result_dtype)
