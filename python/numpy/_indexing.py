@@ -959,13 +959,9 @@ def tri(N, M=None, k=0, dtype=None):
         M = N
     if dtype is None:
         dtype = 'float64'
-    rows = []
-    for i in range(N):
-        row = []
-        for j in range(M):
-            row.append(1 if j <= i + k else 0)
-        rows.append(row)
-    return array(rows, dtype=dtype)
+    row_idx = arange(N).reshape((N, 1))
+    col_idx = arange(M).reshape((1, M))
+    return (col_idx <= (row_idx + k)).astype(dtype)
 
 
 def tril(m, k=0):
