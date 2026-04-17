@@ -18,10 +18,7 @@ fn parse_float64_vec(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<f64
     Ok(data.iter().copied().collect())
 }
 
-fn parse_float64_array(
-    obj: &PyObjectRef,
-    vm: &VirtualMachine,
-) -> PyResult<(Vec<f64>, Vec<usize>)> {
+fn parse_float64_array(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<(Vec<f64>, Vec<usize>)> {
     let arr = obj_to_ndarray(obj, vm)?;
     let shape = arr.shape().to_vec();
     let flat = arr.flatten().astype(DType::Float64);
@@ -184,7 +181,12 @@ mod _random {
     }
 
     #[pyfunction]
-    fn laplace(loc: f64, scale: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn laplace(
+        loc: f64,
+        scale: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::laplace(loc, scale, &sh)
             .map(PyNdArray::from_core)
@@ -192,7 +194,12 @@ mod _random {
     }
 
     #[pyfunction]
-    fn logistic(loc: f64, scale: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn logistic(
+        loc: f64,
+        scale: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::logistic(loc, scale, &sh)
             .map(PyNdArray::from_core)
@@ -200,7 +207,12 @@ mod _random {
     }
 
     #[pyfunction]
-    fn gumbel(loc: f64, scale: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn gumbel(
+        loc: f64,
+        scale: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::gumbel(loc, scale, &sh)
             .map(PyNdArray::from_core)
@@ -208,7 +220,12 @@ mod _random {
     }
 
     #[pyfunction]
-    fn gamma(shape_param: f64, scale: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn gamma(
+        shape_param: f64,
+        scale: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::gamma(shape_param, scale, &sh)
             .map(PyNdArray::from_core)
@@ -224,7 +241,11 @@ mod _random {
     }
 
     #[pyfunction]
-    fn dirichlet(alpha: PyObjectRef, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn dirichlet(
+        alpha: PyObjectRef,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let alpha = parse_float64_vec(&alpha, vm)?;
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::dirichlet(&alpha, &sh)
@@ -275,7 +296,12 @@ mod _random {
     }
 
     #[pyfunction]
-    fn vonmises(mu: f64, kappa: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn vonmises(
+        mu: f64,
+        kappa: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::vonmises(mu, kappa, &sh)
             .map(PyNdArray::from_core)
@@ -313,7 +339,12 @@ mod _random {
     }
 
     #[pyfunction]
-    fn negative_binomial(n: i64, p: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn negative_binomial(
+        n: i64,
+        p: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
         let sh = extract_shape(&shape, vm)?;
         numpy_rust_core::random::negative_binomial(n, p, &sh)
             .map(PyNdArray::from_core)
@@ -818,6 +849,24 @@ mod _random {
         let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
         let arr = rng
             .triangular(left, mode, right, &sh)
+            .map(PyNdArray::from_core)
+            .map_err(|e| err(e, vm))?
+            .to_pyobject(vm);
+        Ok(make_state_tuple(rng.state(), arr, vm))
+    }
+
+    #[pyfunction]
+    fn choice_with_state(
+        state: u64,
+        a: PyRef<PyNdArray>,
+        size: usize,
+        replace: vm::function::OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let replace = replace.unwrap_or(true);
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let arr = rng
+            .choice(&a.inner(), size, replace)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))?
             .to_pyobject(vm);

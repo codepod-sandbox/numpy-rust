@@ -49,7 +49,7 @@ def diagonal(a, offset=0, axis1=0, axis2=1):
     if diag_len <= 0:
         out_shape = list(batch_shape) + [0]
         return zeros(out_shape)
-    flat = a.flatten().tolist()
+    flat = _flat_values(a)
     batch_size = 1
     for s in batch_shape:
         batch_size *= s
@@ -239,6 +239,68 @@ def _coerce_histogram_weight_value(value, dtype_name):
     return value
 
 
+def _histogram_accumulate_counts(flat, edge_list, count_dtype, w_list=None, *, lo=None, hi=None):
+    n_bins = len(edge_list) - 1
+    if count_dtype == 'float64':
+        counts = [0.0] * n_bins
+    elif count_dtype == 'complex128':
+        counts = [0j] * n_bins
+    else:
+        counts = [0] * n_bins
+    for idx_val, val in enumerate(flat):
+        if lo is not None and hi is not None and (val < lo or val > hi):
+            continue
+        for j in _builtin_range(n_bins):
+            is_last = (j == n_bins - 1)
+            in_bin = (edge_list[j] <= val <= edge_list[j + 1]) if is_last else (edge_list[j] <= val < edge_list[j + 1])
+            if in_bin:
+                counts[j] += (_coerce_histogram_weight_value(w_list[idx_val], count_dtype) if w_list is not None else 1.0)
+                break
+    return counts
+
+
+def _histogramdd_flat_index(bin_indices, bins_per_dim):
+    flat_idx = 0
+    stride = 1
+    for d in _builtin_range(len(bins_per_dim) - 1, -1, -1):
+        flat_idx += bin_indices[d] * stride
+        stride *= bins_per_dim[d]
+    return flat_idx
+
+
+def _histogramdd_row_bin_indices(row, edges, bins_per_dim):
+    bin_indices = []
+    for d in _builtin_range(len(bins_per_dim)):
+        val = row[d]
+        edge = edges[d]
+        nb = bins_per_dim[d]
+        found = False
+        for j in _builtin_range(nb):
+            if (val >= edge[j] and val < edge[j + 1]) or (j == nb - 1 and val == edge[j + 1]):
+                bin_indices.append(j)
+                found = True
+                break
+        if not found:
+            return None
+    return bin_indices
+
+
+def _flat_int_index_values(arr):
+    if hasattr(arr, 'flatten'):
+        return [int(v) for v in arr.flatten().tolist()]
+    return [int(arr)]
+
+
+def _flat_values(arr):
+    return arr.flatten().tolist() if hasattr(arr, 'flatten') else [arr]
+
+
+def _flat_weight_values(weights):
+    if weights is None:
+        return None
+    return _flat_values(asarray(weights))
+
+
 def _normalize_histogramdd_bins(bins, n_dims):
     """Normalize histogramdd-style bins into one spec per dimension."""
     if isinstance(bins, int):
@@ -253,7 +315,7 @@ def _normalize_histogramdd_bins(bins, n_dims):
 def _resolve_histogramdd_edges(bin_spec, values, range_spec):
     """Resolve one histogramdd dimension bin spec to explicit edges."""
     if isinstance(bin_spec, ndarray):
-        edge = bin_spec.flatten().tolist()
+        edge = _flat_values(bin_spec)
         return edge, len(edge) - 1
     if isinstance(bin_spec, (list, tuple)):
         edge = [float(v) for v in bin_spec]
@@ -276,7 +338,7 @@ def histogram_bin_edges(a, bins=10, range=None, weights=None):
     if isinstance(bins, str):
         return _histogram_bin_edges_from_method(a, bins, range=range)
     if isinstance(bins, int):
-        flat = a.flatten().tolist()
+        flat = _flat_values(a)
         lo, hi = _histogram_range_from_flat(flat, range)
         edges = linspace(lo, hi, bins + 1)
         return edges
@@ -286,15 +348,15 @@ def histogram_bin_edges(a, bins=10, range=None, weights=None):
 
 def _histogram_bin_edges_from_method(a, method, range=None):
     """Compute bin edges using an automatic bin-width method (string name)."""
-    flat = a.flatten()
-    n = flat.size
+    flat = _flat_values(a)
+    n = len(flat)
     if range is not None:
         lo, hi = float(range[0]), float(range[1])
         # Filter data to range
-        vals = [float(flat[i]) for i in _builtin_range(n) if lo <= float(flat[i]) <= hi]
+        vals = [float(v) for v in flat if lo <= float(v) <= hi]
         n_eff = len(vals)
     else:
-        vals = [float(flat[i]) for i in _builtin_range(n)]
+        vals = [float(v) for v in flat]
         n_eff = n
         if n_eff == 0:
             lo, hi = 0.0, 1.0
@@ -388,27 +450,10 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
         return histogram(a, bins=edges, range=range, density=density, weights=weights)
     if isinstance(bins, (list, tuple, ndarray, _ObjectArray)):
         edges, edge_list, n_bins = _coerce_histogram_edges(bins)
-        flat = a.flatten().tolist()
+        flat = _flat_values(a)
         count_dtype = _histogram_count_dtype(weights, density)
-        if count_dtype == 'float64':
-            counts = [0.0] * n_bins
-        elif count_dtype == 'complex128':
-            counts = [0j] * n_bins
-        else:
-            counts = [0] * n_bins
-        w_list = None
-        if weights is not None:
-            w_list = asarray(weights).flatten().tolist()
-        for idx_val, v in enumerate(flat):
-            for j in _builtin_range(n_bins):
-                if j == n_bins - 1:
-                    if edge_list[j] <= v <= edge_list[j + 1]:
-                        counts[j] += (_coerce_histogram_weight_value(w_list[idx_val], count_dtype) if w_list is not None else 1.0)
-                        break
-                else:
-                    if edge_list[j] <= v < edge_list[j + 1]:
-                        counts[j] += (_coerce_histogram_weight_value(w_list[idx_val], count_dtype) if w_list is not None else 1.0)
-                        break
+        w_list = _flat_weight_values(weights)
+        counts = _histogram_accumulate_counts(flat, edge_list, count_dtype, w_list=w_list)
         counts_arr = array(counts, dtype=count_dtype)
         if density:
             bin_widths = diff(edges)
@@ -427,35 +472,21 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
             lo = lo - 0.5
             hi = hi + 0.5
     if range is None:
-        lo, hi = _histogram_range_from_flat(a.flatten().tolist(), None)
+        lo, hi = _histogram_range_from_flat(_flat_values(a), None)
     edge_preview = linspace(lo, hi, num=bins + 1, endpoint=True).tolist()
     for i in _builtin_range(len(edge_preview) - 1):
         if not (edge_preview[i] < edge_preview[i + 1]):
             raise ValueError("Too many bins for data range")
     if weights is not None or range is not None:
         # Python fallback for weights/range with integer bins
-        flat = a.flatten().tolist()
+        flat = _flat_values(a)
         if range is None:
             lo, hi = _histogram_range_from_flat(flat, None)
         edges = linspace(lo, hi, num=bins + 1, endpoint=True)
         edge_list = edges.tolist()
         count_dtype = _histogram_count_dtype(weights, density)
-        if count_dtype == 'float64':
-            counts = [0.0] * bins
-        elif count_dtype == 'complex128':
-            counts = [0j] * bins
-        else:
-            counts = [0] * bins
-        w_list = None
-        if weights is not None:
-            w_list = asarray(weights).flatten().tolist()
-        for idx_val, val in enumerate(flat):
-            if val < lo or val > hi:
-                continue
-            for j in _builtin_range(bins):
-                if (val >= edge_list[j] and val < edge_list[j + 1]) or (j == bins - 1 and val == edge_list[j + 1]):
-                    counts[j] += (_coerce_histogram_weight_value(w_list[idx_val], count_dtype) if w_list is not None else 1.0)
-                    break
+        w_list = _flat_weight_values(weights)
+        counts = _histogram_accumulate_counts(flat, edge_list, count_dtype, w_list=w_list, lo=lo, hi=hi)
         hist = array(counts, dtype=count_dtype)
         if density:
             widths = array([edge_list[i+1] - edge_list[i] for i in _builtin_range(bins)])
@@ -547,33 +578,14 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
 
     w_list = None
     if weights is not None:
-        w_list = asarray(weights).flatten().tolist()
+        w_list = _flat_weight_values(weights)
 
     for idx_s in _builtin_range(n_samples):
         row = sample_list[idx_s]
-        bin_indices = []
-        in_range_flag = True
-        for d in _builtin_range(n_dims):
-            val = row[d]
-            edge = edges[d]
-            nb = bins_per_dim[d]
-            found = False
-            for j in _builtin_range(nb):
-                if (val >= edge[j] and val < edge[j + 1]) or (j == nb - 1 and val == edge[j + 1]):
-                    bin_indices.append(j)
-                    found = True
-                    break
-            if not found:
-                in_range_flag = False
-                break
-        if not in_range_flag:
+        bin_indices = _histogramdd_row_bin_indices(row, edges, bins_per_dim)
+        if bin_indices is None:
             continue
-        # Compute flat index
-        flat_idx = 0
-        stride = 1
-        for d in _builtin_range(n_dims - 1, -1, -1):
-            flat_idx += bin_indices[d] * stride
-            stride *= bins_per_dim[d]
+        flat_idx = _histogramdd_flat_index(bin_indices, bins_per_dim)
         counts[flat_idx] += (w_list[idx_s] if w_list is not None else 1.0)
 
     hist = array(counts).reshape(shape)
@@ -777,15 +789,15 @@ def unravel_index(indices, shape, order='C'):
     total_size = 1
     for s in shape:
         total_size *= s
-    idx_list = indices.flatten().tolist()
+    idx_list = _flat_int_index_values(indices)
     for idx in idx_list:
-        idx_val = int(idx)
+        idx_val = idx
         if idx_val < 0 or idx_val >= total_size:
             raise ValueError(
                 "index {} is out of bounds for array with size {}".format(
                     idx_val, total_size))
     # Compute unravel in Python to support order='F'
-    flat = [int(x) for x in idx_list]
+    flat = idx_list
     ndim = len(shape)
     if order == 'F':
         # F-order: first axis changes fastest
@@ -828,7 +840,7 @@ def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
     # Apply modes to indices
     processed = []
     for arr, d in zip(arrays, dims):
-        vals = [int(v) for v in (arr.flatten().tolist() if hasattr(arr, 'flatten') else [int(arr)])]
+        vals = _flat_int_index_values(arr)
         new_vals = []
         for v in vals:
             if mode == 'raise':
@@ -1094,7 +1106,7 @@ def advanced_fancy_index(arr, indices):
     """Handle multi-axis fancy indexing: arr[[0,1], [2,3]] -> [arr[0,2], arr[1,3]]."""
     arr = asarray(arr)
     # Normalise each index array to a flat Python list of ints
-    idx_arrays = [asarray(idx).flatten().tolist() for idx in indices]
+    idx_arrays = [_flat_int_index_values(asarray(idx)) for idx in indices]
     lengths = [len(a) for a in idx_arrays]
     if len(set(lengths)) > 1:
         raise IndexError("shape mismatch: indexing arrays could not be broadcast together")

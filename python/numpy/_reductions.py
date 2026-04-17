@@ -5,7 +5,7 @@ from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray, _copy_into,
     _builtin_range, _builtin_min, _builtin_max, _is_temporal_dtype,
-    _temporal_dtype_info, _make_temporal_array,
+    _temporal_dtype_info, _make_temporal_array, _flat_arraylike_data,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate, linspace, full
@@ -87,6 +87,43 @@ def _extract_zero_dim_scalar(result):
         except Exception:
             pass
     return value
+
+
+def _flat_membership_data(arr):
+    flat = _flat_arraylike_data(arr)
+    if flat is not None:
+        return flat
+    if hasattr(arr, "flatten"):
+        return arr.flatten().tolist()
+    return [arr]
+
+
+def _membership_bool_result(element, test_elements, invert=False):
+    el_flat = _flat_membership_data(element)
+    te_set = set(_flat_membership_data(test_elements))
+    if invert:
+        res = [x not in te_set for x in el_flat]
+    else:
+        res = [x in te_set for x in el_flat]
+    result = array(res, dtype='bool')
+    shape = getattr(element, 'shape', result.shape)
+    if shape != result.shape:
+        result = result.reshape(shape)
+    return result
+
+
+def _truthy_scalar(value):
+    if isinstance(value, tuple):  # complex (re, im) representation
+        return value[0] != 0.0 or value[1] != 0.0
+    if isinstance(value, (str, bytes)):
+        return bool(value)
+    if isinstance(value, (int, float, bool)):
+        return value != 0
+    return bool(value)
+
+
+def _flat_nonzero_indices(values):
+    return [i for i, v in enumerate(values) if _truthy_scalar(v)]
 
 
 def _mean_result_dtype(input_arr):
@@ -1189,7 +1226,7 @@ def _is_strong_float64_q(q):
 def _is_zero_one_integral_q(q):
     if isinstance(q, ndarray):
         try:
-            vals = q.flatten().tolist()
+            vals = _q_values(q)
         except Exception:
             return False
         return all(_is_zero_one_integral_q(v) for v in vals)
@@ -1207,7 +1244,7 @@ def _quantile_preserve_exact_result(q):
         return True
     if isinstance(q, ndarray):
         try:
-            for qi in q.flatten().tolist():
+            for qi in _q_values(q):
                 if _is_fraction_scalar(qi):
                     return True
         except Exception:
@@ -1225,14 +1262,14 @@ def _contains_fraction_data(values):
         return True
     if isinstance(values, _ObjectArray):
         try:
-            return any(_contains_fraction_data(v) for v in values.flatten().tolist())
+            return any(_contains_fraction_data(v) for v in _flat_membership_data(values))
         except Exception:
             return False
     if isinstance(values, ndarray):
         if str(values.dtype) != 'object':
             return False
         try:
-            return any(_contains_fraction_data(v) for v in values.flatten().tolist())
+            return any(_contains_fraction_data(v) for v in _flat_membership_data(values))
         except Exception:
             return False
     if isinstance(values, (list, tuple)):
@@ -1285,7 +1322,7 @@ def _compute_quantile_1d(sorted_vals, q, method='linear'):
     if len(sorted_vals) == 1:
         only = sorted_vals[0]
         if isinstance(only, (ndarray, _ObjectArray)):
-            sorted_vals = only.flatten().tolist()
+            sorted_vals = _flat_membership_data(only)
         elif isinstance(only, (list, tuple)):
             sorted_vals = list(only)
     if sorted_vals and isinstance(sorted_vals[0], complex):
@@ -1641,7 +1678,7 @@ def _validate_q_range(q, is_percentile=False):
             raise ValueError("{} must be in the range {}".format(label, rng))
     def _walk(values):
         if isinstance(values, ndarray):
-            for qi in values.flatten().tolist():
+            for qi in _q_values(values):
                 _walk(qi)
             return
         if isinstance(values, (list, tuple)):
@@ -1666,14 +1703,18 @@ def _normalize_quantile_axis(axis, ndim):
     return axis, orig_axis
 
 
+def _q_values(q_arr):
+    return _flat_membership_data(q_arr)
+
+
 def _normalize_q_array(q, *, scale=1.0):
     preserve_exact = _quantile_preserve_exact_result(q)
     if preserve_exact:
         q_arr = asarray(q, dtype=object) if not isinstance(q, ndarray) else q
-        q_flat = [_scale_quantile_scalar(qi, scale) for qi in q_arr.flatten().tolist()]
+        q_flat = [_scale_quantile_scalar(qi, scale) for qi in _q_values(q_arr)]
         return q_arr, q_flat
     q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-    q_flat = [_scale_quantile_scalar(qi, scale) for qi in q_arr.flatten().tolist()]
+    q_flat = [_scale_quantile_scalar(qi, scale) for qi in _q_values(q_arr)]
     return q_arr, q_flat
 
 
@@ -1716,6 +1757,51 @@ def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dt
     if q_arr.ndim > 1:
         stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
     return stacked
+
+
+def _finalize_multi_q_results(a, q_arr, results, *, q_is_scalar, keepdims, orig_axis, target_dtype, out):
+    if q_is_scalar:
+        result = results[0]
+        if keepdims:
+            result = _apply_keepdims(result, a, orig_axis)
+    else:
+        result = _stack_quantile_results(
+            a,
+            q_arr,
+            results,
+            keepdims=keepdims,
+            orig_axis=orig_axis,
+            target_dtype=target_dtype,
+        )
+    if out is not None:
+        out[...] = result
+        return out
+    return result
+
+
+def _finalize_nan_multi_q_results(a, q_arr, results, *, q_is_scalar, keepdims, axis, out):
+    import numpy as _np
+
+    if q_is_scalar:
+        result = results[0]
+        if keepdims:
+            result = _apply_keepdims(result if isinstance(result, ndarray) else asarray(result), a, axis)
+    else:
+        arr_results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
+        if keepdims:
+            arr_results = [_apply_keepdims(r, a, axis) for r in arr_results]
+        if not keepdims and axis is None:
+            result = array([float(r) if r.ndim == 0 else r for r in arr_results])
+            if q_arr.ndim > 1:
+                result = result.reshape(q_arr.shape)
+        else:
+            result = _np.stack(arr_results)
+            if q_arr.ndim > 1:
+                result = result.reshape(q_arr.shape + result.shape[1:])
+    if out is not None and isinstance(out, ndarray):
+        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
+        return out
+    return result
 
 
 def _validate_weight_vector(weights):
@@ -1764,12 +1850,9 @@ def _weighted_quantile_result_dtype(a):
 
 
 def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
-    import itertools as _it
-    import numpy as _np
-
     axis, orig_axis = _normalize_quantile_axis(axis, a.ndim)
     q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
-    q_flat = [float(qi) * q_scale for qi in q_arr.flatten().tolist()]
+    q_flat = [float(qi) * q_scale for qi in _q_values(q_arr)]
     q_is_scalar = not isinstance(q, (list, tuple, ndarray))
 
     w_arr = asarray(weights, dtype='float64') if not isinstance(weights, ndarray) else weights.astype('float64')
@@ -1803,40 +1886,29 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
                 native_ok = False
                 break
         if native_ok:
-            if q_is_scalar:
-                result = native_results[0]
-            else:
-                result = _stack_quantile_results(
-                    a,
-                    q_arr,
-                    native_results,
-                    keepdims=keepdims,
-                    orig_axis=orig_axis,
-                    target_dtype=_weighted_quantile_result_dtype(a),
-                )
-            if q_is_scalar and keepdims:
-                result = _apply_keepdims(result, a, orig_axis)
-            if out is not None:
-                out[...] = result
-                return out
-            return result
+            return _finalize_multi_q_results(
+                a, q_arr, native_results,
+                q_is_scalar=q_is_scalar,
+                keepdims=keepdims,
+                orig_axis=orig_axis,
+                target_dtype=_weighted_quantile_result_dtype(a),
+                out=out,
+            )
 
     if axis is None:
         if tuple(w_arr.shape) != tuple(a.shape):
             raise ValueError("Shape of weights must match shape of a when axis=None")
-        vals = a.flatten().tolist()
+        vals = _flat_membership_data(a)
         w_vals = _validate_weight_vector(w_arr)
         results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(vals, w_vals, qi)) for qi in q_flat]
-        if q_is_scalar:
-            result = results[0]
-        else:
-            result = asarray(results, dtype=_weighted_quantile_result_dtype(a)).reshape(q_arr.shape)
-        if keepdims:
-            result = _apply_keepdims(result, a, orig_axis)
-        if out is not None:
-            out[...] = result
-            return out
-        return result
+        return _finalize_multi_q_results(
+            a, q_arr, results,
+            q_is_scalar=q_is_scalar,
+            keepdims=keepdims,
+            orig_axis=orig_axis,
+            target_dtype=_weighted_quantile_result_dtype(a),
+            out=out,
+        )
 
     if isinstance(axis, list):
         axes = axis
@@ -1851,7 +1923,7 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
         for ax in axes:
             n_reduce *= a.shape[ax]
         if len(result_shape) == 0:
-            vals = a_t.flatten().tolist()
+            vals = _flat_membership_data(a_t)
             w_vals = _validate_weight_vector(w_t)
             results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(vals, w_vals, qi)) for qi in q_flat]
         else:
@@ -1864,21 +1936,14 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
                     rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), _validate_weight_vector(w_2d[i]), qi))
                 per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(result_shape))
             results = per_q
-        if q_is_scalar:
-            result = results[0]
-        else:
-            result = _np.stack([asarray(r) if not isinstance(r, ndarray) else r for r in results])
-            if q_arr.ndim > 1:
-                result = result.reshape(q_arr.shape + result.shape[1:])
-        if keepdims:
-            if q_is_scalar:
-                result = _apply_keepdims(result, a, orig_axis)
-            else:
-                result = _np.stack([_apply_keepdims(r, a, orig_axis) for r in result])
-        if out is not None:
-            out[...] = result
-            return out
-        return result
+        return _finalize_multi_q_results(
+            a, q_arr, results,
+            q_is_scalar=q_is_scalar,
+            keepdims=keepdims,
+            orig_axis=orig_axis,
+            target_dtype=_weighted_quantile_result_dtype(a),
+            out=out,
+        )
 
     ax = axis
     if w_arr.ndim == 1:
@@ -1888,7 +1953,7 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
         moved = _np.moveaxis(a, ax, -1)
         orig_shape = moved.shape[:-1]
         if len(orig_shape) == 0:
-            results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(moved.flatten().tolist(), shared_weights, qi)) for qi in q_flat]
+            results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(_flat_membership_data(moved), shared_weights, qi)) for qi in q_flat]
         else:
             a_2d = moved.reshape(-1, moved.shape[-1])
             per_q = []
@@ -1905,7 +1970,7 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
         w_moved = _np.moveaxis(w_arr, ax, -1)
         orig_shape = a_moved.shape[:-1]
         if len(orig_shape) == 0:
-            results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(a_moved.flatten().tolist(), _validate_weight_vector(w_moved), qi)) for qi in q_flat]
+            results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(_flat_membership_data(a_moved), _validate_weight_vector(w_moved), qi)) for qi in q_flat]
         else:
             a_2d = a_moved.reshape(-1, a_moved.shape[-1])
             w_2d = w_moved.reshape(-1, w_moved.shape[-1])
@@ -1917,21 +1982,14 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
                 per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(orig_shape))
             results = per_q
 
-    if q_is_scalar:
-        result = results[0]
-    else:
-        result = _np.stack([asarray(r) if not isinstance(r, ndarray) else r for r in results])
-        if q_arr.ndim > 1:
-            result = result.reshape(q_arr.shape + result.shape[1:])
-    if keepdims:
-        if q_is_scalar:
-            result = _apply_keepdims(result, a, orig_axis)
-        else:
-            result = _np.stack([_apply_keepdims(r, a, orig_axis) for r in result])
-    if out is not None:
-        out[...] = result
-        return out
-    return result
+    return _finalize_multi_q_results(
+        a, q_arr, results,
+        q_is_scalar=q_is_scalar,
+        keepdims=keepdims,
+        orig_axis=orig_axis,
+        target_dtype=_weighted_quantile_result_dtype(a),
+        out=out,
+    )
 
 
 def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dtype):
@@ -2667,12 +2725,13 @@ def _nanq_impl(a, q_scale, axis, keepdims, out, _rdt):
     """Shared implementation for nanpercentile / nanquantile (scalar q)."""
     result = _nan_quantile_impl(a, q_scale, axis)
     result = _nanq_warn_and_wrap(result, a, _rdt, axis=axis)
-    if keepdims:
-        result = _apply_keepdims(result if isinstance(result, ndarray) else asarray(result), a, axis)
-    if out is not None and isinstance(out, ndarray):
-        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
-        return out
-    return result
+    return _finalize_nan_multi_q_results(
+        a, None, [result],
+        q_is_scalar=True,
+        keepdims=keepdims,
+        axis=axis,
+        out=out,
+    )
 
 
 def _nanq_list_impl(a, q_arr, q_scale, axis, keepdims, out, _rdt):
@@ -2680,32 +2739,16 @@ def _nanq_list_impl(a, q_arr, q_scale, axis, keepdims, out, _rdt):
     q_arr: original q ndarray (for shape info).
     q_scale: q values already in [0,1] range.
     """
-    import numpy as _np
-    q_flat = q_scale.flatten().tolist()
+    q_flat = _q_values(q_scale)
     results = [_nanq_warn_and_wrap(_nan_quantile_impl(a, float(qi), axis), a, _rdt, axis=axis)
                for qi in q_flat]
-    # Wrap results as ndarrays
-    results = [r if isinstance(r, ndarray) else asarray(r) for r in results]
-    if keepdims:
-        results = [_apply_keepdims(r, a, axis) for r in results]
-        # Stack along new leading axis
-        result = _np.stack(results)
-        # Reshape leading dim to q_arr.shape
-        if q_arr.ndim > 1:
-            result = result.reshape(q_arr.shape + result.shape[1:])
-    else:
-        if axis is None:
-            result = array([float(r) if r.ndim == 0 else r for r in results])
-            if q_arr.ndim > 1:
-                result = result.reshape(q_arr.shape)
-        else:
-            result = _np.stack(results)
-            if q_arr.ndim > 1:
-                result = result.reshape(q_arr.shape + result.shape[1:])
-    if out is not None and isinstance(out, ndarray):
-        _copy_into(out, result if isinstance(result, ndarray) else asarray(result))
-        return out
-    return result
+    return _finalize_nan_multi_q_results(
+        a, q_arr, results,
+        q_is_scalar=False,
+        keepdims=keepdims,
+        axis=axis,
+        out=out,
+    )
 
 
 def _nan_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale):
@@ -2865,10 +2908,7 @@ def argwhere(a):
 
 def nonzero(a):
     if isinstance(a, _ObjectArray):
-        indices = []
-        for i, v in enumerate(a._data):
-            if bool(v):
-                indices.append(i)
+        indices = _flat_nonzero_indices(a._data)
         return (array(indices, dtype="int64"),) if indices else (array([], dtype="int64"),)
     if not isinstance(a, ndarray):
         a = asarray(a)
@@ -2906,16 +2946,6 @@ def count_nonzero(a, axis=None, *, keepdims=False):
         n = axis if axis >= 0 else axis + a.ndim
         if n < 0 or n >= a.ndim:
             raise AxisError(axis, a.ndim)
-    # Helper: determine if a scalar value is nonzero
-    def _is_nonzero(v):
-        if isinstance(v, tuple):  # complex (re, im) representation
-            return v[0] != 0.0 or v[1] != 0.0
-        if isinstance(v, (str, bytes)):  # empty string/bytes is falsy
-            return bool(v)
-        if isinstance(v, (int, float, bool)):
-            return v != 0
-        # Arbitrary Python objects (void, datetime64, etc.) — use __bool__
-        return bool(v)
     # Rust count_nonzero only handles float64; cast integer/bool arrays
     dt = str(a.dtype)
     if dt in ("int32", "int64", "int8", "int16", "uint8", "uint16", "uint32", "uint64", "bool"):
@@ -2923,8 +2953,8 @@ def count_nonzero(a, axis=None, *, keepdims=False):
     if axis is None:
         if not isinstance(a, ndarray):
             # _ObjectArray (strings, bytes, etc.) — iterate Python-side
-            flat = a.flatten().tolist() if hasattr(a, 'flatten') else list(a)
-            result = sum(1 for v in flat if _is_nonzero(v))
+            flat = _flat_membership_data(a)
+            result = len(_flat_nonzero_indices(flat))
             if keepdims:
                 return array([float(result)]).reshape((1,) * len(a.shape)).astype("int64")
             return result
@@ -2933,8 +2963,8 @@ def count_nonzero(a, axis=None, *, keepdims=False):
             return array([float(result)]).reshape((1,) * a.ndim).astype("int64")
         return result
     # Build a boolean mask (nonzero -> 1.0, zero -> 0.0), then sum along axis
-    flat = a.flatten().tolist()
-    mask_data = [1.0 if _is_nonzero(v) else 0.0 for v in flat]
+    flat = _flat_membership_data(a)
+    mask_data = [1.0 if _truthy_scalar(v) else 0.0 for v in flat]
     mask = array(mask_data).reshape(a.shape)
     result = mask.sum(axis, keepdims)
     # Convert to integer values
@@ -2946,11 +2976,7 @@ def count_nonzero(a, axis=None, *, keepdims=False):
 def flatnonzero(a):
     """Return indices of non-zero elements in the flattened array."""
     a = asarray(a).flatten()
-    indices_list = []
-    for i in range(len(a)):
-        if float(a[i]) != 0.0:
-            indices_list.append(i)
-    return array(indices_list)
+    return array(_flat_nonzero_indices(_flat_membership_data(a)))
 
 
 def searchsorted(a, v, side="left", sorter=None):
@@ -3300,7 +3326,6 @@ def cumulative_trapezoid(y, x=None, dx=1.0, axis=-1, initial=None):
 
 
 def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
-    import numpy as _np
     if not isinstance(ar1, (ndarray, _ObjectArray)):
         ar1 = asarray(ar1)
     if not isinstance(ar2, (ndarray, _ObjectArray)):
@@ -3308,9 +3333,7 @@ def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
     orig_dtype = ar1.dtype
     if not return_indices:
         if isinstance(ar1, _ObjectArray) or isinstance(ar2, _ObjectArray):
-            s1 = set(ar1.flatten().tolist())
-            s2 = set(ar2.flatten().tolist())
-            return array(sorted(s1 & s2))
+            return array(sorted(set(_flat_membership_data(ar1)) & set(_flat_membership_data(ar2))))
         result = _native.intersect1d(ar1, ar2)
         if str(result.dtype) != str(orig_dtype):
             try:
@@ -3319,8 +3342,8 @@ def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
                 pass
         return result
     # Find intersection with indices
-    flat1 = ar1.flatten().tolist()
-    flat2 = ar2.flatten().tolist()
+    flat1 = _flat_membership_data(ar1)
+    flat2 = _flat_membership_data(ar2)
     s1 = set(flat1)
     s2 = set(flat2)
     common = sorted(s1 & s2)
@@ -3352,14 +3375,13 @@ def setdiff1d(ar1, ar2, assume_unique=False):
         ar2 = array(ar2)
     orig_dtype = ar1.dtype
     if isinstance(ar1, _ObjectArray) or isinstance(ar2, _ObjectArray):
-        s1 = set(ar1.flatten().tolist())
-        s2 = set(ar2.flatten().tolist())
+        s1 = set(_flat_membership_data(ar1))
+        s2 = set(_flat_membership_data(ar2))
         return array(sorted(s1 - s2))
     if assume_unique:
         # Preserve order: elements of ar1 not in ar2 (no sort, no dedup)
-        ar2_flat = ar2.flatten()
-        b_set = set(ar2_flat.tolist())
-        result_list = [x for x in ar1.flatten().tolist() if x not in b_set]
+        b_set = set(_flat_membership_data(ar2))
+        result_list = [x for x in _flat_membership_data(ar1) if x not in b_set]
         if not result_list:
             return _np.empty(0, dtype=orig_dtype)
         return array(result_list).astype(orig_dtype)
@@ -3407,17 +3429,7 @@ def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
                 "The 'table' method only works for integer inputs. "
                 "For other dtypes, use kind='sort'."
             )
-        el_flat = element.flatten().tolist() if isinstance(element, (ndarray, _ObjectArray)) else [element]
-        te_flat = test_elements.flatten().tolist() if isinstance(test_elements, (ndarray, _ObjectArray)) else [test_elements]
-        te_set = set(te_flat)
-        if invert:
-            res = [x not in te_set for x in el_flat]
-        else:
-            res = [x in te_set for x in el_flat]
-        result = array(res, dtype='bool')
-        if hasattr(element, 'shape') and element.shape != result.shape:
-            result = result.reshape(element.shape)
-        return result
+        return _membership_bool_result(element, test_elements, invert=invert)
     # kind='table' requires integer dtype
     if kind == 'table':
         el_dtype = str(element.dtype)
@@ -3432,7 +3444,7 @@ def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
                 "For other dtypes, use kind='sort'."
             )
         # Check for integer overflow (range too large)
-        te_flat = test_elements.flatten().tolist()
+        te_flat = _flat_membership_data(test_elements)
         if te_flat:
             try:
                 _range = _builtin_max(te_flat) - _builtin_min(te_flat)
@@ -3465,17 +3477,7 @@ def isin(element, test_elements, assume_unique=False, invert=False, kind=None):
         except (ValueError, TypeError, IndexError):
             pass  # Fall through to Python implementation
     # Python fallback
-    el_flat = element.flatten().tolist()
-    te_flat = test_elements.flatten().tolist()
-    te_set = set(te_flat)
-    if invert:
-        res = [x not in te_set for x in el_flat]
-    else:
-        res = [x in te_set for x in el_flat]
-    result = array(res, dtype='bool')
-    if element.shape != result.shape:
-        result = result.reshape(element.shape)
-    return result
+    return _membership_bool_result(element, test_elements, invert=invert)
 
 
 def in1d(ar1, ar2, assume_unique=False, invert=False):
@@ -3496,9 +3498,9 @@ def all(a, axis=None, out=None, keepdims=False, where=True):
     # Reduce along specific axis: all elements nonzero iff min != 0
     m = a.min(axis, keepdims)
     if not isinstance(m, ndarray):
-        return _scalar_result(bool(m != 0.0), a, 'bool')
-    flat = m.flatten().tolist()
-    result = [v != 0.0 for v in flat]
+        return _scalar_result(bool(_truthy_scalar(m)), a, 'bool')
+    flat = _flat_membership_data(m)
+    result = [_truthy_scalar(v) for v in flat]
     return array(result).reshape(m.shape)
 
 
@@ -3510,9 +3512,9 @@ def any(a, axis=None, out=None, keepdims=False, where=True):
     # Reduce along specific axis: any element nonzero iff max != 0
     m = a.max(axis, keepdims)
     if not isinstance(m, ndarray):
-        return _scalar_result(bool(m != 0.0), a, 'bool')
-    flat = m.flatten().tolist()
-    result = [v != 0.0 for v in flat]
+        return _scalar_result(bool(_truthy_scalar(m)), a, 'bool')
+    flat = _flat_membership_data(m)
+    result = [_truthy_scalar(v) for v in flat]
     return array(result).reshape(m.shape)
 
 

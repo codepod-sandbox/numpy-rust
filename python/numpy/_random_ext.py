@@ -265,6 +265,12 @@ class _NativeRngAdapter:
         )
         return arr
 
+    def choice_array(self, a, size, replace=True):
+        self._state, arr = _native_random_module.choice_with_state(
+            self._state, a, int(size), bool(replace)
+        )
+        return arr
+
     def getrandbits(self, bits):
         self._state, value = _native_random_module.randbits_with_state(self._state, int(bits))
         return int(value)
@@ -354,11 +360,8 @@ def _random_shuffle(x):
         x = asarray(x)
     n = x.size
     flat = x.flatten()
-    vals = [flat[i] for i in range(n)]
-    for i in range(n - 1, 0, -1):
-        j_arr = random.randint(0, i + 1, (1,))
-        j = int(j_arr[0])
-        vals[i], vals[j] = vals[j], vals[i]
+    order = _wrapped_random_choice(n, size=n, replace=False)
+    vals = [flat[int(i)] for i in order.flatten().tolist()]
     # Attempt to update array in-place via __setitem__
     try:
         for i in range(n):
@@ -376,11 +379,8 @@ def _random_permutation(x):
         x = asarray(x)
     n = x.size
     flat = x.flatten()
-    vals = [flat[i] for i in range(n)]
-    for i in range(n - 1, 0, -1):
-        j_arr = random.randint(0, i + 1, (1,))
-        j = int(j_arr[0])
-        vals[i], vals[j] = vals[j], vals[i]
+    order = _wrapped_random_choice(n, size=n, replace=False)
+    vals = [flat[int(i)] for i in order.flatten().tolist()]
     result = array(vals)
     if x.ndim > 1:
         result = result.reshape(x.shape)
@@ -780,41 +780,70 @@ def _fill_out(out, src):
             out[tuple(multi)] = src_flat[flat_idx]
 
 
+def _normalize_size_tuple(size):
+    if size is None:
+        return None
+    if isinstance(size, int):
+        return (size,)
+    return tuple(size)
+
+
+def _shape_total(shape):
+    total = 1
+    for s in shape:
+        total *= s
+    return total
+
+
+def _flat_broadcast_values(value):
+    if isinstance(value, ndarray):
+        return value.flatten().tolist(), list(value.shape)
+    return [value], [1]
+
+
+def _broadcast_result_shape(shapes, size):
+    size_shape = _normalize_size_tuple(size)
+    if size_shape is not None:
+        return list(size_shape)
+    max_ndim = max(len(shape) for shape in shapes)
+    padded = []
+    for shape in shapes:
+        shape = list(shape)
+        while len(shape) < max_ndim:
+            shape = [1] + shape
+        padded.append(shape)
+    return [max(shape[i] for shape in padded) for i in range(max_ndim)]
+
+
+def _wrap_broadcast_results(results, out_shape):
+    r = array(results)
+    if len(out_shape) > 1:
+        r = r.reshape(out_shape)
+    return r
+
+
 def _broadcast_call_1(func, arg, size=None):
     """Call a single-param distribution function with broadcasting support."""
     if isinstance(arg, ndarray):
         arg_flat = arg.flatten().tolist()
-        if size is not None:
-            if isinstance(size, int):
-                size = (size,)
-            total = 1
-            for s in size:
-                total *= s
-            results = []
+        size_shape = _normalize_size_tuple(size)
+        if size_shape is not None:
+            total = _shape_total(size_shape)
             n = len(arg_flat)
-            for i in range(total):
-                results.append(float(func(arg_flat[i % n])))
-            r = array(results)
-            if len(size) > 1:
-                r = r.reshape(list(size))
-            return r
+            return _wrap_broadcast_results(
+                [float(func(arg_flat[i % n])) for i in range(total)],
+                list(size_shape),
+            )
         else:
             results = [float(func(v)) for v in arg_flat]
             r = array(results)
             if arg.ndim > 1:
                 r = r.reshape(arg.shape)
             return r
-    if size is not None:
-        if isinstance(size, int):
-            size = (size,)
-        total = 1
-        for s in size:
-            total *= s
-        results = [float(func(arg)) for _ in range(total)]
-        r = array(results)
-        if len(size) > 1:
-            r = r.reshape(list(size))
-        return r
+    size_shape = _normalize_size_tuple(size)
+    if size_shape is not None:
+        total = _shape_total(size_shape)
+        return _wrap_broadcast_results([float(func(arg)) for _ in range(total)], list(size_shape))
     return func(arg)
 
 
@@ -822,58 +851,22 @@ def _broadcast_call_2(func, a, b, size=None):
     """Call a two-param distribution function with broadcasting support."""
     a_is_arr = isinstance(a, ndarray)
     b_is_arr = isinstance(b, ndarray)
+    size_shape = _normalize_size_tuple(size)
     if not a_is_arr and not b_is_arr:
-        if size is not None:
-            if isinstance(size, int):
-                size = (size,)
-            total = 1
-            for s in size:
-                total *= s
-            results = [float(func(a, b)) for _ in range(total)]
-            r = array(results)
-            if len(size) > 1:
-                r = r.reshape(list(size))
-            return r
+        if size_shape is not None:
+            total = _shape_total(size_shape)
+            return _wrap_broadcast_results([float(func(a, b)) for _ in range(total)], list(size_shape))
         return func(a, b)
-    # At least one is an array; broadcast
-    if a_is_arr:
-        a_flat = a.flatten().tolist()
-        a_shape = list(a.shape)
-    else:
-        a_flat = [a]
-        a_shape = [1]
-    if b_is_arr:
-        b_flat = b.flatten().tolist()
-        b_shape = list(b.shape)
-    else:
-        b_flat = [b]
-        b_shape = [1]
-    # Broadcast shapes
-    max_ndim = max(len(a_shape), len(b_shape))
-    while len(a_shape) < max_ndim:
-        a_shape = [1] + a_shape
-    while len(b_shape) < max_ndim:
-        b_shape = [1] + b_shape
-    out_shape = []
-    for i in range(max_ndim):
-        out_shape.append(max(a_shape[i], b_shape[i]))
-    if size is not None:
-        if isinstance(size, int):
-            out_shape = [size]
-        else:
-            out_shape = list(size)
-    total = 1
-    for s in out_shape:
-        total *= s
+    a_flat, a_shape = _flat_broadcast_values(a)
+    b_flat, b_shape = _flat_broadcast_values(b)
+    out_shape = _broadcast_result_shape([a_shape, b_shape], size)
+    total = _shape_total(out_shape)
     na = len(a_flat)
     nb = len(b_flat)
-    results = []
-    for i in range(total):
-        results.append(float(func(a_flat[i % na], b_flat[i % nb])))
-    r = array(results)
-    if len(out_shape) > 1:
-        r = r.reshape(out_shape)
-    return r
+    return _wrap_broadcast_results(
+        [float(func(a_flat[i % na], b_flat[i % nb])) for i in range(total)],
+        out_shape,
+    )
 
 
 def _broadcast_call_3(func, a, b, c, size=None):
@@ -881,47 +874,22 @@ def _broadcast_call_3(func, a, b, c, size=None):
     a_is_arr = isinstance(a, ndarray)
     b_is_arr = isinstance(b, ndarray)
     c_is_arr = isinstance(c, ndarray)
+    size_shape = _normalize_size_tuple(size)
     if not a_is_arr and not b_is_arr and not c_is_arr:
-        if size is not None:
-            if isinstance(size, int):
-                size = (size,)
-            total = 1
-            for s in size:
-                total *= s
-            results = [float(func(a, b, c)) for _ in range(total)]
-            r = array(results)
-            if len(size) > 1:
-                r = r.reshape(list(size))
-            return r
+        if size_shape is not None:
+            total = _shape_total(size_shape)
+            return _wrap_broadcast_results([float(func(a, b, c)) for _ in range(total)], list(size_shape))
         return func(a, b, c)
-    a_flat = a.flatten().tolist() if a_is_arr else [a]
-    b_flat = b.flatten().tolist() if b_is_arr else [b]
-    c_flat = c.flatten().tolist() if c_is_arr else [c]
-    a_shape = list(a.shape) if a_is_arr else [1]
-    b_shape = list(b.shape) if b_is_arr else [1]
-    c_shape = list(c.shape) if c_is_arr else [1]
-    max_ndim = max(len(a_shape), len(b_shape), len(c_shape))
-    while len(a_shape) < max_ndim:
-        a_shape = [1] + a_shape
-    while len(b_shape) < max_ndim:
-        b_shape = [1] + b_shape
-    while len(c_shape) < max_ndim:
-        c_shape = [1] + c_shape
-    out_shape = [max(a_shape[i], b_shape[i], c_shape[i]) for i in range(max_ndim)]
-    if size is not None:
-        if isinstance(size, int):
-            out_shape = [size]
-        else:
-            out_shape = list(size)
-    total = 1
-    for s in out_shape:
-        total *= s
+    a_flat, a_shape = _flat_broadcast_values(a)
+    b_flat, b_shape = _flat_broadcast_values(b)
+    c_flat, c_shape = _flat_broadcast_values(c)
+    out_shape = _broadcast_result_shape([a_shape, b_shape, c_shape], size)
+    total = _shape_total(out_shape)
     na, nb, nc = len(a_flat), len(b_flat), len(c_flat)
-    results = [float(func(a_flat[i % na], b_flat[i % nb], c_flat[i % nc])) for i in range(total)]
-    r = array(results)
-    if len(out_shape) > 1:
-        r = r.reshape(out_shape)
-    return r
+    return _wrap_broadcast_results(
+        [float(func(a_flat[i % na], b_flat[i % nb], c_flat[i % nc])) for i in range(total)],
+        out_shape,
+    )
 
 
 def _normalize_random_size(size):
@@ -1813,20 +1781,12 @@ _native_random_choice = _orig_random_choice
 
 def _wrapped_random_choice(a, size=None, replace=True, p=None):
     if _ACTIVE_BITGEN is not None:
-        seq = arange(0.0, float(a), 1.0).tolist() if isinstance(a, int) else (
-            a.tolist() if hasattr(a, 'tolist') else list(a)
+        arr = arange(0.0, float(a), 1.0) if isinstance(a, int) else (
+            a if isinstance(a, ndarray) else array(list(a) if not hasattr(a, 'tolist') else a.tolist())
         )
         if size is None:
-            size = 1
-        rng = _ACTIVE_BITGEN._rng
-        if replace:
-            return array([seq[rng.randrange(0, len(seq))] for _ in range(size)])
-        pool = list(seq)
-        chosen = []
-        for _ in range(size):
-            idx = rng.randrange(0, len(pool))
-            chosen.append(pool.pop(idx))
-        return array(chosen)
+            return _ACTIVE_BITGEN._rng.choice_array(arr, 1, replace).flatten()[0]
+        return _ACTIVE_BITGEN._rng.choice_array(arr, size, replace)
     if isinstance(a, int):
         a = arange(0.0, float(a), 1.0)
     elif isinstance(a, (list, tuple)):
@@ -1849,10 +1809,7 @@ def _wrapped_random_randint(low, high=None, size=None, dtype='int64'):
             return rng.randrange(int(low), int(high))
         if isinstance(size, int):
             size = (size,)
-        total = 1
-        for s in size:
-            total *= s
-        result = array([rng.randrange(int(low), int(high)) for _ in range(total)])
+        result = rng.randint_array(int(low), int(high), size)
         return result.reshape(size) if len(size) > 1 else result
     if size is None:
         return int(_native_random_randint(int(low), int(high), (1,)).flatten()[0])

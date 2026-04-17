@@ -568,35 +568,35 @@ class _ObjectArray:
 
     def _to_bool_array(self, data):
         return _native.array([1.0 if x else 0.0 for x in data]).astype("bool")
+
     def _broadcast_other(self, other):
         """Get other's data list, broadcast scalar/single-element to match self size."""
-        if isinstance(other, _ObjectArray):
-            odata = other._data
-            if len(odata) == 1 and len(self._data) > 1:
-                odata = odata * len(self._data)
-            return odata
-        if isinstance(other, ndarray):
-            return other.flatten().tolist()
-        if isinstance(other, (list, tuple)):
-            odata = list(other)
+        odata = _flat_arraylike_data(other)
+        if odata is not None:
             if len(odata) == 1 and len(self._data) > 1:
                 odata = odata * len(self._data)
             return odata
         return None
+
+    def _bool_binary(self, other, op, scalar_types=(type(None), int, float, complex, str, bytes)):
+        odata = self._broadcast_other(other)
+        if odata is not None:
+            return self._to_bool_array([op(a, b) for a, b in zip(self._data, odata)])
+        if isinstance(other, scalar_types):
+            return self._to_bool_array([op(x, other) for x in self._data])
+        return NotImplemented
+
+    def _object_binary(self, other, op):
+        odata = self._broadcast_other(other)
+        if odata is not None:
+            return _ObjectArray([op(a, b) for a, b in zip(self._data, odata)], self._dtype)
+        return _ObjectArray([op(x, other) for x in self._data], self._dtype)
+
     def __eq__(self, other):
-        odata = self._broadcast_other(other)
-        if odata is not None:
-            return self._to_bool_array([a == b for a, b in zip(self._data, odata)])
-        if other is None or isinstance(other, (int, float, complex, str, bytes)):
-            return self._to_bool_array([x == other for x in self._data])
-        return NotImplemented
+        return self._bool_binary(other, lambda a, b: a == b)
+
     def __ne__(self, other):
-        odata = self._broadcast_other(other)
-        if odata is not None:
-            return self._to_bool_array([a != b for a, b in zip(self._data, odata)])
-        if other is None or isinstance(other, (int, float, complex, str, bytes)):
-            return self._to_bool_array([x != other for x in self._data])
-        return NotImplemented
+        return self._bool_binary(other, lambda a, b: a != b)
     @staticmethod
     def _cmp_complex(a, b):
         """Lexicographic comparison for complex: (real, imag). Returns -1, 0, or 1."""
@@ -626,47 +626,34 @@ class _ObjectArray:
             return self._cmp_complex(a, b) >= 0
         return a >= b
     def __le__(self, other):
-        if isinstance(other, _ObjectArray):
-            return self._to_bool_array([self._cmp_le(a, b) for a, b in zip(self._data, other._data)])
-        if isinstance(other, ndarray):
-            return self._to_bool_array([self._cmp_le(a, b) for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([self._cmp_le(x, other) for x in self._data])
+        return self._bool_binary(other, self._cmp_le, scalar_types=(object,))
+
     def __lt__(self, other):
-        if isinstance(other, _ObjectArray):
-            return self._to_bool_array([self._cmp_lt(a, b) for a, b in zip(self._data, other._data)])
-        if isinstance(other, ndarray):
-            return self._to_bool_array([self._cmp_lt(a, b) for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([self._cmp_lt(x, other) for x in self._data])
+        return self._bool_binary(other, self._cmp_lt, scalar_types=(object,))
+
     def __ge__(self, other):
-        if isinstance(other, _ObjectArray):
-            return self._to_bool_array([self._cmp_ge(a, b) for a, b in zip(self._data, other._data)])
-        if isinstance(other, ndarray):
-            return self._to_bool_array([self._cmp_ge(a, b) for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([self._cmp_ge(x, other) for x in self._data])
+        return self._bool_binary(other, self._cmp_ge, scalar_types=(object,))
+
     def __gt__(self, other):
-        if isinstance(other, _ObjectArray):
-            return self._to_bool_array([self._cmp_gt(a, b) for a, b in zip(self._data, other._data)])
-        if isinstance(other, ndarray):
-            return self._to_bool_array([self._cmp_gt(a, b) for a, b in zip(self._data, other.flatten().tolist())])
-        return self._to_bool_array([self._cmp_gt(x, other) for x in self._data])
+        return self._bool_binary(other, self._cmp_gt, scalar_types=(object,))
+
     def __sub__(self, other):
-        if isinstance(other, _ObjectArray):
-            return _ObjectArray([a - b for a, b in zip(self._data, other._data)], self._dtype)
-        return _ObjectArray([x - other for x in self._data], self._dtype)
+        return self._object_binary(other, lambda a, b: a - b)
+
     def __rsub__(self, other):
         return _ObjectArray([other - x for x in self._data], self._dtype)
+
     def __mul__(self, other):
-        if isinstance(other, _ObjectArray):
-            return _ObjectArray([a * b for a, b in zip(self._data, other._data)], self._dtype)
         if isinstance(other, int) and self._dtype == "object":
             return _ObjectArray(self._data * other, self._dtype)
-        return _ObjectArray([x * other for x in self._data], self._dtype)
+        return self._object_binary(other, lambda a, b: a * b)
+
     def __rmul__(self, other):
         return self.__mul__(other)
+
     def __add__(self, other):
-        if isinstance(other, _ObjectArray):
-            return _ObjectArray([a + b for a, b in zip(self._data, other._data)], self._dtype)
-        return _ObjectArray([x + other for x in self._data], self._dtype)
+        return self._object_binary(other, lambda a, b: a + b)
+
     def __radd__(self, other):
         return self.__add__(other)
     def conjugate(self):
@@ -704,32 +691,20 @@ class _ObjectArray:
             return arr
         return _ObjectArray(result, self._dtype)
     def __pow__(self, other):
-        if isinstance(other, _ObjectArray):
-            return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other._data)], self._dtype)
-        if isinstance(other, ndarray):
-            if other.ndim == 0:
-                scalar = other.item() if hasattr(other, 'item') else float(other)
-                return _ObjectArray([_complex_pow(x, scalar) for x in self._data], self._dtype)
-            other_list = other.flatten().tolist()
+        other_list = _flat_arraylike_data(other)
+        if other_list is not None:
             return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other_list)], self._dtype)
         if hasattr(other, '__iter__') and not isinstance(other, str):
             other_list = list(other) if not isinstance(other, list) else other
             return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other_list)], self._dtype)
         return _ObjectArray([_complex_pow(x, other) for x in self._data], self._dtype)
     def __rpow__(self, other):
-        if isinstance(other, _ObjectArray):
-            return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other._data)], self._dtype)
-        if isinstance(other, ndarray):
-            if other.ndim == 0:
-                scalar = other.item() if hasattr(other, 'item') else float(other)
-                return _ObjectArray([_complex_pow(scalar, x) for x in self._data], self._dtype)
-            other_list = other.flatten().tolist()
+        other_list = _flat_arraylike_data(other)
+        if other_list is not None:
             return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other_list)], self._dtype)
         return _ObjectArray([_complex_pow(other, x) for x in self._data], self._dtype)
     def __truediv__(self, other):
-        if isinstance(other, _ObjectArray):
-            return _ObjectArray([a / b for a, b in zip(self._data, other._data)], self._dtype)
-        return _ObjectArray([x / other for x in self._data], self._dtype)
+        return self._object_binary(other, lambda a, b: a / b)
     def clip(self, a_min=None, a_max=None, out=None, **kwargs):
         _valid_castings = ('no', 'equiv', 'safe', 'same_kind', 'unsafe')
         if 'casting' in kwargs:
@@ -1015,12 +990,26 @@ def _make_temporal_array(data, dtype_str):
         flat = [_convert_element(v) for v in data._data]
     elif isinstance(data, ndarray):
         shape = data.shape
-        flat = [_convert_element(v) for v in data.flatten().tolist()]
+        flat = [_convert_element(v) for v in _flat_arraylike_data(data)]
     else:
         shape = ()
         flat = [_convert_element(data)]
 
     return _ObjectArray(flat, canonical, shape=shape if shape != () else (len(flat),))
+
+
+def _flat_arraylike_data(data):
+    """Return array-like values as a flat Python list for compatibility fallbacks."""
+    if isinstance(data, _ObjectArray):
+        return list(data._data)
+    if isinstance(data, ndarray):
+        if data.ndim == 0:
+            scalar = data.item() if hasattr(data, 'item') else data[()]
+            return [scalar]
+        return data.flatten().tolist()
+    if isinstance(data, (list, tuple)):
+        return list(data)
+    return None
 
 
 def _infer_shape(data):
@@ -1059,7 +1048,7 @@ def _flatten_nested(data):
     if isinstance(data, _ObjectArray):
         return None  # ObjectArrays (e.g. complex) need special handling
     if isinstance(data, ndarray):
-        flat = data.flatten().tolist()
+        flat = _flat_arraylike_data(data)
         # Check if any element is a tuple (complex number from Rust backend)
         if flat and isinstance(flat[0], tuple):
             return None  # Let _array_core handle complex arrays via stack path
@@ -1114,7 +1103,7 @@ def _to_float_list(data):
 def _copy_into(dst, src):
     """Copy src array values into dst array (element-wise) by direct index assignment."""
     _min = __import__("builtins").min
-    sf = src.flatten().tolist()
+    sf = _flat_arraylike_data(src)
     n = _min(dst.size, len(sf))
     if dst.ndim == 1:
         for i in range(n):
