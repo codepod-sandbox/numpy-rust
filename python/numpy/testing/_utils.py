@@ -56,6 +56,7 @@ def _is_array_like(obj):
 def _val_equal(a, b):
     """Compare two values, treating NaN/NaT as equal to NaN/NaT."""
     try:
+        _is_fraction = lambda x: type(x).__name__ == 'Fraction' and type(x).__module__ == 'fractions'
         if isinstance(a, float) and isinstance(b, float):
             if math.isnan(a) and math.isnan(b):
                 return True
@@ -65,6 +66,10 @@ def _val_equal(a, b):
             im_eq = (a.imag == b.imag) or (math.isnan(a.imag) and math.isnan(b.imag))
             return re_eq and im_eq
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return a == b
+        if (_is_fraction(a) and isinstance(b, (int, float))) or (_is_fraction(b) and isinstance(a, (int, float))):
+            return float(a) == float(b)
+        if _is_fraction(a) and _is_fraction(b):
             return a == b
         # datetime64/timedelta64 NaT: treat NaT == NaT
         _ta = type(a).__name__
@@ -117,12 +122,15 @@ def _as_list(arr):
     if isinstance(arr, numpy.ndarray):
         flat = arr.flatten()
         result = []
+        preserve_exact = getattr(arr, "dtype", None) is not None and getattr(arr.dtype, "kind", None) == 'O'
         for i in range(flat.size):
             v = flat[i]
             if isinstance(v, tuple):
                 # Complex value stored as (re, im)
                 result.append(complex(v[0], v[1] if len(v) > 1 else 0))
             elif isinstance(v, (str, bytes)):
+                result.append(v)
+            elif preserve_exact or v is None:
                 result.append(v)
             else:
                 result.append(float(v))

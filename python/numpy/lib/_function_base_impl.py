@@ -6,6 +6,10 @@ def add_newdoc(place, obj, doc, warn_on_python=True):
     pass
 
 
+def _lerp(a, b, t):
+    return a + t * (b - a)
+
+
 def __getattr__(name):
     import numpy
     if hasattr(numpy, name):

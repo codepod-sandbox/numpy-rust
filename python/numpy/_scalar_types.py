@@ -519,6 +519,13 @@ def _scalar_cmp_result(self_val, self_dn, other, op_name):
     else:
         return NotImplemented
     try:
+        if (
+            self_dn in ('float16', 'float32')
+            and other_dn is None
+            and isinstance(other_val, (int, float))
+            and op_name in ('__eq__', '__ne__')
+        ):
+            other_val = float(_wrap_scalar_result(other_val, self_dn))
         result = op_func(self_val, other_val)
     except TypeError:
         return NotImplemented

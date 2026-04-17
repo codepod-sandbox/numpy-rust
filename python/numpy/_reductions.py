@@ -1208,6 +1208,15 @@ def _scale_quantile_scalar(q, scale):
     return float(q) * scale
 
 
+def _preserve_exact_quantile_scalar(value):
+    if _is_fraction_scalar(value) or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        from fractions import Fraction as _Fraction
+        return _Fraction(value)
+    return value
+
+
 def _quantile_sort_key(value):
     if isinstance(value, str) and value == 'NaT':
         return (1, 0)
@@ -1637,10 +1646,10 @@ def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dt
         return stacked
 
     if target_dtype is None and all(not isinstance(r, (ndarray, _ObjectArray)) for r in results):
-        stacked = asarray([
-            float(r) if _is_fraction_scalar(r) else r
-            for r in results
-        ])
+        if any(_is_fraction_scalar(r) for r in results):
+            stacked = asarray([float(r) if _is_fraction_scalar(r) else r for r in results])
+        else:
+            stacked = asarray(results)
         if q_arr.ndim > 1:
             stacked = stacked.reshape(q_arr.shape)
         return stacked
@@ -1657,6 +1666,181 @@ def _stack_quantile_results(a, q_arr, results, *, keepdims, orig_axis, target_dt
     if q_arr.ndim > 1:
         stacked = stacked.reshape(q_arr.shape + stacked.shape[1:])
     return stacked
+
+
+def _validate_weight_vector(weights):
+    _any = __import__("builtins").any
+    w = asarray(weights, dtype='float64') if not isinstance(weights, ndarray) else weights.astype('float64')
+    vals = w.flatten().tolist()
+    if _any(v < 0 for v in vals):
+        raise ValueError("Weights must be non-negative")
+    total = 0.0
+    for v in vals:
+        total += v
+    bad = _any((v != v) or v == float("inf") or v == float("-inf") for v in vals)
+    total_bad = total != total or total == float("inf") or total == float("-inf")
+    if bad or total_bad or total <= 0:
+        raise ValueError("Weights included NaN, inf or were all zero")
+    return vals
+
+
+def _weighted_inverted_cdf_1d(vals, weights, q):
+    for value in vals:
+        try:
+            if value != value:
+                return float('nan')
+        except Exception:
+            pass
+    pairs = [(value, weight) for value, weight in zip(vals, weights) if weight > 0]
+    pairs = sorted(pairs, key=lambda vw: _quantile_sort_key(vw[0]))
+    total = 0.0
+    for _, w in pairs:
+        total += w
+    threshold = float(q) * total
+    cumulative = 0.0
+    for value, weight in pairs:
+        cumulative += weight
+        if cumulative >= threshold:
+            return value
+    return pairs[-1][0]
+
+
+def _weighted_quantile_result_dtype(a):
+    if str(a.dtype) == 'bool':
+        return 'bool'
+    if a.dtype.kind == 'O':
+        return 'float64'
+    return str(a.dtype)
+
+
+def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
+    import itertools as _it
+    import numpy as _np
+
+    axis, orig_axis = _normalize_quantile_axis(axis, a.ndim)
+    q_arr = asarray(q, dtype='float64') if not isinstance(q, ndarray) else q.astype('float64')
+    q_flat = [float(qi) * q_scale for qi in q_arr.flatten().tolist()]
+    q_is_scalar = not isinstance(q, (list, tuple, ndarray))
+
+    w_arr = asarray(weights, dtype='float64') if not isinstance(weights, ndarray) else weights.astype('float64')
+
+    def _wrap_scalar_like(value):
+        if isinstance(value, ndarray):
+            return _extract_zero_dim_scalar(value)
+        dt = _weighted_quantile_result_dtype(a)
+        return _extract_zero_dim_scalar(_scalar_result(value, a, dt))
+
+    if axis is None:
+        if tuple(w_arr.shape) != tuple(a.shape):
+            raise ValueError("Shape of weights must match shape of a when axis=None")
+        vals = a.flatten().tolist()
+        w_vals = _validate_weight_vector(w_arr)
+        results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(vals, w_vals, qi)) for qi in q_flat]
+        if q_is_scalar:
+            result = results[0]
+        else:
+            result = asarray(results, dtype=_weighted_quantile_result_dtype(a)).reshape(q_arr.shape)
+        if keepdims:
+            result = _apply_keepdims(result, a, orig_axis)
+        if out is not None:
+            out[...] = result
+            return out
+        return result
+
+    if isinstance(axis, list):
+        axes = axis
+        if tuple(w_arr.shape) != tuple(a.shape):
+            raise ValueError("Shape of weights must match shape of a for tuple axis")
+        other_axes = [i for i in range(a.ndim) if i not in axes]
+        perm = other_axes + axes
+        a_t = a.transpose(perm)
+        w_t = w_arr.transpose(perm)
+        result_shape = tuple(a.shape[ax] for ax in other_axes)
+        n_reduce = 1
+        for ax in axes:
+            n_reduce *= a.shape[ax]
+        if len(result_shape) == 0:
+            vals = a_t.flatten().tolist()
+            w_vals = _validate_weight_vector(w_t)
+            results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(vals, w_vals, qi)) for qi in q_flat]
+        else:
+            a_2d = a_t.reshape(-1, n_reduce)
+            w_2d = w_t.reshape(-1, n_reduce)
+            per_q = []
+            for qi in q_flat:
+                rows = []
+                for i in range(a_2d.shape[0]):
+                    rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), _validate_weight_vector(w_2d[i]), qi))
+                per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(result_shape))
+            results = per_q
+        if q_is_scalar:
+            result = results[0]
+        else:
+            result = _np.stack([asarray(r) if not isinstance(r, ndarray) else r for r in results])
+            if q_arr.ndim > 1:
+                result = result.reshape(q_arr.shape + result.shape[1:])
+        if keepdims:
+            if q_is_scalar:
+                result = _apply_keepdims(result, a, orig_axis)
+            else:
+                result = _np.stack([_apply_keepdims(r, a, orig_axis) for r in result])
+        if out is not None:
+            out[...] = result
+            return out
+        return result
+
+    ax = axis
+    if w_arr.ndim == 1:
+        if w_arr.shape[0] != a.shape[ax]:
+            raise ValueError("Shape of weights must be consistent with shape of a along the reduction axis")
+        shared_weights = _validate_weight_vector(w_arr)
+        moved = _np.moveaxis(a, ax, -1)
+        orig_shape = moved.shape[:-1]
+        if len(orig_shape) == 0:
+            results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(moved.flatten().tolist(), shared_weights, qi)) for qi in q_flat]
+        else:
+            a_2d = moved.reshape(-1, moved.shape[-1])
+            per_q = []
+            for qi in q_flat:
+                rows = []
+                for i in range(a_2d.shape[0]):
+                    rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), shared_weights, qi))
+                per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(orig_shape))
+            results = per_q
+    else:
+        if tuple(w_arr.shape) != tuple(a.shape):
+            raise ValueError("Shape of weights must match shape of a or be 1-D along the reduction axis")
+        a_moved = _np.moveaxis(a, ax, -1)
+        w_moved = _np.moveaxis(w_arr, ax, -1)
+        orig_shape = a_moved.shape[:-1]
+        if len(orig_shape) == 0:
+            results = [_wrap_scalar_like(_weighted_inverted_cdf_1d(a_moved.flatten().tolist(), _validate_weight_vector(w_moved), qi)) for qi in q_flat]
+        else:
+            a_2d = a_moved.reshape(-1, a_moved.shape[-1])
+            w_2d = w_moved.reshape(-1, w_moved.shape[-1])
+            per_q = []
+            for qi in q_flat:
+                rows = []
+                for i in range(a_2d.shape[0]):
+                    rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), _validate_weight_vector(w_2d[i]), qi))
+                per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(orig_shape))
+            results = per_q
+
+    if q_is_scalar:
+        result = results[0]
+    else:
+        result = _np.stack([asarray(r) if not isinstance(r, ndarray) else r for r in results])
+        if q_arr.ndim > 1:
+            result = result.reshape(q_arr.shape + result.shape[1:])
+    if keepdims:
+        if q_is_scalar:
+            result = _apply_keepdims(result, a, orig_axis)
+        else:
+            result = _np.stack([_apply_keepdims(r, a, orig_axis) for r in result])
+    if out is not None:
+        out[...] = result
+        return out
+    return result
 
 
 def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dtype):
@@ -1684,6 +1868,8 @@ def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dty
     if not keepdims and out is None:
         scalar = _extract_zero_dim_scalar(result)
         if scalar is not result:
+            if preserve_exact:
+                scalar = _preserve_exact_quantile_scalar(scalar)
             if (
                 getattr(scalar, '_is_datetime64', False)
                 or getattr(scalar, '_is_timedelta64', False)
@@ -1692,6 +1878,8 @@ def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dty
                 return _ObjectArray([scalar], str(a.dtype), shape=())
             return scalar
         if not isinstance(result, (ndarray, _ObjectArray)):
+            if preserve_exact:
+                result = _preserve_exact_quantile_scalar(result)
             if (
                 getattr(result, '_is_datetime64', False)
                 or getattr(result, '_is_timedelta64', False)
@@ -1733,6 +1921,9 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
+        return _weighted_quantile_dispatch(
+            a, q, axis, out, keepdims, q_scale=1.0, weights=weights
+        )
     result = _quantile_dispatch(
         a, q, axis, out, method, keepdims,
         q_scale=1.0,
@@ -1767,6 +1958,9 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
     if weights is not None:
         if method != 'inverted_cdf':
             raise ValueError("Only method 'inverted_cdf' supports weights")
+        return _weighted_quantile_dispatch(
+            a, q, axis, out, keepdims, q_scale=0.01, weights=weights
+        )
     result = _quantile_dispatch(
         a, q, axis, out, method, keepdims,
         q_scale=0.01,
