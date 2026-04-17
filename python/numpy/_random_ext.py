@@ -359,16 +359,14 @@ def _random_shuffle(x):
     if not isinstance(x, ndarray):
         x = asarray(x)
     n = x.size
-    flat = x.flatten()
     order = _wrapped_random_choice(n, size=n, replace=False)
-    vals = [flat[int(i)] for i in order.flatten().tolist()]
-    # Attempt to update array in-place via __setitem__
+    permuted = x.flatten().take(order)
     try:
-        for i in range(n):
-            x[i] = vals[i]
+        flat = x.reshape((n,))
+        flat[:] = permuted
     except Exception:
-        pass  # if in-place update not supported, shuffle is best-effort
-    return None  # real numpy returns None
+        pass
+    return None
 
 
 def _random_permutation(x):
@@ -378,10 +376,8 @@ def _random_permutation(x):
     else:
         x = asarray(x)
     n = x.size
-    flat = x.flatten()
     order = _wrapped_random_choice(n, size=n, replace=False)
-    vals = [flat[int(i)] for i in order.flatten().tolist()]
-    result = array(vals)
+    result = x.flatten().take(order)
     if x.ndim > 1:
         result = result.reshape(x.shape)
     return result
@@ -532,128 +528,61 @@ def _random_dirichlet(alpha, size=None):
 
 def _random_standard_cauchy(size=None):
     """Standard Cauchy distribution via ratio of standard normals."""
-    import math as _m
-    if size is None:
-        total = 1
-    elif isinstance(size, int):
-        total = size
-    else:
-        total = 1
-        for s in size:
-            total *= s
-    results = []
-    for _ in range(total):
-        while True:
-            u1 = float(random.normal(0.0, 1.0, (1,))[0])
-            u2 = float(random.normal(0.0, 1.0, (1,))[0])
-            if abs(u2) > 1e-15:
-                results.append(u1 / u2)
-                break
-    result = array(results)
-    if size is None:
-        return float(result[0])
-    if not isinstance(size, int) and len(size) > 1:
-        result = result.reshape(list(size))
-    return result
+    size_shape = _normalize_random_size(size)
+    sample_shape = (1,) if size_shape is None else size_shape
+    result = random.normal(0.0, 1.0, sample_shape) / random.normal(0.0, 1.0, sample_shape)
+    if size_shape is None:
+        return _scalar_from_random_result(result)
+    return _reshape_random_result(result, size_shape)
 
 
 def _random_standard_t(df, size=None):
     """Student's t-distribution."""
-    import math as _m
-    if size is None:
-        total = 1
-    elif isinstance(size, int):
-        total = size
-    else:
-        total = 1
-        for s in size:
-            total *= s
-    results = []
-    for _ in range(total):
-        z = float(random.normal(0.0, 1.0, (1,))[0])
-        chi2 = float(_random_chisquare(int(df), (1,))[0])
-        results.append(z / _m.sqrt(chi2 / df))
-    result = array(results)
-    if size is None:
-        return float(result[0])
-    if not isinstance(size, int) and len(size) > 1:
-        result = result.reshape(list(size))
-    return result
+    size_shape = _normalize_random_size(size)
+    sample_shape = (1,) if size_shape is None else size_shape
+    z = random.normal(0.0, 1.0, sample_shape)
+    chi2 = _random_chisquare(int(df), sample_shape)
+    result = z / ((chi2 / df) ** 0.5)
+    if size_shape is None:
+        return _scalar_from_random_result(result)
+    return _reshape_random_result(result, size_shape)
 
 
 def _random_f(dfnum, dfden, size=None):
     """F-distribution."""
-    if size is None:
-        total = 1
-    elif isinstance(size, int):
-        total = size
-    else:
-        total = 1
-        for s in size:
-            total *= s
-    results = []
-    for _ in range(total):
-        chi1 = float(_random_chisquare(int(dfnum), (1,))[0])
-        chi2 = float(_random_chisquare(int(dfden), (1,))[0])
-        results.append((chi1 / dfnum) / (chi2 / dfden))
-    result = array(results)
-    if size is None:
-        return float(result[0])
-    if not isinstance(size, int) and len(size) > 1:
-        result = result.reshape(list(size))
-    return result
+    size_shape = _normalize_random_size(size)
+    sample_shape = (1,) if size_shape is None else size_shape
+    chi1 = _random_chisquare(int(dfnum), sample_shape)
+    chi2 = _random_chisquare(int(dfden), sample_shape)
+    result = (chi1 / dfnum) / (chi2 / dfden)
+    if size_shape is None:
+        return _scalar_from_random_result(result)
+    return _reshape_random_result(result, size_shape)
 
 
 def _random_noncentral_chisquare(df, nonc, size=None):
     """Noncentral chi-square distribution."""
-    import math as _m
-    if size is None:
-        total = 1
-    elif isinstance(size, int):
-        total = size
-    else:
-        total = 1
-        for s in size:
-            total *= s
-    results = []
-    for _ in range(total):
-        # Generate as sum of (Z + sqrt(nonc/df))^2 terms approximation
-        # Simpler: chi2(df-1) + (N(sqrt(nonc), 1))^2
-        if df > 1:
-            chi = float(_random_chisquare(int(df) - 1, (1,))[0])
-        else:
-            chi = 0.0
-        z = float(random.normal(_m.sqrt(nonc), 1.0, (1,))[0])
-        results.append(chi + z * z)
-    result = array(results)
-    if size is None:
-        return float(result[0])
-    if not isinstance(size, int) and len(size) > 1:
-        result = result.reshape(list(size))
-    return result
+    size_shape = _normalize_random_size(size)
+    sample_shape = (1,) if size_shape is None else size_shape
+    result = random.normal(_math.sqrt(nonc), 1.0, sample_shape)
+    result = result * result
+    if df > 1:
+        result = result + _random_chisquare(int(df) - 1, sample_shape)
+    if size_shape is None:
+        return _scalar_from_random_result(result)
+    return _reshape_random_result(result, size_shape)
 
 
 def _random_noncentral_f(dfnum, dfden, nonc, size=None):
     """Noncentral F-distribution."""
-    if size is None:
-        total = 1
-    elif isinstance(size, int):
-        total = size
-    else:
-        total = 1
-        for s in size:
-            total *= s
-    results = []
-    for _ in range(total):
-        ncchi2 = float(_random_noncentral_chisquare(int(dfnum), nonc, (1,))[0])
-        chi2 = float(_random_chisquare(int(dfden), (1,))[0])
-        results.append((ncchi2 / dfnum) / (chi2 / dfden))
-    result = array(results)
-    if size is None:
-        return float(result[0])
-    if not isinstance(size, int) and len(size) > 1:
-        result = result.reshape(list(size))
-    return result
+    size_shape = _normalize_random_size(size)
+    sample_shape = (1,) if size_shape is None else size_shape
+    ncchi2 = _random_noncentral_chisquare(int(dfnum), nonc, sample_shape)
+    chi2 = _random_chisquare(int(dfden), sample_shape)
+    result = (ncchi2 / dfnum) / (chi2 / dfden)
+    if size_shape is None:
+        return _scalar_from_random_result(result)
+    return _reshape_random_result(result, size_shape)
 
 
 def _random_logseries(p, size=None):
@@ -900,6 +829,24 @@ def _normalize_random_size(size):
     if isinstance(size, int):
         return (size,)
     return tuple(int(x) for x in size)
+
+
+def _reshape_random_result(result, shape):
+    return result.reshape(shape) if len(shape) > 1 else result
+
+
+def _scalar_from_random_result(result, cast=float):
+    return cast(result.flatten()[0])
+
+
+def _native_random_draw(size, native_draw, rng_draw, scalar_cast=float):
+    shape = _normalize_random_size(size)
+    rng = _active_rng()
+    if shape is None:
+        arr = native_draw((1,)) if rng is None else rng_draw(rng, (1,))
+        return _scalar_from_random_result(arr, scalar_cast)
+    result = native_draw(shape) if rng is None else rng_draw(rng, shape)
+    return _reshape_random_result(result, shape)
 
 
 def _random_dtype_bounds(dtype):
@@ -1370,226 +1317,140 @@ def _random_multivariate_normal(mean, cov, size=None):
 def _random_chisquare(df, size=None):
     """Chi-square distribution (sum of df squared standard normals)."""
     df = int(df)
-    if size is None:
-        total = 1
-    elif isinstance(size, int):
-        total = size
-    else:
-        total = 1
-        for s in size:
-            total *= s
-    results = []
-    for _ in range(total):
-        z = random.normal(0.0, 1.0, (df,))
-        z_list = z.tolist()
-        results.append(sum(v * v for v in z_list))
-    result = array(results)
-    if size is None:
-        return float(result[0])
-    if not isinstance(size, int) and len(size) > 1:
-        result = result.reshape(list(size))
-    return result
+    size_shape = _normalize_random_size(size)
+    sample_shape = (1,) if size_shape is None else size_shape
+    z = random.normal(0.0, 1.0, sample_shape + (df,))
+    result = (z * z).sum(axis=-1)
+    if size_shape is None:
+        return _scalar_from_random_result(result)
+    return _reshape_random_result(result, size_shape)
 
 
 def _random_laplace(loc=0.0, scale=1.0, size=None):
     """Laplace distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.laplace(float(loc), float(scale), (1,)).flatten()[0])
-        return float(rng.laplace_array(loc, scale, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.laplace(float(loc), float(scale), size)
-    result = rng.laplace_array(loc, scale, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.laplace(float(loc), float(scale), shape),
+        lambda rng, shape: rng.laplace_array(loc, scale, shape),
+    )
 
 
 def _random_triangular(left, mode, right, size=None):
     """Triangular distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.triangular(float(left), float(mode), float(right), (1,)).flatten()[0])
-        return float(rng.triangular_array(left, mode, right, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.triangular(float(left), float(mode), float(right), size)
-    result = rng.triangular_array(left, mode, right, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.triangular(
+            float(left), float(mode), float(right), shape
+        ),
+        lambda rng, shape: rng.triangular_array(left, mode, right, shape),
+    )
 
 
 def _random_rayleigh(scale=1.0, size=None):
     """Rayleigh distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.rayleigh(float(scale), (1,)).flatten()[0])
-        return float(rng.rayleigh_array(scale, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.rayleigh(float(scale), size)
-    result = rng.rayleigh_array(scale, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.rayleigh(float(scale), shape),
+        lambda rng, shape: rng.rayleigh_array(scale, shape),
+    )
 
 
 def _random_weibull(a, size=None):
     """Weibull distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.weibull(float(a), (1,)).flatten()[0])
-        return float(rng.weibull_array(a, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.weibull(float(a), size)
-    result = rng.weibull_array(a, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.weibull(float(a), shape),
+        lambda rng, shape: rng.weibull_array(a, shape),
+    )
 
 
 def _random_logistic(loc=0.0, scale=1.0, size=None):
     """Logistic distribution via inverse CDF."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.logistic(float(loc), float(scale), (1,)).flatten()[0])
-        return float(rng.logistic_array(loc, scale, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.logistic(float(loc), float(scale), size)
-    result = rng.logistic_array(loc, scale, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.logistic(float(loc), float(scale), shape),
+        lambda rng, shape: rng.logistic_array(loc, scale, shape),
+    )
 
 
 def _random_gumbel(loc=0.0, scale=1.0, size=None):
     """Gumbel distribution via inverse CDF."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.gumbel(float(loc), float(scale), (1,)).flatten()[0])
-        return float(rng.gumbel_array(loc, scale, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.gumbel(float(loc), float(scale), size)
-    result = rng.gumbel_array(loc, scale, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.gumbel(float(loc), float(scale), shape),
+        lambda rng, shape: rng.gumbel_array(loc, scale, shape),
+    )
 
 
 def _random_negative_binomial(n, p, size=None):
     """Negative binomial distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.negative_binomial(int(n), float(p), (1,)).flatten()[0])
-        return float(rng.negative_binomial_array(n, p, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.negative_binomial(int(n), float(p), size)
-    result = rng.negative_binomial_array(n, p, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.negative_binomial(int(n), float(p), shape),
+        lambda rng, shape: rng.negative_binomial_array(n, p, shape),
+    )
 
 
 def _random_power(a, size=None):
     """Power distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.power(float(a), (1,)).flatten()[0])
-        return float(rng.power_array(a, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.power(float(a), size)
-    result = rng.power_array(a, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.power(float(a), shape),
+        lambda rng, shape: rng.power_array(a, shape),
+    )
 
 
 def _random_vonmises(mu, kappa, size=None):
     """Von Mises distribution (rejection sampling)."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.vonmises(float(mu), float(kappa), (1,)).flatten()[0])
-        return float(rng.vonmises_array(mu, kappa, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.vonmises(float(mu), float(kappa), size)
-    result = rng.vonmises_array(mu, kappa, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.vonmises(float(mu), float(kappa), shape),
+        lambda rng, shape: rng.vonmises_array(mu, kappa, shape),
+    )
 
 
 def _random_wald(mean, scale, size=None):
     """Wald (inverse Gaussian) distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.wald(float(mean), float(scale), (1,)).flatten()[0])
-        return float(rng.wald_array(mean, scale, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.wald(float(mean), float(scale), size)
-    result = rng.wald_array(mean, scale, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.wald(float(mean), float(scale), shape),
+        lambda rng, shape: rng.wald_array(mean, scale, shape),
+    )
 
 
 def _random_zipf(a, size=None):
     """Zipf distribution (rejection sampling)."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.zipf(float(a), (1,)).flatten()[0])
-        return float(rng.zipf_array(a, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.zipf(float(a), size)
-    result = rng.zipf_array(a, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.zipf(float(a), shape),
+        lambda rng, shape: rng.zipf_array(a, shape),
+    )
 
 
 def _random_hypergeometric(ngood, nbad, nsample, size=None):
     """Hypergeometric distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.hypergeometric(int(ngood), int(nbad), int(nsample), (1,)).flatten()[0])
-        return float(rng.hypergeometric_array(ngood, nbad, nsample, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.hypergeometric(int(ngood), int(nbad), int(nsample), size)
-    result = rng.hypergeometric_array(ngood, nbad, nsample, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.hypergeometric(
+            int(ngood), int(nbad), int(nsample), shape
+        ),
+        lambda rng, shape: rng.hypergeometric_array(ngood, nbad, nsample, shape),
+    )
 
 
 def _random_pareto(a, size=None):
     """Pareto II (Lomax) distribution."""
-    rng = _active_rng()
-    if size is None:
-        if rng is None:
-            return float(_native_random_module.pareto(float(a), (1,)).flatten()[0])
-        return float(rng.pareto_array(a, (1,)).flatten()[0])
-    if isinstance(size, int):
-        size = (size,)
-    if rng is None:
-        return _native_random_module.pareto(float(a), size)
-    result = rng.pareto_array(a, size)
-    return result.reshape(size) if len(size) > 1 else result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.pareto(float(a), shape),
+        lambda rng, shape: rng.pareto_array(a, shape),
+    )
 
 
 def _random_bytes(length):
     """Return random bytes."""
-    vals = random.uniform(0.0, 1.0, (length,)).tolist()
-    return bytes([int(v * 256) for v in vals])
+    vals = random.randint(0, 256, (length,))
+    return bytes(int(v) for v in vals.tolist())
 
 
 def _default_rng(seed=None):
