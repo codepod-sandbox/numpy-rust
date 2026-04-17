@@ -1511,12 +1511,7 @@ def _quantile_along_axis(a, q, axis, method):
         vals.sort(key=_quantile_sort_key)
         return _compute_quantile_1d(vals, q, method)
     a_2d = a_moved.reshape(-1, n)
-    m = a_2d.shape[0]
-    results = []
-    for i in range(m):
-        row = a_2d[i].tolist()
-        row.sort(key=_quantile_sort_key)
-        results.append(_compute_quantile_1d(row, q, method))
+    results = _python_quantile_rows(a_2d, q, method)
     if str(a.dtype).startswith(("datetime64", "timedelta64")):
         from ._helpers import _make_temporal_array
         return _make_temporal_array(results, str(a.dtype)).reshape(orig_shape)
@@ -1559,16 +1554,20 @@ def _quantile_tuple_axis(a, q, axes, method):
         return _compute_quantile_1d(vals, q, method)
 
     a_2d = a_t.reshape(-1, n_reduce)
-    m = a_2d.shape[0]
-    results = []
-    for i in range(m):
-        row = a_2d[i].tolist()
-        row.sort(key=_quantile_sort_key)
-        results.append(_compute_quantile_1d(row, q, method))
+    results = _python_quantile_rows(a_2d, q, method)
     if str(a.dtype).startswith(("datetime64", "timedelta64")):
         from ._helpers import _make_temporal_array
         return _make_temporal_array(results, str(a.dtype)).reshape(result_shape)
     return asarray(results).reshape(result_shape)
+
+
+def _python_quantile_rows(a_2d, q, method):
+    results = []
+    for i in range(a_2d.shape[0]):
+        row = a_2d[i].tolist()
+        row.sort(key=_quantile_sort_key)
+        results.append(_compute_quantile_1d(row, q, method))
+    return results
 
 
 _NON_INTERPOLATING_METHODS = frozenset([

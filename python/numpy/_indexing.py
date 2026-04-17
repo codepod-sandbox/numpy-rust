@@ -540,15 +540,12 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
             cols = [asarray(col).flatten() for col in sample]
             lengths = [col.size for col in cols]
             if lengths and all(n == lengths[0] for n in lengths):
-                rows = []
-                for i in _builtin_range(lengths[0]):
-                    rows.append([col[i] for col in cols])
-                sample = array(rows)
+                sample = stack(cols, axis=1)
     sample = asarray(sample)
     if sample.ndim == 1:
         sample = sample.reshape((-1, 1))
     n_samples, n_dims = sample.shape[0], sample.shape[1]
-    sample_list = sample.tolist()
+    sample_cols = [sample[:, d].tolist() for d in _builtin_range(n_dims)] if n_samples > 0 else [[] for _ in _builtin_range(n_dims)]
 
     _range = range
 
@@ -559,7 +556,7 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
     edges = []
     bins_per_dim = []
     for d in _builtin_range(n_dims):
-        values = [row[d] for row in sample_list] if n_samples > 0 else []
+        values = sample_cols[d]
         range_spec = _range[d] if _range is not None and _range[d] is not None else None
         edge, nb = _resolve_histogramdd_edges(bins_spec[d], values, range_spec)
         edges.append(edge)
@@ -581,7 +578,7 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
         w_list = _flat_weight_values(weights)
 
     for idx_s in _builtin_range(n_samples):
-        row = sample_list[idx_s]
+        row = [sample_cols[d][idx_s] for d in _builtin_range(n_dims)]
         bin_indices = _histogramdd_row_bin_indices(row, edges, bins_per_dim)
         if bin_indices is None:
             continue
@@ -596,8 +593,7 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
         total_count = float(sum(hist))
         bin_volumes = ones(shape)
         for d in _builtin_range(n_dims):
-            widths = [edges[d][i+1] - edges[d][i] for i in _builtin_range(bins_per_dim[d])]
-            w_arr = array(widths)
+            w_arr = diff(edge_arrays[d])
             bcast_shape = [1] * n_dims
             bcast_shape[d] = bins_per_dim[d]
             w_arr = w_arr.reshape(bcast_shape)
