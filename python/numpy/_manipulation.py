@@ -84,22 +84,8 @@ def vander(x, N=None, increasing=False):
                 row.append(x[i] ** exp)
             rows.append(row)
         return array(rows)
-    if increasing:
-        cols = []
-        for j in range(N):
-            col = []
-            for i in range(n):
-                col.append(x[i] ** j)
-            cols.append(array(col))
-    else:
-        cols = []
-        for j in range(N):
-            col = []
-            for i in range(n):
-                col.append(x[i] ** (N - 1 - j))
-            cols.append(array(col))
-    result = stack(cols, axis=1)
-    return result
+    powers = arange(N) if increasing else arange(N - 1, -1, -1)
+    return x.reshape((n, 1)) ** powers.reshape((1, N))
 
 
 # ---------------------------------------------------------------------------
