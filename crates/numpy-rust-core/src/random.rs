@@ -692,6 +692,46 @@ mod inner {
             Ok(NdArray::from_data(ArrayData::Float64(arr)))
         }
 
+        pub fn logseries(&mut self, p: f64, shape: &[usize]) -> Result<NdArray> {
+            if !(0.0 < p && p < 1.0) {
+                return Err(NumpyError::ValueError("p <= 0, p >= 1 or p is NaN".into()));
+            }
+            let size: usize = shape.iter().product();
+            let mut out = Vec::with_capacity(size);
+            while out.len() < size {
+                let u1 = self.random_scalar();
+                let u2 = self.random_scalar();
+                if u1 <= 0.0 || u1 >= 1.0 {
+                    continue;
+                }
+                let _q = 1.0 - (1.0 - p).powf(u2);
+                let v = self.random_scalar();
+                if v >= p {
+                    out.push(1.0);
+                    continue;
+                }
+                if v >= p * p {
+                    if v >= p + p * p * (1.0 - p) {
+                        out.push(1.0);
+                    } else {
+                        out.push(2.0);
+                    }
+                    continue;
+                }
+                let mut x = 1_i64;
+                let mut cumprob = p;
+                let mut total_prob = p;
+                while total_prob < v {
+                    x += 1;
+                    cumprob *= p;
+                    total_prob += cumprob / x as f64;
+                }
+                out.push(x as f64);
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), out).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
         pub fn choice(&mut self, a: &NdArray, size: usize, replace: bool) -> Result<NdArray> {
             if a.ndim() != 1 {
                 return Err(NumpyError::ValueError("choice requires a 1-D array".into()));
@@ -891,6 +931,10 @@ mod inner {
 
     pub fn zipf(a: f64, shape: &[usize]) -> Result<NdArray> {
         with_rng(|rng| rng.zipf(a, shape))
+    }
+
+    pub fn logseries(p: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.logseries(p, shape))
     }
 
     /// Choose random elements from a 1-D array.

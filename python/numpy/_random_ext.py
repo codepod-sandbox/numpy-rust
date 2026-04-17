@@ -253,6 +253,12 @@ class _NativeRngAdapter:
         )
         return arr
 
+    def logseries_array(self, p, shape):
+        self._state, arr = _native_random_module.logseries_with_state(
+            self._state, float(p), shape
+        )
+        return arr
+
     def randrange(self, low, high):
         self._state, value = _native_random_module.randint_scalar_with_state(
             self._state, int(low), int(high)
@@ -587,52 +593,12 @@ def _random_noncentral_f(dfnum, dfden, nonc, size=None):
 
 def _random_logseries(p, size=None):
     """Logarithmic (Log-Series) distribution."""
-    import math as _m
-    if size is None:
-        total = 1
-    elif isinstance(size, int):
-        total = size
-    else:
-        total = 1
-        for s in size:
-            total *= s
-    r = -1.0 / _m.log(1.0 - p)
-    results = []
-    for _ in range(total):
-        while True:
-            u1 = float(random.uniform(0.0, 1.0, (1,))[0])
-            u2 = float(random.uniform(0.0, 1.0, (1,))[0])
-            if u1 <= 0 or u1 >= 1:
-                continue
-            q = 1.0 - (1.0 - p) ** u2  # actually use different algorithm
-            # Kemp's algorithm
-            v = float(random.uniform(0.0, 1.0, (1,))[0])
-            if v >= p:
-                results.append(1)
-                break
-            if v >= p * p:
-                # could be 1 or 2
-                if v >= p + p * p * (1.0 - p):
-                    results.append(1)
-                else:
-                    results.append(2)
-                break
-            # General: geometric-like
-            x = 1
-            cumprob = p
-            total_prob = p
-            while total_prob < v:
-                x += 1
-                cumprob *= p
-                total_prob += cumprob / x
-            results.append(x)
-            break
-    result = array(results)
-    if size is None:
-        return float(result[0])
-    if not isinstance(size, int) and len(size) > 1:
-        result = result.reshape(list(size))
-    return result
+    return _native_random_draw(
+        size,
+        lambda shape: _native_random_module.logseries(float(p), shape),
+        lambda rng, shape: rng.logseries_array(p, shape),
+        scalar_cast=int,
+    )
 
 
 def _check_out_dtype(out, dtype):

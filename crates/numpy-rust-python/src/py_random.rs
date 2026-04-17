@@ -325,6 +325,14 @@ mod _random {
     }
 
     #[pyfunction]
+    fn logseries(p: f64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let sh = extract_shape(&shape, vm)?;
+        numpy_rust_core::random::logseries(p, &sh)
+            .map(PyNdArray::from_core)
+            .map_err(|e| err(e, vm))
+    }
+
+    #[pyfunction]
     fn multinomial(
         n: i64,
         pvals: PyObjectRef,
@@ -774,6 +782,23 @@ mod _random {
         let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
         let arr = rng
             .zipf(a, &sh)
+            .map(PyNdArray::from_core)
+            .map_err(|e| err(e, vm))?
+            .to_pyobject(vm);
+        Ok(make_state_tuple(rng.state(), arr, vm))
+    }
+
+    #[pyfunction]
+    fn logseries_with_state(
+        state: u64,
+        p: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let sh = extract_shape(&shape, vm)?;
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let arr = rng
+            .logseries(p, &sh)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))?
             .to_pyobject(vm);
