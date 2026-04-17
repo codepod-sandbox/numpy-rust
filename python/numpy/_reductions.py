@@ -1540,6 +1540,19 @@ def _quantile_tuple_axis(a, q, axes, method):
     for ax in axes_sorted:
         n_reduce *= a.shape[ax]
 
+    can_use_native_linear = (
+        method == 'linear'
+        and isinstance(a, ndarray)
+        and not str(a.dtype).startswith(("datetime64", "timedelta64"))
+        and getattr(a.dtype, "kind", "") != "O"
+    )
+
+    if can_use_native_linear:
+        if len(result_shape) == 0:
+            return _native.quantile(a_t.reshape(-1), q, None)
+        result = _native.quantile(a_t.reshape(-1, n_reduce), q, 1)
+        return result.reshape(result_shape)
+
     if len(result_shape) == 0:
         vals = a_t.flatten().tolist()
         vals.sort(key=_quantile_sort_key)
@@ -1602,6 +1615,12 @@ def _quantile_core(a, q, axis, method, keepdims, orig_axis_for_keepdims=None, ta
     if is_tuple_axis:
         # Tuple axis: must collapse all axes at once (sequential reduction is wrong)
         result = _quantile_tuple_axis(a, q, axis, method)
+        if (
+            method == 'linear'
+            and isinstance(a, ndarray)
+            and a.dtype.kind == 'f'
+        ):
+            result = _apply_nan_mask(result, a, axis)
     elif method == 'linear' and not _is_fraction_scalar(q) and isinstance(a, ndarray):
         # Use Rust backend for linear interpolation (fast path)
         result = _native.quantile(a, q, axis)
@@ -1659,11 +1678,7 @@ def _apply_nan_mask(result, a, axis):
     if not isinstance(result, ndarray):
         result = asarray(result)
     result_f = result.astype('float64')
-    # Use fancy indexing to set NaN
-    has_nan_list = has_nan.flatten().tolist()
-    res_list = result_f.flatten().tolist()
-    out_list = [float('nan') if hn else rv for hn, rv in zip(has_nan_list, res_list)]
-    return asarray(out_list).reshape(result_f.shape)
+    return _np.where(has_nan, float('nan'), result_f)
 
 
 def _validate_q_range(q, is_percentile=False):
