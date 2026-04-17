@@ -1929,13 +1929,20 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
         else:
             a_2d = a_t.reshape(-1, n_reduce)
             w_2d = w_t.reshape(-1, n_reduce)
-            per_q = []
-            for qi in q_flat:
-                rows = []
-                for i in range(a_2d.shape[0]):
-                    rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), _validate_weight_vector(w_2d[i]), qi))
-                per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(result_shape))
-            results = per_q
+            dt = str(a.dtype)
+            if not dt.startswith(("datetime64", "timedelta64")) and getattr(a.dtype, "kind", "") != "O":
+                results = [
+                    _native.weighted_inverted_cdf_quantile(a_2d, float(qi), w_2d, 1).reshape(result_shape)
+                    for qi in q_flat
+                ]
+            else:
+                per_q = []
+                for qi in q_flat:
+                    rows = []
+                    for i in range(a_2d.shape[0]):
+                        rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), _validate_weight_vector(w_2d[i]), qi))
+                    per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(result_shape))
+                results = per_q
         return _finalize_multi_q_results(
             a, q_arr, results,
             q_is_scalar=q_is_scalar,

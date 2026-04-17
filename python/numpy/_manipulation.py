@@ -252,9 +252,13 @@ def interp(x, xp, fp, left=None, right=None, period=None):
             im_result = _interp_two_point_nonfinite_fp_lane(im_vals, x_flat.size)
             if re_result is not None or im_result is not None:
                 if re_result is None:
-                    re_result = [_nat.interp(asarray([xi], dtype='float64'), xp_arr, asarray(re_vals, dtype='float64')).flatten()[0] for xi in x_flat.tolist()]
+                    re_result = _nat.interp(
+                        x_flat, xp_arr, asarray(re_vals, dtype='float64')
+                    ).flatten().tolist()
                 if im_result is None:
-                    im_result = [_nat.interp(asarray([xi], dtype='float64'), xp_arr, asarray(im_vals, dtype='float64')).flatten()[0] for xi in x_flat.tolist()]
+                    im_result = _nat.interp(
+                        x_flat, xp_arr, asarray(im_vals, dtype='float64')
+                    ).flatten().tolist()
                 result = _rebuild_complex_result(
                     [complex(re_val, im_val) for re_val, im_val in zip(re_result, im_result)],
                     () if x_is_scalar else x_shape,
