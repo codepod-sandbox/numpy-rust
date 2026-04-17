@@ -1066,7 +1066,10 @@ def y1(x):
 
 def i0(x):
     """Modified Bessel function of the first kind, order 0."""
-    return _native.i0(asarray(x))
+    arr = asarray(x)
+    if iscomplexobj(arr):
+        raise TypeError("i0 not supported for complex values")
+    return _native.i0(arr)
 
 # --- Comparison / allclose / isclose -----------------------------------------
 
@@ -1467,6 +1470,10 @@ conjugate = conj
 
 def angle(z, deg=False):
     """Return the angle (argument) of complex or real elements."""
+    from numpy.ma import MaskedArray as _MA
+    if isinstance(z, _MA):
+        result = angle(z.filled(0), deg=deg)
+        return _MA(result, mask=z.mask, fill_value=getattr(z, "_fill_value", None))
     z = asarray(z)
     if iscomplexobj(z):
         try:
@@ -1501,11 +1508,30 @@ def _unwrap_1d_list(data, discont, period):
 def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
     """Unwrap by changing deltas between values to 2*pi complement."""
     import numpy as _np
+
+    def _can_restore_integral_dtype(values):
+        for value in values:
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                continue
+            if isinstance(value, float):
+                if not value.is_integer():
+                    return False
+                continue
+            return False
+        return True
+
     p = asarray(p)
     if discont is None:
         discont = period / 2
     if p.ndim <= 1:
-        return array(_unwrap_1d_list(p.flatten().tolist(), discont, period))
+        values = _unwrap_1d_list(p.flatten().tolist(), discont, period)
+        result = array(values)
+        dtype_name = str(p.dtype)
+        if (dtype_name.startswith("int") or dtype_name.startswith("uint")) and _can_restore_integral_dtype(values):
+            result = result.astype(dtype_name)
+        return result
     # For 2D: apply unwrap along the specified axis
     nd = p.ndim
     ax = axis
@@ -1531,6 +1557,9 @@ def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
         row = flat_all[start:start + axis_len]
         result_flat.extend(_unwrap_1d_list(row, discont, period))
     out = array(result_flat).reshape(pt_shape)
+    dtype_name = str(p.dtype)
+    if (dtype_name.startswith("int") or dtype_name.startswith("uint")) and _can_restore_integral_dtype(result_flat):
+        out = out.astype(dtype_name)
     # Move axis back if we transposed
     if ax != nd - 1:
         # Inverse permutation

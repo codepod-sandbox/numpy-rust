@@ -358,6 +358,23 @@ class ufunc:
                 f"operand type(s) all returned NotImplemented from "
                 f"__array_ufunc__({type(self).__name__}, '__call__', ...)")
 
+        # Coerce plain array-like inputs that do not participate in
+        # __array_ufunc__ dispatch onto the ndarray path, while remembering
+        # wrappers for post-processing (__array_wrap__).
+        _wrapped_args = list(args)
+        _array_wrap_candidates = []
+        for i, a in enumerate(_wrapped_args):
+            if isinstance(a, (ndarray, int, float, bool, complex, list, tuple)):
+                continue
+            if hasattr(a, '__array_interface__') or hasattr(a, '__array__'):
+                try:
+                    _wrapped_args[i] = asarray(a)
+                    if hasattr(a, '__array_wrap__'):
+                        _array_wrap_candidates.append(a)
+                except Exception:
+                    pass
+        args = tuple(_wrapped_args)
+
         # Check for MaskedArray inputs — delegate to numpy.ma and preserve type
         _has_masked = any(
             hasattr(a, 'filled') and hasattr(a, 'mask') and not isinstance(a, ndarray)
@@ -380,6 +397,16 @@ class ufunc:
             result = asarray(result).astype(str(_dtype))
         else:
             result = asarray(result)
+
+        if _array_wrap_candidates:
+            candidate = _array_wrap_candidates[0]
+            try:
+                result = candidate.__array_wrap__(result, None, False)
+            except TypeError:
+                try:
+                    result = candidate.__array_wrap__(result, None)
+                except TypeError:
+                    result = candidate.__array_wrap__(result)
 
         # Handle where=
         if _where is not True and not (isinstance(_where, bool) and _where):

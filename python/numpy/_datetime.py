@@ -296,6 +296,25 @@ class datetime64:
         if _is_td64(other):
             v = _to_common_unit(other._value, other._unit, self._unit)
             return datetime64.__new_from_value(self._value + v, self._unit)
+        if isinstance(other, ndarray):
+            from ._helpers import _make_temporal_array
+            dt = str(other.dtype)
+            vals = other.flatten().tolist()
+            if dt.startswith('timedelta64'):
+                out = []
+                for v in vals:
+                    if _is_td64(v):
+                        if v._is_nat:
+                            out.append(datetime64.__new_from_value(_NAT_VALUE, self._unit))
+                        else:
+                            vv = _to_common_unit(v._value, v._unit, self._unit)
+                            out.append(datetime64.__new_from_value(self._value + vv, self._unit))
+                    else:
+                        out.append(datetime64.__new_from_value(self._value + int(v), self._unit))
+                return _make_temporal_array(out, 'datetime64[{}]'.format(self._unit)).reshape(other.shape)
+            if getattr(other.dtype, 'kind', '') in ('i', 'u', 'b'):
+                out = [datetime64.__new_from_value(self._value + int(v), self._unit) for v in vals]
+                return _make_temporal_array(out, 'datetime64[{}]'.format(self._unit)).reshape(other.shape)
         return NotImplemented
 
     def __radd__(self, other):
@@ -398,6 +417,8 @@ class timedelta64:
             return timedelta64(v1 + v2, common)
         if _is_dt64(other):
             return other + self
+        if isinstance(other, ndarray):
+            return other + self
         return NotImplemented
 
     def __sub__(self, other):
@@ -457,6 +478,23 @@ class timedelta64:
             v2 = _to_common_unit(other._value, other._unit, common)
             return v1 < v2
         return NotImplemented
+
+    def __le__(self, other):
+        if self._is_nat or (_is_td64(other) and other._is_nat):
+            return False
+        return self == other or self < other
+
+    def __gt__(self, other):
+        if self._is_nat or (_is_td64(other) and other._is_nat):
+            return False
+        if _is_td64(other):
+            return other < self
+        return NotImplemented
+
+    def __ge__(self, other):
+        if self._is_nat or (_is_td64(other) and other._is_nat):
+            return False
+        return self == other or self > other
 
     def __hash__(self):
         return hash((self._value, self._unit))

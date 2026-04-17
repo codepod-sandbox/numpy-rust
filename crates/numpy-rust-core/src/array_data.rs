@@ -71,6 +71,19 @@ impl ArrayData {
         self.shape().iter().product()
     }
 
+    pub fn raw_data_ptr(&self) -> usize {
+        match self {
+            ArrayData::Bool(a) => a.as_ptr() as usize,
+            ArrayData::Int32(a) => a.as_ptr() as usize,
+            ArrayData::Int64(a) => a.as_ptr() as usize,
+            ArrayData::Float32(a) => a.as_ptr() as usize,
+            ArrayData::Float64(a) => a.as_ptr() as usize,
+            ArrayData::Complex64(a) => a.as_ptr() as usize,
+            ArrayData::Complex128(a) => a.as_ptr() as usize,
+            ArrayData::Str(_) => 0,
+        }
+    }
+
     /// Return the strides of the underlying array (in units of elements, not bytes).
     pub fn strides(&self) -> Vec<isize> {
         match self {

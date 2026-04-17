@@ -43,8 +43,174 @@ __all__ = [
 ]
 
 # Keep references to native modules
-random = _random_native
+_native_random_module = _random_native
+random = _native_random_module
 linalg = _linalg_native
+_orig_random_seed = _native_random_module.seed
+_orig_random_rand = _native_random_module.rand
+_orig_random_uniform = _native_random_module.uniform
+_orig_random_normal = _native_random_module.normal
+_orig_random_randn = _native_random_module.randn
+_orig_random_randint = _native_random_module.randint
+_orig_random_choice = _native_random_module.choice
+
+_ACTIVE_BITGEN = None
+
+
+class _bitgen_context:
+    def __init__(self, bitgen):
+        self.bitgen = bitgen
+        self.prev = None
+
+    def __enter__(self):
+        global _ACTIVE_BITGEN
+        self.prev = _ACTIVE_BITGEN
+        _ACTIVE_BITGEN = self.bitgen
+
+    def __exit__(self, exc_type, exc, tb):
+        global _ACTIVE_BITGEN
+        _ACTIVE_BITGEN = self.prev
+
+def _active_rng():
+    if _ACTIVE_BITGEN is not None and hasattr(_ACTIVE_BITGEN, "_rng"):
+        return _ACTIVE_BITGEN._rng
+    return None
+
+
+class _NativeRngAdapter:
+    def __init__(self, seed=None, state=None):
+        if state is None:
+            if seed is None:
+                self._state = int(_native_random_module.stateful_seed())
+            else:
+                self._state = int(_native_random_module.stateful_seed(int(seed)))
+        else:
+            self._state = int(state)
+
+    def seed(self, seed=None):
+        if seed is None:
+            self._state = int(_native_random_module.stateful_seed())
+        else:
+            self._state = int(_native_random_module.stateful_seed(int(seed)))
+
+    def getstate(self):
+        return int(self._state)
+
+    def setstate(self, state):
+        self._state = int(state)
+
+    def random(self):
+        return float(self.random_array((1,))[0])
+
+    def random_array(self, shape):
+        self._state, arr = _native_random_module.rand_with_state(self._state, shape)
+        return arr
+
+    def gauss(self, mean, std):
+        return float(self.normal_array(mean, std, (1,))[0])
+
+    def normal_array(self, mean, std, shape):
+        self._state, arr = _native_random_module.normal_with_state(
+            self._state, float(mean), float(std), shape
+        )
+        return arr
+
+    def uniform_array(self, low, high, shape):
+        self._state, arr = _native_random_module.uniform_with_state(
+            self._state, float(low), float(high), shape
+        )
+        return arr
+
+    def randrange(self, low, high):
+        self._state, value = _native_random_module.randint_scalar_with_state(
+            self._state, int(low), int(high)
+        )
+        return int(value)
+
+    def randint_array(self, low, high, shape):
+        self._state, arr = _native_random_module.randint_with_state(
+            self._state, int(low), int(high), shape
+        )
+        return arr
+
+    def getrandbits(self, bits):
+        self._state, value = _native_random_module.randbits_with_state(self._state, int(bits))
+        return int(value)
+
+
+def _proxy_seed(seed):
+    rng = _active_rng()
+    if rng is not None:
+        rng.seed(seed)
+    else:
+        _orig_random_seed(seed)
+
+
+def _coerce_random_shape_args(shape_args):
+    if len(shape_args) == 0:
+        return ()
+    if len(shape_args) == 1:
+        shape = shape_args[0]
+        if isinstance(shape, int):
+            return (shape,)
+        if isinstance(shape, tuple):
+            return shape
+        return tuple(shape)
+    return tuple(int(s) for s in shape_args)
+
+
+def _proxy_rand(*shape_args):
+    shape = _coerce_random_shape_args(shape_args)
+    rng = _active_rng()
+    if rng is None:
+        return _orig_random_rand(shape)
+    result = rng.random_array(shape if len(shape) > 0 else (1,))
+    if len(shape) == 0:
+        return result
+    return result.reshape(shape) if len(shape) > 1 else result
+
+
+def _proxy_uniform(low, high, shape):
+    rng = _active_rng()
+    if rng is None:
+        return _orig_random_uniform(low, high, shape)
+    if isinstance(shape, int):
+        shape = (shape,)
+    result = rng.uniform_array(low, high, shape)
+    return result.reshape(shape) if len(shape) > 1 else result
+
+
+def _proxy_normal(mean, std, shape):
+    rng = _active_rng()
+    if rng is None:
+        return _orig_random_normal(mean, std, shape)
+    if isinstance(shape, int):
+        shape = (shape,)
+    result = rng.normal_array(mean, std, shape)
+    return result.reshape(shape) if len(shape) > 1 else result
+
+
+def _proxy_randn(*shape_args):
+    shape = _coerce_random_shape_args(shape_args)
+    return _proxy_normal(0.0, 1.0, shape)
+
+
+def _proxy_randint(low, high, size):
+    rng = _active_rng()
+    if rng is None:
+        return _orig_random_randint(low, high, size)
+    if isinstance(size, int):
+        size = (size,)
+    result = rng.randint_array(low, high, size)
+    return result.reshape(size) if len(size) > 1 else result
+
+
+random.seed = _proxy_seed
+random.rand = _proxy_rand
+random.uniform = _proxy_uniform
+random.normal = _proxy_normal
+random.randn = _proxy_randn
+random.randint = _proxy_randint
 
 # stdlib math (needed for _random_vonmises)
 _stdlib_math = _math
@@ -588,6 +754,19 @@ def _check_out_dtype(out, dtype):
             pass  # Allow for backward compat
 
 
+def _validate_out_array(out, size):
+    if out is None:
+        return
+    if size is not None and tuple(out.shape) != tuple(size):
+        raise ValueError("size must match out.shape")
+    flags = getattr(out, 'flags', None)
+    if flags is not None:
+        is_c = bool(flags['C_CONTIGUOUS']) if hasattr(flags, '__getitem__') else bool(getattr(flags, 'c_contiguous', False))
+        is_f = bool(flags['F_CONTIGUOUS']) if hasattr(flags, '__getitem__') else bool(getattr(flags, 'f_contiguous', False))
+        if not is_c and not is_f:
+            raise ValueError("out array must be contiguous")
+
+
 def _fill_out(out, src):
     """Fill an output array in-place from a source array using tuple indexing."""
     shape = out.shape
@@ -768,6 +947,111 @@ def _broadcast_call_3(func, a, b, c, size=None):
     return r
 
 
+def _normalize_random_size(size):
+    if size is None:
+        return None
+    if hasattr(size, '__iter__') and not isinstance(size, (tuple, list)):
+        size = tuple(int(x) for x in size)
+    if isinstance(size, int):
+        return (size,)
+    return tuple(int(x) for x in size)
+
+
+def _random_dtype_bounds(dtype):
+    dt_str = str(dtype)
+    bounds_list = [
+        ('uint64', (0, 18446744073709551616)),
+        ('uint32', (0, 4294967296)),
+        ('uint16', (0, 65536)),
+        ('uint8', (0, 256)),
+        ('int64', (-9223372036854775808, 9223372036854775808)),
+        ('int32', (-2147483648, 2147483648)),
+        ('int16', (-32768, 32768)),
+        ('int8', (-128, 128)),
+        ('bool', (0, 2)),
+    ]
+    for name, bounds in bounds_list:
+        if name in dt_str:
+            return name, bounds
+    return dt_str, None
+
+
+def _coerce_int_operand(value):
+    if isinstance(value, ndarray):
+        arr = value
+    elif hasattr(value, 'flatten') and hasattr(value, 'shape'):
+        arr = value
+    elif isinstance(value, (list, tuple)):
+        def _shape_of(seq):
+            if not isinstance(seq, (list, tuple)):
+                return []
+            if len(seq) == 0:
+                return [0]
+            inner = _shape_of(seq[0])
+            return [len(seq)] + inner
+
+        def _flatten(seq, out):
+            if isinstance(seq, (list, tuple)):
+                for item in seq:
+                    _flatten(item, out)
+            else:
+                out.append(int(seq))
+
+        flat = []
+        _flatten(value, flat)
+        return flat, _shape_of(value)
+    else:
+        return int(value), None
+    return arr.flatten().tolist(), list(arr.shape)
+
+
+def _broadcast_random_operand_shapes(low_shape, high_shape, size):
+    if size is not None:
+        return list(size)
+    max_ndim = max(len(low_shape), len(high_shape))
+    while len(low_shape) < max_ndim:
+        low_shape = [1] + low_shape
+    while len(high_shape) < max_ndim:
+        high_shape = [1] + high_shape
+    out_shape = []
+    for lo_dim, hi_dim in zip(low_shape, high_shape):
+        if lo_dim != hi_dim and lo_dim != 1 and hi_dim != 1:
+            raise ValueError("shape mismatch: objects cannot be broadcast to a single shape")
+        out_shape.append(max(lo_dim, hi_dim))
+    return out_shape
+
+
+def _randbelow_with_rng(rng, width):
+    if width <= 0:
+        raise ValueError("high <= low")
+    if width == 1:
+        return 0
+    bits = (width - 1).bit_length()
+    while True:
+        candidate = rng.getrandbits(bits)
+        if candidate < width:
+            return candidate
+
+
+def _draw_integers_with_rng(rng, low, high, count):
+    values = []
+    for idx in range(count):
+        lo = int(low[idx] if isinstance(low, list) else low)
+        hi = int(high[idx] if isinstance(high, list) else high)
+        values.append(lo + _randbelow_with_rng(rng, hi - lo))
+    return values
+
+
+def _build_integer_array(values, dtype_name):
+    if dtype_name == 'uint64':
+        signed = [
+            value if value <= 9223372036854775807 else value - 18446744073709551616
+            for value in values
+        ]
+        return _native.array(signed).astype('uint64')
+    return array(values, dtype=dtype_name)
+
+
 class _Generator:
     """Random number generator (simplified)."""
     def __init__(self, seed_val=None):
@@ -778,9 +1062,22 @@ class _Generator:
             self.bit_generator = _PCG64(seed_val)
             # _PCG64.__init__ already seeds the RNG
 
+    def __getattribute__(self, name):
+        attr = object.__getattribute__(self, name)
+        if callable(attr) and not name.startswith('_'):
+            bitgen = object.__getattribute__(self, 'bit_generator')
+
+            def _wrapped(*args, **kwargs):
+                with _bitgen_context(bitgen):
+                    return attr(*args, **kwargs)
+
+            return _wrapped
+        return attr
+
     def random(self, size=None, dtype=None, out=None):
         if size is None and out is not None:
             size = out.shape
+        _validate_out_array(out, size)
         if size is None:
             return float(random.rand((1,))[0])
         if hasattr(size, '__iter__') and not isinstance(size, (tuple, list)):
@@ -802,6 +1099,7 @@ class _Generator:
             _check_out_dtype(out, dtype)
         if size is None and out is not None:
             size = out.shape
+        _validate_out_array(out, size)
         r = _random_standard_normal(size)
         if dtype is not None:
             dt = str(dtype)
@@ -820,68 +1118,39 @@ class _Generator:
         if high is None:
             high = low
             low = 0
-        if not endpoint:
-            pass  # high is exclusive already
-        else:
-            high = high + 1
-        # Validate dtype bounds
-        dt_str = str(dtype)
-        # Check uint before int to avoid 'int16' matching 'uint16'
-        _dtype_bounds_list = [
-            ('uint64', (0, 18446744073709551616)),
-            ('uint32', (0, 4294967296)),
-            ('uint16', (0, 65536)),
-            ('uint8', (0, 256)),
-            ('int64', (-9223372036854775808, 9223372036854775808)),
-            ('int32', (-2147483648, 2147483648)),
-            ('int16', (-32768, 32768)),
-            ('int8', (-128, 128)),
-            ('bool', (0, 2)),
-        ]
-        bounds = None
-        for k, v in _dtype_bounds_list:
-            if k in dt_str:
-                bounds = v
-                break
-        # Handle array low/high
-        low_is_arr = isinstance(low, (list, tuple, ndarray))
-        high_is_arr = isinstance(high, (list, tuple, ndarray))
-        if low_is_arr or high_is_arr:
-            if low_is_arr:
-                low_a = asarray(low)
-                low_flat = low_a.flatten().tolist()
-                low_shape = list(low_a.shape)
+        size = _normalize_random_size(size)
+        if endpoint:
+            if isinstance(high, ndarray):
+                high = high + 1
+            elif isinstance(high, (list, tuple)):
+                high = (asarray(high) + 1).tolist()
             else:
-                low_flat = [low]
+                high = high + 1
+
+        dt_str, bounds = _random_dtype_bounds(dtype)
+        rng = self.bit_generator._rng
+
+        low_values, low_shape = _coerce_int_operand(low)
+        high_values, high_shape = _coerce_int_operand(high)
+
+        if low_shape is not None or high_shape is not None:
+            if low_shape is None:
+                low_values = [low_values]
                 low_shape = [1]
-            if high_is_arr:
-                high_a = asarray(high)
-                high_flat = high_a.flatten().tolist()
-                high_shape = list(high_a.shape)
-            else:
-                high_flat = [high]
+            if high_shape is None:
+                high_values = [high_values]
                 high_shape = [1]
-            # Determine output shape from broadcast
-            max_ndim = max(len(low_shape), len(high_shape))
-            while len(low_shape) < max_ndim:
-                low_shape = [1] + low_shape
-            while len(high_shape) < max_ndim:
-                high_shape = [1] + high_shape
-            out_shape = [max(low_shape[i], high_shape[i]) for i in range(max_ndim)]
-            if size is not None:
-                if isinstance(size, int):
-                    out_shape = [size]
-                else:
-                    out_shape = list(size)
-            n = 1
-            for s in out_shape:
-                n *= s
-            # Validate bounds
-            nl = len(low_flat)
-            nh = len(high_flat)
-            for i in range(max(nl, nh)):
-                lo_v = int(low_flat[i % nl])
-                hi_v = int(high_flat[i % nh])
+            out_shape = _broadcast_random_operand_shapes(low_shape, high_shape, size)
+            count = 1
+            for dim in out_shape:
+                count *= dim
+            low_len = len(low_values)
+            high_len = len(high_values)
+            lows = []
+            highs = []
+            for idx in range(count):
+                lo_v = int(low_values[idx % low_len])
+                hi_v = int(high_values[idx % high_len])
                 if lo_v >= hi_v:
                     raise ValueError("low >= high")
                 if bounds is not None:
@@ -889,27 +1158,15 @@ class _Generator:
                         raise ValueError(f"low is out of bounds for {dt_str}")
                     if hi_v > bounds[1]:
                         raise ValueError(f"high is out of bounds for {dt_str}")
-            # Check if all low/high values are the same — use batch call
-            lo_set = set(int(x) for x in low_flat)
-            hi_set = set(int(x) for x in high_flat)
-            if len(lo_set) == 1 and len(hi_set) == 1:
-                lo_val = int(low_flat[0])
-                hi_val = int(high_flat[0])
-                r = _native_random_randint(lo_val, hi_val, (n,))
-            else:
-                results = []
-                nl = len(low_flat)
-                nh = len(high_flat)
-                for i in range(n):
-                    lo = int(low_flat[i % nl])
-                    hi = int(high_flat[i % nh])
-                    results.append(int(_native_random_randint(lo, hi, (1,)).flatten()[0]))
-                r = array(results)
-            if len(out_shape) > 1:
-                r = r.reshape(out_shape)
-            return r
-        lo_v = int(low)
-        hi_v = int(high)
+                lows.append(lo_v)
+                highs.append(hi_v)
+            result = _build_integer_array(_draw_integers_with_rng(rng, lows, highs, count), dt_str)
+            if out_shape:
+                return result.reshape(tuple(out_shape))
+            return result
+
+        lo_v = int(low_values)
+        hi_v = int(high_values)
         if lo_v >= hi_v:
             raise ValueError("low >= high")
         if bounds is not None:
@@ -918,10 +1175,15 @@ class _Generator:
             if hi_v > bounds[1]:
                 raise ValueError(f"high is out of bounds for {dt_str}")
         if size is None:
-            return int(_native_random_randint(lo_v, hi_v, (1,)).flatten()[0])
-        if isinstance(size, int):
-            size = (size,)
-        return _native_random_randint(lo_v, hi_v, size)
+            value = lo_v + _randbelow_with_rng(rng, hi_v - lo_v)
+            if 'bool' in dt_str:
+                return bool(value)
+            return int(value)
+        count = 1
+        for dim in size:
+            count *= dim
+        result = _build_integer_array(_draw_integers_with_rng(rng, lo_v, hi_v, count), dt_str)
+        return result.reshape(size)
 
     def choice(self, a, size=None, replace=True, p=None):
         if isinstance(a, int):
@@ -984,6 +1246,7 @@ class _Generator:
             _check_out_dtype(out, dtype)
         if size is None and out is not None:
             size = out.shape
+        _validate_out_array(out, size)
         if isinstance(shape, ndarray):
             r = _broadcast_call_1(lambda s: _random_gamma(s, 1.0), shape, size)
         else:
@@ -1006,6 +1269,7 @@ class _Generator:
             _check_out_dtype(out, dtype)
         if size is None and out is not None:
             size = out.shape
+        _validate_out_array(out, size)
         r = _random_exponential(1.0, size)
         if dtype is not None:
             dt = str(dtype)
@@ -1743,10 +2007,25 @@ class _RandomState:
 
 
 # Wrap random.choice to accept lists, tuples, and ints (Rust version requires ndarray)
-_native_random_choice = random.choice
+_native_random_choice = _orig_random_choice
 
 
 def _wrapped_random_choice(a, size=None, replace=True, p=None):
+    if _ACTIVE_BITGEN is not None:
+        seq = arange(0.0, float(a), 1.0).tolist() if isinstance(a, int) else (
+            a.tolist() if hasattr(a, 'tolist') else list(a)
+        )
+        if size is None:
+            size = 1
+        rng = _ACTIVE_BITGEN._rng
+        if replace:
+            return array([seq[rng.randrange(0, len(seq))] for _ in range(size)])
+        pool = list(seq)
+        chosen = []
+        for _ in range(size):
+            idx = rng.randrange(0, len(pool))
+            chosen.append(pool.pop(idx))
+        return array(chosen)
     if isinstance(a, int):
         a = arange(0.0, float(a), 1.0)
     elif isinstance(a, (list, tuple)):
@@ -1756,13 +2035,24 @@ def _wrapped_random_choice(a, size=None, replace=True, p=None):
     return _native_random_choice(a, size, replace)
 
 
-_native_random_randint = random.randint
+_native_random_randint = _orig_random_randint
 
 
 def _wrapped_random_randint(low, high=None, size=None, dtype='int64'):
     if high is None:
         high = low
         low = 0
+    if _ACTIVE_BITGEN is not None:
+        rng = _ACTIVE_BITGEN._rng
+        if size is None:
+            return rng.randrange(int(low), int(high))
+        if isinstance(size, int):
+            size = (size,)
+        total = 1
+        for s in size:
+            total *= s
+        result = array([rng.randrange(int(low), int(high)) for _ in range(total)])
+        return result.reshape(size) if len(size) > 1 else result
     if size is None:
         return int(_native_random_randint(int(low), int(high), (1,)).flatten()[0])
     if isinstance(size, int):
@@ -1871,9 +2161,11 @@ _bitgen_counter = 0
 class _BitGenerator:
     """Base class stub for bit generators."""
     def __init__(self, seed=None):
+        self._mt19937_state_cache = None
         if isinstance(seed, _SeedSequence):
             self._seed_seq = seed
             self._seed = seed.entropy
+            self._rng = _NativeRngAdapter(seed=self._seed)
         elif isinstance(seed, (ndarray, list, tuple)):
             # Array/list seed: use hash of all elements
             if isinstance(seed, ndarray):
@@ -1887,13 +2179,13 @@ class _BitGenerator:
             # Collapse single-element list to scalar for state comparison
             if len(seed_list) == 1:
                 self._seed = int(seed_list[0])
-                random.seed(int(seed_list[0]) % (2**63))
+                self._rng = _NativeRngAdapter(seed=self._seed)
             else:
                 self._seed = seed_list
                 seed_val = 0
                 for i, v in enumerate(seed_list):
                     seed_val = (seed_val * 31 + int(v)) % (2**63)
-                random.seed(seed_val)
+                self._rng = _NativeRngAdapter(seed=seed_val)
         else:
             self._seed_seq = _SeedSequence(seed)
             self._seed = seed
@@ -1901,7 +2193,7 @@ class _BitGenerator:
                 sv = int(seed)
                 if sv < 0:
                     raise ValueError("Seed must be non-negative")
-                random.seed(sv % (2**63))
+                self._rng = _NativeRngAdapter(seed=sv % (2**63))
             else:
                 # Generate unique state for unseeded generators
                 global _bitgen_counter
@@ -1909,15 +2201,68 @@ class _BitGenerator:
                 import time as _time
                 entropy = int(_time.time() * 1e6) + _bitgen_counter
                 self._seed = entropy
-                random.seed(entropy % (2**63))
+                self._rng = _NativeRngAdapter(seed=entropy % (2**63))
 
     @property
     def state(self):
-        return {'bit_generator': self.__class__.__name__, 'state': {'seed': self._seed}}
+        if self.__class__.__name__ == 'MT19937' and self._mt19937_state_cache is not None:
+            return self._mt19937_state_cache
+        return {
+            'bit_generator': self.__class__.__name__,
+            'state': {'native_state': self._rng.getstate(), 'seed': self._seed},
+        }
 
     @state.setter
     def state(self, value):
-        pass
+        if isinstance(value, tuple) and len(value) >= 3 and value[0] == 'MT19937':
+            key = value[1].tolist() if hasattr(value[1], 'tolist') else list(value[1])
+            pos = int(value[2])
+            self._mt19937_state_cache = {
+                'bit_generator': self.__class__.__name__,
+                'state': {
+                    'key': array(key, dtype='uint32'),
+                    'pos': pos,
+                },
+            }
+            seed_val = 0
+            for item in key:
+                seed_val = (seed_val * 1315423911 + int(item)) % (2**63)
+            self._rng.setstate(seed_val ^ pos)
+            return
+        if isinstance(value, dict):
+            st = value.get('state', value)
+            if isinstance(st, dict) and 'native_state' in st:
+                self._rng.setstate(st['native_state'])
+                if 'seed' in st:
+                    self._seed = st['seed']
+                self._mt19937_state_cache = None
+                return
+            if isinstance(st, dict) and 'key' in st and 'pos' in st:
+                key = st['key'].tolist() if hasattr(st['key'], 'tolist') else list(st['key'])
+                self._mt19937_state_cache = {
+                    'bit_generator': self.__class__.__name__,
+                    'state': {
+                        'key': array(key, dtype='uint32'),
+                        'pos': int(st['pos']),
+                    },
+                }
+                seed_val = 0
+                for item in key:
+                    seed_val = (seed_val * 1315423911 + int(item)) % (2**63)
+                self._rng.setstate(seed_val ^ int(st['pos']))
+                return
+
+    def advance(self, delta):
+        if delta is None:
+            return
+        self._rng.setstate(_native_random_module.advance_state(self._rng.getstate(), hash(int(delta)) % (2**63)))
+        self._mt19937_state_cache = None
+
+    def jumped(self):
+        new = self.__class__(0)
+        new._rng.setstate(_native_random_module.jumped_state(self._rng.getstate()))
+        new._seed = self._seed
+        return new
 
 
 class _MT19937(_BitGenerator):

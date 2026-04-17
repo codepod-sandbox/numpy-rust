@@ -4,7 +4,8 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray, _copy_into,
-    _builtin_range, _builtin_min, _builtin_max,
+    _builtin_range, _builtin_min, _builtin_max, _is_temporal_dtype,
+    _temporal_dtype_info, _make_temporal_array,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate, linspace, full
@@ -239,47 +240,87 @@ def prod(a, axis=None, dtype=None, out=None, keepdims=False, initial=None, where
     return result
 
 
-def cumsum(a, axis=None, dtype=None, out=None):
+def cumsum(a, axis=None, dtype=None, out=None, include_initial=False):
     if not isinstance(a, ndarray):
         a = array(a)
+    if axis is None:
+        a = a.flatten()
+        axis = 0
     if axis is not None and axis < 0:
         axis = a.ndim + axis
     _in_dt = str(a.dtype)
     result = a.cumsum(axis)
     if dtype is not None:
-        return _dtype_cast(result, dtype)
-    if _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
+        result = _dtype_cast(result, dtype)
+    elif _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
         try:
             result = result.astype(_in_dt)
         except Exception:
             pass
+    if include_initial:
+        prefix_shape = list(result.shape)
+        prefix_shape[axis] = 1
+        prefix = zeros(prefix_shape, dtype=result.dtype)
+        result = concatenate([prefix, result], axis=axis)
+    if out is not None:
+        out[...] = result
+        return out
     return result
 
 
-def cumprod(a, axis=None, dtype=None, out=None):
+def cumprod(a, axis=None, dtype=None, out=None, include_initial=False):
     if not isinstance(a, ndarray):
         a = array(a)
+    if axis is None:
+        a = a.flatten()
+        axis = 0
     if axis is not None and axis < 0:
         axis = a.ndim + axis
     _in_dt = str(a.dtype)
     result = a.cumprod(axis)
     if dtype is not None:
-        return _dtype_cast(result, dtype)
-    if _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
+        result = _dtype_cast(result, dtype)
+    elif _in_dt.startswith(('float', 'complex')) and str(result.dtype) != _in_dt:
         try:
             result = result.astype(_in_dt)
         except Exception:
             pass
+    if include_initial:
+        prefix_shape = list(result.shape)
+        prefix_shape[axis] = 1
+        prefix = ones(prefix_shape, dtype=result.dtype)
+        result = concatenate([prefix, result], axis=axis)
+    if out is not None:
+        out[...] = result
+        return out
     return result
 
 
 def diff(a, n=1, axis=-1, prepend=None, append=None):
     from ._helpers import AxisError as _AxisError
+    from numpy.ma import MaskedArray as _MA
     # n=0: return a unchanged (identity)
     if n == 0:
         return a
     if n < 0:
         raise ValueError("order must be non-negative but got {}".format(n))
+    if isinstance(a, _MA):
+        import numpy as _np
+        data = diff(a.data, n=n, axis=axis, prepend=prepend, append=append)
+        mask = a.mask
+        if axis < 0:
+            _mask_axis = mask.ndim + axis
+        else:
+            _mask_axis = axis
+        if n >= mask.shape[_mask_axis]:
+            return _MA(data, mask=zeros(data.shape, dtype='bool'))
+        for _ in _builtin_range(n):
+            left = [slice(None)] * mask.ndim
+            right = [slice(None)] * mask.ndim
+            left[_mask_axis] = slice(1, None)
+            right[_mask_axis] = slice(None, -1)
+            mask = _np.logical_or(mask[tuple(left)], mask[tuple(right)])
+        return _MA(data, mask=mask)
     if not isinstance(a, ndarray):
         a = array(a)
     # Validate axis
@@ -328,15 +369,24 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
             except Exception:
                 pass
         a = concatenate([a, append], axis=_axis)
+    _in_dtype = str(a.dtype)
+    _temporal_diff_dtype = None
+    if _is_temporal_dtype(_in_dtype):
+        kind, unit, _, _ = _temporal_dtype_info(_in_dtype)
+        _temporal_diff_dtype = _in_dtype if kind == 'm' else "timedelta64[{}]".format(unit)
     # If n >= axis size, result is empty along that axis
     _axis_len = a.shape[_axis]
     if n >= _axis_len:
         new_shape = list(a.shape)
         _result_len = _axis_len - n
         new_shape[_axis] = _result_len if _result_len > 0 else 0
-        _out_dtype = 'bool' if _is_bool else str(a.dtype)
+        _out_dtype = 'bool' if _is_bool else (_temporal_diff_dtype or _in_dtype)
         return zeros(new_shape, dtype=_out_dtype)
-    _in_dtype = str(a.dtype)
+    if isinstance(a, _ObjectArray) and _temporal_diff_dtype is not None and a.ndim == 1:
+        values = a.tolist()
+        for _ in _builtin_range(n):
+            values = [values[i + 1] - values[i] for i in _builtin_range(len(values) - 1)]
+        return _make_temporal_array(values, _temporal_diff_dtype)
     result = _native.diff(a, n, _axis)
     if _is_bool:
         result = result.astype('bool')
@@ -1977,6 +2027,7 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
 
 def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
     import warnings as _warnings
+    orig_input = a
     if not isinstance(a, ndarray):
         a = array(a)
 
@@ -2004,6 +2055,57 @@ def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
             return out
         return result
 
+    subtype = type(orig_input) if isinstance(orig_input, ndarray) and type(orig_input) is not ndarray else None
+
+    def _restore_median_subclass(value):
+        if subtype is None:
+            return value
+        if isinstance(value, ndarray):
+            return value.view(subtype)
+        return asarray(value).reshape(()).view(subtype)
+
+    def _median_window_mean(arr, ax):
+        from ._sorting import partition
+        if arr.ndim == 0:
+            return arr.reshape((1,)).mean()
+        part = partition(arr, arr.size // 2 if ax is None else arr.shape[int(ax)] // 2, axis=ax if ax is not None else -1)
+        if ax is None:
+            flat = part.reshape((part.size,))
+            start = (flat.size - 1) // 2
+            stop = flat.size // 2 + 1
+            window = flat[start:stop]
+            return window.mean()
+        start = (part.shape[int(ax)] - 1) // 2
+        stop = part.shape[int(ax)] // 2 + 1
+        slc = [slice(None)] * part.ndim
+        slc[int(ax)] = slice(start, stop)
+        window = part[tuple(slc)]
+        return window.mean(axis=ax)
+
+    if subtype is not None:
+        has_nan = False
+        try:
+            if getattr(a.dtype, "kind", "") == "f":
+                has_nan = any(_math.isnan(float(v)) for v in a.flatten().tolist())
+        except Exception:
+            has_nan = False
+        if not has_nan and axis is not None and not isinstance(axis, list):
+            result = _median_window_mean(a, axis)
+            if keepdims:
+                result = _apply_keepdims(result, a, orig_axis)
+            if out is not None:
+                out[...] = result
+                return out
+            return result
+        if not has_nan and axis is None:
+            result = _median_window_mean(a, None)
+            if keepdims:
+                result = _apply_keepdims(result, a, orig_axis)
+            if out is not None:
+                out[...] = result
+                return out
+            return result
+
     try:
         result = _quantile_core(a, 0.5, axis, 'linear', keepdims=keepdims,
                                 orig_axis_for_keepdims=orig_axis)
@@ -2018,6 +2120,7 @@ def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
 
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
+    result = _restore_median_subclass(result)
     if out is not None:
         out[...] = result
         return out
@@ -2198,20 +2301,36 @@ def corrcoef(x, y=None, rowvar=True, dtype=None):
 
 def average(a, axis=None, weights=None, returned=False, keepdims=False):
     """Compute the weighted average along the specified axis."""
+    orig_a = a
+
+    def _restore_subclass(value):
+        if type(orig_a) is ndarray or not isinstance(orig_a, ndarray):
+            return value
+        cls = type(orig_a)
+        if not isinstance(value, ndarray):
+            value = asarray(value)
+        try:
+            return value.view(cls)
+        except Exception:
+            return value
+
     a = asarray(a)
     if weights is None:
         avg = mean(a, axis=axis, keepdims=keepdims)
+        if axis is None and not keepdims and (type(orig_a) is ndarray or isinstance(orig_a, _ObjectArray)):
+            avg = _extract_zero_dim_scalar(avg)
+        avg = _restore_subclass(avg)
         if returned:
             if keepdims:
                 if axis is None:
                     wt_shape = tuple(1 for _ in range(a.ndim)) if a.ndim > 0 else ()
-                    return avg, full(wt_shape, float(a.size))
+                    return avg, _restore_subclass(full(wt_shape, float(a.size)))
                 else:
-                    return avg, full(avg.shape, float(a.shape[axis]))
+                    return avg, _restore_subclass(full(avg.shape, float(a.shape[axis])))
             else:
                 if axis is None:
-                    return avg, float(a.size)
-                return avg, full(avg.shape, float(a.shape[axis]))
+                    return avg, _restore_subclass(float(a.size))
+                return avg, _restore_subclass(full(avg.shape, float(a.shape[axis])))
         return avg
     weights = asarray(weights)
     # Validate and broadcast weights against a
@@ -2238,6 +2357,19 @@ def average(a, axis=None, weights=None, returned=False, keepdims=False):
             # Multi-axis averaging: weights must be broadcastable to a.shape
             try:
                 import numpy as _np_local
+                axes = tuple(ax if ax >= 0 else ax + a.ndim for ax in _axis)
+                expected_shape = tuple(a.shape[ax] for ax in axes)
+                if weights.ndim != len(axes) or tuple(weights.shape) != expected_shape:
+                    raise ValueError
+                if len(axes) > 1:
+                    perm = [i for i, _ax in sorted(enumerate(axes), key=lambda p: p[1])]
+                    if perm != list(range(len(axes))):
+                        weights = weights.transpose(tuple(perm))
+                    axes = tuple(sorted(axes))
+                new_shape = [1] * a.ndim
+                for i, ax in enumerate(axes):
+                    new_shape[ax] = weights.shape[i]
+                weights = weights.reshape(new_shape)
                 weights = _np_local.broadcast_to(weights, a.shape)
             except Exception:
                 raise ValueError(
@@ -2246,6 +2378,8 @@ def average(a, axis=None, weights=None, returned=False, keepdims=False):
     wsum = sum(a * weights, axis=axis, keepdims=keepdims)
     wt = sum(weights, axis=axis, keepdims=keepdims)
     avg = wsum / wt
+    avg = _restore_subclass(avg)
+    wt = _restore_subclass(wt)
     if returned:
         return avg, wt
     return avg
@@ -2814,6 +2948,12 @@ def _coerce_gradient_spacing(sp):
         raise ValueError("Spacing must be scalars or 1d, not {}d".format(arr.ndim))
     if arr.size == 1:
         return float(arr.flatten()[0])
+    dt = str(arr.dtype)
+    if dt.startswith("uint") or dt in ("bool", "int8", "int16", "int32", "int64", "float16", "float32"):
+        try:
+            arr = arr.astype("float64")
+        except Exception:
+            pass
     return arr
 
 
@@ -2856,37 +2996,44 @@ def _resolve_gradient_spacings(varargs, axes, ndim_shape):
                     sp.size, axes[i], ndim_shape[axes[i]]
                 )
             )
+        if isinstance(sp, ndarray):
+            diffx = sp[1:] - sp[:-1]
+            if diffx.size > 0 and bool((diffx == diffx[0]).all()):
+                spacings[i] = float(diffx[0])
+            else:
+                spacings[i] = diffx
     return spacings
 
 
-def _gradient_1d_nonuniform(f_1d, x, edge_order):
-    """Compute 1-D gradient with non-uniform coordinate array x."""
+def _gradient_1d_nonuniform(f_1d, dx_arr, edge_order):
+    """Compute 1-D gradient with non-uniform spacing deltas."""
     n = len(f_1d)
-    import math as _math
     out = [0.0] * n
     # Interior: central differences
     for i in _builtin_range(1, n - 1):
-        dx1 = x[i] - x[i - 1]
-        dx2 = x[i + 1] - x[i]
+        dx1 = dx_arr[i - 1]
+        dx2 = dx_arr[i]
         f0 = float(f_1d[i - 1])
         f1 = float(f_1d[i])
         f2 = float(f_1d[i + 1])
-        # Weighted central difference for non-uniform grid
-        out[i] = (f2 * dx1 ** 2 + (dx2 ** 2 - dx1 ** 2) * f1 - f0 * dx2 ** 2) / (dx1 * dx2 * (dx1 + dx2))
+        a = -dx2 / (dx1 * (dx1 + dx2))
+        b = (dx2 - dx1) / (dx1 * dx2)
+        c = dx1 / (dx2 * (dx1 + dx2))
+        out[i] = a * f0 + b * f1 + c * f2
     # Boundaries
     if edge_order == 1:
-        out[0] = (float(f_1d[1]) - float(f_1d[0])) / (x[1] - x[0])
-        out[-1] = (float(f_1d[-1]) - float(f_1d[-2])) / (x[-1] - x[-2])
+        out[0] = (float(f_1d[1]) - float(f_1d[0])) / dx_arr[0]
+        out[-1] = (float(f_1d[-1]) - float(f_1d[-2])) / dx_arr[-1]
     else:
         # 2nd order one-sided (matches NumPy's formula using consecutive diffs)
-        dx1 = x[1] - x[0]  # first spacing
-        dx2 = x[2] - x[1]  # second spacing
+        dx1 = dx_arr[0]
+        dx2 = dx_arr[1]
         a = -(2.0 * dx1 + dx2) / (dx1 * (dx1 + dx2))
         b = (dx1 + dx2) / (dx1 * dx2)
         c = -dx1 / (dx2 * (dx1 + dx2))
         out[0] = a * float(f_1d[0]) + b * float(f_1d[1]) + c * float(f_1d[2])
-        dx1 = x[-2] - x[-3]  # second-to-last spacing
-        dx2 = x[-1] - x[-2]  # last spacing
+        dx1 = dx_arr[-2]
+        dx2 = dx_arr[-1]
         a = dx2 / (dx1 * (dx1 + dx2))
         b = -(dx2 + dx1) / (dx1 * dx2)
         c = (2.0 * dx2 + dx1) / (dx2 * (dx1 + dx2))
@@ -2924,9 +3071,9 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
                 min_size, edge_order
             )
         )
-    # Resolve spacing to scalar or coordinate list
+    # Resolve spacing to scalar or spacing-delta list
     use_array_spacing = False
-    x_list = None
+    dx_list = None
     dx = None
     if isinstance(spacing, ndarray):
         if spacing.ndim > 1:
@@ -2935,22 +3082,22 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
             )
         if spacing.size == 1:
             dx = float(spacing.flatten()[0])
-        elif spacing.size == n:
-            x_list = spacing.flatten().tolist()
+        elif spacing.size == n - 1:
+            dx_list = spacing.flatten().tolist()
             use_array_spacing = True
         else:
             raise ValueError(
                 "Spacing array has wrong size {}, expected 1 or {}".format(
-                    spacing.size, n
+                    spacing.size, n - 1
                 )
             )
     elif isinstance(spacing, (list, tuple)):
-        if len(spacing) == n:
-            x_list = [float(v) for v in spacing]
+        if len(spacing) == n - 1:
+            dx_list = [float(v) for v in spacing]
             use_array_spacing = True
         else:
             raise ValueError(
-                "Spacing list has wrong size {}, expected {}".format(len(spacing), n)
+                "Spacing list has wrong size {}, expected {}".format(len(spacing), n - 1)
             )
     else:
         dx = float(spacing)
@@ -2971,7 +3118,7 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
         row = f_flat[row_idx]
         row_list = row.tolist()
         if use_array_spacing:
-            grad_row = _gradient_1d_nonuniform(row_list, x_list, edge_order)
+            grad_row = _gradient_1d_nonuniform(row_list, dx_list, edge_order)
         else:
             grad_row = _gradient_1d_uniform(row_list, dx, edge_order)
         result_rows.append(grad_row)
@@ -2985,6 +3132,13 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
 
 
 def gradient(f, *varargs, axis=None, edge_order=1):
+    from numpy.ma import MaskedArray as _MA
+    if isinstance(f, _MA):
+        base = gradient(f.filled(0), *varargs, axis=axis, edge_order=edge_order)
+        mask = f.mask.copy() if hasattr(f.mask, 'copy') else f.mask
+        if isinstance(base, tuple):
+            return tuple(_MA(part, mask=mask.copy() if hasattr(mask, 'copy') else mask) for part in base)
+        return _MA(base, mask=mask)
     f = array(f) if not isinstance(f, ndarray) else f
     if f.ndim == 0:
         raise ValueError("f must have at least 1 dimension")
@@ -2992,7 +3146,27 @@ def gradient(f, *varargs, axis=None, edge_order=1):
         raise ValueError("'edge_order' must be 1 or 2")
     axes, single_axis = _resolve_gradient_axes(axis, f.ndim)
     spacings = _resolve_gradient_spacings(varargs, axes, f.shape)
-    results = _native.gradient(f, spacings, edge_order, axes)
+    if isinstance(f, _ObjectArray) and _is_temporal_dtype(str(f.dtype)) and f.ndim == 1 and axes == [0] and len(varargs) == 0:
+        in_dt = str(f.dtype)
+        kind, unit, _, _ = _temporal_dtype_info(in_dt)
+        out_dt = in_dt if kind == 'm' else "timedelta64[{}]".format(unit)
+        ints = [int(array([v], dtype=in_dt).astype('int64')[0]) for v in f.tolist()]
+        n = len(ints)
+        out = [0] * n
+        for i in _builtin_range(1, n - 1):
+            out[i] = int((ints[i + 1] - ints[i - 1]) / 2)
+        if edge_order == 1:
+            out[0] = ints[1] - ints[0]
+            out[-1] = ints[-1] - ints[-2]
+        else:
+            out[0] = int((-3 * ints[0] + 4 * ints[1] - ints[2]) / 2)
+            out[-1] = int((ints[-3] - 4 * ints[-2] + 3 * ints[-1]) / 2)
+        return _make_temporal_array(out, out_dt)
+    use_python_gradient = edge_order == 2 or any(isinstance(sp, ndarray) and sp.ndim > 0 for sp in spacings)
+    if use_python_gradient:
+        results = [_gradient_along_axis(f, ax, sp, edge_order) for ax, sp in zip(axes, spacings)]
+    else:
+        results = _native.gradient(f, spacings, edge_order, axes)
     if single_axis or (axis is None and f.ndim == 1):
         return results[0]
     return tuple(results)
@@ -3000,6 +3174,53 @@ def gradient(f, *varargs, axis=None, edge_order=1):
 
 def trapz(y, x=None, dx=1.0, axis=-1):
     """Integrate along the given axis using the composite trapezoidal rule."""
+    try:
+        import numpy.ma as _ma
+    except Exception:
+        _ma = None
+
+    y_ma = _ma is not None and isinstance(y, _ma.MaskedArray)
+    x_ma = _ma is not None and isinstance(x, _ma.MaskedArray)
+
+    if y_ma or x_ma:
+        import numpy as _np
+
+        y_data = y.filled(0) if y_ma else asarray(y)
+        y_mask = asarray(y.mask, dtype="bool") if y_ma else zeros(y_data.shape, dtype="bool")
+        ax = int(axis)
+        if ax < 0:
+            ax += y_data.ndim
+
+        sl1 = [slice(None)] * y_data.ndim
+        sl2 = [slice(None)] * y_data.ndim
+        sl1[ax] = slice(None, -1)
+        sl2[ax] = slice(1, None)
+        y0 = y_data[tuple(sl1)]
+        y1 = y_data[tuple(sl2)]
+        seg_valid = _np.logical_not(y_mask[tuple(sl1)] | y_mask[tuple(sl2)])
+
+        if x is None:
+            dx_arr = float(dx)
+        else:
+            x_data = x.filled(0) if x_ma else asarray(x)
+            x_mask = asarray(x.mask, dtype="bool") if x_ma else None
+            if getattr(x_data, "ndim", 0) == 1:
+                x0 = x_data[:-1]
+                x1 = x_data[1:]
+                dx_arr = x1 - x0
+                if x_mask is not None:
+                    seg_valid = seg_valid & _np.logical_not(x_mask[:-1] | x_mask[1:])
+            else:
+                x0 = x_data[tuple(sl1)]
+                x1 = x_data[tuple(sl2)]
+                dx_arr = x1 - x0
+                if x_mask is not None:
+                    seg_valid = seg_valid & _np.logical_not(x_mask[tuple(sl1)] | x_mask[tuple(sl2)])
+
+        contrib = 0.5 * (y0 + y1) * dx_arr
+        contrib = _np.where(seg_valid, contrib, 0)
+        return _np.sum(contrib, axis=ax)
+
     y = asarray(y)
     if x is not None:
         return _native.trapz_x(y, asarray(x), float(dx), int(axis))
@@ -3222,11 +3443,11 @@ def all(a, axis=None, out=None, keepdims=False, where=True):
     a = _ensure_reduction_array(a)
     a = _apply_where_mask(a, where, true_identity=True)
     if axis is None:
-        return a.all()
+        return _scalar_result(bool(a.all()), a, 'bool')
     # Reduce along specific axis: all elements nonzero iff min != 0
     m = a.min(axis, keepdims)
     if not isinstance(m, ndarray):
-        return bool(m != 0.0)
+        return _scalar_result(bool(m != 0.0), a, 'bool')
     flat = m.flatten().tolist()
     result = [v != 0.0 for v in flat]
     return array(result).reshape(m.shape)
@@ -3236,11 +3457,11 @@ def any(a, axis=None, out=None, keepdims=False, where=True):
     a = _ensure_reduction_array(a)
     a = _apply_where_mask(a, where)
     if axis is None:
-        return a.any()
+        return _scalar_result(bool(a.any()), a, 'bool')
     # Reduce along specific axis: any element nonzero iff max != 0
     m = a.max(axis, keepdims)
     if not isinstance(m, ndarray):
-        return bool(m != 0.0)
+        return _scalar_result(bool(m != 0.0), a, 'bool')
     flat = m.flatten().tolist()
     result = [v != 0.0 for v in flat]
     return array(result).reshape(m.shape)

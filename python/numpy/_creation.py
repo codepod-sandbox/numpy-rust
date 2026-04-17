@@ -44,6 +44,10 @@ def _is_fraction_scalar(value):
     return type(value).__name__ == 'Fraction' and type(value).__module__ == 'fractions'
 
 
+def _is_decimal_scalar(value):
+    return type(value).__name__ == 'Decimal' and type(value).__module__ == 'decimal'
+
+
 def _contains_fraction_values(value):
     if _is_fraction_scalar(value):
         return True
@@ -58,6 +62,20 @@ def _contains_fraction_values(value):
     return False
 
 
+def _contains_decimal_values(value):
+    if _is_decimal_scalar(value):
+        return True
+    if isinstance(value, _ObjectArray):
+        return any(_contains_decimal_values(v) for v in value.flatten().tolist())
+    if isinstance(value, ndarray):
+        if str(value.dtype) != 'object':
+            return False
+        return any(_contains_decimal_values(v) for v in value.flatten().tolist())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_decimal_values(v) for v in value)
+    return False
+
+
 def _flatten_object_nested(value):
     if isinstance(value, (list, tuple)):
         out = []
@@ -65,6 +83,75 @@ def _flatten_object_nested(value):
             out.extend(_flatten_object_nested(item))
         return out
     return [value]
+
+
+def _contains_large_python_ints(value):
+    if type(value) is int:
+        return value < -9223372036854775808 or value > 9223372036854775807
+    if isinstance(value, (list, tuple)):
+        return any(_contains_large_python_ints(item) for item in value)
+    return False
+
+
+def _native_integer_result(values, dtype_name):
+    if dtype_name == 'uint64':
+        signed = [
+            value if value <= 9223372036854775807 else value - 18446744073709551616
+            for value in values
+        ]
+        result = _native.zeros([len(signed)], 'int64')
+        for i, value in enumerate(signed):
+            result[i] = int(value)
+        return result.astype('uint64')
+    result = _native.zeros([len(values)], dtype_name)
+    for i, value in enumerate(values):
+        result[i] = int(value)
+    return result
+
+
+def _array_from_array_interface(data):
+    import ctypes
+    import numpy as _np
+
+    ai = getattr(data, "__array_interface__", None)
+    if not isinstance(ai, dict):
+        return None
+    shape = tuple(ai.get("shape", ()))
+    typestr = ai.get("typestr")
+    data_info = ai.get("data")
+    if typestr is None or not isinstance(data_info, tuple) or not data_info:
+        return None
+    ptr = data_info[0]
+    if not ptr:
+        return None
+
+    dt_name = str(_np.dtype(typestr))
+    ctype_map = {
+        "bool": ctypes.c_bool,
+        "int8": ctypes.c_int8,
+        "int16": ctypes.c_int16,
+        "int32": ctypes.c_int32,
+        "int64": ctypes.c_int64,
+        "uint8": ctypes.c_uint8,
+        "uint16": ctypes.c_uint16,
+        "uint32": ctypes.c_uint32,
+        "uint64": ctypes.c_uint64,
+        "float32": ctypes.c_float,
+        "float64": ctypes.c_double,
+    }
+    ctype = ctype_map.get(dt_name)
+    if ctype is None:
+        return None
+
+    count = 1
+    for dim in shape:
+        count *= dim
+    buffer = (ctype * count).from_address(ptr)
+    values = list(buffer)
+    result = array(values, dtype=dt_name)
+    if shape:
+        result = result.reshape(shape)
+    return result
 
 
 def concatenate(arrays, axis=0, out=None, dtype=None, casting='same_kind'):
@@ -385,6 +472,11 @@ def array(data, dtype=None, copy=None, order=None, subok=False, ndmin=0, like=No
         while result.ndim < ndmin:
             import numpy as _np
             result = _np.expand_dims(result, 0)
+    if isinstance(result, ndarray):
+        if order == 'F' and hasattr(result, '_mark_fortran'):
+            result._mark_fortran()
+        elif order == 'C' and hasattr(result, '_mark_c_contiguous'):
+            result._mark_c_contiguous()
     return result
 
 def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None):
@@ -404,6 +496,15 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             # Rust flatiter - iterate to list
             vals = list(data)
             return _array_core(vals, dtype=dtype, copy=copy, order=order, subok=subok, like=like)
+    if (not isinstance(data, (ndarray, _ObjectArray, list, tuple, int, float, complex, bool, str, bytes))
+            and hasattr(data, '__array_interface__')):
+        converted = _array_from_array_interface(data)
+        if converted is not None:
+            if dtype is not None:
+                converted = converted.astype(str(dtype))
+            if copy:
+                converted = converted.copy()
+            return converted
     # Support __array__ protocol: objects with __array__() method
     if (not isinstance(data, (ndarray, _ObjectArray, list, tuple, int, float, complex, bool, str, bytes))
             and hasattr(data, '__array__')):
@@ -538,7 +639,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 else:
                     converted.append(x)
             data = converted
-    if dtype is None and _contains_fraction_values(data):
+    if dtype is None and (_contains_fraction_values(data) or _contains_decimal_values(data)):
         if isinstance(data, _ObjectArray):
             return data.copy() if copy else data
         if isinstance(data, (list, tuple)):
@@ -625,6 +726,8 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             if result is data:
                 result = result.copy()
             result._mark_c_contiguous()
+        elif order in ('K', 'A'):
+            result = _like_order(result, data, order)
         return result
     if isinstance(data, bool):
         # bool must be checked before int since bool is a subclass of int
@@ -632,8 +735,13 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
         result = _native.full([], 1.0 if data else 0.0, 'float64').astype(dt_name)
         return result
     if isinstance(data, int):
+        if dtype is None and _contains_large_python_ints(data):
+            return _ObjectArray([data], "object", shape=())
         dt_name = str(dtype) if dtype is not None else 'int64'
-        result = _native.full([], float(data), 'float64').astype(dt_name)
+        if dt_name in ('uint8', 'uint16', 'uint32', 'uint64', 'int8', 'int16', 'int32', 'int64'):
+            result = _native_integer_result([int(data)], dt_name).reshape([])
+        else:
+            result = _native.full([], float(data), 'float64').astype(dt_name)
         return result
     if isinstance(data, float):
         dt_name = str(dtype) if dtype is not None else 'float64'
@@ -685,14 +793,18 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
         _any_complex = __import__("builtins").any(isinstance(x, complex) for x in data)
         if _any_complex:
             return _ObjectArray([complex(x) for x in data], "complex128")
+        if dtype is None and _contains_large_python_ints(data):
+            return _ObjectArray(list(data), "object")
+        dt_name = str(dtype) if dtype is not None else None
+        if dt_name in ('uint8', 'uint16', 'uint32', 'uint64', 'int8', 'int16', 'int32', 'int64'):
+            return _native_integer_result([int(x) for x in data], dt_name)
+        if dtype is None and not __import__("builtins").any(isinstance(x, float) for x in data):
+            return _native_integer_result([int(x) for x in data], 'int64')
         result = _native.array([float(x) for x in data])
         if dtype is not None:
             dt = str(dtype)
             if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                 result = result.astype(dt)
-        elif not __import__("builtins").any(isinstance(x, float) for x in data):
-            # All elements are int (not float) and no dtype specified: default to int64
-            result = result.astype("int64")
         return result
     # Nested lists/tuples: infer shape, flatten, reshape
     if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], (list, tuple, ndarray, _ObjectArray)):
@@ -792,18 +904,22 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 if isinstance(data, (list, tuple)) and len(data) > 0 and isinstance(data[0], ndarray):
                     _src_dtype = str(data[0].dtype)
                 # Rust native array requires floats; convert ints before passing
-                if flat and isinstance(flat[0], int) and not isinstance(flat[0], bool):
-                    flat = [float(x) for x in flat]
-                result = _native.array(flat)
-                result = result.reshape(shape)
                 if _orig_all_ints and dtype is None:
-                    # Restore int64 dtype for pure-integer arrays
-                    result = result.astype("int64")
+                    result = _native_integer_result([int(x) for x in flat], "int64").reshape(shape)
                 elif dtype is not None:
+                    if flat and isinstance(flat[0], int) and not isinstance(flat[0], bool):
+                        flat = [float(x) for x in flat]
+                    result = _native.array(flat)
+                    result = result.reshape(shape)
                     dt = str(dtype)
                     if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
                         result = result.astype(dt)
-                elif _all_bools_nested(data):
+                else:
+                    if flat and isinstance(flat[0], int) and not isinstance(flat[0], bool):
+                        flat = [float(x) for x in flat]
+                    result = _native.array(flat)
+                    result = result.reshape(shape)
+                if not (_orig_all_ints and dtype is None) and _all_bools_nested(data):
                     result = result.astype("bool")
                 elif _src_dtype and (_src_dtype.startswith("int") or _src_dtype.startswith("uint")):
                     result = result.astype(_src_dtype)
@@ -841,6 +957,11 @@ def zeros(shape, dtype=None, order="C", like=None):
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=0)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
+    if dt is not None and _is_temporal_dtype(dt):
+        n = 1
+        for s in shape:
+            n *= s
+        return _apply_order(_make_temporal_array([0] * n, dt).reshape(shape), order)
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -876,6 +997,11 @@ def ones(shape, dtype=None, order="C", like=None):
             nrows = shape[0] if isinstance(shape, (list, tuple)) else shape
             return _create_empty_structured(nrows, parsed, fill_value=1)
     dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
+    if dt is not None and _is_temporal_dtype(dt):
+        n = 1
+        for s in shape:
+            n *= s
+        return _apply_order(_make_temporal_array([1] * n, dt).reshape(shape), order)
     if dt in ("object", "<class 'object'>"):
         n = 1
         for s in shape:
@@ -895,7 +1021,16 @@ def ones(shape, dtype=None, order="C", like=None):
     return _apply_order(_native.ones(shape), order)
 
 def arange(*args, dtype=None, like=None, **kwargs):
-    dt = _normalize_dtype(str(dtype)) if dtype is not None else None
+    if dtype is datetime64:
+        dt = "datetime64[D]"
+    elif dtype is timedelta64:
+        dt = "timedelta64[D]"
+    else:
+        dt = _normalize_dtype_with_size(dtype) if dtype is not None else None
+    if dt in ("<class 'numpy.datetime64'>", "datetime64"):
+        dt = "datetime64[D]"
+    elif dt in ("<class 'numpy.timedelta64'>", "timedelta64"):
+        dt = "timedelta64[D]"
     if dt == "object" or dt == "<class 'object'>":
         float_args = [float(a) for a in args]
         if len(float_args) == 1:
@@ -906,12 +1041,27 @@ def arange(*args, dtype=None, like=None, **kwargs):
             vals = list(range(int(float_args[0]), int(float_args[1]), int(float_args[2])))
         return _ObjectArray(vals, "object")
     if dt is not None and _is_temporal_dtype(dt):
-        float_args = [float(a) for a in args]
-        if len(float_args) == 1:
-            float_args = [0.0, float_args[0], 1.0]
-        elif len(float_args) == 2:
-            float_args = [float_args[0], float_args[1], 1.0]
-        vals = list(range(int(float_args[0]), int(float_args[1]), int(float_args[2])))
+        kind, unit, _, _ = _temporal_dtype_info(dt)
+        step_dt = "timedelta64[{}]".format(unit)
+
+        def _temporal_int(value, cast_dt):
+            if isinstance(value, (str, bytes)) or hasattr(value, '_numpy_dtype_name'):
+                return int(array([value], dtype=cast_dt).astype('int64')[0])
+            return int(float(value))
+
+        if len(args) == 1:
+            start_i = 0
+            stop_i = _temporal_int(args[0], dt)
+            step_i = 1
+        elif len(args) == 2:
+            start_i = _temporal_int(args[0], dt)
+            stop_i = _temporal_int(args[1], dt)
+            step_i = 1
+        else:
+            start_i = _temporal_int(args[0], dt)
+            stop_i = _temporal_int(args[1], dt)
+            step_i = _temporal_int(args[2], step_dt)
+        vals = list(range(start_i, stop_i, step_i))
         return _make_temporal_array(vals, dt)
     # Detect if all args are integers (for integer output dtype)
     _all_int = all(isinstance(a, (int, bool)) and not isinstance(a, float) for a in args)
@@ -1548,10 +1698,8 @@ def copy(a, order="K", subok=False):
         return a.copy()
     if isinstance(a, _MA):
         # subok=False: return base ndarray
-        return array(a.data if hasattr(a, 'data') else a)
-    if isinstance(a, ndarray):
-        return a.copy()
-    return array(a)
+        return array(a.data if hasattr(a, 'data') else a, copy=True, order=order)
+    return array(a, copy=True, order=order, subok=subok)
 
 def fromiter(iterable, dtype=None, count=-1):
     if dtype is not None:

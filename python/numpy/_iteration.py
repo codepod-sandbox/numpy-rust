@@ -15,6 +15,25 @@ __all__ = [
 ]
 
 
+def _vectorize_subclass_from_args(args):
+    for arg in args:
+        if isinstance(arg, ndarray):
+            arg_type = type(arg)
+            if arg_type is not ndarray:
+                return arg_type
+    return None
+
+
+def _restore_vectorize_subclass(value, subtype):
+    if subtype is None:
+        return value
+    if isinstance(value, tuple):
+        return tuple(_restore_vectorize_subclass(item, subtype) for item in value)
+    if isinstance(value, ndarray) and type(value) is ndarray:
+        return value.view(subtype)
+    return value
+
+
 def apply_along_axis(func1d, axis, arr, *args, **kwargs):
     """Apply a function to 1-D slices of an array along the given axis."""
     from ._join import stack
@@ -153,6 +172,7 @@ class vectorize:
         import itertools
         from .lib._function_base_impl import _parse_gufunc_signature
         from ._shape import broadcast_shapes, broadcast_to
+        output_subtype = _vectorize_subclass_from_args(args)
         in_specs, out_specs = _parse_gufunc_signature(self.signature)
         n_in = len(in_specs)
 
@@ -217,7 +237,8 @@ class vectorize:
                 out_core_shape = tuple(dim_sizes[d] for d in ospec)
                 out_shape = bc_loop_shape + out_core_shape
                 outputs.append(zeros(out_shape, dtype=dt))
-            return outputs[0] if len(outputs) == 1 else tuple(outputs)
+            result = outputs[0] if len(outputs) == 1 else tuple(outputs)
+            return _restore_vectorize_subclass(result, output_subtype)
 
         # Build loop indices
         if bc_loop_shape:
@@ -279,10 +300,12 @@ class vectorize:
                     result = array(res_k).reshape(out_shape)
             outputs.append(result)
 
-        return outputs[0] if len(outputs) == 1 else tuple(outputs)
+        result = outputs[0] if len(outputs) == 1 else tuple(outputs)
+        return _restore_vectorize_subclass(result, output_subtype)
 
     def __call__(self, *args, **kwargs):
         from ._shape import broadcast_arrays
+        output_subtype = _vectorize_subclass_from_args(args)
         # If used as decorator factory (pyfunc=None), wrap the passed function
         if self.pyfunc is None:
             if len(args) == 1 and callable(args[0]):
@@ -332,7 +355,7 @@ class vectorize:
             for k in range(nout):
                 vals = [r[k] for r in results]
                 out.append(array(vals).reshape(shape))
-            return tuple(out)
+            return _restore_vectorize_subclass(tuple(out), output_subtype)
         if otypes is not None:
             # Coerce to specified otype
             _ot = otypes[0] if isinstance(otypes, (list, tuple)) else otypes[0] if isinstance(otypes, str) else otypes
@@ -361,7 +384,7 @@ class vectorize:
                     result = result.astype(_in_dt)
         if shape != result.shape:
             result = result.reshape(shape)
-        return result
+        return _restore_vectorize_subclass(result, output_subtype)
 
 
 def repeat(a, repeats, axis=None):

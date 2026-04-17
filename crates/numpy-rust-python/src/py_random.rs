@@ -1,4 +1,5 @@
 use rustpython_vm as vm;
+use vm::convert::ToPyObject;
 use vm::{PyObjectRef, PyRef, PyResult, VirtualMachine};
 
 use crate::py_array::{extract_shape, PyNdArray};
@@ -28,6 +29,12 @@ fn shape_from_varargs(args: &vm::function::FuncArgs, vm: &VirtualMachine) -> PyR
 #[vm::pymodule]
 mod _random {
     use super::*;
+
+    fn make_state_tuple(state: u64, value: PyObjectRef, vm: &VirtualMachine) -> PyObjectRef {
+        vm.ctx
+            .new_tuple(vec![vm.ctx.new_int(state).into(), value])
+            .into()
+    }
 
     #[pyfunction]
     fn seed(n: u64, _vm: &VirtualMachine) {
@@ -125,6 +132,113 @@ mod _random {
         numpy_rust_core::random::choice(&a_inner, size, replace)
             .map(PyNdArray::from_core)
             .map_err(|e| err(e, vm))
+    }
+
+    #[pyfunction]
+    fn stateful_seed(seed: vm::function::OptionalArg<u64>, vm: &VirtualMachine) -> PyObjectRef {
+        let rng = numpy_rust_core::random::StatefulRng::new(seed.into_option());
+        vm.ctx.new_int(rng.state()).into()
+    }
+
+    #[pyfunction]
+    fn rand_with_state(state: u64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let sh = extract_shape(&shape, vm)?;
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let arr = PyNdArray::from_core(rng.rand(&sh)).to_pyobject(vm);
+        Ok(make_state_tuple(rng.state(), arr, vm))
+    }
+
+    #[pyfunction]
+    fn randn_with_state(state: u64, shape: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let sh = extract_shape(&shape, vm)?;
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let arr = PyNdArray::from_core(rng.randn(&sh)).to_pyobject(vm);
+        Ok(make_state_tuple(rng.state(), arr, vm))
+    }
+
+    #[pyfunction]
+    fn uniform_with_state(
+        state: u64,
+        low: f64,
+        high: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let sh = extract_shape(&shape, vm)?;
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let arr = rng
+            .uniform(low, high, &sh)
+            .map(PyNdArray::from_core)
+            .map_err(|e| err(e, vm))?
+            .to_pyobject(vm);
+        Ok(make_state_tuple(rng.state(), arr, vm))
+    }
+
+    #[pyfunction]
+    fn normal_with_state(
+        state: u64,
+        mean: f64,
+        std: f64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let sh = extract_shape(&shape, vm)?;
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let arr = rng
+            .normal(mean, std, &sh)
+            .map(PyNdArray::from_core)
+            .map_err(|e| err(e, vm))?
+            .to_pyobject(vm);
+        Ok(make_state_tuple(rng.state(), arr, vm))
+    }
+
+    #[pyfunction]
+    fn randint_with_state(
+        state: u64,
+        low: i64,
+        high: i64,
+        shape: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let sh = extract_shape(&shape, vm)?;
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let arr = rng
+            .randint(low, high, &sh)
+            .map(PyNdArray::from_core)
+            .map_err(|e| err(e, vm))?
+            .to_pyobject(vm);
+        Ok(make_state_tuple(rng.state(), arr, vm))
+    }
+
+    #[pyfunction]
+    fn randint_scalar_with_state(
+        state: u64,
+        low: i64,
+        high: i64,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        let value = rng.randint_scalar(low, high).map_err(|e| err(e, vm))?;
+        Ok(make_state_tuple(rng.state(), vm.ctx.new_int(value).into(), vm))
+    }
+
+    #[pyfunction]
+    fn randbits_with_state(state: u64, bits: usize, vm: &VirtualMachine) -> PyObjectRef {
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        make_state_tuple(rng.state(), vm.ctx.new_int(rng.randbits(bits)).into(), vm)
+    }
+
+    #[pyfunction]
+    fn advance_state(state: u64, delta: u64, vm: &VirtualMachine) -> PyObjectRef {
+        let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
+        rng.advance(delta);
+        vm.ctx.new_int(rng.state()).into()
+    }
+
+    #[pyfunction]
+    fn jumped_state(state: u64, vm: &VirtualMachine) -> PyObjectRef {
+        let rng = numpy_rust_core::random::StatefulRng::from_state(state).jumped();
+        vm.ctx.new_int(rng.state()).into()
     }
 }
 

@@ -16,6 +16,12 @@ __all__ = [
 ]
 
 
+def _restore_sort_subclass(result, original):
+    if type(original) is not ndarray and isinstance(original, ndarray) and isinstance(result, ndarray):
+        return result.view(type(original))
+    return result
+
+
 def _sort_complex_axis(a, axis):
     """Sort a complex ndarray along the given axis, lexicographically by (real, imag)."""
     from ._creation import _make_complex_array
@@ -64,6 +70,7 @@ def _sort_complex_axis(a, axis):
 
 def sort(a, axis=-1, kind=None, order=None):
     from ._helpers import _ObjectArray
+    original = a
     if not isinstance(a, (ndarray, _ObjectArray)):
         a = asarray(a)
     if isinstance(a, _ObjectArray):
@@ -86,16 +93,16 @@ def sort(a, axis=-1, kind=None, order=None):
                 return (v.real if hasattr(v, 'real') else float(v), 0.0)
             flat.sort(key=_cx_key)
             from ._creation import _make_complex_array
-            return _make_complex_array(flat, (len(flat),))
+            return _restore_sort_subclass(_make_complex_array(flat, (len(flat),)), original)
         ax = axis if axis is not None else a.ndim - 1
         # Sort along axis
         _sorted = _sort_complex_axis(a, ax)
-        return _sorted
+        return _restore_sort_subclass(_sorted, original)
     result = a.sort(axis)
     # Preserve original dtype (Rust sort may convert to float64)
     if original_dtype in ('int32', 'int64') and str(result.dtype) != original_dtype:
         result = result.astype(original_dtype)
-    return result
+    return _restore_sort_subclass(result, original)
 
 
 def sort_complex(a):
@@ -118,6 +125,11 @@ def sort_complex(a):
         v = c.flatten()[i]
         if isinstance(v, tuple) and len(v) == 2:
             vals.append(complex(v[0], v[1]))
+        elif hasattr(v, 'real') or hasattr(v, 'imag'):
+            vals.append(complex(
+                float(v.real) if hasattr(v, 'real') else float(v),
+                float(v.imag) if hasattr(v, 'imag') else 0.0,
+            ))
         else:
             try:
                 vals.append(complex(v))
@@ -166,6 +178,7 @@ def partition(a, kth, axis=-1):
     """Return a partitioned copy of an array.
     Creates a copy where the element at kth position is where it would be in a sorted array.
     Elements before kth are <= element at kth, elements after are >=."""
+    original = a
     a = asarray(a)
     if axis == -1:
         axis = a.ndim - 1
@@ -174,9 +187,9 @@ def partition(a, kth, axis=-1):
         n = flat.size
         vals = [flat[i] for i in range(n)]
         vals.sort()
-        return array(vals)
+        return _restore_sort_subclass(array(vals), original)
     # For multi-dim, sort along axis (full sort, which satisfies partition contract)
-    return sort(a, axis=axis)
+    return _restore_sort_subclass(sort(a, axis=axis), original)
 
 
 def argpartition(a, kth, axis=-1):

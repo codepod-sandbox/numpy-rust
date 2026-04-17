@@ -166,6 +166,10 @@ impl NdArray {
         self.storage.data()
     }
 
+    pub fn raw_data_ptr(&self) -> usize {
+        self.data().raw_data_ptr()
+    }
+
     pub fn descriptor(&self) -> &'static DTypeDescriptor {
         self.descriptor
     }

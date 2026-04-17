@@ -318,7 +318,17 @@ def select(condlist, choicelist, default=0):
 
 def piecewise(x, condlist, funclist):
     """Evaluate a piecewise-defined function."""
+    orig_x = x
     x = asarray(x)
+    subtype = type(orig_x) if isinstance(orig_x, ndarray) and type(orig_x) is not ndarray else None
+
+    def _restore_piecewise_subclass(value):
+        if subtype is None:
+            return value
+        if isinstance(value, ndarray) and type(value) is ndarray:
+            return value.view(subtype)
+        return value
+
     n_conditions = len(condlist)
     n_funcs = len(funclist)
 
@@ -369,19 +379,19 @@ def piecewise(x, condlist, funclist):
                     val = funclist[j](x)
                     if not isinstance(val, ndarray):
                         val = asarray(val).reshape(())
-                    return val
+                    return _restore_piecewise_subclass(val)
                 else:
-                    return asarray(funclist[j]).reshape(())
+                    return _restore_piecewise_subclass(asarray(funclist[j]).reshape(()))
         # No condition matched - use "otherwise" or default 0
         if n_funcs == n_conditions + 1:
             if callable(funclist[-1]):
                 val = funclist[-1](x)
                 if not isinstance(val, ndarray):
                     val = asarray(val).reshape(())
-                return val
+                return _restore_piecewise_subclass(val)
             else:
-                return asarray(funclist[-1]).reshape(())
-        return asarray(0.0).reshape(())
+                return _restore_piecewise_subclass(asarray(funclist[-1]).reshape(()))
+        return _restore_piecewise_subclass(asarray(0.0).reshape(()))
 
     flat_x = x.flatten()
     n = x.size
@@ -423,7 +433,7 @@ def piecewise(x, condlist, funclist):
         result_arr = result_arr.reshape(list(x.shape))
     elif x.ndim == 0:
         result_arr = result_arr.reshape(())
-    return result_arr
+    return _restore_piecewise_subclass(result_arr)
 
 
 def _take_structured(a, indices, axis):
@@ -648,13 +658,16 @@ def putmask(a, mask, values):
 
 def delete(arr, obj, axis=None):
     """Return a new array with sub-arrays along an axis deleted."""
-    # Track original type for subclass preservation
-    wrap = None
-    if not isinstance(arr, ndarray):
-        if hasattr(type(arr), '__mro__') and hasattr(type(arr), 'view'):
-            wrap = type(arr)
-
+    orig_arr = arr
     arr = asarray(arr)
+
+    def _restore_subclass(result):
+        if type(orig_arr) is not ndarray and isinstance(orig_arr, ndarray):
+            try:
+                return result.view(type(orig_arr))
+            except Exception:
+                return result
+        return result
 
     if axis is not None and not isinstance(axis, int):
         try:
@@ -702,11 +715,7 @@ def delete(arr, obj, axis=None):
             parts.append(arr[tuple(sl)])
         result = concatenate(parts, axis=axis)
 
-    if wrap is not None:
-        try:
-            result = result.view(wrap)
-        except Exception:
-            pass
+    result = _restore_subclass(result)
 
     # Preserve memory order (Fortran or C) from input array
     if hasattr(arr, 'flags') and arr.flags.f_contiguous:
@@ -720,7 +729,16 @@ def insert(arr, obj, values, axis=None):
     """Insert values along the given axis before the given indices."""
     from ._helpers import AxisError
     from ._shape import transpose
+    orig_arr = arr
     arr = asarray(arr)
+
+    def _restore_subclass(result):
+        if type(orig_arr) is not ndarray and isinstance(orig_arr, ndarray):
+            try:
+                return result.view(type(orig_arr))
+            except Exception:
+                return result
+        return result
 
     arr, axis = _normalize_edit_axis(arr, axis, "an integer is required")
 
@@ -739,7 +757,62 @@ def insert(arr, obj, values, axis=None):
         norm_indices.append(idx)
 
     if not norm_indices:
-        return arr.copy()
+        return _restore_subclass(arr.copy())
+
+    if getattr(getattr(arr, 'dtype', None), 'names', None) and arr.ndim == 1 and axis == 0:
+        from ._creation import _create_structured_array
+        from ._shape import broadcast_to
+
+        val_arr = values if type(values).__name__ == 'StructuredArray' else array(values, dtype=arr.dtype)
+        if getattr(val_arr, 'ndim', 0) == 0:
+            val_arr = val_arr.reshape((1,))
+
+        insert_count = int(getattr(val_arr, 'shape', (1,))[0]) if getattr(val_arr, 'ndim', 0) > 0 else 1
+        if scalar_obj and len(norm_indices) == 1 and insert_count > 1:
+            norm_indices = [norm_indices[0]] * insert_count
+        elif not scalar_obj:
+            if insert_count == 1 and len(norm_indices) > 1:
+                val_arr = broadcast_to(val_arr, (len(norm_indices),))
+                insert_count = len(norm_indices)
+            elif len(norm_indices) == 1 and insert_count > 1:
+                norm_indices = [norm_indices[0]] * insert_count
+
+        if insert_count != len(norm_indices):
+            raise ValueError(
+                "could not broadcast input array from shape {} into shape {}".format(
+                    getattr(val_arr, 'shape', ()), (len(norm_indices),)
+                )
+            )
+
+        field_names = arr.dtype.names
+
+        def _record_tuple(v):
+            if isinstance(v, tuple):
+                return v
+            if type(v).__name__ == 'void':
+                return tuple(v[name] for name in field_names)
+            if hasattr(v, 'tolist'):
+                out = v.tolist()
+                if isinstance(out, tuple):
+                    return out
+                if isinstance(out, list):
+                    return tuple(out)
+            return tuple(v)
+
+        records = []
+        ins_pos = 0
+        inserts = sorted(zip(norm_indices, _builtin_range(insert_count)), key=lambda x: x[0])
+        for orig_i in _builtin_range(n):
+            while ins_pos < len(inserts) and inserts[ins_pos][0] == orig_i:
+                records.append(_record_tuple(val_arr[inserts[ins_pos][1]]))
+                ins_pos += 1
+            records.append(_record_tuple(arr[orig_i]))
+        while ins_pos < len(inserts):
+            records.append(_record_tuple(val_arr[inserts[ins_pos][1]]))
+            ins_pos += 1
+
+        result = _create_structured_array(records, arr.dtype)
+        return _restore_subclass(result)
 
     # Move target axis to front
     perm = [axis] + [i for i in _builtin_range(ndims) if i != axis]
@@ -846,4 +919,5 @@ def insert(arr, obj, values, axis=None):
                 flat.append(float(r[()]))
     new_shape = [len(all_rows)] + list(sub_shape)
     result = array(flat).reshape(new_shape) if flat else array([]).reshape(new_shape)
-    return transpose(result, inv_perm)
+    result = transpose(result, inv_perm)
+    return _restore_subclass(result)

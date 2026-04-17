@@ -143,6 +143,128 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         if isinstance(v, tuple): return float(v[1])
         return float(v.imag) if hasattr(v, 'imag') else 0.0
 
+    def _apply_exact_x_overrides(result_arr, x_values, xp_values, fp_values):
+        result_list = result_arr.flatten().tolist()
+        for i, xi in enumerate(x_values):
+            for j, xpj in enumerate(xp_values):
+                if xi == xpj:
+                    result_list[i] = fp_values[j]
+                    break
+        return array(result_list)
+
+    def _rebuild_complex_result(values, shape=None):
+        flat_values = list(values)
+        result_arr = zeros((len(flat_values),), dtype='complex128')
+        result_arr.real = asarray([_complex_real(v) for v in flat_values], dtype='float64')
+        result_arr.imag = asarray([_complex_imag(v) for v in flat_values], dtype='float64')
+        if shape is not None:
+            result_arr = result_arr.reshape(shape)
+        return result_arr
+
+    def _interp_nonfinite_xp_lane(values, fill_count):
+        lane = [float(v) for v in values]
+        head = lane[0]
+        if not _mth.isnan(head) and all(v == head for v in lane[1:]):
+            return [head] * fill_count
+        return [float('nan')] * fill_count
+
+    def _interp_infinite_xp_lane(values, xp_values, fill_count):
+        lane = [float(v) for v in values]
+        head = lane[0]
+        if all(v == head for v in lane[1:]) and not _mth.isnan(head):
+            return [head] * fill_count
+        if any(not _mth.isfinite(v) for v in lane):
+            return [float('nan')] * fill_count
+        if all(v == float('inf') for v in xp_values):
+            return [lane[0]] * fill_count
+        if all(v == float('-inf') for v in xp_values):
+            return [lane[-1]] * fill_count
+        if xp_values and xp_values[0] == float('-inf') and all(_mth.isfinite(v) for v in xp_values[1:]):
+            return [lane[-1]] * fill_count
+        if xp_values and xp_values[-1] == float('inf') and all(_mth.isfinite(v) for v in xp_values[:-1]):
+            return [lane[0]] * fill_count
+        return [float('nan')] * fill_count
+
+    def _interp_two_point_nonfinite_fp_lane(values, fill_count):
+        lane = [float(v) for v in values]
+        if any(_mth.isnan(v) for v in lane):
+            return [float('nan')] * fill_count
+        inf_signs = {1 if v > 0 else -1 for v in lane if _mth.isinf(v)}
+        if len(inf_signs) > 1:
+            return [float('nan')] * fill_count
+        if len(inf_signs) == 1:
+            sign = next(iter(inf_signs))
+            return [float('inf') if sign > 0 else float('-inf')] * fill_count
+        return None
+
+    xp_values = xp_arr.tolist()
+    has_nan_xp = any(_mth.isnan(v) for v in xp_values)
+    has_inf_xp = any(_mth.isinf(v) for v in xp_values)
+
+    if has_nan_xp or has_inf_xp:
+        if is_complex:
+            fp_flat = fp_arr.flatten().tolist()
+            re_vals = [_complex_real(v) for v in fp_flat]
+            im_vals = [_complex_imag(v) for v in fp_flat]
+            if has_nan_xp:
+                re_result = _interp_nonfinite_xp_lane(re_vals, x_flat.size)
+                im_result = _interp_nonfinite_xp_lane(im_vals, x_flat.size)
+            else:
+                re_result = _interp_infinite_xp_lane(re_vals, xp_values, x_flat.size)
+                im_result = _interp_infinite_xp_lane(im_vals, xp_values, x_flat.size)
+            result = _rebuild_complex_result(
+                [
+                    complex(re_val, im_val)
+                    for re_val, im_val in zip(re_result, im_result)
+                ],
+                () if x_is_scalar else x_shape,
+            )
+            return result
+
+        if has_nan_xp:
+            result_vals = _interp_nonfinite_xp_lane(fp_arr.flatten().tolist(), x_flat.size)
+        else:
+            result_vals = _interp_infinite_xp_lane(fp_arr.flatten().tolist(), xp_values, x_flat.size)
+        result = array(result_vals)
+        if x_is_scalar:
+            return float(result.flatten()[0])
+        if x_shape != result.shape:
+            try:
+                result = result.reshape(x_shape)
+            except Exception:
+                pass
+        return result
+
+    if xp_arr.size == 2 and all(_mth.isfinite(v) for v in xp_values):
+        if is_complex:
+            fp_flat = fp_arr.flatten().tolist()
+            re_vals = [_complex_real(v) for v in fp_flat]
+            im_vals = [_complex_imag(v) for v in fp_flat]
+            re_result = _interp_two_point_nonfinite_fp_lane(re_vals, x_flat.size)
+            im_result = _interp_two_point_nonfinite_fp_lane(im_vals, x_flat.size)
+            if re_result is not None or im_result is not None:
+                if re_result is None:
+                    re_result = [_nat.interp(asarray([xi], dtype='float64'), xp_arr, asarray(re_vals, dtype='float64')).flatten()[0] for xi in x_flat.tolist()]
+                if im_result is None:
+                    im_result = [_nat.interp(asarray([xi], dtype='float64'), xp_arr, asarray(im_vals, dtype='float64')).flatten()[0] for xi in x_flat.tolist()]
+                result = _rebuild_complex_result(
+                    [complex(re_val, im_val) for re_val, im_val in zip(re_result, im_result)],
+                    () if x_is_scalar else x_shape,
+                )
+                return result
+        else:
+            result_vals = _interp_two_point_nonfinite_fp_lane(fp_arr.flatten().tolist(), x_flat.size)
+            if result_vals is not None:
+                result = array(result_vals)
+                if x_is_scalar:
+                    return float(result.flatten()[0])
+                if x_shape != result.shape:
+                    try:
+                        result = result.reshape(x_shape)
+                    except Exception:
+                        pass
+                return result
+
     if period is not None:
         # Sort xp/fp by xp modulo period, then interpolate
         x_flat_list = x_flat.tolist()
@@ -194,6 +316,14 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         result = zeros(result_re.shape, dtype='complex128')
         result.real = result_re
         result.imag = result_im
+        result_list = result.flatten().tolist()
+        fp_list = [complex(_complex_real(v), _complex_imag(v)) for v in fp_arr.flatten().tolist()]
+        for i, xi in enumerate(x_flat.tolist()):
+            for j, xpj in enumerate(xp_arr.tolist()):
+                if xi == xpj:
+                    result_list[i] = fp_list[j]
+                    break
+        result = _rebuild_complex_result(result_list, result.shape)
 
         # Apply left/right for complex
         if left is not None or right is not None:
@@ -211,9 +341,15 @@ def interp(x, xp, fp, left=None, right=None, period=None):
                     v = right
                     result_list[i] = complex(v.real if hasattr(v, 'real') else float(v),
                                              v.imag if hasattr(v, 'imag') else 0.0)
-            result = array(result_list)
+            result = _rebuild_complex_result(result_list, result.shape)
     else:
         result = _nat.interp(x_flat, xp_arr, fp_arr)
+        result = _apply_exact_x_overrides(
+            result,
+            x_flat.tolist(),
+            xp_arr.tolist(),
+            fp_arr.flatten().tolist(),
+        )
         if left is not None or right is not None:
             x_list = x_flat.tolist()
             xp_list = xp_arr.tolist()
@@ -229,13 +365,10 @@ def interp(x, xp, fp, left=None, right=None, period=None):
 
     # Restore original shape
     if x_is_scalar:
-        # Return scalar float64 (or complex if complex fp)
-        v = result.flatten()[0] if result.size > 0 else 0.0
         if is_complex:
-            # v might be a tuple (re, im) from native complex array
-            if isinstance(v, tuple):
-                return complex(v[0], v[1])
-            return complex(v)
+            return result.reshape(())
+        # Return scalar float64
+        v = result.flatten()[0] if result.size > 0 else 0.0
         return float(v)
     if x_shape != result.shape:
         try:

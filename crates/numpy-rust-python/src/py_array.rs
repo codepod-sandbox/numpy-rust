@@ -6,7 +6,7 @@ use vm::atomic_func;
 use vm::builtins::{PyList, PySlice, PyStr, PyTuple};
 use vm::protocol::{PyIterReturn, PyMappingMethods, PyNumberMethods, PySequenceMethods};
 use vm::types::{AsMapping, AsNumber, AsSequence, IterNext, Iterable, Representable, SelfIter};
-use vm::{AsObject, Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine};
+use vm::{AsObject, Py, PyObjectRef, PyPayload, PyRef, PyResult, TryFromObject, VirtualMachine};
 
 use numpy_rust_core::indexing::{Scalar, SliceArg};
 use numpy_rust_core::{DType, NdArray};
@@ -789,7 +789,10 @@ impl PyNdArray {
 
         // Build data tuple: (pointer_as_int, read_only_flag)
         let data_tuple = PyTuple::new_ref(
-            vec![vm.ctx.new_int(0).into(), vm.ctx.new_bool(false).into()],
+            vec![
+                vm.ctx.new_int(data.raw_data_ptr()).into(),
+                vm.ctx.new_bool(false).into(),
+            ],
             &vm.ctx,
         )
         .into();
@@ -808,7 +811,12 @@ impl PyNdArray {
     // --- Methods ---
 
     #[pymethod]
-    fn reshape(&self, args: vm::function::FuncArgs, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+    fn reshape(
+        zelf: PyRef<Self>,
+        args: vm::function::FuncArgs,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
         // Accept reshape(shape) or reshape(*dims) plus optional order= and copy= kwargs.
         let shape_obj = if args.args.len() == 1 {
             args.args[0].clone()
@@ -847,7 +855,7 @@ impl PyNdArray {
 
         // Determine whether a reshape with the requested order would be a view.
         // C-contiguous + order C -> view; F-contiguous + order F -> view; else copy.
-        let is_f = self.is_fortran.load(Ordering::Relaxed);
+        let is_f = zelf.is_fortran.load(Ordering::Relaxed);
         let would_be_view = match order_str.as_str() {
             "F" => is_f,
             "A" => true, // 'A' uses source order -> always view-compatible
@@ -862,11 +870,11 @@ impl PyNdArray {
         }
 
         let raw = extract_shape_i64(&shape_obj, vm)?;
-        let total = self.data.read().unwrap().size();
+        let total = zelf.data.read().unwrap().size();
         let sh = resolve_shape(&raw, total, vm)?;
 
         // Perform the actual reshape
-        let mut result_data = self
+        let mut result_data = zelf
             .data
             .read()
             .unwrap()
@@ -881,22 +889,58 @@ impl PyNdArray {
         let result = PyNdArray {
             data: RwLock::new(result_data),
             is_fortran: AtomicBool::new(order_str == "F" || (order_str == "A" && is_f)),
-            is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
-            base: RwLock::new(None),
+            is_aligned: AtomicBool::new(zelf.is_aligned.load(Ordering::Relaxed)),
+            base: RwLock::new(if would_be_view && !copy_is_true {
+                Some(self_obj.clone())
+            } else {
+                None
+            }),
             view_prefix: RwLock::new(None),
         };
 
-        Ok(result)
+        let self_type = self_obj.class().to_owned();
+        let ndarray_type = Self::class(&vm.ctx);
+        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref()) {
+            let obj_ref: PyObjectRef = result.into_ref_with_type(vm, self_type)?.into();
+            if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
+                let _ = finalize.call((self_obj,), vm);
+            }
+            return Ok(obj_ref);
+        }
+
+        Ok(result.into_pyobject(vm))
     }
 
     #[pymethod]
-    fn flatten(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.read().unwrap().flatten())
+    fn flatten(zelf: PyRef<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let result = PyNdArray::from_core(zelf.data.read().unwrap().flatten());
+        let self_type = self_obj.class().to_owned();
+        let ndarray_type = Self::class(&vm.ctx);
+        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref()) {
+            let obj_ref: PyObjectRef = result.into_ref_with_type(vm, self_type)?.into();
+            if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
+                let _ = finalize.call((self_obj,), vm);
+            }
+            return Ok(obj_ref);
+        }
+        Ok(result.into_pyobject(vm))
     }
 
     #[pymethod]
-    fn ravel(&self) -> PyNdArray {
-        PyNdArray::from_core(self.data.read().unwrap().ravel())
+    fn ravel(zelf: PyRef<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let self_obj: PyObjectRef = zelf.as_object().to_owned();
+        let result = PyNdArray::from_core_with_base(zelf.data.read().unwrap().ravel(), self_obj.clone());
+        let self_type = self_obj.class().to_owned();
+        let ndarray_type = Self::class(&vm.ctx);
+        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref()) {
+            let obj_ref: PyObjectRef = result.into_ref_with_type(vm, self_type)?.into();
+            if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
+                let _ = finalize.call((self_obj,), vm);
+            }
+            return Ok(obj_ref);
+        }
+        Ok(result.into_pyobject(vm))
     }
 
     #[pymethod]
@@ -957,7 +1001,30 @@ impl PyNdArray {
             return Ok(result);
         }
 
-        let dt = parse_dtype(dtype_str.as_str(), vm)?;
+        let dtype_name = dtype_str.as_str();
+        if dtype_name.starts_with("datetime64[")
+            || dtype_name.starts_with("timedelta64[")
+            || dtype_name.starts_with("M8[")
+            || dtype_name.starts_with("m8[")
+        {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let array_fn = numpy_mod.get_attr("array", vm)?;
+            let self_obj: PyObjectRef =
+                PyNdArray::from_core(self.data.read().unwrap().clone()).into_pyobject(vm);
+            let tolist = self_obj.get_attr("tolist", vm)?;
+            let data = tolist.call((), vm)?;
+            let kwargs: vm::function::KwArgs =
+                std::iter::once(("dtype".to_owned(), dtype_obj.clone())).collect();
+            return array_fn.call(
+                vm::function::FuncArgs::new(
+                    vec![data],
+                    kwargs,
+                ),
+                vm,
+            );
+        }
+
+        let dt = parse_dtype(dtype_name, vm)?;
 
         // Extract optional 'casting' keyword argument
         let casting_str = args
@@ -1011,16 +1078,60 @@ impl PyNdArray {
         let data = self.data.read().unwrap();
         let is_f = self.is_fortran.load(Ordering::Relaxed);
         if let Some(dtype_obj) = dtype_opt {
-            // If it's a Python type/class (e.g. MyNDArray subclass), check if it's
-            // actually an ndarray subclass vs a scalar type like np.int8
-            if let Ok(py_type) = dtype_obj.clone().downcast::<vm::builtins::PyType>() {
-                // First try to extract _scalar_name (indicating a dtype-like type, not ndarray subclass)
-                let scalar_name_result = py_type
-                    .as_object()
+            // If it's a Python type/class (e.g. MyNDArray subclass), distinguish
+            // ndarray subclasses from scalar dtype classes like np.int8.
+            if format!("{}", dtype_obj.class().name()) == "type" {
+                let py_type: vm::builtins::PyTypeRef = unsafe { dtype_obj.clone().downcast_unchecked() };
+                let ndarray_type = Self::class(&vm.ctx);
+                if py_type.fast_issubclass(ndarray_type.as_ref()) {
+                    let shape_tuple = vm.ctx.new_tuple(
+                        data.shape()
+                            .iter()
+                            .map(|&d| vm.ctx.new_int(d as i64).into())
+                            .collect(),
+                    );
+                    let slot_new = ndarray_type
+                        .slots
+                        .new
+                        .load()
+                        .expect("ndarray should define tp_new");
+                    let obj_ref = slot_new(
+                        py_type.clone(),
+                        vm::function::FuncArgs::new(
+                            vec![shape_tuple.into()],
+                            vm::function::KwArgs::default(),
+                        ),
+                        vm,
+                    )?;
+                    let arr_ref = PyRef::<PyNdArray>::try_from_object(vm, obj_ref.clone())
+                        .map_err(|_| {
+                            vm.new_type_error(format!(
+                                "'{}' is not a subtype of 'ndarray'",
+                                py_type.name()
+                            ))
+                        })?;
+                    {
+                        let mut target = arr_ref.data.write().unwrap();
+                        *target = data.clone();
+                    }
+                    arr_ref.is_fortran.store(is_f, Ordering::Relaxed);
+                    arr_ref
+                        .is_aligned
+                        .store(self.is_aligned.load(Ordering::Relaxed), Ordering::Relaxed);
+                    *arr_ref.base.write().unwrap() = None;
+                    *arr_ref.view_prefix.write().unwrap() = None;
+                    if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
+                        let self_obj = PyNdArray::from_core(data.clone()).into_pyobject(vm);
+                        let _ = finalize.call((self_obj,), vm);
+                    }
+                    return Ok(obj_ref);
+                }
+
+                // Non-ndarray Python classes may still represent scalar dtype classes.
+                if let Ok(scalar_name) = dtype_obj
                     .get_attr("_scalar_name", vm)
-                    .and_then(|v| v.try_into_value::<String>(vm));
-                if let Ok(scalar_name) = scalar_name_result {
-                    // It's a scalar type like np.int8 – use _scalar_name as dtype
+                    .and_then(|v| v.try_into_value::<String>(vm))
+                {
                     match parse_dtype(scalar_name.as_str(), vm) {
                         Ok(target_dt) => {
                             let result = data
@@ -1031,9 +1142,7 @@ impl PyNdArray {
                         Err(_) => return Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm)),
                     }
                 }
-                // Also try __name__ as a dtype string (e.g. "int8", "float32")
-                if let Ok(type_name) = py_type
-                    .as_object()
+                if let Ok(type_name) = dtype_obj
                     .get_attr("__name__", vm)
                     .and_then(|v| v.try_into_value::<String>(vm))
                 {
@@ -1044,38 +1153,7 @@ impl PyNdArray {
                         return Ok(PyNdArray::from_core(result).into_pyobject(vm));
                     }
                 }
-                // It's likely an ndarray subclass – create instance of that type
-                let result = PyNdArray {
-                    data: RwLock::new(data.clone()),
-                    is_fortran: AtomicBool::new(is_f),
-                    is_aligned: AtomicBool::new(self.is_aligned.load(Ordering::Relaxed)),
-                    base: RwLock::new(None),
-                    view_prefix: RwLock::new(None),
-                };
-                // Try into_ref_with_type first; if it fails (not a real ndarray subclass),
-                // try calling the type's _from_array classmethod as a fallback.
-                match result.into_ref_with_type(vm, py_type.clone()) {
-                    Ok(obj) => {
-                        // Call __array_finalize__ if it exists on the subclass
-                        let obj_ref: PyObjectRef = obj.into();
-                        if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
-                            let self_obj = PyNdArray::from_core(data.clone()).into_pyobject(vm);
-                            let _ = finalize.call((self_obj,), vm);
-                        }
-                        return Ok(obj_ref);
-                    }
-                    Err(_) => {
-                        // Fallback: try _from_array classmethod (e.g. chararray)
-                        let self_obj = PyNdArray::from_core(data.clone()).into_pyobject(vm);
-                        if let Ok(from_array) = py_type.as_object().get_attr("_from_array", vm) {
-                            return from_array.call((self_obj,), vm);
-                        }
-                        return Err(vm.new_type_error(format!(
-                            "'{}' is not a subtype of 'ndarray'",
-                            py_type.name()
-                        )));
-                    }
-                }
+                return Ok(PyNdArray::from_core(data.clone()).into_pyobject(vm));
             }
             // Try to parse as dtype string
             let dtype_str: String = match dtype_obj.try_into_value::<String>(vm) {
@@ -1728,6 +1806,23 @@ impl PyNdArray {
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let data = self.data.read().unwrap();
+        let build_array_result =
+            |result: NdArray, prefix: Option<Vec<SliceArg>>| -> PyResult<PyObjectRef> {
+                let payload =
+                    PyNdArray::from_core_with_base_and_prefix(result, parent_obj.clone(), prefix);
+                let parent_type = parent_obj.class().to_owned();
+                let ndarray_type = Self::class(&vm.ctx);
+                if !parent_type.is(ndarray_type.as_ref())
+                    && parent_type.fast_issubclass(ndarray_type.as_ref())
+                {
+                    let obj_ref: PyObjectRef = payload.into_ref_with_type(vm, parent_type)?.into();
+                    if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
+                        let _ = finalize.call((parent_obj.clone(),), vm);
+                    }
+                    return Ok(obj_ref);
+                }
+                Ok(payload.to_py(vm))
+            };
 
         // Integer index -> scalar or sub-array
         if let Ok(idx) = key.clone().try_into_value::<i64>(vm) {
@@ -1744,12 +1839,7 @@ impl PyNdArray {
                 let result = data
                     .slice(&[SliceArg::Index(idx as isize)])
                     .map_err(|e| numpy_err(e, vm))?;
-                return Ok(PyNdArray::from_core_with_base_and_prefix(
-                    result,
-                    parent_obj.clone(),
-                    Some(vec![SliceArg::Index(idx as isize)]),
-                )
-                .to_py(vm));
+                return build_array_result(result, Some(vec![SliceArg::Index(idx as isize)]));
             }
         }
 
@@ -1759,12 +1849,7 @@ impl PyNdArray {
             let result = data
                 .slice(std::slice::from_ref(&arg))
                 .map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core_with_base_and_prefix(
-                result,
-                parent_obj.clone(),
-                Some(vec![arg]),
-            )
-            .to_py(vm));
+            return build_array_result(result, Some(vec![arg]));
         }
 
         // Tuple index -> multi-dimensional indexing (integers and/or slices)
@@ -1899,23 +1984,13 @@ impl PyNdArray {
                     if let Ok(reshaped) = result.reshape(&shape) {
                         result = reshaped;
                     }
-                    return Ok(PyNdArray::from_core_with_base_and_prefix(
-                        result,
-                        parent_obj.clone(),
-                        Some(args.clone()),
-                    )
-                    .to_py(vm));
+                    return build_array_result(result, Some(args.clone()));
                 }
                 // Return view if ndim > 0, scalar otherwise
                 if result.ndim() == 0 {
                     return Ok(ndarray_or_scalar(result, vm));
                 }
-                return Ok(PyNdArray::from_core_with_base_and_prefix(
-                    result,
-                    parent_obj.clone(),
-                    Some(args.clone()),
-                )
-                .to_py(vm));
+                return build_array_result(result, Some(args.clone()));
             }
 
             // All integers (with possible newaxis insertions)
@@ -1953,12 +2028,7 @@ impl PyNdArray {
             }
             let args: Vec<SliceArg> = indices.iter().map(|&i| SliceArg::Index(i)).collect();
             let result = data.slice(&args).map_err(|e| numpy_err(e, vm))?;
-            return Ok(PyNdArray::from_core_with_base_and_prefix(
-                result,
-                parent_obj.clone(),
-                Some(args),
-            )
-            .to_py(vm));
+            return build_array_result(result, Some(args));
         }
 
         // NdArray index: boolean mask or integer fancy indexing

@@ -2,7 +2,7 @@
 import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import AxisError, _builtin_range, _builtin_min, _builtin_max
+from ._helpers import AxisError, _ObjectArray, _builtin_range, _builtin_min, _builtin_max
 from ._core_types import _normalize_dtype
 from ._creation import array, asarray, zeros, ones, arange, linspace, empty
 from ._math import floor as _floor, isnan
@@ -72,15 +72,15 @@ def trace(a, offset=0, axis1=0, axis2=1):
 
 
 def meshgrid(*xi, indexing='xy', sparse=False, copy=True):
+    from ._shape import broadcast_to
     if indexing not in ('xy', 'ij'):
         raise ValueError("Valid values for `indexing` are 'xy' and 'ij'.")
     arrays = [a if isinstance(a, ndarray) else array(a) for a in xi]
     if not arrays:
         return []
-    result = _native.meshgrid(arrays, indexing)
+    ndim = len(arrays)
     if sparse:
         # Return sparse (open) meshgrids: each output has shape with 1s except along its own axis
-        ndim = len(arrays)
         sparse_result = []
         for i, a in enumerate(arrays):
             shape = [1] * ndim
@@ -97,6 +97,31 @@ def meshgrid(*xi, indexing='xy', sparse=False, copy=True):
         if copy:
             sparse_result = [s.copy() for s in sparse_result]
         return sparse_result
+    dense_shape = []
+    for i, a in enumerate(arrays):
+        axis = i
+        if indexing == 'xy' and ndim >= 2:
+            if i == 0:
+                axis = 1
+            elif i == 1:
+                axis = 0
+        while len(dense_shape) <= axis:
+            dense_shape.append(1)
+        dense_shape[axis] = len(a.flatten())
+    while len(dense_shape) < ndim:
+        dense_shape.append(1)
+    result = []
+    for i, a in enumerate(arrays):
+        axis = i
+        if indexing == 'xy' and ndim >= 2:
+            if i == 0:
+                axis = 1
+            elif i == 1:
+                axis = 0
+        shape = [1] * ndim
+        shape[axis] = len(a.flatten())
+        expanded = a.flatten().reshape(shape)
+        result.append(broadcast_to(expanded, tuple(dense_shape)))
     if copy:
         result = [r.copy() for r in result]
     return result
@@ -163,6 +188,8 @@ def _histogram_range_from_flat(flat, range):
         lo, hi = _builtin_min(flat), _builtin_max(flat)
     else:
         lo, hi = 0.0, 1.0
+    if not (_math.isfinite(lo) and _math.isfinite(hi)):
+        raise ValueError("autodetected range of [{}, {}] is not finite".format(lo, hi))
     if lo == hi:
         lo = lo - 0.5
         hi = hi + 0.5
@@ -171,17 +198,45 @@ def _histogram_range_from_flat(flat, range):
 
 def _coerce_histogram_edges(bins):
     """Normalize explicit 1-D histogram edges."""
-    edges = asarray(bins).flatten()
+    edges = asarray(bins)
     if edges.ndim != 1:
         raise ValueError("bins must be 1d")
+    edges = edges.flatten()
     edge_list = edges.tolist()
     n_bins = len(edge_list) - 1
     if n_bins < 1:
         raise ValueError("bins must have at least 2 edges")
     for edge in edge_list:
-        if _math.isinf(edge) or _math.isnan(edge):
-            raise ValueError("bins must be finite")
+        if getattr(edge, '_is_nat', False):
+            raise ValueError("bins must not contain NaN")
+        if isinstance(edge, (int, float)) and _math.isnan(edge):
+            raise ValueError("bins must not contain NaN")
+    for i in _builtin_range(len(edge_list) - 1):
+        if not (edge_list[i] < edge_list[i + 1]):
+            raise ValueError("`bins` must increase monotonically, when an array")
     return edges, edge_list, n_bins
+
+
+def _histogram_count_dtype(weights, density):
+    if density:
+        return 'float64'
+    if weights is None:
+        return 'int64'
+    w = asarray(weights)
+    kind = getattr(w.dtype, 'kind', '')
+    if kind == 'f':
+        return 'float64'
+    if kind == 'c':
+        return 'complex128'
+    if kind in ('i', 'u', 'b'):
+        return 'int64'
+    return 'object'
+
+
+def _coerce_histogram_weight_value(value, dtype_name):
+    if dtype_name == 'complex128' and isinstance(value, tuple) and len(value) == 2:
+        return complex(value[0], value[1])
+    return value
 
 
 def _normalize_histogramdd_bins(bins, n_dims):
@@ -244,8 +299,12 @@ def _histogram_bin_edges_from_method(a, method, range=None):
         if n_eff == 0:
             lo, hi = 0.0, 1.0
         else:
+            if any(not _math.isfinite(v) for v in vals):
+                raise ValueError("autodetected range of [{}, {}] is not finite".format(_builtin_min(vals), _builtin_max(vals)))
             lo = _builtin_min(vals)
             hi = _builtin_max(vals)
+    if not (_math.isfinite(lo) and _math.isfinite(hi)):
+        raise ValueError("autodetected range of [{}, {}] is not finite".format(lo, hi))
     if lo == hi:
         lo = lo - 0.5
         hi = hi + 0.5
@@ -308,8 +367,16 @@ def _histogram_bin_edges_from_method(a, method, range=None):
     return linspace(lo, hi, nbins + 1, endpoint=True)
 
 def histogram(a, bins=10, range=None, density=None, weights=None):
+    import warnings as _warnings
     if not isinstance(a, ndarray):
         a = array(a)
+    if getattr(a.dtype, 'kind', '') == 'b':
+        _warnings.warn(
+            "Converting input from bool to <class 'numpy.uint8'> for compatibility.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        a = a.astype('uint8')
     # Validate weights
     if weights is not None:
         w = asarray(weights)
@@ -319,10 +386,16 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
     if isinstance(bins, str):
         edges = _histogram_bin_edges_from_method(a, bins, range=range)
         return histogram(a, bins=edges, range=range, density=density, weights=weights)
-    if isinstance(bins, (list, tuple, ndarray)):
+    if isinstance(bins, (list, tuple, ndarray, _ObjectArray)):
         edges, edge_list, n_bins = _coerce_histogram_edges(bins)
         flat = a.flatten().tolist()
-        counts = [0.0] * n_bins
+        count_dtype = _histogram_count_dtype(weights, density)
+        if count_dtype == 'float64':
+            counts = [0.0] * n_bins
+        elif count_dtype == 'complex128':
+            counts = [0j] * n_bins
+        else:
+            counts = [0] * n_bins
         w_list = None
         if weights is not None:
             w_list = asarray(weights).flatten().tolist()
@@ -330,13 +403,13 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
             for j in _builtin_range(n_bins):
                 if j == n_bins - 1:
                     if edge_list[j] <= v <= edge_list[j + 1]:
-                        counts[j] += (w_list[idx_val] if w_list is not None else 1.0)
+                        counts[j] += (_coerce_histogram_weight_value(w_list[idx_val], count_dtype) if w_list is not None else 1.0)
                         break
                 else:
                     if edge_list[j] <= v < edge_list[j + 1]:
-                        counts[j] += (w_list[idx_val] if w_list is not None else 1.0)
+                        counts[j] += (_coerce_histogram_weight_value(w_list[idx_val], count_dtype) if w_list is not None else 1.0)
                         break
-        counts_arr = array(counts)
+        counts_arr = array(counts, dtype=count_dtype)
         if density:
             bin_widths = diff(edges)
             total = float(sum(counts_arr))
@@ -353,6 +426,12 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
         if lo == hi:
             lo = lo - 0.5
             hi = hi + 0.5
+    if range is None:
+        lo, hi = _histogram_range_from_flat(a.flatten().tolist(), None)
+    edge_preview = linspace(lo, hi, num=bins + 1, endpoint=True).tolist()
+    for i in _builtin_range(len(edge_preview) - 1):
+        if not (edge_preview[i] < edge_preview[i + 1]):
+            raise ValueError("Too many bins for data range")
     if weights is not None or range is not None:
         # Python fallback for weights/range with integer bins
         flat = a.flatten().tolist()
@@ -360,7 +439,13 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
             lo, hi = _histogram_range_from_flat(flat, None)
         edges = linspace(lo, hi, num=bins + 1, endpoint=True)
         edge_list = edges.tolist()
-        counts = [0.0] * bins
+        count_dtype = _histogram_count_dtype(weights, density)
+        if count_dtype == 'float64':
+            counts = [0.0] * bins
+        elif count_dtype == 'complex128':
+            counts = [0j] * bins
+        else:
+            counts = [0] * bins
         w_list = None
         if weights is not None:
             w_list = asarray(weights).flatten().tolist()
@@ -369,9 +454,9 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
                 continue
             for j in _builtin_range(bins):
                 if (val >= edge_list[j] and val < edge_list[j + 1]) or (j == bins - 1 and val == edge_list[j + 1]):
-                    counts[j] += (w_list[idx_val] if w_list is not None else 1.0)
+                    counts[j] += (_coerce_histogram_weight_value(w_list[idx_val], count_dtype) if w_list is not None else 1.0)
                     break
-        hist = array(counts)
+        hist = array(counts, dtype=count_dtype)
         if density:
             widths = array([edge_list[i+1] - edge_list[i] for i in _builtin_range(bins)])
             total = float(sum(hist))
@@ -418,6 +503,16 @@ def histogram2d(x, y, bins=10, range=None, density=None, weights=None):
 
 def histogramdd(sample, bins=10, range=None, density=False, weights=None):
     """Compute the multidimensional histogram of some data."""
+    if isinstance(sample, (list, tuple)) and sample:
+        first = sample[0]
+        if isinstance(first, (list, tuple, ndarray, _ObjectArray)):
+            cols = [asarray(col).flatten() for col in sample]
+            lengths = [col.size for col in cols]
+            if lengths and all(n == lengths[0] for n in lengths):
+                rows = []
+                for i in _builtin_range(lengths[0]):
+                    rows.append([col[i] for col in cols])
+                sample = array(rows)
     sample = asarray(sample)
     if sample.ndim == 1:
         sample = sample.reshape((-1, 1))
@@ -503,8 +598,78 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
 def digitize(x, bins, right=False):
     """Return the indices of the bins to which each value belongs."""
     from numpy._reductions import searchsorted
+    from numpy._math import iscomplexobj
+
+    def _contains_unsafe_python_ints(value):
+        if type(value) is int:
+            return abs(value) > (1 << 53)
+        if isinstance(value, (list, tuple)):
+            return any(_contains_unsafe_python_ints(item) for item in value)
+        return False
+
+    def _is_plain_int_sequence(value):
+        return isinstance(value, (list, tuple)) and all(type(item) is int for item in value)
+
+    def _digitize_exact_python_ints(values, edges):
+        n_edges = len(edges)
+        if n_edges == 0:
+            return [] if isinstance(values, (list, tuple)) else 0
+        increasing = all(edges[i] <= edges[i + 1] for i in range(n_edges - 1))
+        decreasing = all(edges[i] >= edges[i + 1] for i in range(n_edges - 1))
+        if not increasing and not decreasing:
+            raise ValueError("bins must be monotonically increasing or decreasing")
+
+        def _search_one(v):
+            if increasing:
+                if right:
+                    lo, hi = 0, n_edges
+                    while lo < hi:
+                        mid = (lo + hi) // 2
+                        if v <= edges[mid]:
+                            hi = mid
+                        else:
+                            lo = mid + 1
+                    return lo
+                lo, hi = 0, n_edges
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if v < edges[mid]:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                return lo
+
+            lo, hi = 0, n_edges
+            while lo < hi:
+                mid = (lo + hi) // 2
+                edge = edges[n_edges - 1 - mid]
+                if right:
+                    if v <= edge:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                else:
+                    if v < edge:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+            return n_edges - lo
+
+        if type(values) is int:
+            return _search_one(values)
+        return array([_search_one(v) for v in values], dtype='int64')
+
+    if (
+        _is_plain_int_sequence(bins)
+        and _contains_unsafe_python_ints(bins)
+        and (type(x) is int or _is_plain_int_sequence(x))
+    ):
+        return _digitize_exact_python_ints(x, bins)
+
     x = asarray(x)
     bins = asarray(bins)
+    if iscomplexobj(x) or iscomplexobj(bins):
+        raise TypeError("x and bins must be real")
     n = len(bins)
     if n == 0:
         return zeros(x.shape, dtype='int64')

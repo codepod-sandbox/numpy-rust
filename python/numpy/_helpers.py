@@ -315,10 +315,11 @@ class _ObjectArray:
     def astype(self, dtype):
         dtype_str = str(dtype)
         # Convert temporal types to numeric
-        if dtype_str in ('int64', 'int32', 'int16', 'int8', 'uint64', 'uint32') or dtype_str.startswith('int') or dtype_str.startswith('uint'):
+        if dtype_str in ('int', "<class 'int'>", 'int64', 'int32', 'int16', 'int8', 'uint64', 'uint32') or dtype_str.startswith('int') or dtype_str.startswith('uint'):
             if self._data and getattr(self._data[0], '_is_timedelta64', False) or getattr(self._data[0] if self._data else None, '_is_datetime64', False):
                 vals = [v._value if hasattr(v, '_value') else int(v) for v in self._data]
-                result = _native.array([float(v) for v in vals]).astype(dtype_str)
+                target = 'int64' if dtype_str in ('int', "<class 'int'>") else dtype_str
+                result = _native.array([float(v) for v in vals]).astype(target)
                 if len(self._shape) > 1:
                     result = result.reshape(list(self._shape))
                 return result
@@ -415,6 +416,20 @@ class _ObjectArray:
                 sub_size *= s
             sub_data = self._data[key * sub_size : (key + 1) * sub_size]
             return _ObjectArray(sub_data, self._dtype, shape=sub_shape, itemsize=self._itemsize)
+        if isinstance(key, ndarray):
+            key = key.tolist()
+        if isinstance(key, list):
+            if key and __import__("builtins").all(isinstance(k, bool) for k in key):
+                result = [v for v, keep in zip(self._data, key) if keep]
+                return _ObjectArray(result, self._dtype)
+            indices = []
+            for k in key:
+                if not isinstance(k, int):
+                    raise TypeError("list indices must be integers or booleans")
+                if k < 0:
+                    k += len(self._data)
+                indices.append(k)
+            return _ObjectArray([self._data[k] for k in indices], self._dtype)
         result = self._data[key]
         if isinstance(key, slice):
             return _ObjectArray(result, self._dtype)
@@ -562,6 +577,11 @@ class _ObjectArray:
             return odata
         if isinstance(other, ndarray):
             return other.flatten().tolist()
+        if isinstance(other, (list, tuple)):
+            odata = list(other)
+            if len(odata) == 1 and len(self._data) > 1:
+                odata = odata * len(self._data)
+            return odata
         return None
     def __eq__(self, other):
         odata = self._broadcast_other(other)
