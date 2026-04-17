@@ -26,6 +26,55 @@ fn flatten_to_int64_vec(array: &NdArray) -> Vec<i64> {
     arr.iter().copied().collect()
 }
 
+fn validate_weights(weights: &[f64]) -> Result<()> {
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return Err(NumpyError::ValueError(
+            "Weights included NaN, inf or were all zero".into(),
+        ));
+    }
+    let total: f64 = weights.iter().sum();
+    if !total.is_finite() || total <= 0.0 {
+        return Err(NumpyError::ValueError(
+            "Weights included NaN, inf or were all zero".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn weighted_inverted_cdf_1d(values: &[f64], weights: &[f64], q: f64) -> Result<f64> {
+    if values.len() != weights.len() {
+        return Err(NumpyError::ValueError(
+            "values and weights must have the same length".into(),
+        ));
+    }
+    if values.iter().any(|v| v.is_nan()) {
+        return Ok(f64::NAN);
+    }
+    validate_weights(weights)?;
+
+    let mut pairs: Vec<(f64, f64)> = values
+        .iter()
+        .copied()
+        .zip(weights.iter().copied())
+        .filter(|(_, w)| *w > 0.0)
+        .collect();
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total: f64 = pairs.iter().map(|(_, w)| *w).sum();
+    let threshold = q * total;
+    let mut cumulative = 0.0;
+    for (value, weight) in pairs.iter().copied() {
+        cumulative += weight;
+        if cumulative >= threshold {
+            return Ok(value);
+        }
+    }
+    Ok(pairs
+        .last()
+        .map(|(value, _)| *value)
+        .unwrap_or(f64::NAN))
+}
+
 fn prepare_numeric_float64_input(
     array: &NdArray,
     axis: Option<usize>,
@@ -121,6 +170,95 @@ impl NdArray {
     /// Compute the q-th percentile (0 to 100).
     pub fn percentile(&self, q: f64, axis: Option<usize>) -> Result<NdArray> {
         self.quantile(q / 100.0, axis)
+    }
+
+    pub fn weighted_inverted_cdf_quantile(
+        &self,
+        q: f64,
+        axis: Option<usize>,
+        weights: &NdArray,
+    ) -> Result<NdArray> {
+        if !(0.0..=1.0).contains(&q) {
+            return Err(NumpyError::ValueError(format!(
+                "quantile q must be between 0 and 1, got {}",
+                q
+            )));
+        }
+
+        let arr = prepare_numeric_float64_input(self, axis, "quantile")?;
+        let w_arr = prepare_numeric_float64_input(weights, axis, "quantile")?;
+
+        match axis {
+            None => {
+                if arr.shape() != w_arr.shape() {
+                    return Err(NumpyError::ValueError(
+                        "Shape of weights must match shape of a when axis=None".into(),
+                    ));
+                }
+                let vals: Vec<f64> = arr.iter().copied().collect();
+                let wts: Vec<f64> = w_arr.iter().copied().collect();
+                let result = weighted_inverted_cdf_1d(&vals, &wts, q)?;
+                Ok(NdArray::from_data(ArrayData::Float64(ArrayD::from_elem(
+                    IxDyn(&[]),
+                    result,
+                ))))
+            }
+            Some(ax) => {
+                if ax >= arr.ndim() {
+                    return Err(NumpyError::InvalidAxis {
+                        axis: ax,
+                        ndim: arr.ndim(),
+                    });
+                }
+
+                let result_shape: Vec<usize> = arr
+                    .shape()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &dim)| if i == ax { None } else { Some(dim) })
+                    .collect();
+                let result_dim = if result_shape.is_empty() {
+                    IxDyn(&[])
+                } else {
+                    IxDyn(&result_shape)
+                };
+                let mut result = ArrayD::<f64>::zeros(result_dim);
+
+                if w_arr.ndim() == 1 {
+                    if w_arr.len() != arr.shape()[ax] {
+                        return Err(NumpyError::ValueError(
+                            "Shape of weights must be consistent with shape of a along the reduction axis"
+                                .into(),
+                        ));
+                    }
+                    let shared_weights: Vec<f64> = w_arr.iter().copied().collect();
+                    validate_weights(&shared_weights)?;
+                    for (lane, result_elem) in arr.lanes(Axis(ax)).into_iter().zip(result.iter_mut()) {
+                        let vals: Vec<f64> = lane.iter().copied().collect();
+                        *result_elem = weighted_inverted_cdf_1d(&vals, &shared_weights, q)?;
+                    }
+                } else {
+                    if arr.shape() != w_arr.shape() {
+                        return Err(NumpyError::ValueError(
+                            "Shape of weights must match shape of a or be 1-D along the reduction axis"
+                                .into(),
+                        ));
+                    }
+                    for ((lane, weight_lane), result_elem) in arr
+                        .lanes(Axis(ax))
+                        .into_iter()
+                        .zip(w_arr.lanes(Axis(ax)).into_iter())
+                        .zip(result.iter_mut())
+                    {
+                        let vals: Vec<f64> = lane.iter().copied().collect();
+                        let wts: Vec<f64> = weight_lane.iter().copied().collect();
+                        *result_elem = weighted_inverted_cdf_1d(&vals, &wts, q)?;
+                    }
+                }
+
+                Ok(NdArray::from_data(ArrayData::Float64(result)))
+            }
+        }
     }
 
     /// Compute the histogram of a dataset.

@@ -900,7 +900,8 @@ impl PyNdArray {
 
         let self_type = self_obj.class().to_owned();
         let ndarray_type = Self::class(&vm.ctx);
-        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref()) {
+        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref())
+        {
             let obj_ref: PyObjectRef = result.into_ref_with_type(vm, self_type)?.into();
             if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
                 let _ = finalize.call((self_obj,), vm);
@@ -917,7 +918,8 @@ impl PyNdArray {
         let result = PyNdArray::from_core(zelf.data.read().unwrap().flatten());
         let self_type = self_obj.class().to_owned();
         let ndarray_type = Self::class(&vm.ctx);
-        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref()) {
+        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref())
+        {
             let obj_ref: PyObjectRef = result.into_ref_with_type(vm, self_type)?.into();
             if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
                 let _ = finalize.call((self_obj,), vm);
@@ -930,10 +932,12 @@ impl PyNdArray {
     #[pymethod]
     fn ravel(zelf: PyRef<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         let self_obj: PyObjectRef = zelf.as_object().to_owned();
-        let result = PyNdArray::from_core_with_base(zelf.data.read().unwrap().ravel(), self_obj.clone());
+        let result =
+            PyNdArray::from_core_with_base(zelf.data.read().unwrap().ravel(), self_obj.clone());
         let self_type = self_obj.class().to_owned();
         let ndarray_type = Self::class(&vm.ctx);
-        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref()) {
+        if !self_type.is(ndarray_type.as_ref()) && self_type.fast_issubclass(ndarray_type.as_ref())
+        {
             let obj_ref: PyObjectRef = result.into_ref_with_type(vm, self_type)?.into();
             if let Ok(finalize) = obj_ref.get_attr("__array_finalize__", vm) {
                 let _ = finalize.call((self_obj,), vm);
@@ -1015,13 +1019,7 @@ impl PyNdArray {
             let data = tolist.call((), vm)?;
             let kwargs: vm::function::KwArgs =
                 std::iter::once(("dtype".to_owned(), dtype_obj.clone())).collect();
-            return array_fn.call(
-                vm::function::FuncArgs::new(
-                    vec![data],
-                    kwargs,
-                ),
-                vm,
-            );
+            return array_fn.call(vm::function::FuncArgs::new(vec![data], kwargs), vm);
         }
 
         let dt = parse_dtype(dtype_name, vm)?;
@@ -1081,7 +1079,8 @@ impl PyNdArray {
             // If it's a Python type/class (e.g. MyNDArray subclass), distinguish
             // ndarray subclasses from scalar dtype classes like np.int8.
             if format!("{}", dtype_obj.class().name()) == "type" {
-                let py_type: vm::builtins::PyTypeRef = unsafe { dtype_obj.clone().downcast_unchecked() };
+                let py_type: vm::builtins::PyTypeRef =
+                    unsafe { dtype_obj.clone().downcast_unchecked() };
                 let ndarray_type = Self::class(&vm.ctx);
                 if py_type.fast_issubclass(ndarray_type.as_ref()) {
                     let shape_tuple = vm.ctx.new_tuple(

@@ -1459,6 +1459,21 @@ pub mod _numpy_native {
             .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
+    #[pyfunction]
+    fn weighted_inverted_cdf_quantile(
+        a: vm::PyRef<PyNdArray>,
+        q: f64,
+        weights: vm::PyRef<PyNdArray>,
+        axis: vm::function::OptionalArg<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let axis = parse_optional_axis(axis, vm)?;
+        a.inner()
+            .weighted_inverted_cdf_quantile(q, axis, &weights.inner())
+            .map(|arr| py_array::ndarray_or_scalar(arr, vm))
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
     // --- Correlation / Covariance ---
 
     #[pyfunction]
@@ -1853,6 +1868,44 @@ pub mod _numpy_native {
         numpy_rust_core::ops::numerical::interp(&x.inner(), &xp.inner(), &fp.inner())
             .map(PyNdArray::from_core)
             .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn interp_with_options(
+        x: vm::PyRef<PyNdArray>,
+        xp: vm::PyRef<PyNdArray>,
+        fp: vm::PyRef<PyNdArray>,
+        left: vm::function::OptionalArg<f64>,
+        right: vm::function::OptionalArg<f64>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        numpy_rust_core::ops::numerical::interp_with_options(
+            &x.inner(),
+            &xp.inner(),
+            &fp.inner(),
+            left.into_option(),
+            right.into_option(),
+        )
+        .map(PyNdArray::from_core)
+        .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn interp_periodic(
+        x: vm::PyRef<PyNdArray>,
+        xp: vm::PyRef<PyNdArray>,
+        fp: vm::PyRef<PyNdArray>,
+        period: f64,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        numpy_rust_core::ops::numerical::interp_periodic(
+            &x.inner(),
+            &xp.inner(),
+            &fp.inner(),
+            period,
+        )
+        .map(PyNdArray::from_core)
+        .map_err(|e| vm.new_value_error(e.to_string()))
     }
 
     /// gradient(f, spacings, edge_order, axes) -> list of arrays

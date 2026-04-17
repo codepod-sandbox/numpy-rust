@@ -1,5 +1,6 @@
 use crate::array_data::ArrayD;
 use std::collections::HashSet;
+use std::hash::Hash;
 
 use ndarray::IxDyn;
 
@@ -21,6 +22,38 @@ fn flatten_to_float64_vec(array: &NdArray) -> Vec<f64> {
     to_float64(&array.flatten()).iter().copied().collect()
 }
 
+fn flatten_to_bool_vec(array: &NdArray) -> Vec<bool> {
+    let cast = array.flatten().astype(DType::Bool);
+    let ArrayData::Bool(arr) = cast.data() else {
+        unreachable!("bool cast must produce bool storage")
+    };
+    arr.iter().copied().collect()
+}
+
+fn flatten_to_int32_vec(array: &NdArray) -> Vec<i32> {
+    let cast = array.flatten().astype(DType::Int32);
+    let ArrayData::Int32(arr) = cast.data() else {
+        unreachable!("int32 cast must produce int32 storage")
+    };
+    arr.iter().copied().collect()
+}
+
+fn flatten_to_float32_vec(array: &NdArray) -> Vec<f32> {
+    let cast = array.flatten().astype(DType::Float32);
+    let ArrayData::Float32(arr) = cast.data() else {
+        unreachable!("float32 cast must produce float32 storage")
+    };
+    arr.iter().copied().collect()
+}
+
+fn flatten_to_string_vec(array: &NdArray) -> Vec<String> {
+    let cast = array.flatten().astype(DType::Str);
+    let ArrayData::Str(arr) = cast.data() else {
+        unreachable!("str cast must produce str storage")
+    };
+    arr.iter().cloned().collect()
+}
+
 fn flatten_to_int64(array: &NdArray) -> ArrayD<i64> {
     let cast = array.astype(DType::Int64);
     let flat = cast.flatten();
@@ -28,6 +61,10 @@ fn flatten_to_int64(array: &NdArray) -> ArrayD<i64> {
         unreachable!("int64 cast must produce int64 storage")
     };
     arr.clone()
+}
+
+fn flatten_to_int64_vec(array: &NdArray) -> Vec<i64> {
+    flatten_to_int64(array).iter().copied().collect()
 }
 
 fn flatten_to_float64_choice_vec(choice: &NdArray, target_shape: &[usize]) -> Vec<f64> {
@@ -110,6 +147,134 @@ fn prepare_complex128_choice_vecs(
         .iter()
         .map(|choice| flatten_to_complex128_choice_vec(choice, target_shape))
         .collect()
+}
+
+fn intersect_ord<T: Ord + Copy + Hash>(a_values: Vec<T>, b_values: Vec<T>) -> Vec<T> {
+    let b_set: HashSet<T> = b_values.into_iter().collect();
+    let mut result: Vec<T> = a_values.into_iter().filter(|v| b_set.contains(v)).collect();
+    result.sort();
+    result.dedup();
+    result
+}
+
+fn union_ord<T: Ord + Copy>(a_values: Vec<T>, b_values: Vec<T>) -> Vec<T> {
+    let mut result: Vec<T> = a_values.into_iter().chain(b_values).collect();
+    result.sort();
+    result.dedup();
+    result
+}
+
+fn setdiff_ord<T: Ord + Copy + Hash>(a_values: Vec<T>, b_values: Vec<T>) -> Vec<T> {
+    let b_set: HashSet<T> = b_values.into_iter().collect();
+    let mut result: Vec<T> = a_values.into_iter().filter(|v| !b_set.contains(v)).collect();
+    result.sort();
+    result.dedup();
+    result
+}
+
+fn isin_hashable<T: Eq + Hash + Copy>(element: &[T], test_elements: &[T]) -> Vec<bool> {
+    let test_set: HashSet<T> = test_elements.iter().copied().collect();
+    element.iter().map(|v| test_set.contains(v)).collect()
+}
+
+fn intersect_float64(a_values: Vec<f64>, b_values: Vec<f64>) -> Vec<f64> {
+    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_values
+        .iter()
+        .copied()
+        .filter(|v| b_set.contains(&v.to_bits()))
+        .collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup_by(|x, y| x.to_bits() == y.to_bits());
+    result
+}
+
+fn union_float64(a_values: Vec<f64>, b_values: Vec<f64>) -> Vec<f64> {
+    let mut result: Vec<f64> = a_values.into_iter().chain(b_values).collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup_by(|x, y| x.to_bits() == y.to_bits());
+    result
+}
+
+fn setdiff_float64(a_values: Vec<f64>, b_values: Vec<f64>) -> Vec<f64> {
+    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f64> = a_values
+        .iter()
+        .copied()
+        .filter(|v| !b_set.contains(&v.to_bits()))
+        .collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup_by(|x, y| x.to_bits() == y.to_bits());
+    result
+}
+
+fn isin_float64(element: &[f64], test_elements: &[f64]) -> Vec<bool> {
+    let test_set: HashSet<u64> = test_elements.iter().map(|v| v.to_bits()).collect();
+    element.iter().map(|v| test_set.contains(&v.to_bits())).collect()
+}
+
+fn intersect_float32(a_values: Vec<f32>, b_values: Vec<f32>) -> Vec<f32> {
+    let b_set: HashSet<u32> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f32> = a_values
+        .iter()
+        .copied()
+        .filter(|v| b_set.contains(&v.to_bits()))
+        .collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup_by(|x, y| x.to_bits() == y.to_bits());
+    result
+}
+
+fn union_float32(a_values: Vec<f32>, b_values: Vec<f32>) -> Vec<f32> {
+    let mut result: Vec<f32> = a_values.into_iter().chain(b_values).collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup_by(|x, y| x.to_bits() == y.to_bits());
+    result
+}
+
+fn setdiff_float32(a_values: Vec<f32>, b_values: Vec<f32>) -> Vec<f32> {
+    let b_set: HashSet<u32> = b_values.iter().map(|v| v.to_bits()).collect();
+    let mut result: Vec<f32> = a_values
+        .iter()
+        .copied()
+        .filter(|v| !b_set.contains(&v.to_bits()))
+        .collect();
+    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    result.dedup_by(|x, y| x.to_bits() == y.to_bits());
+    result
+}
+
+fn isin_float32(element: &[f32], test_elements: &[f32]) -> Vec<bool> {
+    let test_set: HashSet<u32> = test_elements.iter().map(|v| v.to_bits()).collect();
+    element.iter().map(|v| test_set.contains(&v.to_bits())).collect()
+}
+
+fn intersect_string(a_values: Vec<String>, b_values: Vec<String>) -> Vec<String> {
+    let b_set: HashSet<String> = b_values.into_iter().collect();
+    let mut result: Vec<String> = a_values.into_iter().filter(|v| b_set.contains(v)).collect();
+    result.sort();
+    result.dedup();
+    result
+}
+
+fn union_string(a_values: Vec<String>, b_values: Vec<String>) -> Vec<String> {
+    let mut result: Vec<String> = a_values.into_iter().chain(b_values).collect();
+    result.sort();
+    result.dedup();
+    result
+}
+
+fn setdiff_string(a_values: Vec<String>, b_values: Vec<String>) -> Vec<String> {
+    let b_set: HashSet<String> = b_values.into_iter().collect();
+    let mut result: Vec<String> = a_values.into_iter().filter(|v| !b_set.contains(v)).collect();
+    result.sort();
+    result.dedup();
+    result
+}
+
+fn isin_string(element: &[String], test_elements: &[String]) -> Vec<bool> {
+    let test_set: HashSet<String> = test_elements.iter().cloned().collect();
+    element.iter().map(|v| test_set.contains(v)).collect()
 }
 
 impl NdArray {
@@ -214,68 +379,172 @@ pub fn choose(a: &NdArray, choices: &[&NdArray]) -> Result<NdArray> {
 
 /// Return sorted unique values present in both arrays.
 pub fn intersect1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_values = flatten_to_float64_vec(a);
-    let b_values = flatten_to_float64_vec(b);
-
-    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
-    let mut result: Vec<f64> = a_values
-        .iter()
-        .copied()
-        .filter(|v| b_set.contains(&v.to_bits()))
-        .collect();
-    // Sort and dedup
-    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-    result.dedup();
-
-    NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
-    ))
+    match (a.data(), b.data()) {
+        (ArrayData::Bool(_), ArrayData::Bool(_)) => {
+            let result = intersect_ord(flatten_to_bool_vec(a), flatten_to_bool_vec(b));
+            NdArray::from_data(ArrayData::Bool(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Int32(_), ArrayData::Int32(_)) => {
+            let result = intersect_ord(flatten_to_int32_vec(a), flatten_to_int32_vec(b));
+            NdArray::from_data(ArrayData::Int32(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Int64(_), ArrayData::Int64(_)) => {
+            let result = intersect_ord(flatten_to_int64_vec(a), flatten_to_int64_vec(b));
+            NdArray::from_data(ArrayData::Int64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Float32(_), ArrayData::Float32(_)) => {
+            let result = intersect_float32(flatten_to_float32_vec(a), flatten_to_float32_vec(b));
+            NdArray::from_data(ArrayData::Float32(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Float64(_), ArrayData::Float64(_)) => {
+            let result = intersect_float64(flatten_to_float64_vec(a), flatten_to_float64_vec(b));
+            NdArray::from_data(ArrayData::Float64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Str(_), ArrayData::Str(_)) => {
+            let result = intersect_string(flatten_to_string_vec(a), flatten_to_string_vec(b));
+            NdArray::from_data(ArrayData::Str(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        _ => {
+            let result = intersect_float64(flatten_to_float64_vec(a), flatten_to_float64_vec(b));
+            NdArray::from_data(ArrayData::Float64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+    }
 }
 
 /// Return sorted unique values from either array.
 pub fn union1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_values = flatten_to_float64_vec(a);
-    let b_values = flatten_to_float64_vec(b);
-
-    let mut result: Vec<f64> = a_values.iter().chain(b_values.iter()).copied().collect();
-    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-    result.dedup();
-
-    NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
-    ))
+    match (a.data(), b.data()) {
+        (ArrayData::Bool(_), ArrayData::Bool(_)) => {
+            let result = union_ord(flatten_to_bool_vec(a), flatten_to_bool_vec(b));
+            NdArray::from_data(ArrayData::Bool(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Int32(_), ArrayData::Int32(_)) => {
+            let result = union_ord(flatten_to_int32_vec(a), flatten_to_int32_vec(b));
+            NdArray::from_data(ArrayData::Int32(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Int64(_), ArrayData::Int64(_)) => {
+            let result = union_ord(flatten_to_int64_vec(a), flatten_to_int64_vec(b));
+            NdArray::from_data(ArrayData::Int64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Float32(_), ArrayData::Float32(_)) => {
+            let result = union_float32(flatten_to_float32_vec(a), flatten_to_float32_vec(b));
+            NdArray::from_data(ArrayData::Float32(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Float64(_), ArrayData::Float64(_)) => {
+            let result = union_float64(flatten_to_float64_vec(a), flatten_to_float64_vec(b));
+            NdArray::from_data(ArrayData::Float64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Str(_), ArrayData::Str(_)) => {
+            let result = union_string(flatten_to_string_vec(a), flatten_to_string_vec(b));
+            NdArray::from_data(ArrayData::Str(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        _ => {
+            let result = union_float64(flatten_to_float64_vec(a), flatten_to_float64_vec(b));
+            NdArray::from_data(ArrayData::Float64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+    }
 }
 
 /// Return sorted values in `a` that are NOT in `b`.
 pub fn setdiff1d(a: &NdArray, b: &NdArray) -> NdArray {
-    let a_values = flatten_to_float64_vec(a);
-    let b_values = flatten_to_float64_vec(b);
-
-    let b_set: HashSet<u64> = b_values.iter().map(|v| v.to_bits()).collect();
-    let mut result: Vec<f64> = a_values
-        .iter()
-        .copied()
-        .filter(|v| !b_set.contains(&v.to_bits()))
-        .collect();
-    result.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-    result.dedup();
-
-    NdArray::from_data(ArrayData::Float64(
-        ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
-    ))
+    match (a.data(), b.data()) {
+        (ArrayData::Bool(_), ArrayData::Bool(_)) => {
+            let result = setdiff_ord(flatten_to_bool_vec(a), flatten_to_bool_vec(b));
+            NdArray::from_data(ArrayData::Bool(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Int32(_), ArrayData::Int32(_)) => {
+            let result = setdiff_ord(flatten_to_int32_vec(a), flatten_to_int32_vec(b));
+            NdArray::from_data(ArrayData::Int32(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Int64(_), ArrayData::Int64(_)) => {
+            let result = setdiff_ord(flatten_to_int64_vec(a), flatten_to_int64_vec(b));
+            NdArray::from_data(ArrayData::Int64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Float32(_), ArrayData::Float32(_)) => {
+            let result = setdiff_float32(flatten_to_float32_vec(a), flatten_to_float32_vec(b));
+            NdArray::from_data(ArrayData::Float32(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Float64(_), ArrayData::Float64(_)) => {
+            let result = setdiff_float64(flatten_to_float64_vec(a), flatten_to_float64_vec(b));
+            NdArray::from_data(ArrayData::Float64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        (ArrayData::Str(_), ArrayData::Str(_)) => {
+            let result = setdiff_string(flatten_to_string_vec(a), flatten_to_string_vec(b));
+            NdArray::from_data(ArrayData::Str(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+        _ => {
+            let result = setdiff_float64(flatten_to_float64_vec(a), flatten_to_float64_vec(b));
+            NdArray::from_data(ArrayData::Float64(
+                ArrayD::from_shape_vec(IxDyn(&[result.len()]), result).expect("shape matches"),
+            ))
+        }
+    }
 }
 
 /// Return boolean array with same shape as `element`, true where value exists in `test_elements`.
 pub fn isin(element: &NdArray, test_elements: &NdArray) -> NdArray {
-    let elem_arr = to_float64(element);
-    let test_arr = flatten_to_float64_vec(test_elements);
-
-    let test_set: HashSet<u64> = test_arr.iter().map(|v| v.to_bits()).collect();
     let shape: Vec<usize> = element.shape().to_vec();
-    let result: Vec<bool> = elem_arr
-        .iter()
-        .map(|v| test_set.contains(&v.to_bits()))
-        .collect();
+    let result = match (element.data(), test_elements.data()) {
+        (ArrayData::Bool(_), ArrayData::Bool(_)) => {
+            isin_hashable(&flatten_to_bool_vec(element), &flatten_to_bool_vec(test_elements))
+        }
+        (ArrayData::Int32(_), ArrayData::Int32(_)) => {
+            isin_hashable(&flatten_to_int32_vec(element), &flatten_to_int32_vec(test_elements))
+        }
+        (ArrayData::Int64(_), ArrayData::Int64(_)) => {
+            isin_hashable(&flatten_to_int64_vec(element), &flatten_to_int64_vec(test_elements))
+        }
+        (ArrayData::Float32(_), ArrayData::Float32(_)) => {
+            isin_float32(&flatten_to_float32_vec(element), &flatten_to_float32_vec(test_elements))
+        }
+        (ArrayData::Float64(_), ArrayData::Float64(_)) => {
+            isin_float64(&flatten_to_float64_vec(element), &flatten_to_float64_vec(test_elements))
+        }
+        (ArrayData::Str(_), ArrayData::Str(_)) => {
+            isin_string(&flatten_to_string_vec(element), &flatten_to_string_vec(test_elements))
+        }
+        _ => isin_float64(&flatten_to_float64_vec(element), &flatten_to_float64_vec(test_elements)),
+    };
 
     NdArray::from_data(ArrayData::Bool(
         ArrayD::from_shape_vec(IxDyn(&shape), result).expect("shape matches"),

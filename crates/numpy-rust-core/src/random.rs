@@ -145,6 +145,559 @@ mod inner {
             Ok(NdArray::from_data(ArrayData::Float64(arr)))
         }
 
+        pub fn exponential(&mut self, scale: f64, shape: &[usize]) -> Result<NdArray> {
+            if scale < 0.0 {
+                return Err(NumpyError::ValueError(
+                    "scale < 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| -scale * (1.0 - self.random_scalar()).ln())
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn weibull(&mut self, a: f64, shape: &[usize]) -> Result<NdArray> {
+            if a <= 0.0 {
+                return Err(NumpyError::ValueError(
+                    "a <= 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| (-(1.0 - self.random_scalar()).ln()).powf(1.0 / a))
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn rayleigh(&mut self, scale: f64, shape: &[usize]) -> Result<NdArray> {
+            if scale < 0.0 {
+                return Err(NumpyError::ValueError(
+                    "scale < 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| scale * (-2.0 * (1.0 - self.random_scalar()).ln()).sqrt())
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn power(&mut self, a: f64, shape: &[usize]) -> Result<NdArray> {
+            if a <= 0.0 {
+                return Err(NumpyError::ValueError(
+                    "a <= 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| self.random_scalar().powf(1.0 / a))
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn pareto(&mut self, a: f64, shape: &[usize]) -> Result<NdArray> {
+            if a <= 0.0 {
+                return Err(NumpyError::ValueError(
+                    "a <= 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| (1.0 - self.random_scalar()).powf(-1.0 / a) - 1.0)
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn laplace(&mut self, loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+            if scale < 0.0 {
+                return Err(NumpyError::ValueError(
+                    "scale < 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| {
+                    let shifted = self.random_scalar() - 0.5;
+                    if shifted == 0.0 {
+                        loc
+                    } else {
+                        let sign = if shifted > 0.0 { 1.0 } else { -1.0 };
+                        loc - scale * sign * (1.0 - 2.0 * shifted.abs()).ln()
+                    }
+                })
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn logistic(&mut self, loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+            if scale < 0.0 {
+                return Err(NumpyError::ValueError(
+                    "scale < 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| {
+                    let u = self.random_scalar().clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+                    loc + scale * (u / (1.0 - u)).ln()
+                })
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn gumbel(&mut self, loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+            if scale < 0.0 {
+                return Err(NumpyError::ValueError(
+                    "scale < 0".into(),
+                ));
+            }
+            let size: usize = shape.iter().product();
+            let data: Vec<f64> = (0..size)
+                .map(|_| {
+                    let u = self.random_scalar().clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+                    loc - scale * (-(u.ln())).ln()
+                })
+                .collect();
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        fn gamma_scalar(&mut self, shape: f64, scale: f64) -> Result<f64> {
+            if shape <= 0.0 {
+                return Err(NumpyError::ValueError("shape <= 0".into()));
+            }
+            if scale < 0.0 {
+                return Err(NumpyError::ValueError("scale < 0".into()));
+            }
+
+            let (alpha, boost) = if shape < 1.0 {
+                let u = self.random_scalar().clamp(f64::MIN_POSITIVE, 1.0);
+                (shape + 1.0, u.powf(1.0 / shape))
+            } else {
+                (shape, 1.0)
+            };
+
+            let d = alpha - 1.0 / 3.0;
+            let c = 1.0 / (9.0 * d).sqrt();
+            loop {
+                let x = self.standard_normal_scalar();
+                let v = (1.0 + c * x).powi(3);
+                if v <= 0.0 {
+                    continue;
+                }
+                let u = self.random_scalar();
+                if u < 1.0 - 0.0331 * x.powi(4) {
+                    return Ok(d * v * scale * boost);
+                }
+                if u.ln() < 0.5 * x * x + d * (1.0 - v + v.ln()) {
+                    return Ok(d * v * scale * boost);
+                }
+            }
+        }
+
+        pub fn gamma(&mut self, shape_param: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                data.push(self.gamma_scalar(shape_param, scale)?);
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn beta(&mut self, a: f64, b: f64, shape: &[usize]) -> Result<NdArray> {
+            if a <= 0.0 {
+                return Err(NumpyError::ValueError("a <= 0".into()));
+            }
+            if b <= 0.0 {
+                return Err(NumpyError::ValueError("b <= 0".into()));
+            }
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                let x = self.gamma_scalar(a, 1.0)?;
+                let y = self.gamma_scalar(b, 1.0)?;
+                data.push(x / (x + y));
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn dirichlet(&mut self, alpha: &[f64], sample_shape: &[usize]) -> Result<NdArray> {
+            if alpha.is_empty() {
+                return Err(NumpyError::ValueError("alpha must be non-empty".into()));
+            }
+            for &a in alpha {
+                if a <= 0.0 {
+                    return Err(NumpyError::ValueError("alpha <= 0".into()));
+                }
+            }
+
+            let samples: usize = if sample_shape.is_empty() {
+                1
+            } else {
+                sample_shape.iter().product()
+            };
+            let k = alpha.len();
+            let mut data = Vec::with_capacity(samples * k);
+            for _ in 0..samples {
+                let mut draws = Vec::with_capacity(k);
+                let mut total = 0.0;
+                for &a in alpha {
+                    let g = self.gamma_scalar(a, 1.0)?;
+                    total += g;
+                    draws.push(g);
+                }
+                for g in draws {
+                    data.push(g / total);
+                }
+            }
+
+            let mut shape = sample_shape.to_vec();
+            shape.push(k);
+            let arr = ArrayD::from_shape_vec(IxDyn(&shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        fn poisson_scalar(&mut self, lam: f64) -> Result<f64> {
+            if lam < 0.0 {
+                return Err(NumpyError::ValueError("lam < 0".into()));
+            }
+            let l = (-lam).exp();
+            let mut k = 0usize;
+            let mut p = 1.0f64;
+            loop {
+                k += 1;
+                p *= self.random_scalar();
+                if p <= l {
+                    return Ok((k - 1) as f64);
+                }
+            }
+        }
+
+        pub fn poisson(&mut self, lam: f64, shape: &[usize]) -> Result<NdArray> {
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                data.push(self.poisson_scalar(lam)?);
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        fn binomial_scalar(&mut self, n: i64, p: f64) -> Result<f64> {
+            if n < 0 {
+                return Err(NumpyError::ValueError("n < 0".into()));
+            }
+            if !(0.0..=1.0).contains(&p) {
+                return Err(NumpyError::ValueError("p < 0, p > 1 or p is NaN".into()));
+            }
+            let mut successes = 0i64;
+            for _ in 0..n {
+                if self.random_scalar() < p {
+                    successes += 1;
+                }
+            }
+            Ok(successes as f64)
+        }
+
+        pub fn binomial(&mut self, n: i64, p: f64, shape: &[usize]) -> Result<NdArray> {
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                data.push(self.binomial_scalar(n, p)?);
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        fn geometric_scalar(&mut self, p: f64) -> Result<f64> {
+            if !(0.0 < p && p <= 1.0) {
+                return Err(NumpyError::ValueError("p <= 0, p > 1 or p is NaN".into()));
+            }
+            let u = self.random_scalar().clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+            Ok((u.ln() / (1.0 - p).ln()).ceil())
+        }
+
+        pub fn geometric(&mut self, p: f64, shape: &[usize]) -> Result<NdArray> {
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                data.push(self.geometric_scalar(p)?);
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn multinomial(
+            &mut self,
+            n: i64,
+            pvals: &[f64],
+            sample_shape: &[usize],
+        ) -> Result<NdArray> {
+            if n < 0 {
+                return Err(NumpyError::ValueError("n < 0".into()));
+            }
+            if pvals.is_empty() {
+                return Err(NumpyError::ValueError("pvals must not be empty".into()));
+            }
+            if pvals.iter().any(|&p| p < 0.0 || p.is_nan()) {
+                return Err(NumpyError::ValueError("pvals < 0, pvals > 1 or pvals contains NaNs".into()));
+            }
+
+            let samples: usize = if sample_shape.is_empty() {
+                1
+            } else {
+                sample_shape.iter().product()
+            };
+            let k = pvals.len();
+            let mut out = Vec::with_capacity(samples * k);
+
+            for _ in 0..samples {
+                let mut counts = vec![0_i64; k];
+                for _ in 0..n {
+                    let r = self.random_scalar();
+                    let mut cumsum = 0.0;
+                    let mut placed = false;
+                    for (j, p) in pvals.iter().enumerate() {
+                        cumsum += *p;
+                        if r < cumsum {
+                            counts[j] += 1;
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if !placed {
+                        counts[k - 1] += 1;
+                    }
+                }
+                out.extend(counts);
+            }
+
+            let mut shape = sample_shape.to_vec();
+            shape.push(k);
+            let arr = ArrayD::from_shape_vec(IxDyn(&shape), out).unwrap();
+            Ok(NdArray::from_data(ArrayData::Int64(arr)))
+        }
+
+        pub fn negative_binomial(&mut self, n: i64, p: f64, shape: &[usize]) -> Result<NdArray> {
+            if n < 0 {
+                return Err(NumpyError::ValueError("n < 0".into()));
+            }
+            if !(0.0..=1.0).contains(&p) {
+                return Err(NumpyError::ValueError("p < 0, p > 1 or p is NaN".into()));
+            }
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                let mut failures = 0_i64;
+                let mut successes = 0_i64;
+                while successes < n {
+                    if self.random_scalar() < p {
+                        successes += 1;
+                    } else {
+                        failures += 1;
+                    }
+                }
+                data.push(failures as f64);
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn hypergeometric(
+            &mut self,
+            ngood: i64,
+            nbad: i64,
+            nsample: i64,
+            shape: &[usize],
+        ) -> Result<NdArray> {
+            if ngood < 0 || nbad < 0 || nsample < 0 {
+                return Err(NumpyError::ValueError("parameters must be non-negative".into()));
+            }
+            if nsample > ngood + nbad {
+                return Err(NumpyError::ValueError("nsample > ngood + nbad".into()));
+            }
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                let mut count = 0_i64;
+                let mut rg = ngood as f64;
+                let mut rt = (ngood + nbad) as f64;
+                for _ in 0..nsample {
+                    if self.random_scalar() < (rg / rt) {
+                        count += 1;
+                        rg -= 1.0;
+                    }
+                    rt -= 1.0;
+                }
+                data.push(count as f64);
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn triangular(
+            &mut self,
+            left: f64,
+            mode: f64,
+            right: f64,
+            shape: &[usize],
+        ) -> Result<NdArray> {
+            if !(left <= mode && mode <= right) || left == right {
+                return Err(NumpyError::ValueError(
+                    "left <= mode <= right and left < right required".into(),
+                ));
+            }
+            let fc = (mode - left) / (right - left);
+            let size: usize = shape.iter().product();
+            let mut data = Vec::with_capacity(size);
+            for _ in 0..size {
+                let u = self.random_scalar();
+                if u < fc {
+                    data.push(left + ((right - left) * (mode - left) * u).sqrt());
+                } else {
+                    data.push(right - ((right - left) * (right - mode) * (1.0 - u)).sqrt());
+                }
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), data).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn multivariate_normal_from_cholesky(
+            &mut self,
+            mean: &[f64],
+            chol: &[f64],
+            sample_shape: &[usize],
+        ) -> Result<NdArray> {
+            let n = mean.len();
+            if n == 0 {
+                return Err(NumpyError::ValueError("mean must be non-empty".into()));
+            }
+            if chol.len() != n * n {
+                return Err(NumpyError::ValueError(
+                    "cholesky factor has incompatible shape".into(),
+                ));
+            }
+            let samples: usize = if sample_shape.is_empty() {
+                1
+            } else {
+                sample_shape.iter().product()
+            };
+            let mut out = Vec::with_capacity(samples * n);
+            let mut z = vec![0.0; n];
+            for _ in 0..samples {
+                for zi in &mut z {
+                    *zi = self.standard_normal_scalar();
+                }
+                for i in 0..n {
+                    let mut val = mean[i];
+                    let row = &chol[i * n..(i + 1) * n];
+                    for j in 0..n {
+                        val += row[j] * z[j];
+                    }
+                    out.push(val);
+                }
+            }
+            let mut shape = sample_shape.to_vec();
+            shape.push(n);
+            let arr = ArrayD::from_shape_vec(IxDyn(&shape), out).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn vonmises(&mut self, mu: f64, kappa: f64, shape: &[usize]) -> Result<NdArray> {
+            if kappa < 0.0 {
+                return Err(NumpyError::ValueError("kappa < 0".into()));
+            }
+            let size: usize = shape.iter().product();
+            let mut out = Vec::with_capacity(size);
+            if kappa < 1e-6 {
+                for _ in 0..size {
+                    out.push(-std::f64::consts::PI + 2.0 * std::f64::consts::PI * self.random_scalar());
+                }
+            } else {
+                let tau = 1.0 + (1.0 + 4.0 * kappa * kappa).sqrt();
+                let rho = (tau - (2.0 * tau).sqrt()) / (2.0 * kappa);
+                let r = (1.0 + rho * rho) / (2.0 * rho);
+                while out.len() < size {
+                    let u1 = self.random_scalar();
+                    let z = (std::f64::consts::PI * u1).cos();
+                    let f = (1.0 + r * z) / (r + z);
+                    let c = kappa * (r - f);
+                    let u2 = self.random_scalar();
+                    if u2 < c * (2.0 - c) || u2 <= c * (1.0 - c).exp() {
+                        let u3 = self.random_scalar();
+                        let theta = mu
+                            + if u3 > 0.5 { 1.0 } else { -1.0 } * f.acos();
+                        out.push(theta);
+                    }
+                }
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), out).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn wald(&mut self, mean: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+            if mean <= 0.0 || scale <= 0.0 {
+                return Err(NumpyError::ValueError("mean <= 0 or scale <= 0".into()));
+            }
+            let size: usize = shape.iter().product();
+            let mut out = Vec::with_capacity(size);
+            for _ in 0..size {
+                let v = self.standard_normal_scalar();
+                let y = v * v;
+                let x = mean
+                    + (mean * mean * y) / (2.0 * scale)
+                    - (mean / (2.0 * scale))
+                        * (4.0 * mean * scale * y + mean * mean * y * y).sqrt();
+                let u = self.random_scalar();
+                if u <= mean / (mean + x) {
+                    out.push(x);
+                } else {
+                    out.push(mean * mean / x);
+                }
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), out).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
+        pub fn zipf(&mut self, a: f64, shape: &[usize]) -> Result<NdArray> {
+            if a <= 1.0 {
+                return Err(NumpyError::ValueError("a <= 1".into()));
+            }
+            let size: usize = shape.iter().product();
+            let am1 = a - 1.0;
+            let b = 2.0_f64.powf(am1);
+            let mut out = Vec::with_capacity(size);
+            while out.len() < size {
+                let u = self.random_scalar();
+                if u <= 0.0 {
+                    continue;
+                }
+                let v = self.random_scalar();
+                let mut x = (u.powf(-1.0 / am1)) as i64;
+                if x < 1 {
+                    x = 1;
+                }
+                let xf = x as f64;
+                let t = (1.0 + 1.0 / xf).powf(am1);
+                if v * xf * (t - 1.0) / (b - 1.0) <= t / b {
+                    out.push(xf);
+                }
+            }
+            let arr = ArrayD::from_shape_vec(IxDyn(shape), out).unwrap();
+            Ok(NdArray::from_data(ArrayData::Float64(arr)))
+        }
+
         pub fn choice(&mut self, a: &NdArray, size: usize, replace: bool) -> Result<NdArray> {
             if a.ndim() != 1 {
                 return Err(NumpyError::ValueError("choice requires a 1-D array".into()));
@@ -253,6 +806,104 @@ mod inner {
         with_rng(|rng| rng.uniform(low, high, shape))
     }
 
+    /// Generate an array of exponential-distributed values.
+    pub fn exponential(scale: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.exponential(scale, shape))
+    }
+
+    pub fn weibull(a: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.weibull(a, shape))
+    }
+
+    pub fn rayleigh(scale: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.rayleigh(scale, shape))
+    }
+
+    pub fn power(a: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.power(a, shape))
+    }
+
+    pub fn pareto(a: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.pareto(a, shape))
+    }
+
+    pub fn laplace(loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.laplace(loc, scale, shape))
+    }
+
+    pub fn logistic(loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.logistic(loc, scale, shape))
+    }
+
+    pub fn gumbel(loc: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.gumbel(loc, scale, shape))
+    }
+
+    pub fn gamma(shape_param: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.gamma(shape_param, scale, shape))
+    }
+
+    pub fn beta(a: f64, b: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.beta(a, b, shape))
+    }
+
+    pub fn dirichlet(alpha: &[f64], sample_shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.dirichlet(alpha, sample_shape))
+    }
+
+    pub fn poisson(lam: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.poisson(lam, shape))
+    }
+
+    pub fn binomial(n: i64, p: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.binomial(n, p, shape))
+    }
+
+    pub fn geometric(p: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.geometric(p, shape))
+    }
+
+    pub fn multinomial(n: i64, pvals: &[f64], sample_shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.multinomial(n, pvals, sample_shape))
+    }
+
+    pub fn negative_binomial(n: i64, p: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.negative_binomial(n, p, shape))
+    }
+
+    pub fn hypergeometric(
+        ngood: i64,
+        nbad: i64,
+        nsample: i64,
+        shape: &[usize],
+    ) -> Result<NdArray> {
+        with_rng(|rng| rng.hypergeometric(ngood, nbad, nsample, shape))
+    }
+
+    pub fn triangular(left: f64, mode: f64, right: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.triangular(left, mode, right, shape))
+    }
+
+    pub fn multivariate_normal_from_cholesky(
+        mean: &[f64],
+        chol: &[f64],
+        sample_shape: &[usize],
+    ) -> Result<NdArray> {
+        with_rng(|rng| rng.multivariate_normal_from_cholesky(mean, chol, sample_shape))
+    }
+
+    pub fn vonmises(mu: f64, kappa: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.vonmises(mu, kappa, shape))
+    }
+
+    pub fn wald(mean: f64, scale: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.wald(mean, scale, shape))
+    }
+
+    pub fn zipf(a: f64, shape: &[usize]) -> Result<NdArray> {
+        with_rng(|rng| rng.zipf(a, shape))
+    }
+
     /// Choose random elements from a 1-D array.
     /// Like `numpy.random.choice(a, size, replace)`.
     pub fn choice(a: &NdArray, size: usize, replace: bool) -> Result<NdArray> {
@@ -275,9 +926,13 @@ mod tests {
 
         let mut guard = GLOBAL_RNG.lock().unwrap();
         *guard = Some(StatefulRng::new(Some(99)));
-        let vals_a: Vec<f64> = (0..5).map(|_| guard.as_mut().unwrap().random_scalar()).collect();
+        let vals_a: Vec<f64> = (0..5)
+            .map(|_| guard.as_mut().unwrap().random_scalar())
+            .collect();
         *guard = Some(StatefulRng::new(Some(99)));
-        let vals_b: Vec<f64> = (0..5).map(|_| guard.as_mut().unwrap().random_scalar()).collect();
+        let vals_b: Vec<f64> = (0..5)
+            .map(|_| guard.as_mut().unwrap().random_scalar())
+            .collect();
         drop(guard);
 
         assert_eq!(vals_a, vals_b);

@@ -143,15 +143,6 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         if isinstance(v, tuple): return float(v[1])
         return float(v.imag) if hasattr(v, 'imag') else 0.0
 
-    def _apply_exact_x_overrides(result_arr, x_values, xp_values, fp_values):
-        result_list = result_arr.flatten().tolist()
-        for i, xi in enumerate(x_values):
-            for j, xpj in enumerate(xp_values):
-                if xi == xpj:
-                    result_list[i] = fp_values[j]
-                    break
-        return array(result_list)
-
     def _rebuild_complex_result(values, shape=None):
         flat_values = list(values)
         result_arr = zeros((len(flat_values),), dtype='complex128')
@@ -266,46 +257,16 @@ def interp(x, xp, fp, left=None, right=None, period=None):
                 return result
 
     if period is not None:
-        # Sort xp/fp by xp modulo period, then interpolate
-        x_flat_list = x_flat.tolist()
-        xp_list = xp_arr.tolist()
         if is_complex:
             fp_re = [_complex_real(v) for v in fp_arr.flatten().tolist()]
             fp_im = [_complex_imag(v) for v in fp_arr.flatten().tolist()]
-        else:
-            fp_list = [float(v) for v in fp_arr.flatten().tolist()]
-
-        # Normalize x to [0, period), then sort and add wrap-around points
-        # Build sorted (xp_norm, fp) pairs
-        pairs = list(zip(xp_list, fp_re if is_complex else fp_list))
-        if is_complex:
-            pairs_im = list(zip(xp_list, fp_im))
-        # Normalize xp to [0, period)
-        pairs = [((xpi % period), fpi) for xpi, fpi in pairs]
-        pairs.sort(key=lambda kv: kv[0])
-        if is_complex:
-            pairs_im = [((xpi % period), fpi) for xpi, fpi in pairs_im]
-            pairs_im.sort(key=lambda kv: kv[0])
-
-        # Add wrap-around: append first point at period and last point at -period
-        pairs = [(pairs[-1][0] - period, pairs[-1][1])] + pairs + [(pairs[0][0] + period, pairs[0][1])]
-        if is_complex:
-            pairs_im = [(pairs_im[-1][0] - period, pairs_im[-1][1])] + pairs_im + [(pairs_im[0][0] + period, pairs_im[0][1])]
-
-        xp_sorted = array([p[0] for p in pairs])
-        fp_sorted = array([p[1] for p in pairs])
-        x_norm = array([(xi % period) for xi in x_flat_list])
-
-        result_re = _nat.interp(x_norm, xp_sorted, fp_sorted)
-        if is_complex:
-            xp_sorted_im = array([p[0] for p in pairs_im])
-            fp_sorted_im = array([p[1] for p in pairs_im])
-            result_im = _nat.interp(x_norm, xp_sorted_im, fp_sorted_im)
+            result_re = _nat.interp_periodic(x_flat, xp_arr, asarray(fp_re, dtype='float64'), period)
+            result_im = _nat.interp_periodic(x_flat, xp_arr, asarray(fp_im, dtype='float64'), period)
             result = zeros(result_re.shape, dtype='complex128')
             result.real = result_re
             result.imag = result_im
         else:
-            result = result_re
+            result = _nat.interp_periodic(x_flat, xp_arr, fp_arr, period)
     elif is_complex:
         # Interpolate real and imag parts separately
         fp_re_arr = asarray([_complex_real(v) for v in fp_arr.flatten().tolist()])
@@ -343,25 +304,16 @@ def interp(x, xp, fp, left=None, right=None, period=None):
                                              v.imag if hasattr(v, 'imag') else 0.0)
             result = _rebuild_complex_result(result_list, result.shape)
     else:
-        result = _nat.interp(x_flat, xp_arr, fp_arr)
-        result = _apply_exact_x_overrides(
-            result,
-            x_flat.tolist(),
-            xp_arr.tolist(),
-            fp_arr.flatten().tolist(),
-        )
         if left is not None or right is not None:
-            x_list = x_flat.tolist()
-            xp_list = xp_arr.tolist()
-            result_list = result.flatten().tolist()
-            xp_min = _builtin_min(xp_list)
-            xp_max = _builtin_max(xp_list)
-            for i, xi in enumerate(x_list):
-                if left is not None and xi < xp_min:
-                    result_list[i] = float(left)
-                if right is not None and xi > xp_max:
-                    result_list[i] = float(right)
-            result = array(result_list)
+            result = _nat.interp_with_options(
+                x_flat,
+                xp_arr,
+                fp_arr,
+                None if left is None else float(left),
+                None if right is None else float(right),
+            )
+        else:
+            result = _nat.interp(x_flat, xp_arr, fp_arr)
 
     # Restore original shape
     if x_is_scalar:

@@ -1774,11 +1774,52 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
 
     w_arr = asarray(weights, dtype='float64') if not isinstance(weights, ndarray) else weights.astype('float64')
 
+    def _can_use_native_weighted_path():
+        if isinstance(axis, list):
+            return False
+        dt = str(a.dtype)
+        if dt.startswith(("datetime64", "timedelta64")):
+            return False
+        if getattr(a.dtype, "kind", "") == "O":
+            return False
+        return True
+
     def _wrap_scalar_like(value):
         if isinstance(value, ndarray):
             return _extract_zero_dim_scalar(value)
         dt = _weighted_quantile_result_dtype(a)
         return _extract_zero_dim_scalar(_scalar_result(value, a, dt))
+
+    if _can_use_native_weighted_path():
+        native_results = []
+        native_axis = axis if not isinstance(axis, list) else None
+        native_ok = True
+        for qi in q_flat:
+            try:
+                native_results.append(
+                    _native.weighted_inverted_cdf_quantile(a, float(qi), w_arr, native_axis)
+                )
+            except Exception:
+                native_ok = False
+                break
+        if native_ok:
+            if q_is_scalar:
+                result = native_results[0]
+            else:
+                result = _stack_quantile_results(
+                    a,
+                    q_arr,
+                    native_results,
+                    keepdims=keepdims,
+                    orig_axis=orig_axis,
+                    target_dtype=_weighted_quantile_result_dtype(a),
+                )
+            if q_is_scalar and keepdims:
+                result = _apply_keepdims(result, a, orig_axis)
+            if out is not None:
+                out[...] = result
+                return out
+            return result
 
     if axis is None:
         if tuple(w_arr.shape) != tuple(a.shape):
@@ -3146,6 +3187,14 @@ def gradient(f, *varargs, axis=None, edge_order=1):
         raise ValueError("'edge_order' must be 1 or 2")
     axes, single_axis = _resolve_gradient_axes(axis, f.ndim)
     spacings = _resolve_gradient_spacings(varargs, axes, f.shape)
+    if isinstance(f, ndarray) and not isinstance(f, _ObjectArray) and not _is_temporal_dtype(str(f.dtype)):
+        try:
+            native_result = _native.gradient(f, spacings, int(edge_order), axes)
+            if single_axis:
+                return native_result[0]
+            return tuple(native_result)
+        except Exception:
+            pass
     if isinstance(f, _ObjectArray) and _is_temporal_dtype(str(f.dtype)) and f.ndim == 1 and axes == [0] and len(varargs) == 0:
         in_dt = str(f.dtype)
         kind, unit, _, _ = _temporal_dtype_info(in_dt)

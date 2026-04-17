@@ -28,8 +28,15 @@ fn spacing_deltas(x: Option<&NdArray>, dx: f64, n: usize) -> Vec<f64> {
 /// x: x-coordinates at which to evaluate
 /// xp: x-coordinates of data points (must be sorted ascending)
 /// fp: y-coordinates of data points (same length as xp)
-/// Values outside xp range are clamped to fp[0] and fp[last].
-pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
+/// Values outside xp range are clamped to fp[0] and fp[last] unless
+/// left/right overrides are provided.
+pub fn interp_with_options(
+    x: &NdArray,
+    xp: &NdArray,
+    fp: &NdArray,
+    left: Option<f64>,
+    right: Option<f64>,
+) -> Result<NdArray> {
     let x_arr = flatten_to_float64(x);
     let xp_arr = flatten_to_float64(xp);
     let fp_arr = flatten_to_float64(fp);
@@ -60,16 +67,20 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
             // xi <= xp_slice[0] → left boundary; NaN in xp[0] gives NaN
             if xp_slice[0].is_nan() {
                 result.push(f64::NAN);
-            } else {
+            } else if xi == xp_slice[0] {
                 result.push(fp_slice[0]);
+            } else {
+                result.push(left.unwrap_or(fp_slice[0]));
             }
         } else if idx == xp_slice.len() {
             // xi >= xp_slice[last] → right boundary; NaN in xp[-1] gives NaN
             let last = xp_slice.len() - 1;
             if xp_slice[last].is_nan() {
                 result.push(f64::NAN);
+            } else if xi == xp_slice[last] {
+                result.push(fp_slice[last]);
             } else {
-                result.push(*fp_slice.last().unwrap());
+                result.push(right.unwrap_or(*fp_slice.last().unwrap()));
             }
         } else {
             let lo = idx - 1;
@@ -112,6 +123,61 @@ pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
     }
 
     Ok(NdArray::from_vec(result))
+}
+
+pub fn interp(x: &NdArray, xp: &NdArray, fp: &NdArray) -> Result<NdArray> {
+    interp_with_options(x, xp, fp, None, None)
+}
+
+pub fn interp_periodic(x: &NdArray, xp: &NdArray, fp: &NdArray, period: f64) -> Result<NdArray> {
+    if period == 0.0 {
+        return Err(NumpyError::ValueError(
+            "period must be a non-zero value".into(),
+        ));
+    }
+
+    let x_arr = flatten_to_float64(x);
+    let xp_arr = flatten_to_float64(xp);
+    let fp_arr = flatten_to_float64(fp);
+
+    if xp_arr.len() != fp_arr.len() {
+        return Err(NumpyError::ValueError(
+            "xp and fp must have same length".into(),
+        ));
+    }
+    if xp_arr.is_empty() {
+        return Err(NumpyError::ValueError("xp must not be empty".into()));
+    }
+
+    let mut pairs: Vec<(f64, f64)> = xp_arr
+        .iter()
+        .copied()
+        .zip(fp_arr.iter().copied())
+        .map(|(xp, fp)| (xp.rem_euclid(period), fp))
+        .collect();
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let first = pairs[0];
+    let last = pairs[pairs.len() - 1];
+
+    let mut xp_periodic = Vec::with_capacity(pairs.len() + 2);
+    let mut fp_periodic = Vec::with_capacity(pairs.len() + 2);
+    xp_periodic.push(last.0 - period);
+    fp_periodic.push(last.1);
+    for (xp, fp) in &pairs {
+        xp_periodic.push(*xp);
+        fp_periodic.push(*fp);
+    }
+    xp_periodic.push(first.0 + period);
+    fp_periodic.push(first.1);
+
+    let x_norm: Vec<f64> = x_arr.iter().map(|&v| v.rem_euclid(period)).collect();
+
+    interp(
+        &NdArray::from_vec(x_norm),
+        &NdArray::from_vec(xp_periodic),
+        &NdArray::from_vec(fp_periodic),
+    )
 }
 
 /// Compute numerical gradient using central differences.
