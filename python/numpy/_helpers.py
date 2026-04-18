@@ -569,9 +569,17 @@ class _ObjectArray:
     def _to_bool_array(self, data):
         return _native.array([1.0 if x else 0.0 for x in data]).astype("bool")
 
+    def _coerce_other_data(self, other, *, allow_iter=False):
+        odata = _flat_arraylike_data(other)
+        if odata is not None:
+            return odata
+        if allow_iter and hasattr(other, '__iter__') and not isinstance(other, (str, bytes)):
+            return list(other)
+        return None
+
     def _broadcast_other(self, other):
         """Get other's data list, broadcast scalar/single-element to match self size."""
-        odata = _flat_arraylike_data(other)
+        odata = self._coerce_other_data(other)
         if odata is not None:
             if len(odata) == 1 and len(self._data) > 1:
                 odata = odata * len(self._data)
@@ -691,15 +699,12 @@ class _ObjectArray:
             return arr
         return _ObjectArray(result, self._dtype)
     def __pow__(self, other):
-        other_list = _flat_arraylike_data(other)
+        other_list = self._coerce_other_data(other, allow_iter=True)
         if other_list is not None:
-            return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other_list)], self._dtype)
-        if hasattr(other, '__iter__') and not isinstance(other, str):
-            other_list = list(other) if not isinstance(other, list) else other
             return _ObjectArray([_complex_pow(a, b) for a, b in zip(self._data, other_list)], self._dtype)
         return _ObjectArray([_complex_pow(x, other) for x in self._data], self._dtype)
     def __rpow__(self, other):
-        other_list = _flat_arraylike_data(other)
+        other_list = self._coerce_other_data(other, allow_iter=True)
         if other_list is not None:
             return _ObjectArray([_complex_pow(b, a) for a, b in zip(self._data, other_list)], self._dtype)
         return _ObjectArray([_complex_pow(other, x) for x in self._data], self._dtype)
