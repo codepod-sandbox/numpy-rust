@@ -1,5 +1,6 @@
 """Array utility functions for numpy-rust."""
 from _numpy_native import ndarray
+from ._helpers import _flat_arraylike_data
 from ._creation import array, asarray
 
 __all__ = [
@@ -64,8 +65,8 @@ def take_along_axis(arr, indices, axis):
         lead *= s
     arr_flat = arr_m.reshape((lead, n_axis))
     ind_flat = ind_m.reshape((lead, ind_m.shape[-1]))
-    arr_list = arr_flat.tolist()
-    ind_list = ind_flat.tolist()
+    arr_list = [_flat_arraylike_data(arr_flat[i]) for i in range(lead)]
+    ind_list = [_flat_arraylike_data(ind_flat[i]) for i in range(lead)]
     result = []
     for i in range(lead):
         row = arr_list[i]
@@ -106,9 +107,9 @@ def put_along_axis(arr, indices, values, axis):
     for s in arr_m.shape[:-1]:
         lead *= s
     n_axis = arr_m.shape[-1]
-    arr_flat = arr_m.reshape((lead, n_axis)).tolist()
-    ind_flat = ind_m.reshape((lead, ind_m.shape[-1])).tolist()
-    val_flat = val_m.reshape((lead, val_m.shape[-1])).tolist()
+    arr_flat = [_flat_arraylike_data(arr_m.reshape((lead, n_axis))[i]) for i in range(lead)]
+    ind_flat = [_flat_arraylike_data(ind_m.reshape((lead, ind_m.shape[-1]))[i]) for i in range(lead)]
+    val_flat = [_flat_arraylike_data(val_m.reshape((lead, val_m.shape[-1]))[i]) for i in range(lead)]
     for i in range(lead):
         for j in range(len(ind_flat[i])):
             arr_flat[i][int(ind_flat[i][j])] = val_flat[i][j]
