@@ -425,9 +425,9 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
         _out_dtype = 'bool' if _is_bool else (_temporal_diff_dtype or _in_dtype)
         return zeros(new_shape, dtype=_out_dtype)
     if isinstance(a, _ObjectArray) and _temporal_diff_dtype is not None and a.ndim == 1:
-        ints = array(a.tolist(), dtype=_in_dtype).astype('int64')
+        ints = array(_flat_membership_data(a), dtype=_in_dtype).astype('int64')
         diff_ints = _native.diff(ints, n, 0).astype('int64')
-        return _make_temporal_array(diff_ints.tolist(), _temporal_diff_dtype)
+        return _make_temporal_array(_flat_membership_data(diff_ints), _temporal_diff_dtype)
     result = _native.diff(a, n, _axis)
     if _is_bool:
         result = result.astype('bool')
@@ -1688,7 +1688,7 @@ def _apply_nan_mask(result, a, axis):
         has_nan = asarray(has_nan)
     # If has_nan is a scalar
     if has_nan.ndim == 0:
-        if bool(has_nan.tolist()):
+        if bool(_extract_zero_dim_scalar(has_nan)):
             if isinstance(result, ndarray):
                 if result.ndim == 0:
                     return asarray(float('nan'))
@@ -1983,7 +1983,13 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
                 for qi in q_flat:
                     rows = []
                     for i in range(a_2d.shape[0]):
-                        rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), _validate_weight_vector(w_2d[i]), qi))
+                        rows.append(
+                            _weighted_inverted_cdf_1d(
+                                _flat_membership_data(a_2d[i]),
+                                _validate_weight_vector(w_2d[i]),
+                                qi,
+                            )
+                        )
                     per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(result_shape))
                 results = per_q
         return _finalize_multi_q_results(
@@ -2010,7 +2016,7 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
             for qi in q_flat:
                 rows = []
                 for i in range(a_2d.shape[0]):
-                    rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), shared_weights, qi))
+                    rows.append(_weighted_inverted_cdf_1d(_flat_membership_data(a_2d[i]), shared_weights, qi))
                 per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(orig_shape))
             results = per_q
     else:
@@ -2028,7 +2034,13 @@ def _weighted_quantile_dispatch(a, q, axis, out, keepdims, *, q_scale, weights):
             for qi in q_flat:
                 rows = []
                 for i in range(a_2d.shape[0]):
-                    rows.append(_weighted_inverted_cdf_1d(a_2d[i].tolist(), _validate_weight_vector(w_2d[i]), qi))
+                    rows.append(
+                        _weighted_inverted_cdf_1d(
+                            _flat_membership_data(a_2d[i]),
+                            _validate_weight_vector(w_2d[i]),
+                            qi,
+                        )
+                    )
                 per_q.append(asarray(rows, dtype=_weighted_quantile_result_dtype(a)).reshape(orig_shape))
             results = per_q
 
@@ -2329,14 +2341,14 @@ def _cov_weighted(m, y=None, rowvar=True, bias=False, ddof=1, fweights=None, awe
         fw = array(fweights).flatten()
         if str(fw.dtype) not in ('int32', 'int64'):
             # Check if they're integer-valued
-            fw_list = fw.tolist()
+            fw_list = _flat_membership_data(fw)
             for v in fw_list:
                 if v != int(v):
                     raise TypeError("fweights must be integer")
             fw = fw.astype('int64')
         if fw.shape[0] != num_obs:
             raise RuntimeError("incompatible numbers of samples and fweights")
-        fw_list = fw.tolist()
+        fw_list = _flat_membership_data(fw)
         _fw_neg = False
         for _fwv in fw_list:
             if _fwv < 0:
@@ -2352,7 +2364,7 @@ def _cov_weighted(m, y=None, rowvar=True, bias=False, ddof=1, fweights=None, awe
             raise RuntimeError("cannot handle multidimensional aweights")
         if aw.shape[0] != num_obs:
             raise RuntimeError("incompatible numbers of samples and aweights")
-        aw_list = aw.tolist()
+        aw_list = _flat_membership_data(aw)
         _aw_neg = False
         for _awv in aw_list:
             if _awv < 0:
@@ -3205,7 +3217,7 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
     result_rows = []
     for row_idx in _builtin_range(outer_size):
         row = f_flat[row_idx]
-        row_list = row.tolist()
+        row_list = _flat_membership_data(row)
         if use_array_spacing:
             grad_row = _gradient_1d_nonuniform(row_list, dx_list, edge_order)
         else:
@@ -3247,7 +3259,7 @@ def gradient(f, *varargs, axis=None, edge_order=1):
         in_dt = str(f.dtype)
         kind, unit, _, _ = _temporal_dtype_info(in_dt)
         out_dt = in_dt if kind == 'm' else "timedelta64[{}]".format(unit)
-        ints = [int(array([v], dtype=in_dt).astype('int64')[0]) for v in f.tolist()]
+        ints = [int(array([v], dtype=in_dt).astype('int64')[0]) for v in _flat_membership_data(f)]
         n = len(ints)
         out = [0] * n
         for i in _builtin_range(1, n - 1):
