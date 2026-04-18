@@ -171,7 +171,7 @@ def indices(dimensions, dtype=None, sparse=False):
         grids.append(grid)
 
     # Force contiguous layout before stacking to avoid memory layout issues
-    contiguous = [asarray(g.tolist()) for g in grids]
+    contiguous = [asarray(_flat_arraylike_data(g)) for g in grids]
     result = stack(contiguous)
     if _dt is not None:
         result = result.astype(_dt)
@@ -205,7 +205,7 @@ def _coerce_histogram_edges(bins):
     if edges.ndim != 1:
         raise ValueError("bins must be 1d")
     edges = edges.flatten()
-    edge_list = edges.tolist()
+    edge_list = _flat_arraylike_data(edges)
     n_bins = len(edge_list) - 1
     if n_bins < 1:
         raise ValueError("bins must have at least 2 edges")
@@ -332,7 +332,7 @@ def _resolve_histogramdd_edges(bin_spec, values, range_spec):
         lo, hi = _builtin_min(values), _builtin_max(values)
     else:
         lo, hi = 0.0, 1.0
-    edge = linspace(lo, hi, num=nb + 1, endpoint=True).tolist()
+    edge = _flat_arraylike_data(linspace(lo, hi, num=nb + 1, endpoint=True))
     return edge, nb
 
 
@@ -477,7 +477,7 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
             hi = hi + 0.5
     if range is None:
         lo, hi = _histogram_range_from_flat(_flat_values(a), None)
-    edge_preview = linspace(lo, hi, num=bins + 1, endpoint=True).tolist()
+    edge_preview = _flat_arraylike_data(linspace(lo, hi, num=bins + 1, endpoint=True))
     for i in _builtin_range(len(edge_preview) - 1):
         if not (edge_preview[i] < edge_preview[i + 1]):
             raise ValueError("Too many bins for data range")
@@ -487,7 +487,7 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
         if range is None:
             lo, hi = _histogram_range_from_flat(flat, None)
         edges = linspace(lo, hi, num=bins + 1, endpoint=True)
-        edge_list = edges.tolist()
+        edge_list = _flat_arraylike_data(edges)
         count_dtype = _histogram_count_dtype(weights, density)
         w_list = _flat_weight_values(weights)
         counts = _histogram_accumulate_counts(flat, edge_list, count_dtype, w_list=w_list, lo=lo, hi=hi)
@@ -547,7 +547,7 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
     if sample.ndim == 1:
         sample = sample.reshape((-1, 1))
     n_samples, n_dims = sample.shape[0], sample.shape[1]
-    sample_cols = [sample[:, d].tolist() for d in _builtin_range(n_dims)] if n_samples > 0 else [[] for _ in _builtin_range(n_dims)]
+    sample_cols = [_flat_arraylike_data(sample[:, d]) for d in _builtin_range(n_dims)] if n_samples > 0 else [[] for _ in _builtin_range(n_dims)]
 
     _range = range
 
@@ -792,7 +792,7 @@ def unravel_index(indices, shape, order='C'):
             if indices == 0:
                 return ()
             raise ValueError("index {} is out of bounds for array with size 1".format(indices))
-        _idx_seq = list(indices) if not isinstance(indices, ndarray) else indices.tolist()
+        _idx_seq = list(indices) if not isinstance(indices, ndarray) else _flat_arraylike_data(indices)
         if not isinstance(_idx_seq, list):
             _idx_seq = [_idx_seq]
         for _v in _idx_seq:
@@ -809,7 +809,7 @@ def unravel_index(indices, shape, order='C'):
         if len(orig_shape) > 1:
             result = tuple(r.reshape(list(orig_shape)) for r in result)
         if scalar_input:
-            return tuple(int(r.tolist()[0]) if hasattr(r, 'tolist') else int(r) for r in result)
+            return tuple(int(_flat_arraylike_data(r)[0]) if isinstance(r, ndarray) else int(r) for r in result)
         return result
     # Validate bounds
     total_size = 1
@@ -849,7 +849,7 @@ def unravel_index(indices, shape, order='C'):
     result = tuple(result_cols)
     # When scalar input, return tuple of int scalars (not arrays)
     if scalar_input:
-        return tuple(int(r.tolist()[0]) if hasattr(r, 'tolist') else int(r) for r in result)
+        return tuple(int(_flat_arraylike_data(r)[0]) if isinstance(r, ndarray) else int(r) for r in result)
     return result
 
 
