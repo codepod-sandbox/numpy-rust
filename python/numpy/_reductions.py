@@ -2528,6 +2528,17 @@ def _is_complex_nan(v):
 
 def _nan_quantile_1d(vals_flat, q):
     """Compute quantile of a 1D array, ignoring NaNs. Returns scalar."""
+    if isinstance(vals_flat, ndarray):
+        kind = getattr(vals_flat.dtype, "kind", "")
+        if kind in ("f", "i", "u", "b"):
+            import numpy as _np
+
+            mask = _np.logical_not(_np.isnan(vals_flat))
+            filtered = vals_flat[mask]
+            if filtered.size == 0:
+                return float('nan')
+            return _extract_zero_dim_scalar(_native.quantile(filtered, q, None))
+
     # Check if this is a complex dtype
     is_complex = False
     if vals_flat.size > 0:
