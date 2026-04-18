@@ -1,7 +1,7 @@
 """FFT Python-level wrappers."""
 import _numpy_native as _native
 from _numpy_native import ndarray, fft as _fft_native
-from ._helpers import _builtin_range
+from ._helpers import _builtin_range, _flat_arraylike_data
 from ._creation import array, asarray
 from ._manipulation import stack, roll, apply_along_axis
 from ._math import conj
@@ -162,7 +162,7 @@ def _fft_fftn(a, s=None, axes=None):
         ax_list = axes if axes is not None else list(range(a.ndim))
         for ax in reversed(ax_list):
             # Apply 1D FFT along each axis using apply_along_axis
-            result = apply_along_axis(lambda x: array(fft.fft(array(x)).tolist()), ax, result)
+            result = apply_along_axis(lambda x: array(_flat_arraylike_data(fft.fft(array(x)))), ax, result)
         return result
 
 
@@ -187,7 +187,7 @@ def _fft_ifftn(a, s=None, axes=None):
         result = a
         ax_list = axes if axes is not None else list(range(a.ndim))
         for ax in reversed(ax_list):
-            result = apply_along_axis(lambda x: array(fft.ifft(array(x)).tolist()), ax, result)
+            result = apply_along_axis(lambda x: array(_flat_arraylike_data(fft.ifft(array(x)))), ax, result)
         return result
 
 
@@ -247,10 +247,10 @@ def _fft_rfft(a, n=None, axis=-1, norm=None):
     if a.ndim == 0:
         a = a.reshape([1])
     if a.ndim == 1:
-        return array(_rfft_1d_list(a.tolist(), n, norm))
+        return array(_rfft_1d_list(_flat_arraylike_data(a), n, norm))
     elif a.ndim == 2:
         ax = axis % 2 if axis >= 0 else 2 + axis  # normalize to 0 or 1
-        a_list = a.tolist()
+        a_list = [_flat_arraylike_data(a[i]) for i in _builtin_range(a.shape[0])]
         rows, cols = a.shape
         if ax == 1:
             # rfft along each row
@@ -273,11 +273,11 @@ def _fft_irfft(a, n=None, axis=-1, norm=None):
     """Inverse real FFT. Supports 1D, (M,2) complex, and (A,B,2) multi-D complex."""
     a = asarray(a)
     if a.ndim == 1:
-        re_parts = a.tolist()
+        re_parts = _flat_arraylike_data(a)
         return array(_irfft_1d_list(re_parts, [0.0] * len(re_parts), n, norm))
     elif a.ndim == 2 and a.shape[-1] == 2:
         # 1D complex: (M, 2) from rfft
-        data_list = a.tolist()
+        data_list = [_flat_arraylike_data(a[i]) for i in _builtin_range(a.shape[0])]
         re_parts = [row[0] for row in data_list]
         im_parts = [row[1] for row in data_list]
         return array(_irfft_1d_list(re_parts, im_parts, n, norm))
@@ -285,7 +285,7 @@ def _fft_irfft(a, n=None, axis=-1, norm=None):
         # Multi-D complex (A, B, 2): axis refers to the logical 2D complex axis
         logical_ndim = 2
         ax = axis if axis >= 0 else axis + logical_ndim
-        a_list = a.tolist()
+        a_list = [[_flat_arraylike_data(a[i, j]) for j in _builtin_range(a.shape[1])] for i in _builtin_range(a.shape[0])]
         dim0, dim1, _ = a.shape
         if ax == 1:
             # irfft along axis 1: apply to each a[i] of shape (dim1, 2)
@@ -308,7 +308,7 @@ def _fft_irfft(a, n=None, axis=-1, norm=None):
             return array(out)  # (N_out, dim1)
     else:
         # Fallback for other shapes
-        data_list = a.tolist()
+        data_list = _flat_arraylike_data(a)
         if isinstance(data_list, list) and len(data_list) > 0 and isinstance(data_list[0], list):
             re_parts = [row[0] if isinstance(row, list) else row for row in data_list]
             im_parts = [row[1] if isinstance(row, list) else 0.0 for row in data_list]
@@ -323,7 +323,7 @@ def _fft_rfft2(a, s=None, axes=(-2, -1), norm=None):
     a = asarray(a)
     if a.ndim < 2:
         return fft.rfft(a)
-    rows = a.tolist()
+    rows = [_flat_arraylike_data(a[i]) for i in _builtin_range(a.shape[0])]
     rfft_rows = []
     for row in rows:
         r = fft.rfft(array(row))
@@ -385,7 +385,7 @@ def _fft_ihfft(a, n=None, axis=-1, norm=None):
     """Inverse Hermitian FFT - input is real, output is Hermitian."""
     a = asarray(a)
     # ihfft(a) = conj(rfft(a)) / N
-    N = n if n is not None else len(a.tolist()) if a.ndim > 0 else 1
+    N = n if n is not None else (a.shape[0] if a.ndim > 0 else 1)
     result = fft.rfft(a, n=N, norm=norm)
     return conj(result) / N if norm != 'ortho' else conj(result)
 
