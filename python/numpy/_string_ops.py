@@ -1,7 +1,7 @@
 """String and char array operations."""
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray
+from ._helpers import _ObjectArray, _flat_arraylike_data
 from ._creation import array, asarray
 from ._string_bridge import (
     python_string_add,
@@ -625,20 +625,11 @@ class _char_mod:
     def _to_str_list(a):
         """Convert input to a flat list of strings."""
         if isinstance(a, chararray):
-            return [str(x) for x in a._arr.flatten().tolist()]
+            return [str(x) for x in _flat_arraylike_data(a._arr.flatten())]
         if isinstance(a, _ObjectArray):
             return [str(x) for x in a._data]
         if isinstance(a, ndarray):
-            data = a.tolist()
-            if isinstance(data, list):
-                result = []
-                for item in data:
-                    if isinstance(item, list):
-                        result.extend([str(x) for x in item])
-                    else:
-                        result.append(str(item))
-                return result
-            return [str(data)]
+            return [str(x) for x in _flat_arraylike_data(a.flatten())]
         if isinstance(a, str):
             return [a]
         if isinstance(a, (list, tuple)):
