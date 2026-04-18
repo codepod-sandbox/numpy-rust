@@ -692,11 +692,18 @@ def _shape_total(shape):
     return total
 
 
+def _flat_random_data(value):
+    flat = _flat_arraylike_data(value)
+    if flat is not None:
+        return flat
+    if isinstance(value, ndarray):
+        return value.flatten().tolist()
+    return None
+
+
 def _flat_broadcast_values(value):
     if isinstance(value, ndarray):
-        flat = _flat_arraylike_data(value)
-        if flat is None:
-            flat = value.flatten().tolist()
+        flat = _flat_random_data(value)
         return flat, list(value.shape)
     return [value], [1]
 
@@ -725,9 +732,7 @@ def _wrap_broadcast_results(results, out_shape):
 def _broadcast_call_1(func, arg, size=None):
     """Call a single-param distribution function with broadcasting support."""
     if isinstance(arg, ndarray):
-        arg_flat = _flat_arraylike_data(arg)
-        if arg_flat is None:
-            arg_flat = arg.flatten().tolist()
+        arg_flat = _flat_random_data(arg)
         size_shape = _normalize_size_tuple(size)
         if size_shape is not None:
             total = _shape_total(size_shape)
@@ -1760,9 +1765,7 @@ class _BitGenerator:
         elif isinstance(seed, (ndarray, list, tuple)):
             # Array/list seed: use hash of all elements
             if isinstance(seed, ndarray):
-                seed_list = _flat_arraylike_data(seed)
-                if seed_list is None:
-                    seed_list = seed.flatten().tolist()
+                seed_list = _flat_random_data(seed)
             else:
                 seed_list = list(seed)
             for v in seed_list:
