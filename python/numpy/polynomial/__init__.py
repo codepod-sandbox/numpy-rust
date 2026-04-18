@@ -469,9 +469,9 @@ class ABCPolyBase:
     def __repr__(self):
         return "{}({}, domain={}, window={}, symbol='{}')".format(
             self.__class__.__name__,
-            list(self._coef.tolist()) if hasattr(self._coef, 'tolist') else list(self._coef),
-            list(self._domain.tolist()) if hasattr(self._domain, 'tolist') else list(self._domain),
-            list(self._window.tolist()) if hasattr(self._window, 'tolist') else list(self._window),
+            _coef_list(self._coef),
+            _coef_list(self._domain),
+            _coef_list(self._window),
             self._symbol)
 
     def _str_term(self, i, c_str):
