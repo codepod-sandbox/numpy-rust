@@ -201,13 +201,15 @@ def interp(x, xp, fp, left=None, right=None, period=None):
             return [float('inf') if sign > 0 else float('-inf')] * fill_count
         return None
 
-    xp_values = xp_arr.tolist()
+    x_values = _flat_values(x_flat)
+    xp_values = _flat_values(xp_arr)
     has_nan_xp = any(_mth.isnan(v) for v in xp_values)
     has_inf_xp = any(_mth.isinf(v) for v in xp_values)
+    fp_values = _flat_values(fp_arr)
 
     if has_nan_xp or has_inf_xp:
         if is_complex:
-            re_vals, im_vals = _complex_parts(_flat_values(fp_arr))
+            re_vals, im_vals = _complex_parts(fp_values)
             if has_nan_xp:
                 re_result = _interp_nonfinite_xp_lane(re_vals, x_flat.size)
                 im_result = _interp_nonfinite_xp_lane(im_vals, x_flat.size)
@@ -224,9 +226,9 @@ def interp(x, xp, fp, left=None, right=None, period=None):
             return result
 
         if has_nan_xp:
-            result_vals = _interp_nonfinite_xp_lane(_flat_values(fp_arr), x_flat.size)
+            result_vals = _interp_nonfinite_xp_lane(fp_values, x_flat.size)
         else:
-            result_vals = _interp_infinite_xp_lane(_flat_values(fp_arr), xp_values, x_flat.size)
+            result_vals = _interp_infinite_xp_lane(fp_values, xp_values, x_flat.size)
         result = array(result_vals)
         if x_is_scalar:
             return float(result.flatten()[0])
@@ -239,7 +241,7 @@ def interp(x, xp, fp, left=None, right=None, period=None):
 
     if xp_arr.size == 2 and all(_mth.isfinite(v) for v in xp_values):
         if is_complex:
-            re_vals, im_vals = _complex_parts(_flat_values(fp_arr))
+            re_vals, im_vals = _complex_parts(fp_values)
             re_result = _interp_two_point_nonfinite_fp_lane(re_vals, x_flat.size)
             im_result = _interp_two_point_nonfinite_fp_lane(im_vals, x_flat.size)
             if re_result is not None or im_result is not None:
@@ -257,7 +259,7 @@ def interp(x, xp, fp, left=None, right=None, period=None):
                 )
                 return result
         else:
-            result_vals = _interp_two_point_nonfinite_fp_lane(_flat_values(fp_arr), x_flat.size)
+            result_vals = _interp_two_point_nonfinite_fp_lane(fp_values, x_flat.size)
             if result_vals is not None:
                 result = array(result_vals)
                 if x_is_scalar:
@@ -272,15 +274,13 @@ def interp(x, xp, fp, left=None, right=None, period=None):
     if period is not None:
         interp_periodic = getattr(_nat, 'interp_periodic', None)
         if is_complex:
-            fp_re, fp_im = _complex_parts(_flat_values(fp_arr))
-            xp_list = xp_arr.tolist()
-            x_list = x_flat.tolist()
+            fp_re, fp_im = _complex_parts(fp_values)
             if interp_periodic is not None:
                 result_re = interp_periodic(x_flat, xp_arr, asarray(fp_re, dtype='float64'), period)
                 result_im = interp_periodic(x_flat, xp_arr, asarray(fp_im, dtype='float64'), period)
             else:
-                result_re = _interp_periodic_fallback(x_list, xp_list, fp_re, period)
-                result_im = _interp_periodic_fallback(x_list, xp_list, fp_im, period)
+                result_re = _interp_periodic_fallback(x_values, xp_values, fp_re, period)
+                result_im = _interp_periodic_fallback(x_values, xp_values, fp_im, period)
             result = zeros(result_re.shape, dtype='complex128')
             result.real = result_re
             result.imag = result_im
@@ -288,11 +288,10 @@ def interp(x, xp, fp, left=None, right=None, period=None):
             if interp_periodic is not None:
                 result = interp_periodic(x_flat, xp_arr, fp_arr, period)
             else:
-                result = _interp_periodic_fallback(x_flat.tolist(), xp_arr.tolist(), _flat_values(fp_arr), period)
+                result = _interp_periodic_fallback(x_values, xp_values, fp_values, period)
     elif is_complex:
         # Interpolate real and imag parts separately
-        fp_flat = _flat_values(fp_arr)
-        fp_re, fp_im = _complex_parts(fp_flat)
+        fp_re, fp_im = _complex_parts(fp_values)
         fp_re_arr = asarray(fp_re)
         fp_im_arr = asarray(fp_im)
         result_re = _nat.interp(x_flat, xp_arr, fp_re_arr)
@@ -303,8 +302,8 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         result.imag = result_im
         result_list = _result_values(result)
         fp_list = [complex(re, im) for re, im in zip(fp_re, fp_im)]
-        for i, xi in enumerate(x_flat.tolist()):
-            for j, xpj in enumerate(xp_arr.tolist()):
+        for i, xi in enumerate(x_values):
+            for j, xpj in enumerate(xp_values):
                 if xi == xpj:
                     result_list[i] = fp_list[j]
                     break
@@ -312,12 +311,10 @@ def interp(x, xp, fp, left=None, right=None, period=None):
 
         # Apply left/right for complex
         if left is not None or right is not None:
-            x_list = x_flat.tolist()
-            xp_list = xp_arr.tolist()
-            xp_min = _builtin_min(xp_list)
-            xp_max = _builtin_max(xp_list)
+            xp_min = _builtin_min(xp_values)
+            xp_max = _builtin_max(xp_values)
             result_list = _result_values(result)
-            for i, xi in enumerate(x_list):
+            for i, xi in enumerate(x_values):
                 if left is not None and xi < xp_min:
                     v = left
                     result_list[i] = complex(v.real if hasattr(v, 'real') else float(v),
