@@ -289,12 +289,7 @@ def _histogramdd_row_bin_indices(row, edges, bins_per_dim):
 
 
 def _flat_int_index_values(arr):
-    flat = _flat_arraylike_data(arr)
-    if flat is not None:
-        return [int(v) for v in flat]
-    if hasattr(arr, 'flatten'):
-        return [int(v) for v in arr.flatten().tolist()]
-    return [int(arr)]
+    return [int(v) for v in _flat_values(arr)]
 
 
 def _flat_values(arr):
