@@ -2,7 +2,7 @@
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._creation import asarray, array
-from ._helpers import _copy_into
+from ._helpers import _copy_into, _flat_arraylike_data
 
 __all__ = [
     'bitwise_and', 'bitwise_or', 'bitwise_xor', 'bitwise_not', 'invert',
@@ -60,10 +60,7 @@ invert = bitwise_not
 def bitwise_count(x, out=None, **kwargs):
     """Element-wise count of 1-bits (population count / popcount)."""
     a = asarray(x) if not isinstance(x, ndarray) else x
-    # int(v) & mask handles negative integers (count bits in unsigned repr)
-    flat = [bin(int(v) & 0xFFFFFFFFFFFFFFFF).count('1')
-            for v in a.flatten().tolist()]
-    r = array(flat, dtype='uint8').reshape(a.shape)
+    r = _native.bitwise_count(a)
     if out is not None:
         _copy_into(out, r)
         return out
@@ -93,7 +90,7 @@ def _to_bool(x):
     try:
         return a.astype('bool')
     except Exception:
-        flat = [bool(v) for v in a.flatten().tolist()]
+        flat = [bool(v) for v in _flat_arraylike_data(a.flatten())]
         return array(flat, dtype='bool').reshape(a.shape)
 
 def logical_and(x1, x2, out=None, **kwargs):

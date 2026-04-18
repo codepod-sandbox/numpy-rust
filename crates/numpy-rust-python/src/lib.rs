@@ -948,6 +948,14 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn bitwise_count(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let arr = obj_to_ndarray(&a, vm)?;
+        arr.bitwise_count()
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
     fn packbits(
         a: PyObjectRef,
         axis: vm::function::OptionalArg<usize>,

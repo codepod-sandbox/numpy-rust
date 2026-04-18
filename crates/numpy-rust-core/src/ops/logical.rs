@@ -123,6 +123,28 @@ fn execute_bitwise_binary(
 }
 
 impl NdArray {
+    pub fn bitwise_count(&self) -> Result<NdArray> {
+        if self.dtype().is_float() || self.dtype().is_complex() || self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "Expected an input array of integer or boolean data type".into(),
+            ));
+        }
+
+        let cast = cast_array_data(self.data(), DType::Int64);
+        let ArrayData::Int64(values) = cast else {
+            unreachable!("int64 cast must produce int64 storage")
+        };
+        let shape = self.shape().to_vec();
+        let counts: Vec<i32> = values
+            .iter()
+            .map(|&v| ((v as u64).count_ones()) as i32)
+            .collect();
+        let result = NdArray::from_vec(counts)
+            .reshape(&shape)?
+            .with_declared_dtype(DType::UInt8);
+        Ok(result)
+    }
+
     pub fn packbits(&self, axis: Option<usize>, little: bool) -> Result<NdArray> {
         if self.dtype().is_float() || self.dtype().is_complex() || self.dtype().is_string() {
             return Err(NumpyError::TypeError(
