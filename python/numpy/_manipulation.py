@@ -136,10 +136,7 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         return arr.flatten().tolist()
 
     def _result_values(arr):
-        flat = _flat_arraylike_data(arr)
-        if flat is not None:
-            return list(flat)
-        return arr.flatten().tolist()
+        return list(_flat_values(arr))
 
     def _complex_parts(values):
         return (
