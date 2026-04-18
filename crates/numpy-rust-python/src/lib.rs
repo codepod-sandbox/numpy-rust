@@ -948,6 +948,63 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn packbits(
+        a: PyObjectRef,
+        axis: vm::function::OptionalArg<usize>,
+        bitorder: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let arr = obj_to_ndarray(&a, vm)?;
+        let little = match bitorder {
+            vm::function::OptionalArg::Present(s) => match s.as_str() {
+                "big" => false,
+                "little" => true,
+                other => {
+                    return Err(vm.new_value_error(format!(
+                        "bitorder must be either 'little' or 'big', got '{}'",
+                        other
+                    )))
+                }
+            },
+            vm::function::OptionalArg::Missing => false,
+        };
+        arr.packbits(axis.into_option(), little)
+            .map(PyNdArray::from_core)
+            .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
+    fn unpackbits(
+        a: PyObjectRef,
+        axis: vm::function::OptionalArg<usize>,
+        count: vm::function::OptionalArg<i64>,
+        bitorder: vm::function::OptionalArg<vm::PyRef<vm::builtins::PyStr>>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let arr = obj_to_ndarray(&a, vm)?;
+        let little = match bitorder {
+            vm::function::OptionalArg::Present(s) => match s.as_str() {
+                "big" => false,
+                "little" => true,
+                other => {
+                    return Err(vm.new_value_error(format!(
+                        "bitorder must be either 'little' or 'big', got '{}'",
+                        other
+                    )))
+                }
+            },
+            vm::function::OptionalArg::Missing => false,
+        };
+        arr.unpackbits(
+            axis.into_option(),
+            count.into_option().map(|v| v as isize),
+            little,
+        )
+        .map(PyNdArray::from_core)
+        .map_err(|e| vm.new_value_error(e.to_string()))
+    }
+
+    #[pyfunction]
     fn logical_and(x1: PyObjectRef, x2: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let a = obj_to_ndarray(&x1, vm)?;
         let b = obj_to_ndarray(&x2, vm)?;

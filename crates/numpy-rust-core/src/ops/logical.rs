@@ -7,6 +7,45 @@ use crate::error::{NumpyError, Result};
 use crate::kernel::{BitwiseBinaryKernelOp, BitwiseUnaryKernelOp, TruthKernelOp};
 use crate::NdArray;
 
+fn pack_byte_chunk(chunk: &[bool], little: bool) -> i32 {
+    let mut byte = 0_i32;
+    if little {
+        for (j, bit) in chunk.iter().enumerate() {
+            if *bit {
+                byte |= 1 << j;
+            }
+        }
+    } else {
+        for (j, bit) in chunk.iter().enumerate() {
+            if *bit {
+                byte |= 1 << (7 - j);
+            }
+        }
+    }
+    byte
+}
+
+fn unpack_byte(byte: i64, little: bool, out: &mut Vec<i32>) {
+    let byte = byte & 0xFF;
+    if little {
+        for j in 0..8 {
+            out.push(((byte >> j) & 1) as i32);
+        }
+    } else {
+        for j in (0..8).rev() {
+            out.push(((byte >> j) & 1) as i32);
+        }
+    }
+}
+
+fn inverse_permutation(order: &[usize]) -> Vec<usize> {
+    let mut inverse = vec![0; order.len()];
+    for (i, &ax) in order.iter().enumerate() {
+        inverse[ax] = i;
+    }
+    inverse
+}
+
 /// Prepare two NdArrays for bitwise ops: promote types and broadcast shapes.
 /// Only Bool and integer types are supported.
 /// Returns `(lhs_data, rhs_data, logical_result_dtype)`.
@@ -84,6 +123,140 @@ fn execute_bitwise_binary(
 }
 
 impl NdArray {
+    pub fn packbits(&self, axis: Option<usize>, little: bool) -> Result<NdArray> {
+        if self.dtype().is_float() || self.dtype().is_complex() || self.dtype().is_string() {
+            return Err(NumpyError::TypeError(
+                "Expected an input array of integer or boolean data type".into(),
+            ));
+        }
+        let ArrayData::Bool(bools) = truth_array(self.data().clone()) else {
+            unreachable!("truth kernel must produce bool arrays")
+        };
+
+        if let Some(axis) = axis {
+            if axis >= self.ndim() {
+                return Err(NumpyError::InvalidAxis {
+                    axis,
+                    ndim: self.ndim(),
+                });
+            }
+            let mut order: Vec<usize> = (0..self.ndim()).collect();
+            order.remove(axis);
+            order.push(axis);
+            let permuted = NdArray::from_data(ArrayData::Bool(bools)).transpose_axes(&order)?;
+            let ArrayData::Bool(pb) = permuted.data().clone() else {
+                unreachable!()
+            };
+            let axis_len = permuted.shape()[permuted.ndim() - 1];
+            let packed_len = axis_len.div_ceil(8);
+            let outer = if axis_len == 0 {
+                permuted.size()
+            } else {
+                permuted.size() / axis_len
+            };
+            let flat: Vec<bool> = pb.iter().copied().collect();
+            let mut packed = Vec::with_capacity(outer * packed_len);
+            for row in 0..outer {
+                let start = row * axis_len;
+                let row_slice = &flat[start..start + axis_len];
+                for chunk in row_slice.chunks(8) {
+                    packed.push(pack_byte_chunk(chunk, little));
+                }
+            }
+            let mut out_shape = permuted.shape().to_vec();
+            out_shape[permuted.ndim() - 1] = packed_len;
+            let packed_arr = NdArray::from_vec(packed)
+                .reshape(&out_shape)?
+                .with_declared_dtype(DType::UInt8);
+            let inverse = inverse_permutation(&order);
+            return packed_arr.transpose_axes(&inverse);
+        }
+
+        let flat: Vec<bool> = bools.iter().copied().collect();
+        let mut packed = Vec::with_capacity(flat.len().div_ceil(8));
+        for chunk in flat.chunks(8) {
+            packed.push(pack_byte_chunk(chunk, little));
+        }
+        Ok(NdArray::from_vec(packed).with_declared_dtype(DType::UInt8))
+    }
+
+    pub fn unpackbits(
+        &self,
+        axis: Option<usize>,
+        count: Option<isize>,
+        little: bool,
+    ) -> Result<NdArray> {
+        if !(self.dtype().is_integer() || self.dtype().is_bool()) {
+            return Err(NumpyError::TypeError(
+                "Expected an input array of unsigned byte data type".into(),
+            ));
+        }
+        let cast = cast_array_data(self.data(), DType::Int64);
+        let ArrayData::Int64(bytes) = cast else {
+            unreachable!("int64 cast must produce int64 storage")
+        };
+
+        let adjust_len = |bits_len: usize| -> usize {
+            match count {
+                Some(c) if c >= 0 => usize::min(bits_len, c as usize),
+                Some(c) => bits_len.saturating_sub((-c) as usize),
+                None => bits_len,
+            }
+        };
+
+        if let Some(axis) = axis {
+            if axis >= self.ndim() {
+                return Err(NumpyError::InvalidAxis {
+                    axis,
+                    ndim: self.ndim(),
+                });
+            }
+            let mut order: Vec<usize> = (0..self.ndim()).collect();
+            order.remove(axis);
+            order.push(axis);
+            let permuted = NdArray::from_data(ArrayData::Int64(bytes)).transpose_axes(&order)?;
+            let ArrayData::Int64(pb) = permuted.data().clone() else {
+                unreachable!()
+            };
+            let axis_len = permuted.shape()[permuted.ndim() - 1];
+            let bits_len = axis_len * 8;
+            let out_bits_len = adjust_len(bits_len);
+            let outer = if axis_len == 0 {
+                permuted.size()
+            } else {
+                permuted.size() / axis_len
+            };
+            let flat: Vec<i64> = pb.iter().copied().collect();
+            let mut unpacked = Vec::with_capacity(outer * out_bits_len);
+            for row in 0..outer {
+                let start = row * axis_len;
+                let row_slice = &flat[start..start + axis_len];
+                let mut row_bits = Vec::with_capacity(bits_len);
+                for &byte in row_slice {
+                    unpack_byte(byte, little, &mut row_bits);
+                }
+                unpacked.extend_from_slice(&row_bits[..out_bits_len]);
+            }
+            let mut out_shape = permuted.shape().to_vec();
+            out_shape[permuted.ndim() - 1] = out_bits_len;
+            let unpacked_arr = NdArray::from_vec(unpacked)
+                .reshape(&out_shape)?
+                .with_declared_dtype(DType::UInt8);
+            let inverse = inverse_permutation(&order);
+            return unpacked_arr.transpose_axes(&inverse);
+        }
+
+        let flat: Vec<i64> = bytes.iter().copied().collect();
+        let bits_len = flat.len() * 8;
+        let out_bits_len = adjust_len(bits_len);
+        let mut unpacked = Vec::with_capacity(bits_len);
+        for byte in flat {
+            unpack_byte(byte, little, &mut unpacked);
+        }
+        unpacked.truncate(out_bits_len);
+        Ok(NdArray::from_vec(unpacked).with_declared_dtype(DType::UInt8))
+    }
+
     /// Element-wise bitwise AND. For Bool arrays: logical AND. For integers: bitwise &.
     pub fn bitwise_and(&self, other: &NdArray) -> Result<NdArray> {
         execute_bitwise_binary(self, other, BitwiseBinaryKernelOp::And)
