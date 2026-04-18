@@ -1,7 +1,7 @@
 """Array printing and formatting utilities for numpy-rust."""
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray
+from ._helpers import _ObjectArray, _flat_arraylike_data
 from ._creation import array, asarray
 
 __all__ = [
@@ -73,6 +73,23 @@ class printoptions:
 
 class _char_mod:
     @staticmethod
+    def _to_nested_items(a):
+        if isinstance(a, _ObjectArray):
+            return a._data
+        if isinstance(a, ndarray):
+            if a.ndim == 0:
+                flat = _flat_arraylike_data(a)
+                return flat[0] if flat else None
+            if a.ndim == 1:
+                return _flat_arraylike_data(a)
+            return [_char_mod._to_nested_items(a[i]) for i in range(a.shape[0])]
+        if isinstance(a, str):
+            return [a]
+        if isinstance(a, (list, tuple)):
+            return list(a)
+        return [a]
+
+    @staticmethod
     def upper(a):
         return _native.char_upper(a)
 
@@ -107,14 +124,7 @@ class _char_mod:
     @staticmethod
     def split(a, sep=None, maxsplit=-1):
         """Split each element in a around sep."""
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
+        items = _char_mod._to_nested_items(a)
         result = []
         for s in items:
             result.append(str(s).split(sep, maxsplit))
@@ -125,14 +135,7 @@ class _char_mod:
     @staticmethod
     def join(sep, a):
         """Join strings in a with separator sep, element-wise."""
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, (list, tuple)):
-            items = a
-        else:
-            items = [a]
+        items = _char_mod._to_nested_items(a)
         # If items is a list of lists, join each sublist
         if len(items) > 0 and isinstance(items[0], (list, tuple)):
             result = [str(sep).join(str(x) for x in sub) for sub in items]
@@ -143,14 +146,7 @@ class _char_mod:
     @staticmethod
     def find(a, sub, start=0, end=None):
         """Find first occurrence of sub in each element of a."""
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
+        items = _char_mod._to_nested_items(a)
         result = []
         for s in items:
             s = str(s)
@@ -163,14 +159,7 @@ class _char_mod:
     @staticmethod
     def count(a, sub, start=0, end=None):
         """Count non-overlapping occurrences of sub in each element of a."""
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
+        items = _char_mod._to_nested_items(a)
         result = []
         for s in items:
             s = str(s)
@@ -183,22 +172,8 @@ class _char_mod:
     @staticmethod
     def add(a, b):
         """Element-wise string concatenation."""
-        if isinstance(a, ndarray):
-            items_a = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items_a = a._data
-        elif isinstance(a, str):
-            items_a = [a]
-        else:
-            items_a = list(a)
-        if isinstance(b, ndarray):
-            items_b = b.tolist()
-        elif isinstance(b, _ObjectArray):
-            items_b = b._data
-        elif isinstance(b, str):
-            items_b = [b]
-        else:
-            items_b = list(b)
+        items_a = _char_mod._to_nested_items(a)
+        items_b = _char_mod._to_nested_items(b)
         # Broadcast if lengths differ
         if len(items_a) == 1 and len(items_b) > 1:
             items_a = items_a * len(items_b)
@@ -210,14 +185,7 @@ class _char_mod:
     @staticmethod
     def multiply(a, i):
         """Element-wise string repetition."""
-        if isinstance(a, ndarray):
-            items = a.tolist()
-        elif isinstance(a, _ObjectArray):
-            items = a._data
-        elif isinstance(a, str):
-            items = [a]
-        else:
-            items = list(a)
+        items = _char_mod._to_nested_items(a)
         i = int(i)
         result = [str(s) * i for s in items]
         return array(result)
@@ -228,7 +196,7 @@ class _char_mod:
         if isinstance(a, _ObjectArray):
             return [str(x) for x in a._data]
         if isinstance(a, ndarray):
-            data = a.tolist()
+            data = _char_mod._to_nested_items(a)
             if isinstance(data, list):
                 result = []
                 for item in data:
@@ -326,7 +294,7 @@ class _char_mod:
     def isdecimal(a):
         """Return true for each element if all characters are decimal."""
         a = asarray(a)
-        return array([1.0 if str(s).isdecimal() else 0.0 for s in a.flatten().tolist()]).reshape(a.shape).astype("bool")
+        return array([1.0 if str(s).isdecimal() else 0.0 for s in _flat_arraylike_data(a.flatten())]).reshape(a.shape).astype("bool")
 
     @staticmethod
     def encode(a, encoding='utf-8', errors='strict'):
