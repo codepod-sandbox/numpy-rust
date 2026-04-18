@@ -240,8 +240,12 @@ def _apply_where_mask(a, where, *, false_fill=None, true_identity=False):
     if false_fill is None:
         mask_f = w.astype("float64")
         return a * mask_f + ((1.0 - mask_f) if true_identity else 0.0)
-    flat_a = a.flatten().tolist()
-    flat_w = w.flatten().tolist()
+    flat_a = _flat_arraylike_data(a)
+    if flat_a is None:
+        flat_a = a.flatten().tolist()
+    flat_w = _flat_arraylike_data(w)
+    if flat_w is None:
+        flat_w = w.flatten().tolist()
     masked = [v if m else false_fill for v, m in zip(flat_a, flat_w)]
     return array(masked).reshape(a.shape)
 
@@ -1584,6 +1588,16 @@ def _python_nan_quantile_rows(a_2d, q):
     return results
 
 
+def _restore_temporal_object_array(result, source):
+    if (
+        isinstance(result, _ObjectArray)
+        and str(source.dtype).startswith(("datetime64", "timedelta64"))
+        and str(result.dtype) == "object"
+    ):
+        return _ObjectArray(result.flatten().tolist(), str(source.dtype), shape=result.shape)
+    return result
+
+
 _NON_INTERPOLATING_METHODS = frozenset([
     'inverted_cdf', 'closest_observation', 'lower', 'higher', 'nearest'
 ])
@@ -2080,12 +2094,7 @@ def _quantile_dispatch(a, q, axis, out, method, keepdims, *, q_scale, result_dty
             ):
                 return _ObjectArray([result], str(a.dtype), shape=())
             return result
-    if (
-        isinstance(result, _ObjectArray)
-        and str(a.dtype).startswith(("datetime64", "timedelta64"))
-        and str(result.dtype) == "object"
-    ):
-        result = _ObjectArray(result.flatten().tolist(), str(a.dtype), shape=result.shape)
+    result = _restore_temporal_object_array(result, a)
     if not isinstance(result, ndarray):
         result = _scalar_result(result, a, _mean_result_dtype(a))
     if out is not None:
@@ -2122,13 +2131,7 @@ def quantile(a, q, axis=None, out=None, overwrite_input=False, method="linear", 
         q_scale=1.0,
         result_dtype=_get_quantile_result_dtype(a, method, q),
     )
-    if (
-        isinstance(result, _ObjectArray)
-        and str(a.dtype).startswith(("datetime64", "timedelta64"))
-        and str(result.dtype) == "object"
-    ):
-        return _ObjectArray(result.flatten().tolist(), str(a.dtype), shape=result.shape)
-    return result
+    return _restore_temporal_object_array(result, a)
 
 
 def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear", keepdims=False, weights=None):
@@ -2159,13 +2162,7 @@ def percentile(a, q, axis=None, out=None, overwrite_input=False, method="linear"
         q_scale=0.01,
         result_dtype=_get_quantile_result_dtype(a, method, q),
     )
-    if (
-        isinstance(result, _ObjectArray)
-        and str(a.dtype).startswith(("datetime64", "timedelta64"))
-        and str(result.dtype) == "object"
-    ):
-        return _ObjectArray(result.flatten().tolist(), str(a.dtype), shape=result.shape)
-    return result
+    return _restore_temporal_object_array(result, a)
 
 
 def median(a, axis=None, out=None, overwrite_input=False, keepdims=False):
