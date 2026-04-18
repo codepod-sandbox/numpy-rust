@@ -7,6 +7,7 @@ never gets an ``ImportError``.
 """
 
 import sys as _sys
+from numpy._helpers import _flat_arraylike_data
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +162,10 @@ class MaskedConstant:
 
 masked = MaskedConstant()
 masked_singleton = masked
+
+
+def _flat_ma_values(value):
+    return _flat_arraylike_data(value.flatten()) if hasattr(value, "flatten") else list(value)
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +359,8 @@ class MaskedArray:
             return result
         # Convert fill value to a native Python type matching the array's dtype
         if isinstance(fv, np.ndarray):
-            fv_native = fv.flatten().tolist()[0]
+            fv_flat = _flat_ma_values(fv)
+            fv_native = fv_flat[0]
             if isinstance(fv_native, tuple):
                 fv_native = complex(fv_native[0], fv_native[1])
         else:
@@ -364,8 +370,8 @@ class MaskedArray:
             fv_native = float(fv_native)
         elif dt_kind in ('i', 'u') and isinstance(fv_native, float):
             fv_native = int(fv_native)
-        mask_flat = self.mask.flatten().tolist()
-        result_flat = result.flatten().tolist()
+        mask_flat = _flat_ma_values(self.mask)
+        result_flat = _flat_ma_values(result)
         for i in range(len(result_flat)):
             if mask_flat[i]:
                 result_flat[i] = fv_native
@@ -373,8 +379,8 @@ class MaskedArray:
 
     def compressed(self):
         import numpy as np
-        data_list = self.data.flatten().tolist()
-        mask_list = self.mask.flatten().tolist()
+        data_list = _flat_ma_values(self.data)
+        mask_list = _flat_ma_values(self.mask)
         return np.array([d for d, m in zip(data_list, mask_list) if not m],
                         dtype=self.data.dtype)
 
@@ -951,15 +957,15 @@ class MaskedArray:
         import numpy as np
         if self.ndim == 0:
             if isinstance(self.mask, np.ndarray):
-                is_masked = bool(self.mask.flatten().tolist()[0]) if self.mask.size > 0 else False
+                is_masked = bool(_flat_ma_values(self.mask)[0]) if self.mask.size > 0 else False
             else:
                 is_masked = bool(self.mask)
             if is_masked:
                 return str(masked_print_option)
             return repr(self.data.tolist())
         # Build data representation with masked values shown as '--'
-        data_list = self.data.flatten().tolist()
-        mask_list = self.mask.flatten().tolist() if isinstance(self.mask, np.ndarray) else [bool(self.mask)] * len(data_list)
+        data_list = _flat_ma_values(self.data)
+        mask_list = _flat_ma_values(self.mask) if isinstance(self.mask, np.ndarray) else [bool(self.mask)] * len(data_list)
         displayed = []
         for d, m in zip(data_list, mask_list):
             if m:
@@ -974,7 +980,7 @@ class MaskedArray:
         import numpy as np
         if self.ndim == 0:
             if isinstance(self.mask, np.ndarray):
-                is_masked = bool(self.mask.flatten().tolist()[0]) if self.mask.size > 0 else False
+                is_masked = bool(_flat_ma_values(self.mask)[0]) if self.mask.size > 0 else False
             else:
                 is_masked = bool(self.mask)
             if is_masked:
@@ -993,7 +999,7 @@ class MaskedArray:
 
     def __bool__(self):
         c = self.compressed()
-        if len(c.tolist()) == 0:
+        if len(_flat_ma_values(c)) == 0:
             return False
         return bool(c)
 
@@ -1061,7 +1067,7 @@ def _any_true(mask):
     if isinstance(mask, bool):
         return mask
     try:
-        flat = mask.flatten().tolist()
+        flat = _flat_ma_values(mask)
         return any(flat)
     except Exception:
         return bool(mask)
@@ -1112,7 +1118,7 @@ def _check_fill_value(value, dtype):
         elif isinstance(value, complex):
             v = value.real
         elif isinstance(value, np.ndarray):
-            elem = value.flatten().tolist()[0]
+            elem = _flat_ma_values(value)[0]
             if isinstance(elem, tuple):
                 # Complex array: tolist returns (real, imag) tuples
                 v = float(elem[0])
@@ -1539,12 +1545,14 @@ def mask_rowcols(a, axis=None):
     col_mask = np.any(m, axis=0)
     new_mask = m.copy()
     if axis is None or axis == 0:
-        for i in range(len(row_mask.tolist())):
-            if row_mask.tolist()[i]:
+        row_mask_list = _flat_ma_values(row_mask)
+        for i in range(len(row_mask_list)):
+            if row_mask_list[i]:
                 new_mask[i] = True
     if axis is None or axis == 1:
-        for j in range(len(col_mask.tolist())):
-            if col_mask.tolist()[j]:
+        col_mask_list = _flat_ma_values(col_mask)
+        for j in range(len(col_mask_list)):
+            if col_mask_list[j]:
                 for i in range(new_mask.shape[0]):
                     new_mask[i][j] = True
     return MaskedArray(a.data, mask=new_mask, fill_value=a._fill_value)
@@ -1620,7 +1628,7 @@ def fix_invalid(a, mask=None, copy=True, fill_value=None):
     # Replace invalid data with fill_value in underlying array
     if fv is not None:
         fv_scalar = float(fv) if isinstance(fv, np.ndarray) else fv
-        inv_flat = invalid_mask.flatten().tolist()
+        inv_flat = _flat_ma_values(invalid_mask)
         for i, is_inv in enumerate(inv_flat):
             if is_inv:
                 result.data.flat[i] = fv_scalar
@@ -2096,9 +2104,9 @@ def allequal(a, b, fill_value=True):
             not_m = np.logical_not(m)
             if not _any_true(not_m):
                 return True  # All masked
-            da_flat = da.flatten().tolist()
-            db_flat = db.flatten().tolist()
-            m_flat = not_m.flatten().tolist()
+            da_flat = _flat_ma_values(da)
+            db_flat = _flat_ma_values(db)
+            m_flat = _flat_ma_values(not_m)
             for i in range(len(da_flat)):
                 if m_flat[i] and da_flat[i] != db_flat[i]:
                     return False
@@ -2111,9 +2119,9 @@ def allequal(a, b, fill_value=True):
         # Compare data at unmasked positions
         if _any_true(ma):
             not_m = np.logical_not(ma)
-            da_flat = da.flatten().tolist()
-            db_flat = db.flatten().tolist()
-            m_flat = not_m.flatten().tolist()
+            da_flat = _flat_ma_values(da)
+            db_flat = _flat_ma_values(db)
+            m_flat = _flat_ma_values(not_m)
             for i in range(len(da_flat)):
                 if m_flat[i] and da_flat[i] != db_flat[i]:
                     return False
@@ -2646,7 +2654,7 @@ def ediff1d(ary, to_end=None, to_begin=None):
         else:
             diff_mask = [False] * len(diff_data)
         # Handle to_begin and to_end
-        result_data = list(diff_data.tolist())
+        result_data = _flat_ma_values(diff_data)
         result_mask = list(diff_mask)
         if to_begin is not None:
             if isinstance(to_begin, MaskedConstant) or to_begin is masked:
@@ -2661,7 +2669,7 @@ def ediff1d(ary, to_end=None, to_begin=None):
                 if isinstance(tb_data, (list, tuple)):
                     result_data = list(tb_data) + result_data
                 else:
-                    result_data = list(np.asarray(tb_data).tolist()) + result_data
+                    result_data = _flat_ma_values(np.asarray(tb_data)) + result_data
                 if tb_mask is nomask or tb_mask is False:
                     result_mask = [False] * len(tb_data) + result_mask
                 else:
@@ -2682,7 +2690,7 @@ def ediff1d(ary, to_end=None, to_begin=None):
                 if isinstance(te_data, (list, tuple)):
                     result_data = result_data + list(te_data)
                 else:
-                    result_data = result_data + list(np.asarray(te_data).tolist())
+                    result_data = result_data + _flat_ma_values(np.asarray(te_data))
                 if te_mask is nomask or te_mask is False:
                     result_mask = result_mask + [False] * len(te_data)
                 else:
@@ -2848,7 +2856,7 @@ def clump_masked(a):
     """Return list of slices for masked runs."""
     if not isinstance(a, MaskedArray):
         return []
-    mask = a.mask.flatten().tolist()
+    mask = _flat_ma_values(a.mask)
     slices = []
     start = None
     for i, m in enumerate(mask):
@@ -2865,7 +2873,7 @@ def clump_unmasked(a):
     """Return list of slices for unmasked runs."""
     if not isinstance(a, MaskedArray):
         return [slice(0, a.size if hasattr(a, 'size') else len(a))]
-    mask = a.mask.flatten().tolist()
+    mask = _flat_ma_values(a.mask)
     slices = []
     start = None
     for i, m in enumerate(mask):
@@ -2884,7 +2892,7 @@ def flatnotmasked_edges(a):
         import numpy as np
         s = np.asarray(a).size
         return [0, s - 1] if s > 0 else None
-    mask = a.mask.flatten().tolist()
+    mask = _flat_ma_values(a.mask)
     first = None
     last = None
     for i, m in enumerate(mask):
