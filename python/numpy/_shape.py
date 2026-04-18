@@ -82,54 +82,22 @@ def _transpose_with_axes(a, axes):
     axes = list(axes)
     if len(axes) != ndim_a:
         raise ValueError("axes don't match array")
+    norm_axes = []
+    for ax in axes:
+        ax_n = int(ax)
+        if ax_n < 0:
+            ax_n += ndim_a
+        if ax_n < 0 or ax_n >= ndim_a:
+            raise ValueError("axes don't match array")
+        norm_axes.append(ax_n)
+    if len(set(norm_axes)) != ndim_a:
+        raise ValueError("axes don't match array")
     # Fast-paths
-    if axes == list(range(ndim_a)):
+    if norm_axes == list(range(ndim_a)):
         return a.copy() if hasattr(a, 'copy') else array(a.tolist())
-    if ndim_a == 2 and axes == [1, 0] and type(a).__name__ != '_ObjectArray':
+    if ndim_a == 2 and norm_axes == [1, 0] and type(a).__name__ != '_ObjectArray':
         return a.T
-    # Generic: walk every index of the output and pick from source
-    new_shape = tuple(shape[ax] for ax in axes)
-    size = 1
-    for s in new_shape:
-        size *= s
-    flat_data = a.flatten()
-    # Build strides of original array (row-major)
-    src_strides = [0] * ndim_a
-    s = 1
-    for i in range(ndim_a - 1, -1, -1):
-        src_strides[i] = s
-        s *= shape[i]
-    result = [None] * size
-    # Iterate over every multi-index of the *output*
-    out_idx = [0] * ndim_a
-    for flat_i in range(size):
-        # Map output index -> source index
-        src_flat = 0
-        for d in range(ndim_a):
-            src_flat += out_idx[d] * src_strides[axes[d]]
-        result[flat_i] = flat_data[src_flat]
-        # Increment out_idx (rightmost first)
-        for d in range(ndim_a - 1, -1, -1):
-            out_idx[d] += 1
-            if out_idx[d] < new_shape[d]:
-                break
-            out_idx[d] = 0
-    # Complex scalars may be (re, im) tuples or _NumpyComplexScalar
-    # Build proper ndarray via real+imag to avoid _ObjectArray
-    if hasattr(a, 'dtype') and 'complex' in str(a.dtype):
-        def _re(v):
-            if isinstance(v, tuple): return v[0]
-            if isinstance(v, complex): return v.real
-            return float(v)
-        def _im(v):
-            if isinstance(v, tuple): return v[1]
-            if isinstance(v, complex): return v.imag
-            return 0.0
-        reals = array([_re(v) for v in result], dtype='float64')
-        imags = array([_im(v) for v in result], dtype='float64')
-        out = reals + imags * array(1j)
-        return out.astype(a.dtype).reshape(list(new_shape))
-    return array(result, dtype=a.dtype).reshape(list(new_shape))
+    return a.transpose(tuple(norm_axes))
 
 
 def transpose(a, axes=None):
@@ -367,9 +335,7 @@ def swapaxes(a, axis1, axis2):
         axis2 += ndim_a
     if axis1 == axis2:
         return a
-    order = list(range(ndim_a))
-    order[axis1], order[axis2] = order[axis2], order[axis1]
-    return _transpose_with_axes(a, order)
+    return a.swapaxes(axis1, axis2)
 
 
 def flip(a, axis=None):
