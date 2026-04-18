@@ -4186,7 +4186,13 @@ fn setitem_impl(
     if let (Some(base_obj), Some(prefix)) = (base_obj, view_prefix) {
         if let Some(base_array) = base_obj.downcast_ref::<PyNdArray>() {
             let composed = compose_view_key(&prefix, &key, vm)?;
-            return setitem_impl(base_array, composed, value, vm);
+            setitem_impl(base_array, composed, value, vm)?;
+            let refreshed = {
+                let base_data = base_array.data.read().unwrap();
+                base_data.slice(&prefix).map_err(|e| numpy_err(e, vm))?
+            };
+            zelf.replace_inner(refreshed);
+            return Ok(());
         }
     }
 
