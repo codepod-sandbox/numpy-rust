@@ -1868,7 +1868,10 @@ def _validate_weight_vector(weights):
     total = float(sum(w))
     if bool(_np.any(~_np.isfinite(w))) or not _math.isfinite(total) or total <= 0:
         raise ValueError("Weights included NaN, inf or were all zero")
-    return w.flatten().tolist()
+    flat = _flat_arraylike_data(w)
+    if flat is None:
+        flat = w.flatten().tolist()
+    return flat
 
 
 def _weighted_inverted_cdf_1d(vals, weights, q):
@@ -3170,7 +3173,9 @@ def _gradient_along_axis(f, axis, spacing, edge_order):
         if spacing.size == 1:
             dx = float(spacing.flatten()[0])
         elif spacing.size == n - 1:
-            dx_list = spacing.flatten().tolist()
+            dx_list = _flat_arraylike_data(spacing)
+            if dx_list is None:
+                dx_list = spacing.flatten().tolist()
             use_array_spacing = True
         else:
             raise ValueError(
