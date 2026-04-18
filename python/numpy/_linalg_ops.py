@@ -1,7 +1,14 @@
 """Linear algebra operations in the flat numpy namespace."""
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray, AxisError, _builtin_max, _copy_into, _ComplexResultArray
+from ._helpers import (
+    _ObjectArray,
+    AxisError,
+    _builtin_max,
+    _copy_into,
+    _ComplexResultArray,
+    _flat_arraylike_data,
+)
 from ._creation import array, asarray
 from ._core_types import dtype
 
@@ -64,7 +71,7 @@ def _scimath_wrap(result):
     RustPython returns complex scalars as (re, im) tuples; _ComplexResultArray
     converts them to proper Python complex objects on element access."""
     if hasattr(result, 'dtype') and result.dtype == dtype('complex128'):
-        flat = result.flatten().tolist()
+        flat = _flat_arraylike_data(result.flatten())
         flat_complex = [complex(v[0], v[1]) if isinstance(v, tuple) else complex(v) for v in flat]
         return _ComplexResultArray(flat_complex, result.shape)
     return result
@@ -150,7 +157,7 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
     if a.ndim >= 2 and b.ndim == 1:
         b = b.reshape((1,) * (a.ndim - 1) + (b.shape[0],))
         b_shape = list(a.shape[:-1]) + [b.shape[-1]]
-        b_flat = b.flatten().tolist()
+        b_flat = _flat_arraylike_data(b.flatten())
         b_new = []
         batch = 1
         for s in a.shape[:-1]:
@@ -162,7 +169,7 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
     elif b.ndim >= 2 and a.ndim == 1:
         a = a.reshape((1,) * (b.ndim - 1) + (a.shape[0],))
         a_shape = list(b.shape[:-1]) + [a.shape[-1]]
-        a_flat = a.flatten().tolist()
+        a_flat = _flat_arraylike_data(a.flatten())
         a_new = []
         batch = 1
         for s in b.shape[:-1]:
@@ -172,8 +179,8 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
             a_new.extend(a_flat[:vec_len])
         a = array(a_new).reshape(a_shape)
     if a.ndim == 1 and b.ndim == 1:
-        af = a.flatten().tolist()
-        bf = b.flatten().tolist()
+        af = _flat_arraylike_data(a.flatten())
+        bf = _flat_arraylike_data(b.flatten())
         la, lb = len(af), len(bf)
         if la not in (2, 3) or lb not in (2, 3):
             raise ValueError("incompatible vector sizes for cross product")
@@ -201,8 +208,8 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
         batch_size = 1
         for s in out_batch:
             batch_size *= s
-        af = a_bc.flatten().tolist()
-        bf = b_bc.flatten().tolist()
+        af = _flat_arraylike_data(a_bc.flatten())
+        bf = _flat_arraylike_data(b_bc.flatten())
         results = []
         for i in range(batch_size):
             ai = af[i * la:(i + 1) * la]
@@ -355,7 +362,7 @@ def einsum(*operands, **kwargs):
             i += 1
             # Convert ndarray subscripts to a list
             if isinstance(subs, ndarray):
-                subs = subs.tolist()
+                subs = _flat_arraylike_data(subs)
                 if not isinstance(subs, list):
                     subs = [subs]
             if isinstance(subs, list):
