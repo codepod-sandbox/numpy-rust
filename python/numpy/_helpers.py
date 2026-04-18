@@ -417,7 +417,7 @@ class _ObjectArray:
             sub_data = self._data[key * sub_size : (key + 1) * sub_size]
             return _ObjectArray(sub_data, self._dtype, shape=sub_shape, itemsize=self._itemsize)
         if isinstance(key, ndarray):
-            key = key.tolist()
+            key = _flat_arraylike_data(key)
         if isinstance(key, list):
             if key and __import__("builtins").all(isinstance(k, bool) for k in key):
                 result = [v for v, keep in zip(self._data, key) if keep]

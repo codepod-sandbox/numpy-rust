@@ -957,7 +957,7 @@ class _Generator:
             if isinstance(high, ndarray):
                 high = high + 1
             elif isinstance(high, (list, tuple)):
-                high = (asarray(high) + 1).tolist()
+                high = _flat_arraylike_data(asarray(high) + 1)
             else:
                 high = high + 1
 
@@ -1237,7 +1237,7 @@ def _random_multivariate_normal(mean, cov, size=None):
     """Draw from multivariate normal distribution."""
     mean = asarray(mean)
     cov = asarray(cov)
-    n = len(mean.tolist())
+    n = mean.shape[0]
 
     # Cholesky decomposition of covariance
     L = linalg.cholesky(cov)
@@ -1392,7 +1392,7 @@ def _random_pareto(a, size=None):
 def _random_bytes(length):
     """Return random bytes."""
     vals = random.randint(0, 256, (length,))
-    return bytes(int(v) for v in vals.tolist())
+    return bytes(int(v) for v in _flat_arraylike_data(vals))
 
 
 def _default_rng(seed=None):
@@ -1585,7 +1585,7 @@ _native_random_choice = _orig_random_choice
 def _wrapped_random_choice(a, size=None, replace=True, p=None):
     if _ACTIVE_BITGEN is not None:
         arr = arange(0.0, float(a), 1.0) if isinstance(a, int) else (
-            a if isinstance(a, ndarray) else array(list(a) if not hasattr(a, 'tolist') else a.tolist())
+            a if isinstance(a, ndarray) else array(list(a) if not hasattr(a, 'tolist') else _flat_arraylike_data(asarray(a)))
         )
         if size is None:
             return _ACTIVE_BITGEN._rng.choice_array(arr, 1, replace).flatten()[0]
@@ -1776,7 +1776,7 @@ class _BitGenerator:
     @state.setter
     def state(self, value):
         if isinstance(value, tuple) and len(value) >= 3 and value[0] == 'MT19937':
-            key = value[1].tolist() if hasattr(value[1], 'tolist') else list(value[1])
+            key = _flat_arraylike_data(value[1]) if hasattr(value[1], 'tolist') else list(value[1])
             pos = int(value[2])
             self._mt19937_state_cache = {
                 'bit_generator': self.__class__.__name__,
@@ -1799,7 +1799,7 @@ class _BitGenerator:
                 self._mt19937_state_cache = None
                 return
             if isinstance(st, dict) and 'key' in st and 'pos' in st:
-                key = st['key'].tolist() if hasattr(st['key'], 'tolist') else list(st['key'])
+                key = _flat_arraylike_data(st['key']) if hasattr(st['key'], 'tolist') else list(st['key'])
                 self._mt19937_state_cache = {
                     'bit_generator': self.__class__.__name__,
                     'state': {
