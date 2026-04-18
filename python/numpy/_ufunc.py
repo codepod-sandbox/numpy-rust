@@ -1,6 +1,6 @@
 """NumPy ufunc class and function wrapping registration."""
 from _numpy_native import ndarray
-from ._helpers import _copy_into
+from ._helpers import _copy_into, _flat_arraylike_data
 from ._creation import asarray, array
 from ._math import (
     add, subtract, multiply, divide, true_divide, floor_divide,
@@ -67,16 +67,16 @@ _REDUCE_NOVALUE = object()  # sentinel distinguishes "no initial" from initial=N
 
 def _apply_where_mask(result, where_arr, fill, existing=None):
     """Apply boolean mask: keep result at True, fill/existing at False."""
-    flat_r = result.ravel().tolist()
+    flat_r = _flat_arraylike_data(result.ravel())
     if where_arr.ndim == 0:
         flat_w = [bool(where_arr.flat[0])] * len(flat_r)
     else:
-        flat_w = where_arr.ravel().tolist()
+        flat_w = _flat_arraylike_data(where_arr.ravel())
     if len(flat_w) < len(flat_r):
         repeats = (len(flat_r) + len(flat_w) - 1) // len(flat_w)
         flat_w = (flat_w * repeats)[:len(flat_r)]
     if existing is not None:
-        flat_e = asarray(existing).ravel().tolist()
+        flat_e = _flat_arraylike_data(asarray(existing).ravel())
         flat_out = [r if w else e for r, w, e in zip(flat_r, flat_w, flat_e)]
     else:
         flat_out = [r if w else fill for r, w in zip(flat_r, flat_w)]
@@ -580,8 +580,8 @@ class ufunc:
         if identity is not None:
             where_arr = asarray(where, dtype='bool') if not isinstance(where, bool) else where
             if hasattr(where_arr, 'shape') and where_arr.ndim > 0:
-                flat_a = a.ravel().tolist()
-                flat_w = where_arr.ravel().tolist()
+                flat_a = _flat_arraylike_data(a.ravel())
+                flat_w = _flat_arraylike_data(where_arr.ravel())
                 if len(flat_w) < len(flat_a):
                     repeats = (len(flat_a) + len(flat_w) - 1) // len(flat_w)
                     flat_w = (flat_w * repeats)[:len(flat_a)]
@@ -696,7 +696,7 @@ class ufunc:
         if isinstance(indices, slice):
             idx_list = list(range(*indices.indices(n)))
         elif hasattr(indices, 'tolist'):
-            idx_list = [int(i) for i in indices.flatten().tolist()]
+            idx_list = [int(i) for i in _flat_arraylike_data(indices)]
         else:
             idx_list = [int(i) for i in indices]
         # Resolve negative indices
@@ -712,7 +712,7 @@ class ufunc:
             if b_arr.ndim == 0:
                 b_list = [b_arr.flat[0]] * len(idx_list)
             else:
-                b_flat = b_arr.ravel().tolist()
+                b_flat = _flat_arraylike_data(b_arr.ravel())
                 if len(b_flat) == 1:
                     b_list = b_flat * len(idx_list)
                 elif len(b_flat) != len(idx_list):
