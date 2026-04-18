@@ -4,6 +4,7 @@ from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray,
     _builtin_range, _builtin_min, _builtin_max,
+    _flat_arraylike_data,
 )
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate
 
@@ -108,7 +109,7 @@ def apply_along_axis(func1d, axis, arr, *args, **kwargs):
             # Build flat list
             flat_vals = []
             for r in results:
-                flat_vals.extend(r.flatten().tolist())
+                flat_vals.extend(_flat_arraylike_data(r))
             result_arr = array(flat_vals).reshape(final_shape)
             # Need to move axis back: currently results are indexed by outer dims first
             # then result values. We need to transpose to put axis in correct position.
@@ -392,9 +393,9 @@ def repeat(a, repeats, axis=None):
         a = asarray(a)
     # If repeats is an array or list, implement manually along axis
     if isinstance(repeats, (ndarray, list, tuple)):
-        reps = [int(x) for x in (repeats.flatten().tolist() if isinstance(repeats, ndarray) else repeats)]
+        reps = [int(x) for x in (_flat_arraylike_data(repeats) if isinstance(repeats, ndarray) else repeats)]
         if axis is None:
-            flat = a.flatten().tolist()
+            flat = _flat_arraylike_data(a)
             if len(reps) == 1:
                 reps = reps * len(flat)
             out = []
@@ -456,7 +457,7 @@ def tile(a, reps):
 def _native_resize(col, total):
     """Tile a 1D ndarray to length total."""
     n = len(col)
-    flat = col.flatten().tolist()
+    flat = _flat_arraylike_data(col)
     result_vals = [flat[i % n] for i in _builtin_range(total)]
     return asarray(result_vals).astype(str(col.dtype))
 
@@ -520,7 +521,7 @@ def resize(a, new_shape):
     dt = a.dtype
     if total == 0:
         return zeros(new_shape, dtype=dt)
-    flat = a.flatten().tolist()
+    flat = _flat_arraylike_data(a)
     n = len(flat)
     if n == 0:
         return zeros(new_shape, dtype=dt)
@@ -597,7 +598,7 @@ def _trim_zeros_slice_nonzero(sl):
             if v is None:
                 return False
             return _trim_zeros_is_nonzero(v)
-        for v in sl.flatten().tolist():
+        for v in _flat_arraylike_data(sl):
             if _trim_zeros_is_nonzero(v):
                 return True
         return False
