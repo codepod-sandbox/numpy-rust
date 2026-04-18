@@ -2,6 +2,7 @@
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import _ObjectArray, _flat_arraylike_data
+from ._creation import asarray
 
 __all__ = [
     '_NAT_VALUE',
@@ -553,24 +554,225 @@ def datetime_data(dtype):
     return ('generic', 1)
 
 
-def busday_count(begindates, enddates, weekmask='1111100', holidays=None):
-    """Count business days. Simplified implementation."""
-    if _is_dt64(begindates) and _is_dt64(enddates):
-        diff = enddates - begindates
-        return int(diff._value * 5 / 7)  # rough approximation
-    return 0
+_WEEKDAY_NAMES = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 
 
-def is_busday(dates, weekmask='1111100', holidays=None):
+def _bool_array(values, shape=None):
+    arr = _native.array([1.0 if bool(v) else 0.0 for v in values]).astype('bool')
+    if shape is not None:
+        arr = arr.reshape(list(shape))
+    return arr
+
+
+def _coerce_date_scalar(value):
+    if _is_dt64(value):
+        return value
+    if isinstance(value, str):
+        return datetime64(value)
+    if value is None:
+        return datetime64('NaT')
+    return datetime64(value)
+
+
+def _date_scalar_to_day(value):
+    dt = _coerce_date_scalar(value)
+    if dt._is_nat:
+        return None
+    text = str(dt)
+    if text == 'NaT':
+        return None
+    if len(text) == 4:
+        return _date_to_days(int(text), 1, 1)
+    if len(text) == 7:
+        return _date_to_days(int(text[:4]), int(text[5:7]), 1)
+    if 'T' in text:
+        text = text.split('T', 1)[0]
+    if len(text) >= 10:
+        return _date_to_days(int(text[:4]), int(text[5:7]), int(text[8:10]))
+    return _date_to_days(1970, 1, 1)
+
+
+def _datetime_from_day(days):
+    return datetime64(_days_to_date(int(days)), 'D')
+
+
+def _weekday_index(days):
+    return (int(days) + 3) % 7
+
+
+def _parse_weekmask(weekmask):
+    if isinstance(weekmask, str):
+        s = weekmask.strip()
+        if len(s) == 7 and all(ch in '01' for ch in s):
+            mask = [ch == '1' for ch in s]
+        else:
+            compact = ''.join(s.split())
+            if not compact:
+                raise ValueError("weekmask cannot be all zeros")
+            if any(ch.islower() for ch in compact):
+                raise ValueError("invalid business day weekmask string")
+            mask = [False] * 7
+            i = 0
+            while i < len(compact):
+                token = compact[i:i + 3]
+                if token not in _WEEKDAY_NAMES:
+                    raise ValueError("invalid business day weekmask string")
+                mask[_WEEKDAY_NAMES.index(token)] = True
+                i += 3
+    else:
+        values = list(weekmask)
+        if len(values) != 7:
+            raise ValueError("A business day weekmask array must have length 7")
+        mask = [bool(v) for v in values]
+    if not any(mask):
+        raise ValueError("weekmask cannot be all zeros")
+    return tuple(mask)
+
+
+def _normalize_holidays(holidays, weekmask):
+    if holidays is None:
+        return tuple()
+    if isinstance(holidays, (_datetime64_cls, str)):
+        items = [holidays]
+    elif isinstance(holidays, ndarray):
+        items = _flat_arraylike_data(holidays)
+    else:
+        items = list(holidays)
+    seen = set()
+    for item in items:
+        day = _date_scalar_to_day(item)
+        if day is None:
+            continue
+        if weekmask[_weekday_index(day)]:
+            seen.add(day)
+    return tuple(sorted(seen))
+
+
+def _calendar_parts(weekmask='1111100', holidays=None, busdaycal=None):
+    default_mask = _parse_weekmask('1111100')
+    default_holidays = tuple()
+    if busdaycal is not None:
+        if weekmask != '1111100' or holidays is not None:
+            raise ValueError("Cannot supply both weekmask/holidays and busdaycal")
+        return busdaycal._weekmask, busdaycal._holidays
+    mask = _parse_weekmask(weekmask)
+    hols = _normalize_holidays(holidays, mask)
+    return mask, hols
+
+
+def _is_business_day_scalar(day, weekmask, holidays):
+    if day is None:
+        return False
+    return weekmask[_weekday_index(day)] and day not in holidays
+
+
+def _roll_business_day(day, roll, weekmask, holidays):
+    if day is None:
+        if roll == 'raise':
+            raise ValueError("NaT input in busday operation")
+        return None
+    if _is_business_day_scalar(day, weekmask, holidays):
+        return day
+    if roll == 'raise':
+        raise ValueError("Non-business day date in busday_offset")
+    if roll == 'nat':
+        return None
+    if roll in ('forward', 'following', 'modifiedfollowing'):
+        probe = day
+        while not _is_business_day_scalar(probe, weekmask, holidays):
+            probe += 1
+        if roll == 'modifiedfollowing' and _days_to_date(probe)[:7] != _days_to_date(day)[:7]:
+            return _roll_business_day(day, 'preceding', weekmask, holidays)
+        return probe
+    if roll in ('backward', 'preceding', 'modifiedpreceding'):
+        probe = day
+        while not _is_business_day_scalar(probe, weekmask, holidays):
+            probe -= 1
+        if roll == 'modifiedpreceding' and _days_to_date(probe)[:7] != _days_to_date(day)[:7]:
+            return _roll_business_day(day, 'following', weekmask, holidays)
+        return probe
+    raise ValueError("Invalid roll parameter")
+
+
+def _offset_business_day(day, offset, roll, weekmask, holidays):
+    day = _roll_business_day(day, roll, weekmask, holidays)
+    if day is None:
+        return None
+    offset = int(offset)
+    if offset > 0:
+        while offset > 0:
+            day += 1
+            if _is_business_day_scalar(day, weekmask, holidays):
+                offset -= 1
+    elif offset < 0:
+        while offset < 0:
+            day -= 1
+            if _is_business_day_scalar(day, weekmask, holidays):
+                offset += 1
+    return day
+
+
+def _count_business_days_scalar(begin, end, weekmask, holidays):
+    if begin is None or end is None:
+        return 0
+    if begin == end:
+        return 0
+    step = 1 if end > begin else -1
+    count = 0
+    day = begin
+    while day != end:
+        if _is_business_day_scalar(day, weekmask, holidays):
+            count += step
+        day += step
+    return count
+
+
+def busday_count(begindates, enddates, weekmask='1111100', holidays=None, busdaycal=None):
+    """Count business days between begin and end dates."""
+    from ._shape import broadcast_arrays
+    weekmask, holidays = _calendar_parts(weekmask, holidays, busdaycal)
+    begin = asarray(begindates)
+    end = asarray(enddates)
+    begin_b, end_b = broadcast_arrays(begin, end)
+    begin_days = [_date_scalar_to_day(v) for v in _flat_arraylike_data(begin_b)]
+    end_days = [_date_scalar_to_day(v) for v in _flat_arraylike_data(end_b)]
+    result = [
+        _count_business_days_scalar(b, e, weekmask, holidays)
+        for b, e in zip(begin_days, end_days)
+    ]
+    out = _native.array([float(v) for v in result]).astype('int64')
+    if begin_b.shape:
+        out = out.reshape(list(begin_b.shape))
+    return int(result[0]) if not begin_b.shape else out
+
+
+def is_busday(dates, weekmask='1111100', holidays=None, busdaycal=None):
     """Check if dates are business days."""
-    return True
+    weekmask, holidays = _calendar_parts(weekmask, holidays, busdaycal)
+    arr = asarray(dates)
+    days = [_date_scalar_to_day(v) for v in _flat_arraylike_data(arr)]
+    result = [_is_business_day_scalar(day, weekmask, holidays) for day in days]
+    return _bool_array(result, arr.shape if arr.shape else None) if arr.shape else result[0]
 
 
-def busday_offset(dates, offsets, roll='raise', weekmask='1111100', holidays=None):
+def busday_offset(dates, offsets, roll='raise', weekmask='1111100', holidays=None, busdaycal=None):
     """Offset dates by business days."""
-    if _is_dt64(dates):
-        return dates + timedelta64(int(offsets), 'D')
-    return dates
+    from ._helpers import _make_temporal_array
+    from ._shape import broadcast_arrays
+    weekmask, holidays = _calendar_parts(weekmask, holidays, busdaycal)
+    date_arr = asarray(dates)
+    offset_arr = asarray(offsets)
+    date_b, offset_b = broadcast_arrays(date_arr, offset_arr)
+    date_days = [_date_scalar_to_day(v) for v in _flat_arraylike_data(date_b)]
+    offset_vals = [int(v) for v in _flat_arraylike_data(offset_b)]
+    result = []
+    for day, off in zip(date_days, offset_vals):
+        out_day = _offset_business_day(day, off, roll, weekmask, holidays)
+        result.append('NaT' if out_day is None else _days_to_date(out_day))
+    out = _make_temporal_array(result, 'datetime64[D]')
+    if date_b.shape:
+        return out.reshape(date_b.shape)
+    return out[0]
 
 
 def datetime_as_string(arr, unit=None, timezone='naive', casting='same_kind'):
@@ -595,7 +797,13 @@ def datetime_as_string(arr, unit=None, timezone='naive', casting='same_kind'):
 
 
 class busdaycalendar:
-    """Business day calendar (stub)."""
+    """Business day calendar."""
     def __init__(self, weekmask='1111100', holidays=None):
-        self.weekmask = weekmask
-        self.holidays = holidays or []
+        from ._helpers import _make_temporal_array
+        self._weekmask = _parse_weekmask(weekmask)
+        self._holidays = _normalize_holidays(holidays, self._weekmask)
+        self.weekmask = _bool_array(self._weekmask, (7,))
+        self.holidays = _make_temporal_array(
+            [_days_to_date(day) for day in self._holidays],
+            'datetime64[D]',
+        )

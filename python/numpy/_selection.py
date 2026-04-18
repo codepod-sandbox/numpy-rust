@@ -453,6 +453,9 @@ def put(a, ind, v, mode='raise'):
     if nv == 0:
         # Empty values: no-op (numpy behavior)
         return None
+    if mode == 'raise' and isinstance(a, ndarray):
+        a.put(ind, v)
+        return None
     for idx in range(ni):
         i = int(ind_arr[idx])
         if mode == 'wrap':
