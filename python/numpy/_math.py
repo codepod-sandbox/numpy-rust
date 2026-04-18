@@ -6,6 +6,7 @@ from _numpy_native import ndarray
 from ._helpers import (
     _ObjectArray, _copy_into, _CLIP_UNSET,
     _builtin_range, _builtin_min, _builtin_max,
+    _flat_arraylike_data,
 )
 from ._core_types import (
     _ScalarType, _ScalarTypeMeta, _NumpyIntScalar, _NumpyFloatScalar, _NumpyComplexScalar,
@@ -927,7 +928,7 @@ def sinc(x):
         _pi = _m.pi
         px = x_f * _pi
         # sinc = sin(pi*x)/(pi*x), = 1 at x=0
-        flat = px.flatten().tolist()
+        flat = _flat_arraylike_data(px)
         out = []
         for v in flat:
             if isinstance(v, tuple):
@@ -945,7 +946,7 @@ def sinc(x):
         # Use float64 for computation then cast back
         x_f = x.astype('float64')
         _pi = _m.pi
-        flat = x_f.flatten().tolist()
+        flat = _flat_arraylike_data(x_f)
         out = []
         for v in flat:
             if v == 0.0:
@@ -998,8 +999,8 @@ def nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
             im_fixed = asarray(im)
 
         result_list = []
-        re_flat = re_fixed.flatten().tolist()
-        im_flat = im_fixed.flatten().tolist()
+        re_flat = _flat_arraylike_data(re_fixed)
+        im_flat = _flat_arraylike_data(im_fixed)
         for i in range(len(re_flat)):
             result_list.append(complex(re_flat[i], im_flat[i]))
         result = array(result_list)
@@ -1078,7 +1079,7 @@ def allclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
     _builtin_all = __import__("builtins").all
     result = isclose(a, b, rtol=rtol, atol=atol, equal_nan=equal_nan)
     if isinstance(result, ndarray):
-        return bool(_builtin_all(result.flatten().tolist()))
+        return bool(_builtin_all(_flat_arraylike_data(result)))
     return bool(result)
 
 def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
@@ -1114,8 +1115,8 @@ def isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
         a_obj = a if isinstance(a, _ObjectArray) else None
         b_obj = b if isinstance(b, _ObjectArray) else None
         out_shape = (a_obj or b_obj)._shape
-        a_data = a._data if isinstance(a, _ObjectArray) else (a.flatten().tolist() if isinstance(a, ndarray) else [a])
-        b_data = b._data if isinstance(b, _ObjectArray) else (b.flatten().tolist() if isinstance(b, ndarray) else [b])
+        a_data = a._data if isinstance(a, _ObjectArray) else (_flat_arraylike_data(a) if isinstance(a, ndarray) else [a])
+        b_data = b._data if isinstance(b, _ObjectArray) else (_flat_arraylike_data(b) if isinstance(b, ndarray) else [b])
         # Broadcast scalar b to match a_data length
         if len(b_data) == 1 and len(a_data) > 1:
             b_data = b_data * len(a_data)
@@ -1394,8 +1395,8 @@ def gcd(x1, x2):
     """Element-wise greatest common divisor."""
     x1 = asarray(x1)
     x2 = asarray(x2)
-    f1 = x1.flatten().tolist()
-    f2 = x2.flatten().tolist()
+    f1 = _flat_arraylike_data(x1)
+    f2 = _flat_arraylike_data(x2)
     result = [_math.gcd(int(a), int(b)) for a, b in zip(f1, f2)]
     return array(result).reshape(x1.shape)
 
@@ -1403,8 +1404,8 @@ def lcm(x1, x2):
     """Element-wise least common multiple."""
     x1 = asarray(x1)
     x2 = asarray(x2)
-    f1 = x1.flatten().tolist()
-    f2 = x2.flatten().tolist()
+    f1 = _flat_arraylike_data(x1)
+    f2 = _flat_arraylike_data(x2)
     def _lcm_pair(a, b):
         ia, ib = int(a), int(b)
         if ia == 0 or ib == 0:
@@ -1526,7 +1527,7 @@ def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
     if discont is None:
         discont = period / 2
     if p.ndim <= 1:
-        values = _unwrap_1d_list(p.flatten().tolist(), discont, period)
+        values = _unwrap_1d_list(_flat_arraylike_data(p), discont, period)
         result = array(values)
         dtype_name = str(p.dtype)
         if (dtype_name.startswith("int") or dtype_name.startswith("uint")) and _can_restore_integral_dtype(values):
@@ -1549,7 +1550,7 @@ def unwrap(p, discont=None, axis=-1, period=2*_math.pi):
     n_outer = 1
     for s in pt_shape[:-1]:
         n_outer *= s
-    flat_all = pt.flatten().tolist()
+    flat_all = _flat_arraylike_data(pt)
     axis_len = pt_shape[-1]
     result_flat = []
     for i in _builtin_range(n_outer):
