@@ -2,7 +2,7 @@
 import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray, random as _random_native, linalg as _linalg_native
-from ._helpers import _builtin_range, _flat_arraylike_data
+from ._helpers import _builtin_range, _copy_into, _flat_arraylike_data
 from ._creation import array, asarray, arange
 from ._math import exp
 
@@ -640,41 +640,8 @@ def _validate_out_array(out, size):
 
 
 def _fill_out(out, src):
-    """Fill an output array in-place from a source array using tuple indexing."""
-    shape = out.shape
-    ndim = len(shape)
-    src_flat = _flat_arraylike_data(src)
-    if src_flat is None:
-        src_flat = [float(src)]
-    if ndim == 1:
-        for i in range(shape[0]):
-            out[(i,)] = src_flat[i]
-    elif ndim == 2:
-        idx = 0
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                out[(i, j)] = src_flat[idx]
-                idx += 1
-    elif ndim == 3:
-        idx = 0
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                for k in range(shape[2]):
-                    out[(i, j, k)] = src_flat[idx]
-                    idx += 1
-    else:
-        # Generic N-d: compute multi-index from flat index
-        total = 1
-        for s in shape:
-            total *= s
-        for flat_idx in range(total):
-            multi = []
-            rem = flat_idx
-            for d in range(ndim - 1, -1, -1):
-                multi.append(rem % shape[d])
-                rem //= shape[d]
-            multi.reverse()
-            out[tuple(multi)] = src_flat[flat_idx]
+    """Fill an output array in-place from a source array."""
+    _copy_into(out, src if hasattr(src, "ndim") else asarray([float(src)]))
 
 
 def _normalize_size_tuple(size):
