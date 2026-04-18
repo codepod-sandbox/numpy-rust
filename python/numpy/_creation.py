@@ -9,6 +9,7 @@ from ._helpers import (
     _copy_into, _apply_order, _infer_shape,
     _flatten_nested, _all_bools_nested, _to_float_list, _is_temporal_dtype,
     _temporal_dtype_info, _make_temporal_array, _CLIP_UNSET, _builtin_range,
+    _flat_arraylike_data,
     _unsupported_numeric_dtype,
 )
 from ._core_types import (
@@ -52,11 +53,11 @@ def _contains_fraction_values(value):
     if _is_fraction_scalar(value):
         return True
     if isinstance(value, _ObjectArray):
-        return any(_contains_fraction_values(v) for v in value.flatten().tolist())
+        return any(_contains_fraction_values(v) for v in _flat_arraylike_data(value))
     if isinstance(value, ndarray):
         if str(value.dtype) != 'object':
             return False
-        return any(_contains_fraction_values(v) for v in value.flatten().tolist())
+        return any(_contains_fraction_values(v) for v in _flat_arraylike_data(value))
     if isinstance(value, (list, tuple)):
         return any(_contains_fraction_values(v) for v in value)
     return False
@@ -66,11 +67,11 @@ def _contains_decimal_values(value):
     if _is_decimal_scalar(value):
         return True
     if isinstance(value, _ObjectArray):
-        return any(_contains_decimal_values(v) for v in value.flatten().tolist())
+        return any(_contains_decimal_values(v) for v in _flat_arraylike_data(value))
     if isinstance(value, ndarray):
         if str(value.dtype) != 'object':
             return False
-        return any(_contains_decimal_values(v) for v in value.flatten().tolist())
+        return any(_contains_decimal_values(v) for v in _flat_arraylike_data(value))
     if isinstance(value, (list, tuple)):
         return any(_contains_decimal_values(v) for v in value)
     return False
@@ -271,7 +272,7 @@ def _concat_object_arrays(arrs, axis):
     converted = []
     for a in arrs:
         if isinstance(a, ndarray):
-            converted.append(_ObjectArray(a.tolist(), common_dt, shape=a.shape))
+            converted.append(_ObjectArray(_flat_arraylike_data(a), common_dt, shape=a.shape))
         elif isinstance(a, _ObjectArray):
             converted.append(a)
         else:
@@ -292,12 +293,12 @@ def _concat_object_arrays(arrs, axis):
     if len(new_shape) == 1:
         all_vals = []
         for c in converted:
-            all_vals.extend(c.tolist())
+            all_vals.extend(_flat_arraylike_data(c))
         return _ObjectArray(all_vals, common_dt, shape=tuple(new_shape))
     # For n-d, use nested list manipulation
     all_data = []
     for c in converted:
-        all_data.append(c.tolist())
+        all_data.append(_flat_arraylike_data(c))
     if axis == 0:
         combined = []
         for d in all_data:
@@ -710,7 +711,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                 result = result.astype(dt)
         # subok=False means strip subclass to base ndarray
         if not subok and type(result) is not ndarray:
-            result = _native.array(result.tolist())
+            result = _native.array(_flat_arraylike_data(result))
             if dtype is not None:
                 dt = str(dtype)
                 if dt not in ("object",) and not dt.startswith("S") and not dt.startswith("U") and dt != "str":
@@ -817,7 +818,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
             def _flatten_complex(d):
                 """Flatten nested lists including complex values."""
                 if isinstance(d, _ObjectArray):
-                    flat = d.flatten().tolist()
+                    flat = _flat_arraylike_data(d)
                     result = []
                     for v in flat:
                         if isinstance(v, complex):
@@ -831,7 +832,7 @@ def _array_core(data, dtype=None, copy=None, order=None, subok=False, like=None)
                                 return None
                     return result
                 if isinstance(d, ndarray):
-                    flat = d.flatten().tolist()
+                    flat = _flat_arraylike_data(d)
                     result = []
                     for v in flat:
                         if isinstance(v, tuple):
@@ -1276,8 +1277,8 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
             stop_arr = stop_arr + _bcast * 0
         except Exception:
             pass
-        s_flat = start_arr.flatten().tolist()
-        e_flat = stop_arr.flatten().tolist()
+        e_flat = _flat_arraylike_data(stop_arr)
+        s_flat = _flat_arraylike_data(start_arr)
         # Convert numpy scalars to Python builtins
         def _to_py(v):
             if isinstance(v, complex):
@@ -1368,7 +1369,7 @@ def geomspace(start, stop, num=50, endpoint=True, dtype=None, axis=0):
     # Force exact start/stop boundaries
     import numpy as _np
     if num > 0:
-        flat = result.flatten().tolist()
+        flat = _flat_arraylike_data(result)
         flat[0] = start_f
         if endpoint and num > 1:
             flat[-1] = stop_f
@@ -1422,11 +1423,11 @@ def where(condition, x=None, y=None):
     from ._helpers import _ObjectArray
     # Handle _ObjectArray inputs — element-wise selection
     if isinstance(x, _ObjectArray) or isinstance(y, _ObjectArray):
-        cond_flat = condition.flatten().tolist()
+        cond_flat = _flat_arraylike_data(condition)
         x_arr = asarray(x) if not isinstance(x, _ObjectArray) else x
         y_arr = asarray(y) if not isinstance(y, _ObjectArray) else y
-        x_flat = x_arr._data if isinstance(x_arr, _ObjectArray) else x_arr.flatten().tolist()
-        y_flat = y_arr._data if isinstance(y_arr, _ObjectArray) else y_arr.flatten().tolist()
+        x_flat = x_arr._data if isinstance(x_arr, _ObjectArray) else _flat_arraylike_data(x_arr)
+        y_flat = y_arr._data if isinstance(y_arr, _ObjectArray) else _flat_arraylike_data(y_arr)
         # Broadcast scalar-like
         if len(x_flat) == 1 and len(cond_flat) > 1:
             x_flat = x_flat * len(cond_flat)
@@ -1881,7 +1882,7 @@ def asarray_chkfinite(a, dtype=None, order=None):
     else:
         a = asarray(a)
     if isinstance(a, ndarray):
-        vals = a.flatten().tolist()
+        vals = _flat_arraylike_data(a)
         for v in vals:
             try:
                 if _math.isinf(v) or _math.isnan(v):
