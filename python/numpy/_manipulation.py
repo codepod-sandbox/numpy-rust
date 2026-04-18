@@ -4,7 +4,7 @@ import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray, _copy_into,
-    _builtin_range, _builtin_min, _builtin_max,
+    _builtin_range, _builtin_min, _builtin_max, _flat_arraylike_data,
 )
 from ._core_types import dtype, _ScalarType, _normalize_dtype
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate, linspace
@@ -130,6 +130,15 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         return float(v.imag) if hasattr(v, 'imag') else 0.0
 
     def _flat_values(arr):
+        flat = _flat_arraylike_data(arr)
+        if flat is not None:
+            return flat
+        return arr.flatten().tolist()
+
+    def _result_values(arr):
+        flat = _flat_arraylike_data(arr)
+        if flat is not None:
+            return list(flat)
         return arr.flatten().tolist()
 
     def _complex_parts(values):
@@ -238,13 +247,13 @@ def interp(x, xp, fp, left=None, right=None, period=None):
             im_result = _interp_two_point_nonfinite_fp_lane(im_vals, x_flat.size)
             if re_result is not None or im_result is not None:
                 if re_result is None:
-                    re_result = _nat.interp(
-                        x_flat, xp_arr, asarray(re_vals, dtype='float64')
-                    ).flatten().tolist()
+                    re_result = _result_values(
+                        _nat.interp(x_flat, xp_arr, asarray(re_vals, dtype='float64'))
+                    )
                 if im_result is None:
-                    im_result = _nat.interp(
-                        x_flat, xp_arr, asarray(im_vals, dtype='float64')
-                    ).flatten().tolist()
+                    im_result = _result_values(
+                        _nat.interp(x_flat, xp_arr, asarray(im_vals, dtype='float64'))
+                    )
                 result = _rebuild_complex_result(
                     [complex(re_val, im_val) for re_val, im_val in zip(re_result, im_result)],
                     () if x_is_scalar else x_shape,
@@ -295,7 +304,7 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         result = zeros(result_re.shape, dtype='complex128')
         result.real = result_re
         result.imag = result_im
-        result_list = result.flatten().tolist()
+        result_list = _result_values(result)
         fp_list = [complex(re, im) for re, im in zip(fp_re, fp_im)]
         for i, xi in enumerate(x_flat.tolist()):
             for j, xpj in enumerate(xp_arr.tolist()):
@@ -310,7 +319,7 @@ def interp(x, xp, fp, left=None, right=None, period=None):
             xp_list = xp_arr.tolist()
             xp_min = _builtin_min(xp_list)
             xp_max = _builtin_max(xp_list)
-            result_list = result.flatten().tolist()
+            result_list = _result_values(result)
             for i, xi in enumerate(x_list):
                 if left is not None and xi < xp_min:
                     v = left
