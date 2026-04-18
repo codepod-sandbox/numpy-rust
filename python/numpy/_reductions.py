@@ -425,10 +425,9 @@ def diff(a, n=1, axis=-1, prepend=None, append=None):
         _out_dtype = 'bool' if _is_bool else (_temporal_diff_dtype or _in_dtype)
         return zeros(new_shape, dtype=_out_dtype)
     if isinstance(a, _ObjectArray) and _temporal_diff_dtype is not None and a.ndim == 1:
-        values = a.tolist()
-        for _ in _builtin_range(n):
-            values = [values[i + 1] - values[i] for i in _builtin_range(len(values) - 1)]
-        return _make_temporal_array(values, _temporal_diff_dtype)
+        ints = array(a.tolist(), dtype=_in_dtype).astype('int64')
+        diff_ints = _native.diff(ints, n, 0).astype('int64')
+        return _make_temporal_array(diff_ints.tolist(), _temporal_diff_dtype)
     result = _native.diff(a, n, _axis)
     if _is_bool:
         result = result.astype('bool')
