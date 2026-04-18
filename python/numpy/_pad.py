@@ -5,6 +5,7 @@ from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray,
     _builtin_range, _builtin_min, _builtin_max,
+    _flat_arraylike_data,
 )
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate
 
@@ -186,7 +187,7 @@ def pad(a, pad_width, mode='constant', **kwargs):
             if _orig_dtype in _int_dtypes and 'float' in str(result.dtype):
                 # Use Python's built-in round() for banker's rounding (round-half-to-even)
                 import builtins as _builtins
-                _flat = [_builtins.round(float(v)) for v in result.flatten().tolist()]
+                _flat = [_builtins.round(float(v)) for v in _flat_arraylike_data(result.flatten())]
                 result = asarray(_flat).reshape(result.shape).astype(_orig_dtype)
             else:
                 result = result.astype(_orig_dtype)
@@ -240,7 +241,7 @@ def _normalize_pad_width(pad_width, ndim):
 
     # Convert to a flat structure
     if hasattr(pad_width, 'tolist'):
-        pad_width = pad_width.tolist()
+        pad_width = _flat_arraylike_data(pad_width) if getattr(pad_width, "ndim", 0) <= 1 else pad_width.tolist()
 
     if isinstance(pad_width, (list, tuple)):
         # Check for nested structure
@@ -971,7 +972,7 @@ def _pad_callable(a, pad_width, func, kwargs):
 
     # Use a flattened approach for in-place mutation
     import itertools
-    result_flat = padded.flatten().tolist()
+    result_flat = _flat_arraylike_data(padded.flatten())
     strides = []
     stride = 1
     for d in range(a.ndim - 1, -1, -1):
