@@ -1216,7 +1216,7 @@ def _chebder(c, m=1, scl=1, axis=0):
     c = np.asarray(c)
     if c.ndim > 1:
         return _chebder_nd(c, m, scl, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     for _ in range(m):
         n = len(c)
         if n <= 1:
@@ -1252,7 +1252,7 @@ def _chebder_nd(c, m, scl, axis):
 
 def _chebval_scalar(x, c):
     """Value Chebyshev series at scalar x."""
-    c_list = list(c) if isinstance(c, list) else list(np.asarray(c).flatten().tolist())
+    c_list = _coef_list(c)
     if len(c_list) == 0:
         return 0.0
     if len(c_list) == 1:
@@ -1286,7 +1286,7 @@ def _chebint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
         raise ValueError("Too many integration constants")
     if c.ndim > 1:
         return _chebint_nd(c, m, k, lbnd, scl, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     k_list = list(k) if k else []
     while len(k_list) < m:
         k_list.append(0)
@@ -1337,7 +1337,7 @@ def _chebint_nd(c, m, k, lbnd, scl, axis):
 
 def _cheb2poly(c):
     """Convert Chebyshev series to polynomial (power series) coefficients."""
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0:
         return np.array([0.0])
@@ -1368,7 +1368,7 @@ def _cheb2poly(c):
 
 def _poly2cheb(c):
     """Convert polynomial (power series) to Chebyshev series."""
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0:
         return np.array([0.0])
@@ -1398,7 +1398,7 @@ def _poly2cheb(c):
     return np.array(result)
 
 def _chebfromroots(roots):
-    roots = list(np.asarray(roots).flatten().tolist())
+    roots = _flat_list(roots)
     if len(roots) == 0:
         return np.array([1.0])
     c = np.array([-roots[0], 1.0])
@@ -1407,7 +1407,7 @@ def _chebfromroots(roots):
     return c
 
 def _chebroots(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0:
         c.pop()
     if len(c) <= 1:
@@ -1416,12 +1416,12 @@ def _chebroots(c):
         return np.array([-c[0] / c[1]])
     m = _chebcompanion(c)
     r = np.linalg.eigvals(m)
-    r_list = list(r.flatten().tolist())
+    r_list = _flat_arraylike_data(r.flatten())
     r_list.sort(key=lambda x: (x.real if isinstance(x, complex) else x, x.imag if isinstance(x, complex) else 0))
     return np.array(r_list)
 
 def _chebcompanion(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0:
         c.pop()
     if len(c) < 2:
@@ -1509,8 +1509,7 @@ def _chebfit(x, y, deg, w=None):
         y = np.asarray(y, dtype='float64')
     _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
-        deg_list = list(np.asarray(deg).flatten().tolist())
-        deg_list = [int(d) for d in deg_list]
+        deg_list = _flat_int_list(deg)
         if any(d < 0 for d in deg_list):
             raise ValueError("deg must be non-negative")
         if len(deg_list) == 0:
@@ -1576,7 +1575,7 @@ def _chebinterpolate(func, deg, args=()):
     import math
     n = deg + 1
     x = np.array([math.cos(math.pi * (2 * kk + 1) / (2 * n)) for kk in range(n)])
-    y = np.array([func(xi, *args) for xi in x.tolist()])
+    y = np.array([func(xi, *args) for xi in _flat_arraylike_data(x)])
     c = np.zeros(n)
     for j in range(n):
         s = 0.0
@@ -1640,7 +1639,7 @@ class Chebyshev(ABCPolyBase):
         x_cheb = np.array([math.cos(math.pi * (2 * kk + 1) / (2 * n)) for kk in range(n)])
         off, scl = pu.mapparms([-1, 1], domain)
         x_domain = x_cheb * scl + off
-        y = np.array([func(xi, *args) for xi in x_domain.tolist()])
+        y = np.array([func(xi, *args) for xi in _flat_arraylike_data(x_domain)])
         c = np.zeros(n)
         for j in range(n):
             s = 0.0
