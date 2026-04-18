@@ -132,6 +132,17 @@ pub mod _numpy_native {
         ))
     }
 
+    fn parse_f64_pair(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<(f64, f64)> {
+        let items = py_sequence_items(obj, vm, "expected pair of floats")?;
+        if items.len() != 2 {
+            return Err(vm.new_value_error("range tuples must have 2 elements".to_owned()));
+        }
+        Ok((
+            items[0].clone().try_into_value::<f64>(vm)?,
+            items[1].clone().try_into_value::<f64>(vm)?,
+        ))
+    }
+
     fn parse_gradient_axes(
         axes: &vm::PyRef<vm::builtins::PyList>,
         vm: &VirtualMachine,
@@ -1394,12 +1405,17 @@ pub mod _numpy_native {
     fn histogram(
         a: vm::PyRef<PyNdArray>,
         bins: vm::function::OptionalArg<usize>,
+        range: vm::function::OptionalArg<PyObjectRef>,
         vm: &VirtualMachine,
     ) -> PyResult<PyObjectRef> {
         let bins = bins.unwrap_or(10);
+        let range = match range {
+            vm::function::OptionalArg::Present(obj) => Some(parse_f64_pair(&obj, vm)?),
+            vm::function::OptionalArg::Missing => None,
+        };
         let (counts, edges) = a
             .inner()
-            .histogram(bins, None)
+            .histogram(bins, range)
             .map_err(|e| vm.new_value_error(e.to_string()))?;
         let py_counts = PyNdArray::from_core(counts).into_pyobject(vm);
         let py_edges = PyNdArray::from_core(edges).into_pyobject(vm);

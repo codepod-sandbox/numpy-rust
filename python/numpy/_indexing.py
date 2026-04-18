@@ -486,8 +486,8 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
     for i in _builtin_range(len(edge_preview) - 1):
         if not (edge_preview[i] < edge_preview[i + 1]):
             raise ValueError("Too many bins for data range")
-    if weights is not None or range is not None:
-        # Python fallback for weights/range with integer bins
+    if weights is not None:
+        # Python fallback for weighted integer bins
         flat = _flat_values(a)
         if range is None:
             lo, hi = _histogram_range_from_flat(flat, None)
@@ -503,8 +503,9 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
             if total > 0.0:
                 hist = hist / (total * widths)
         return hist, edges
-    # No weights, no range: use native
-    counts, edges = _native.histogram(a, bins)
+    # Unweighted integer bins: use native, including explicit range
+    native_range = None if range is None else (lo, hi)
+    counts, edges = _native.histogram(a, bins, native_range)
     if density:
         bin_widths = diff(edges)
         total = float(sum(counts))
