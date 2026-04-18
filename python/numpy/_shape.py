@@ -496,20 +496,18 @@ class broadcast:
             self.size *= s
         self.numiter = len(arrays)
         self._arrays = arrays
+        self._broadcasted = [broadcast_to(a, self.shape).flatten() for a in arrays]
         self.iters = tuple(_BroadcastIter(broadcast_to(a, self.shape), a) for a in arrays)
         self.index = 0
 
     def __iter__(self):
-        # Broadcast each array to the common shape and iterate
-        broadcasted = [broadcast_to(a, self.shape).flatten() for a in self._arrays]
         for i in range(self.size):
-            yield tuple(float(b[i]) for b in broadcasted)
+            yield tuple(float(b[i]) for b in self._broadcasted)
 
     def __next__(self):
         if self.index >= self.size:
             raise StopIteration
-        broadcasted = [broadcast_to(a, self.shape).flatten() for a in self._arrays]
-        result = tuple(float(b[self.index]) for b in broadcasted)
+        result = tuple(float(b[self.index]) for b in self._broadcasted)
         self.index += 1
         return result
 
@@ -595,24 +593,5 @@ def broadcast_arrays(*args):
     arrays = [asarray(a) for a in args]
     if len(arrays) == 0:
         return []
-    # Find common shape
-    shape = list(arrays[0].shape)
-    for a in arrays[1:]:
-        ashape = list(a.shape)
-        # Pad shorter shape with 1s on left
-        while len(shape) < len(ashape):
-            shape.insert(0, 1)
-        while len(ashape) < len(shape):
-            ashape.insert(0, 1)
-        new_shape = []
-        for s1, s2 in zip(shape, ashape):
-            if s1 == s2:
-                new_shape.append(s1)
-            elif s1 == 1:
-                new_shape.append(s2)
-            elif s2 == 1:
-                new_shape.append(s1)
-            else:
-                raise ValueError("shape mismatch: objects cannot be broadcast to a single shape")
-        shape = new_shape
-    return [broadcast_to(a, tuple(shape)) for a in arrays]
+    shape = broadcast_shapes(*(a.shape for a in arrays))
+    return [broadcast_to(a, shape) for a in arrays]

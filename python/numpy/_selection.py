@@ -167,7 +167,8 @@ def extract(condition, arr):
 
 def select(condlist, choicelist, default=0):
     """Return array drawn from elements in choicelist, depending on conditions."""
-    from ._shape import broadcast_to
+    from ._creation import where as _where
+    from ._shape import broadcast_shapes, broadcast_to
     if len(condlist) != len(choicelist):
         raise ValueError("condlist and choicelist must be the same length")
     if len(condlist) == 0:
@@ -179,136 +180,22 @@ def select(condlist, choicelist, default=0):
             raise TypeError(
                 "condlist must be a list of bool arrays")
     choicelist = [asarray(c) for c in choicelist]
-    # Determine output shape by broadcasting all arrays together
-    def _bcast_shapes(s1, s2):
-        """Compute broadcast shape of two shape tuples."""
-        if len(s1) < len(s2):
-            s1 = (1,) * (len(s2) - len(s1)) + s1
-        elif len(s2) < len(s1):
-            s2 = (1,) * (len(s1) - len(s2)) + s2
-        out = []
-        for a_dim, b_dim in zip(s1, s2):
-            if a_dim == 1:
-                out.append(b_dim)
-            elif b_dim == 1:
-                out.append(a_dim)
-            elif a_dim == b_dim:
-                out.append(a_dim)
-            else:
-                raise ValueError("shape mismatch")
-        return tuple(out)
-    # Also include default in shape broadcasting if it's array-like
-    _default_arr = None
-    if not isinstance(default, (int, float, complex)):
-        try:
-            _default_arr = asarray(default)
-        except Exception:
-            pass
-    all_arrays = condlist + choicelist
-    if _default_arr is not None:
-        all_arrays = all_arrays + [_default_arr]
-    out_shape = condlist[0].shape
-    for arr in all_arrays[1:]:
-        try:
-            out_shape = _bcast_shapes(out_shape, arr.shape)
-        except Exception:
-            pass
-    # Determine output dtype
-    _is_complex = isinstance(default, complex)
-    for ch in choicelist:
-        if 'complex' in str(ch.dtype):
-            _is_complex = True
-    if _is_complex:
-        _default_val = complex(default) if not isinstance(default, complex) else default
-        out_dtype = 'complex128'
-    elif isinstance(default, float) or any('float' in str(ch.dtype) for ch in choicelist):
-        _default_val = float(default)
-        out_dtype = 'float64'
-    else:
-        try:
-            _default_val = float(default)
-        except (TypeError, ValueError):
-            _default_val = 0.0
-        out_dtype = None
-        for ch in choicelist:
-            _dt = str(ch.dtype)
-            if 'int' in _dt or 'float' in _dt:
-                out_dtype = _dt
-                break
-        if out_dtype is None:
-            out_dtype = 'float64'
-    # Build result by broadcasting conditions and choices
-    # Start with default value broadcast to output shape
-    _size = 1
-    for s in out_shape:
-        _size *= s
-    if _is_complex:
-        _re = _default_val.real
-        _im = _default_val.imag
-        result_re = [_re] * _size
-        result_im = [_im] * _size
-    else:
-        result_flat = [float(_default_val)] * _size
-    # Broadcast each array to out_shape
-    def _broadcast_to_flat(arr, shape):
-        """Broadcast arr to shape and return flat list."""
-        if arr.shape == shape:
-            return _flat_arraylike_data(arr)
-        # Simple broadcast: expand dimensions
-        _arr = arr
-        while _arr.ndim < len(shape):
-            _arr = _arr.reshape([1] + list(_arr.shape))
-        return _flat_arraylike_data(broadcast_to(_arr, shape))
-    def _broadcast_cond_flat(cond, shape):
-        """Broadcast boolean cond to flat list of ints."""
-        if cond.shape == shape:
-            vals = _flat_arraylike_data(cond)
-        elif cond.size == 1:
-            v = _flat_arraylike_data(cond)[0]
-            _size2 = 1
-            for s in shape:
-                _size2 *= s
-            vals = [v] * _size2
-        else:
-            _c = cond
-            while _c.ndim < len(shape):
-                _c = _c.reshape([1] + list(_c.shape))
-            _c = broadcast_to(_c, shape)
-            vals = _flat_arraylike_data(_c)
-        return [bool(v) for v in vals]
-    # Process in reverse order so first matching condition wins
+    default_arr = asarray(default)
+    out_shape = broadcast_shapes(
+        *(arr.shape for arr in (condlist + choicelist + [default_arr]))
+    )
+
+    def _broadcast_arr(arr):
+        if arr.shape == out_shape:
+            return arr
+        return broadcast_to(arr, out_shape)
+
+    result = _broadcast_arr(default_arr)
     for i in _builtin_range(len(condlist) - 1, -1, -1):
-        cond_flat = _broadcast_cond_flat(condlist[i], out_shape)
-        choice_flat = _broadcast_to_flat(choicelist[i], out_shape)
-        if _is_complex:
-            ch_arr = choicelist[i]
-            if 'complex' in str(ch_arr.dtype):
-                ch_re = ch_arr.real
-                ch_im = ch_arr.imag
-                if not isinstance(ch_re, ndarray):
-                    ch_re = array([float(ch_re)])
-                    ch_im = array([float(ch_im)])
-                ch_re_flat = _broadcast_to_flat(ch_re, out_shape)
-                ch_im_flat = _broadcast_to_flat(ch_im, out_shape)
-            else:
-                ch_re_flat = choice_flat
-                ch_im_flat = [0.0] * len(choice_flat)
-            for j in _builtin_range(_size):
-                if cond_flat[j]:
-                    result_re[j] = ch_re_flat[j]
-                    result_im[j] = ch_im_flat[j]
-        else:
-            for j in _builtin_range(_size):
-                if cond_flat[j]:
-                    result_flat[j] = float(choice_flat[j])
-    if _is_complex:
-        _vals = [complex(result_re[j], result_im[j]) for j in _builtin_range(_size)]
-        result_arr = array(_vals, dtype='complex128')
-    else:
-        result_arr = array(result_flat, dtype=out_dtype)
-    if len(out_shape) != 1 or out_shape != result_arr.shape:
-        result_arr = result_arr.reshape(list(out_shape))
-    return result_arr
+        cond = _broadcast_arr(condlist[i])
+        choice = _broadcast_arr(choicelist[i])
+        result = _where(cond, choice, result)
+    return result
 
 
 def piecewise(x, condlist, funclist):
@@ -356,6 +243,12 @@ def piecewise(x, condlist, funclist):
             )
         )
 
+    has_otherwise = n_funcs == n_conditions + 1
+    if all(not callable(f) for f in funclist):
+        default = funclist[-1] if has_otherwise else 0
+        values = funclist[:n_conditions]
+        return _restore_piecewise_subclass(select(condlist, values, default=default))
+
     # Support 0-d arrays
     if x.ndim == 0:
         scalar_x = float(x)
@@ -390,7 +283,6 @@ def piecewise(x, condlist, funclist):
 
     flat_x = x.flatten()
     n = x.size
-    has_otherwise = n_funcs == n_conditions + 1
     result = [0.0] * n
 
     for i in range(n):
