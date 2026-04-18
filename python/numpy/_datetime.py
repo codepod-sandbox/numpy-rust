@@ -1,7 +1,7 @@
 """Datetime64 and timedelta64 support."""
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray
+from ._helpers import _ObjectArray, _flat_arraylike_data
 
 __all__ = [
     '_NAT_VALUE',
@@ -299,7 +299,7 @@ class datetime64:
         if isinstance(other, ndarray):
             from ._helpers import _make_temporal_array
             dt = str(other.dtype)
-            vals = other.flatten().tolist()
+            vals = _flat_arraylike_data(other)
             if dt.startswith('timedelta64'):
                 out = []
                 for v in vals:
@@ -519,17 +519,19 @@ def isnat(x):
     if isinstance(x, (_datetime64_cls, _timedelta64_cls)):
         return x._is_nat
     if isinstance(x, _ObjectArray):
-        results = []
-        for v in x._data:
-            if isinstance(v, (_datetime64_cls, _timedelta64_cls)):
-                results.append(v._is_nat)
-            else:
-                results.append(False)
+        results = [
+            (v._is_nat if isinstance(v, (_datetime64_cls, _timedelta64_cls)) else False)
+            for v in x._data
+        ]
         arr = _native.array([1.0 if r else 0.0 for r in results]).astype('bool')
         return arr.reshape(list(x._shape))
     if isinstance(x, ndarray):
         # For ndarray, check element-wise - unlikely to have NaT but handle gracefully
-        return _native.array([0.0] * x.size).astype('bool').reshape(list(x.shape))
+        results = [
+            (v._is_nat if isinstance(v, (_datetime64_cls, _timedelta64_cls)) else False)
+            for v in _flat_arraylike_data(x)
+        ]
+        return _native.array([1.0 if r else 0.0 for r in results]).astype('bool').reshape(list(x.shape))
     return False
 
 
@@ -575,21 +577,16 @@ def datetime_as_string(arr, unit=None, timezone='naive', casting='same_kind'):
     """Convert datetime64 array to string representation."""
     from ._helpers import _ObjectArray
     if _is_dt64(arr) or (isinstance(arr, _ObjectArray) and arr.size > 0 and _is_dt64(arr._data[0])):
-        if hasattr(arr, 'tolist'):
-            items = arr.tolist() if hasattr(arr, 'tolist') else [arr]
-        else:
-            items = [arr]
+        items = _flat_arraylike_data(arr) if hasattr(arr, 'shape') else [arr]
         result = [str(x) for x in items]
         if len(result) == 1 and not hasattr(arr, 'shape'):
             return result[0]
         return _ObjectArray(result, 'str')
     # For ndarray of datetime64
     if hasattr(arr, 'flatten'):
-        flat = arr.flatten()
         results = []
-        for i in range(flat.size if hasattr(flat, 'size') else len(flat)):
+        for val in _flat_arraylike_data(arr):
             try:
-                val = flat[i]
                 results.append(str(val))
             except Exception:
                 results.append('NaT')
