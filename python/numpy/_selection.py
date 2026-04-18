@@ -4,6 +4,7 @@ from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray,
     _builtin_range, _builtin_min, _builtin_max,
+    _flat_arraylike_data,
 )
 from ._creation import array, asarray, zeros, ones, empty, arange, concatenate
 
@@ -51,7 +52,7 @@ def _normalize_delete_obj(obj, axis, n):
 
     if isinstance(obj, slice):
         idx_arr = arange(n)[obj]
-        return [int(v) for v in idx_arr.flatten().tolist()]
+        return [int(v) for v in _flat_arraylike_data(idx_arr)]
     if isinstance(obj, bool):
         raise ValueError(
             "in the future, boolean array-likes will be handled as a "
@@ -62,7 +63,7 @@ def _normalize_delete_obj(obj, axis, n):
             raise IndexError("arrays used as indices must be of integer (or boolean) type")
         if obj_dtype == 'object' or 'timedelta' in obj_dtype or 'datetime' in obj_dtype:
             raise _delete_index_type_error()
-        flat_list = obj.flatten().tolist()
+        flat_list = _flat_arraylike_data(obj)
         if obj_dtype == 'bool':
             if len(flat_list) != n:
                 raise ValueError(
@@ -119,7 +120,7 @@ def _normalize_insert_obj(obj, n):
     if isinstance(obj, ndarray) and obj.ndim > 0:
         if obj.dtype.kind == 'f':
             raise IndexError("index {} is not a valid index for insertion".format(obj))
-        return [int(v) for v in obj.flatten().tolist()], False
+        return [int(v) for v in _flat_arraylike_data(obj)], False
     if isinstance(obj, ndarray) and obj.ndim == 0:
         if obj.dtype.kind == 'f':
             raise IndexError("index {} is not a valid index for insertion".format(obj))
@@ -143,7 +144,7 @@ def choose(a, choices, out=None, mode="raise"):
     choice_arrays = [_to_choice_array(c) for c in choices]
     result = _native.choose(a, choice_arrays)
     if out is not None and isinstance(out, ndarray):
-        flat = result.flatten().tolist()
+        flat = _flat_arraylike_data(result)
         for i in range(len(flat)):
             out.flat[i] = flat[i]
         return out
@@ -258,18 +259,18 @@ def select(condlist, choicelist, default=0):
     def _broadcast_to_flat(arr, shape):
         """Broadcast arr to shape and return flat list."""
         if arr.shape == shape:
-            return arr.flatten().tolist()
+            return _flat_arraylike_data(arr)
         # Simple broadcast: expand dimensions
         _arr = arr
         while _arr.ndim < len(shape):
             _arr = _arr.reshape([1] + list(_arr.shape))
-        return broadcast_to(_arr, shape).flatten().tolist()
+        return _flat_arraylike_data(broadcast_to(_arr, shape))
     def _broadcast_cond_flat(cond, shape):
         """Broadcast boolean cond to flat list of ints."""
         if cond.shape == shape:
-            vals = cond.flatten().tolist()
+            vals = _flat_arraylike_data(cond)
         elif cond.size == 1:
-            v = cond.flatten().tolist()[0]
+            v = _flat_arraylike_data(cond)[0]
             _size2 = 1
             for s in shape:
                 _size2 *= s
@@ -279,7 +280,7 @@ def select(condlist, choicelist, default=0):
             while _c.ndim < len(shape):
                 _c = _c.reshape([1] + list(_c.shape))
             _c = broadcast_to(_c, shape)
-            vals = _c.flatten().tolist()
+            vals = _flat_arraylike_data(_c)
         return [bool(v) for v in vals]
     # Process in reverse order so first matching condition wins
     for i in _builtin_range(len(condlist) - 1, -1, -1):
@@ -440,7 +441,7 @@ def _take_structured(a, indices, axis):
     """Pure-Python take for StructuredArray."""
     from ._creation import _create_structured_array
     import itertools
-    idx_list = indices.tolist() if hasattr(indices, 'tolist') else list(indices)
+    idx_list = _flat_arraylike_data(indices) if hasattr(indices, 'tolist') else list(indices)
     shape = list(a.shape)
     if axis is None:
         # Flatten then index: result is 1D
@@ -452,7 +453,7 @@ def _take_structured(a, indices, axis):
                 coords.insert(0, rem % s)
                 rem //= s
             val = a[tuple(coords)]
-            flat_tuples.append(val if isinstance(val, tuple) else tuple(val.tolist()))
+            flat_tuples.append(val if isinstance(val, tuple) else tuple(_flat_arraylike_data(val)))
         picked = [flat_tuples[j] for j in idx_list]
         return _create_structured_array(picked, a.dtype)
     # axis-based take
@@ -474,7 +475,7 @@ def _take_structured(a, indices, axis):
                 elif isinstance(val, tuple):
                     flat_records.append(val)
                 elif hasattr(val, 'tolist'):
-                    v = val.tolist()
+                    v = _flat_arraylike_data(val)
                     flat_records.append(v if isinstance(v, tuple) else tuple(v) if isinstance(v, list) else (v,))
                 else:
                     flat_records.append((val,))
@@ -792,7 +793,7 @@ def insert(arr, obj, values, axis=None):
             if type(v).__name__ == 'void':
                 return tuple(v[name] for name in field_names)
             if hasattr(v, 'tolist'):
-                out = v.tolist()
+                out = _flat_arraylike_data(v)
                 if isinstance(out, tuple):
                     return out
                 if isinstance(out, list):
@@ -840,7 +841,7 @@ def insert(arr, obj, values, axis=None):
         if v_arr.ndim == 0:
             flat_row = [float(v_arr[()])] * row_size
         elif v_arr.size == row_size:
-            flat_row = [float(x) for x in v_arr.flatten().tolist()]
+            flat_row = [float(x) for x in _flat_arraylike_data(v_arr)]
         else:
             flat_row = [float(v_arr.flat[0])] * row_size
         return array(flat_row).reshape(list(sub_shape))
@@ -866,7 +867,7 @@ def insert(arr, obj, values, axis=None):
             norm_indices = [norm_indices[0]] * n_inserts
         elif row_size == 1:
             val_flat = val_arr.flatten()
-            val_list = list(val_flat.tolist())
+            val_list = list(_flat_arraylike_data(val_flat))
             norm_indices = [norm_indices[0]] * len(val_list)
         else:
             # 1D values for scalar obj: 1 insertion, values broadcast to sub_shape
@@ -882,10 +883,10 @@ def insert(arr, obj, values, axis=None):
             # 1 index, multiple values
             if val_arr.ndim == 1:
                 # 1D values: each element is a separate scalar insertion (broadcast obj)
-                val_list = list(val_flat.tolist())
+                val_list = list(_flat_arraylike_data(val_flat))
                 norm_indices = [norm_indices[0]] * len(val_list)
             elif row_size == 1:
-                val_list = list(val_flat.tolist())
+                val_list = list(_flat_arraylike_data(val_flat))
                 norm_indices = [norm_indices[0]] * len(val_list)
             else:
                 # 2D+ values with 1 obj: 1 insertion, values broadcast to sub_shape
