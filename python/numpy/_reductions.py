@@ -2810,8 +2810,7 @@ def ediff1d(ary, to_end=None, to_begin=None):
     if to_begin is not None:
         parts.append(asarray(to_begin).flatten().astype(dtype_str))
     if n > 1:
-        diff_vals = [ary[i] - ary[i - 1] for i in range(1, n)]
-        parts.append(array(diff_vals))
+        parts.append(diff(ary, n=1, axis=-1).astype(dtype_str))
     elif n == 1:
         parts.append(array([], dtype=dtype_str))
     else:
