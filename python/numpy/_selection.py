@@ -514,12 +514,8 @@ def take(a, indices, axis=None, out=None, mode="raise"):
 
 def _take_along_axis(arr, indices, axis):
     """Take slices along an axis by indices list, return concatenated result."""
-    parts = []
-    for idx in indices:
-        slices = [slice(None)] * arr.ndim
-        slices[axis] = slice(idx, idx + 1)
-        parts.append(arr[tuple(slices)])
-    return concatenate(parts, axis=axis)
+    from ._array_utils import take_along_axis as _take_along_axis_impl
+    return _take_along_axis_impl(arr, indices, axis)
 
 
 def copyto(dst, src, casting='same_kind', where=True):
