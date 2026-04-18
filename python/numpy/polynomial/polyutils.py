@@ -1,6 +1,7 @@
 """numpy.polynomial.polyutils - utility functions."""
 import numpy as np
 from numpy.exceptions import RankWarning
+from numpy._helpers import _flat_arraylike_data
 
 
 def trimseq(seq):
@@ -18,7 +19,7 @@ def trimcoef(c, tol=0):
     if tol < 0:
         raise ValueError("tol must be non-negative")
     c = np.asarray(c)
-    c_list = list(c.flatten().tolist())
+    c_list = _flat_arraylike_data(c.flatten())
     while len(c_list) > 1 and abs(c_list[-1]) <= tol:
         c_list.pop()
     # If only one element left and it's also <= tol, replace with 0
@@ -67,7 +68,7 @@ def as_series(alist, trim=True):
     for a in arrays:
         a = a.flatten()
         if trim:
-            a_list = trimseq(list(a.tolist()))
+            a_list = trimseq(_flat_arraylike_data(a))
             a = np.array(a_list, dtype=common_dtype) if a_list else np.array([0.0], dtype=common_dtype)
         else:
             # Cast to common dtype
@@ -81,7 +82,7 @@ def getdomain(x):
     """Return a domain suitable for the given data points."""
     x = np.asarray(x)
     flat = x.flatten()
-    vals = flat.tolist()
+    vals = _flat_arraylike_data(flat)
     if vals and isinstance(vals[0], complex):
         mn = complex(min(v.real for v in vals), min(v.imag for v in vals))
         mx = complex(max(v.real for v in vals), max(v.imag for v in vals))
@@ -93,8 +94,8 @@ def getdomain(x):
 def mapdomain(x, old, new):
     """Apply linear map to input points x from domain old to domain new."""
     x = np.asarray(x)
-    old = list(np.asarray(old).flatten().tolist())
-    new = list(np.asarray(new).flatten().tolist())
+    old = _flat_arraylike_data(np.asarray(old).flatten())
+    new = _flat_arraylike_data(np.asarray(new).flatten())
     off, scl = mapparms(old, new)
     result = x * scl + off
     # Preserve subclass type
@@ -105,8 +106,8 @@ def mapdomain(x, old, new):
 
 def mapparms(old, new):
     """Return offset and scale for linear map between domains."""
-    old = list(np.asarray(old).flatten().tolist())
-    new = list(np.asarray(new).flatten().tolist())
+    old = _flat_arraylike_data(np.asarray(old).flatten())
+    new = _flat_arraylike_data(np.asarray(new).flatten())
     old_len = old[1] - old[0]
     new_len = new[1] - new[0]
     if old_len == 0:
