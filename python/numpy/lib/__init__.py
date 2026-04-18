@@ -1,5 +1,6 @@
 """numpy.lib - library of routines."""
 import sys as _sys
+from numpy._helpers import _flat_arraylike_data
 from numpy.lib import stride_tricks, mixins, format
 
 # Register all _*_impl submodules under their public names
@@ -81,7 +82,7 @@ class _ScimathModule:
             if v < 0:
                 return complex(cmath.sqrt(v))
             return np.sqrt(x)
-        flat = x.flatten().tolist()
+        flat = _flat_arraylike_data(x.flatten())
         any_neg = any(v < 0 for v in flat)
         if any_neg:
             return np.array([complex(cmath.sqrt(v)) for v in flat]).reshape(x.shape)
@@ -98,7 +99,7 @@ class _ScimathModule:
                 return complex(cmath.log(v))
             return np.log(x)
         result = []
-        for v in x.flatten().tolist():
+        for v in _flat_arraylike_data(x.flatten()):
             if v <= 0:
                 result.append(complex(cmath.log(v)))
             else:
@@ -128,7 +129,7 @@ class _ScimathModule:
                 return complex(cmath.log10(v))
             return np.log10(x)
         result = []
-        for v in np.asarray(x).flatten().tolist():
+        for v in _flat_arraylike_data(np.asarray(x).flatten()):
             result.append(complex(cmath.log10(v)))
         return np.array(result)
 
@@ -138,7 +139,7 @@ class _ScimathModule:
         result = np.power(np.asarray(x, dtype='complex128'), p)
         if isinstance(result, tuple):
             return complex(result[0], result[1])
-        flat = result.flatten().tolist()
+        flat = _flat_arraylike_data(result.flatten())
         flat_complex = [complex(v[0], v[1]) if isinstance(v, tuple) else complex(v) for v in flat]
         return np.array(flat_complex).reshape(result.shape)
 
@@ -149,7 +150,7 @@ class _ScimathModule:
         x = np.asarray(x)
         if x.ndim == 0:
             return complex(cmath.acos(float(x)))
-        return np.array([complex(cmath.acos(v)) for v in x.flatten().tolist()])
+        return np.array([complex(cmath.acos(v)) for v in _flat_arraylike_data(x.flatten())])
 
     @staticmethod
     def arcsin(x):
@@ -158,7 +159,7 @@ class _ScimathModule:
         x = np.asarray(x)
         if x.ndim == 0:
             return complex(cmath.asin(float(x)))
-        return np.array([complex(cmath.asin(v)) for v in x.flatten().tolist()])
+        return np.array([complex(cmath.asin(v)) for v in _flat_arraylike_data(x.flatten())])
 
     def __getattr__(self, name):
         import numpy as np
