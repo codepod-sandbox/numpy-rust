@@ -916,9 +916,8 @@ def ravel_multi_index(multi_index, dims, mode='raise', order='C'):
     if order == 'C' and mode == 'raise':
         result = _native.ravel_multi_index(arrays, dims)
         if not was_2d_array and all_scalar_inputs:
-            if hasattr(result, 'tolist'):
-                vals = result.tolist()
-                return int(vals[0] if isinstance(vals, list) else vals)
+            if isinstance(result, ndarray):
+                return int(_flat_arraylike_data(result)[0])
             return int(result)
         return result
     if order == 'F':
@@ -1042,12 +1041,12 @@ def fill_diagonal(a, val, wrap=False):
         # filling diagonal elements for tall matrices
         step = m + 1
         total = n * m
+        vl = val if not isinstance(val, ndarray) else _flat_arraylike_data(val)
         k = 0
         while k < total:
             i = k // m
             j = k % m
-            if isinstance(val, (list, tuple, ndarray)):
-                vl = val if not isinstance(val, ndarray) else val.tolist()
+            if isinstance(vl, (list, tuple)):
                 if isinstance(vl, list):
                     a[i, j] = vl[(k // step) % len(vl)]
                 else:
@@ -1057,9 +1056,9 @@ def fill_diagonal(a, val, wrap=False):
             k += step
     else:
         diag_len = _builtin_min(n, m)
+        vl = val if not isinstance(val, ndarray) else _flat_arraylike_data(val)
         for k in _builtin_range(diag_len):
-            if isinstance(val, (list, tuple, ndarray)):
-                vl = val if not isinstance(val, ndarray) else val.tolist()
+            if isinstance(vl, (list, tuple)):
                 if isinstance(vl, list):
                     a[k, k] = vl[k % len(vl)]
                 else:
@@ -1148,7 +1147,7 @@ def advanced_fancy_index(arr, indices):
         for ax in _builtin_range(len(idx_arrays)):
             ix = int(idx_arrays[ax][i])
             val = val[ix]
-        result.append(float(val.tolist()) if hasattr(val, 'tolist') else float(val))
+        result.append(float(_flat_arraylike_data(val)[0]) if isinstance(val, ndarray) else float(val))
     return array(result)
 
 
