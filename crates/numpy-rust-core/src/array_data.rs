@@ -494,6 +494,58 @@ impl ArrayData {
         }
     }
 
+    pub fn assign_masked_repeat(&mut self, flat_mask: &[bool], values: &ArrayData) -> Result<()> {
+        macro_rules! do_mask_set_repeat {
+            ($dst:expr, $src:expr) => {{
+                let mut val_idx = 0;
+                let src_flat: Vec<_> = $src.iter().cloned().collect();
+                if src_flat.is_empty() {
+                    return Ok(());
+                }
+                if let Some(flat) = $dst.as_slice_mut() {
+                    for (i, &m) in flat_mask.iter().enumerate() {
+                        if m {
+                            flat[i] = src_flat[val_idx % src_flat.len()].clone();
+                            val_idx += 1;
+                        }
+                    }
+                } else {
+                    let shape = $dst.shape().to_vec();
+                    for (i, &m) in flat_mask.iter().enumerate() {
+                        if m {
+                            let mut rem = i;
+                            let mut coord = vec![0usize; shape.len()];
+                            for d in (0..shape.len()).rev() {
+                                coord[d] = rem % shape[d];
+                                rem /= shape[d];
+                            }
+                            let val = src_flat[val_idx % src_flat.len()].clone();
+                            $dst[ndarray::IxDyn(&coord)] = val;
+                            val_idx += 1;
+                        }
+                    }
+                }
+                Ok(())
+            }};
+        }
+
+        match (self, values) {
+            (ArrayData::Bool(dst), ArrayData::Bool(src)) => do_mask_set_repeat!(dst, src),
+            (ArrayData::Int32(dst), ArrayData::Int32(src)) => do_mask_set_repeat!(dst, src),
+            (ArrayData::Int64(dst), ArrayData::Int64(src)) => do_mask_set_repeat!(dst, src),
+            (ArrayData::Float32(dst), ArrayData::Float32(src)) => do_mask_set_repeat!(dst, src),
+            (ArrayData::Float64(dst), ArrayData::Float64(src)) => do_mask_set_repeat!(dst, src),
+            (ArrayData::Complex64(dst), ArrayData::Complex64(src)) => do_mask_set_repeat!(dst, src),
+            (ArrayData::Complex128(dst), ArrayData::Complex128(src)) => {
+                do_mask_set_repeat!(dst, src)
+            }
+            (ArrayData::Str(dst), ArrayData::Str(src)) => do_mask_set_repeat!(dst, src),
+            _ => Err(NumpyError::TypeError(
+                "cannot assign values of incompatible dtype".into(),
+            )),
+        }
+    }
+
     pub fn select_masked(&self, flat_mask: &[bool]) -> Self {
         macro_rules! do_mask {
             ($arr:expr, $variant:ident) => {{

@@ -1441,6 +1441,20 @@ pub mod _numpy_native {
     }
 
     #[pyfunction]
+    fn putmask(
+        a: vm::PyRef<PyNdArray>,
+        mask: vm::PyRef<PyNdArray>,
+        values: vm::PyRef<PyNdArray>,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
+        let mut arr = a.inner().clone();
+        arr.mask_set_repeat(&mask.inner(), &values.inner())
+            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        a.replace_inner(arr);
+        Ok(())
+    }
+
+    #[pyfunction]
     fn choose(
         a: vm::PyRef<PyNdArray>,
         choices: PyObjectRef,

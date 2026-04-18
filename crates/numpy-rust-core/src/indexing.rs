@@ -377,6 +377,30 @@ impl NdArray {
         self.mutate_data(|data| data.assign_masked(&flat_mask, &cast_values))
     }
 
+    /// Set elements where mask is true, repeating values modulo the input size.
+    pub fn mask_set_repeat(&mut self, mask: &NdArray, values: &NdArray) -> Result<()> {
+        let bool_mask = match mask.data() {
+            ArrayData::Bool(m) => m,
+            _ => return Err(NumpyError::TypeError("mask must be a boolean array".into())),
+        };
+
+        if bool_mask.len() != self.size() {
+            return Err(NumpyError::ShapeMismatch(format!(
+                "mask size {} does not match array size {}",
+                bool_mask.len(),
+                self.size()
+            )));
+        }
+
+        if values.size() == 0 {
+            return Ok(());
+        }
+
+        let flat_mask: Vec<bool> = bool_mask.iter().copied().collect();
+        let cast_values = coerce_array_for_assignment(values, self.storage(), self.dtype())?;
+        self.mutate_data(|data| data.assign_masked_repeat(&flat_mask, &cast_values))
+    }
+
     /// Select elements where mask is true, returning a 1-D array.
     /// Like `a[mask]` in NumPy where mask is a boolean array.
     pub fn mask_select(&self, mask: &NdArray) -> Result<NdArray> {

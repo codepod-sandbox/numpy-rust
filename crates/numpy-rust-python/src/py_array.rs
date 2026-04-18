@@ -82,6 +82,10 @@ impl PyNdArray {
         self.data.read().unwrap()
     }
 
+    pub fn replace_inner(&self, data: NdArray) {
+        *self.data.write().unwrap() = data;
+    }
+
     pub fn to_py(self, vm: &VirtualMachine) -> PyObjectRef {
         self.into_pyobject(vm)
     }

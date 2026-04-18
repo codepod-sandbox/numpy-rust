@@ -431,37 +431,10 @@ def place(arr, mask, vals):
         )
     mask_arr = asarray(mask).flatten()
     vals_arr = asarray(vals).flatten()
-    n = arr.size
-    nv = vals_arr.size
-    # Count True positions to validate
-    count_true = 0
-    for i in _builtin_range(n):
-        if bool(mask_arr[i]):
-            count_true += 1
-    if count_true > 0 and nv == 0:
+    if any(bool(v) for v in _flat_arraylike_data(mask_arr)) and vals_arr.size == 0:
         raise ValueError("Cannot insert from an empty array!")
-    flat_a = arr.flatten()
-    vi = 0
-    for i in _builtin_range(n):
-        if bool(mask_arr[i]):
-            flat_a[i] = vals_arr[vi % nv]
-            vi += 1
-    # Write back in-place
-    if arr.ndim == 1:
-        for i in _builtin_range(n):
-            arr[i] = flat_a[i]
-    else:
-        _shape = arr.shape
-        _strides = [1] * arr.ndim
-        for _d in _builtin_range(arr.ndim - 2, -1, -1):
-            _strides[_d] = _strides[_d + 1] * _shape[_d + 1]
-        for i in _builtin_range(n):
-            _idx = []
-            _rem = i
-            for _d in _builtin_range(arr.ndim):
-                _idx.append(_rem // _strides[_d])
-                _rem %= _strides[_d]
-            arr[tuple(_idx)] = flat_a[i]
+    _native.putmask(arr, mask_arr, vals_arr)
+    return None
 
 
 def put(a, ind, v, mode='raise'):
@@ -511,19 +484,11 @@ def putmask(a, mask, values):
 
     Modifies 'a' in-place and returns None.
     """
-    mask = asarray(mask)
-    values = asarray(values)
-    flat_m = mask.flatten()
-    flat_v = values.flatten()
-    n = a.size
-    nv = flat_v.size
-    if nv == 0:
+    mask = asarray(mask).flatten()
+    values = asarray(values).flatten()
+    if values.size == 0:
         return None
-    vi = 0
-    for i in range(n):
-        if flat_m[i]:
-            a.flat[i] = float(flat_v[vi % nv])
-            vi += 1
+    _native.putmask(a, mask, values)
     return None
 
 
