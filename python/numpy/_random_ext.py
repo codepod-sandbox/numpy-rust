@@ -2,7 +2,7 @@
 import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray, random as _random_native, linalg as _linalg_native
-from ._helpers import _builtin_range
+from ._helpers import _builtin_range, _flat_arraylike_data
 from ._creation import array, asarray, arange
 from ._math import exp
 
@@ -643,7 +643,9 @@ def _fill_out(out, src):
     """Fill an output array in-place from a source array using tuple indexing."""
     shape = out.shape
     ndim = len(shape)
-    src_flat = src.flatten().tolist() if isinstance(src, ndarray) else [float(src)]
+    src_flat = _flat_arraylike_data(src)
+    if src_flat is None:
+        src_flat = [float(src)]
     if ndim == 1:
         for i in range(shape[0]):
             out[(i,)] = src_flat[i]
@@ -692,7 +694,10 @@ def _shape_total(shape):
 
 def _flat_broadcast_values(value):
     if isinstance(value, ndarray):
-        return value.flatten().tolist(), list(value.shape)
+        flat = _flat_arraylike_data(value)
+        if flat is None:
+            flat = value.flatten().tolist()
+        return flat, list(value.shape)
     return [value], [1]
 
 
@@ -720,7 +725,9 @@ def _wrap_broadcast_results(results, out_shape):
 def _broadcast_call_1(func, arg, size=None):
     """Call a single-param distribution function with broadcasting support."""
     if isinstance(arg, ndarray):
-        arg_flat = arg.flatten().tolist()
+        arg_flat = _flat_arraylike_data(arg)
+        if arg_flat is None:
+            arg_flat = arg.flatten().tolist()
         size_shape = _normalize_size_tuple(size)
         if size_shape is not None:
             total = _shape_total(size_shape)
@@ -860,7 +867,6 @@ def _coerce_int_operand(value):
         return flat, _shape_of(value)
     else:
         return int(value), None
-    return arr.flatten().tolist(), list(arr.shape)
 
 
 def _broadcast_random_operand_shapes(low_shape, high_shape, size):
@@ -1754,7 +1760,9 @@ class _BitGenerator:
         elif isinstance(seed, (ndarray, list, tuple)):
             # Array/list seed: use hash of all elements
             if isinstance(seed, ndarray):
-                seed_list = seed.flatten().tolist()
+                seed_list = _flat_arraylike_data(seed)
+                if seed_list is None:
+                    seed_list = seed.flatten().tolist()
             else:
                 seed_list = list(seed)
             for v in seed_list:
