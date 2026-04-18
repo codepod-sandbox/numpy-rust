@@ -2,7 +2,6 @@
 import _numpy_native as _native
 from _numpy_native import ndarray
 from ._helpers import _ObjectArray, _flat_arraylike_data
-from ._creation import asarray
 
 __all__ = [
     '_NAT_VALUE',
@@ -730,6 +729,7 @@ def _count_business_days_scalar(begin, end, weekmask, holidays):
 def busday_count(begindates, enddates, weekmask='1111100', holidays=None, busdaycal=None):
     """Count business days between begin and end dates."""
     from ._shape import broadcast_arrays
+    from ._creation import asarray
     weekmask, holidays = _calendar_parts(weekmask, holidays, busdaycal)
     begin = asarray(begindates)
     end = asarray(enddates)
@@ -748,6 +748,7 @@ def busday_count(begindates, enddates, weekmask='1111100', holidays=None, busday
 
 def is_busday(dates, weekmask='1111100', holidays=None, busdaycal=None):
     """Check if dates are business days."""
+    from ._creation import asarray
     weekmask, holidays = _calendar_parts(weekmask, holidays, busdaycal)
     arr = asarray(dates)
     days = [_date_scalar_to_day(v) for v in _flat_arraylike_data(arr)]
@@ -759,6 +760,7 @@ def busday_offset(dates, offsets, roll='raise', weekmask='1111100', holidays=Non
     """Offset dates by business days."""
     from ._helpers import _make_temporal_array
     from ._shape import broadcast_arrays
+    from ._creation import asarray
     weekmask, holidays = _calendar_parts(weekmask, holidays, busdaycal)
     date_arr = asarray(dates)
     offset_arr = asarray(offsets)
