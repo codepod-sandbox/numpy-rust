@@ -138,7 +138,14 @@ def outer(a, b, out=None):
 
 def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
     """Cross product of two arrays."""
+    from ._creation import asarray
+    from ._join import stack
     from ._manipulation import moveaxis, broadcast_shapes, broadcast_to
+
+    def _last_component(arr, idx):
+        key = (slice(None),) * (arr.ndim - 1) + (idx,)
+        return arr[key]
+
     _a_scalar = not isinstance(a, (ndarray, list, tuple))
     _b_scalar = not isinstance(b, (ndarray, list, tuple))
     a, b = _ensure_array_pair(a, b)
@@ -155,29 +162,9 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
     if b.ndim > 1 and axisb != -1 and axisb != b.ndim - 1:
         b = moveaxis(b, axisb, -1)
     if a.ndim >= 2 and b.ndim == 1:
-        b = b.reshape((1,) * (a.ndim - 1) + (b.shape[0],))
-        b_shape = list(a.shape[:-1]) + [b.shape[-1]]
-        b_flat = _flat_arraylike_data(b.flatten())
-        b_new = []
-        batch = 1
-        for s in a.shape[:-1]:
-            batch *= s
-        vec_len = b.shape[-1]
-        for i in range(batch):
-            b_new.extend(b_flat[:vec_len])
-        b = array(b_new).reshape(b_shape)
+        b = broadcast_to(b.reshape((1,) * (a.ndim - 1) + (b.shape[0],)), a.shape[:-1] + (b.shape[0],))
     elif b.ndim >= 2 and a.ndim == 1:
-        a = a.reshape((1,) * (b.ndim - 1) + (a.shape[0],))
-        a_shape = list(b.shape[:-1]) + [a.shape[-1]]
-        a_flat = _flat_arraylike_data(a.flatten())
-        a_new = []
-        batch = 1
-        for s in b.shape[:-1]:
-            batch *= s
-        vec_len = a.shape[-1]
-        for i in range(batch):
-            a_new.extend(a_flat[:vec_len])
-        a = array(a_new).reshape(a_shape)
+        a = broadcast_to(a.reshape((1,) * (b.ndim - 1) + (a.shape[0],)), b.shape[:-1] + (a.shape[0],))
     if a.ndim == 1 and b.ndim == 1:
         af = _flat_arraylike_data(a.flatten())
         bf = _flat_arraylike_data(b.flatten())
@@ -195,40 +182,24 @@ def cross(a, b, axisa=-1, axisb=-1, axisc=-1, axis=None):
             return array(cz)
         return array([cx, cy, cz])
     if a.ndim >= 2 and b.ndim >= 2:
-        a_batch = a.shape[:-1]
-        b_batch = b.shape[:-1]
-        try:
-            out_batch = broadcast_shapes(a_batch, b_batch)
-        except Exception:
-            out_batch = a_batch
+        out_batch = broadcast_shapes(a.shape[:-1], b.shape[:-1])
         a_bc = broadcast_to(a, tuple(out_batch) + (a.shape[-1],))
         b_bc = broadcast_to(b, tuple(out_batch) + (b.shape[-1],))
         la = a_bc.shape[-1]
         lb = b_bc.shape[-1]
-        batch_size = 1
-        for s in out_batch:
-            batch_size *= s
-        af = _flat_arraylike_data(a_bc.flatten())
-        bf = _flat_arraylike_data(b_bc.flatten())
-        results = []
-        for i in range(batch_size):
-            ai = af[i * la:(i + 1) * la]
-            bi = bf[i * lb:(i + 1) * lb]
-            if la == 2:
-                ai = [ai[0], ai[1], 0.0]
-            if lb == 2:
-                bi = [bi[0], bi[1], 0.0]
-            cx = ai[1]*bi[2] - ai[2]*bi[1]
-            cy = ai[2]*bi[0] - ai[0]*bi[2]
-            cz = ai[0]*bi[1] - ai[1]*bi[0]
-            if la == 2 and lb == 2:
-                results.append(cz)
-            else:
-                results.extend([cx, cy, cz])
-        if la == 2 and lb == 2:
-            result = array(results).reshape(out_batch)
+        ax = _last_component(a_bc, 0)
+        ay = _last_component(a_bc, 1)
+        bx = _last_component(b_bc, 0)
+        by = _last_component(b_bc, 1)
+        az = _last_component(a_bc, 2) if a_bc.shape[-1] == 3 else asarray(ax * 0)
+        bz = _last_component(b_bc, 2) if b_bc.shape[-1] == 3 else asarray(bx * 0)
+        cx = ay * bz - az * by
+        cy = az * bx - ax * bz
+        cz = ax * by - ay * bx
+        if a_bc.shape[-1] == 2 and b_bc.shape[-1] == 2:
+            result = cz
         else:
-            result = array(results).reshape(list(out_batch) + [3])
+            result = stack([cx, cy, cz], axis=-1)
         if axisc != -1 and axisc != result.ndim - 1 and result.ndim > 1 and not (la == 2 and lb == 2):
             result = moveaxis(result, -1, axisc)
         return result

@@ -1,7 +1,8 @@
 """Array utility functions for numpy-rust."""
 from _numpy_native import ndarray
-from ._helpers import _flat_arraylike_data
-from ._creation import array, asarray
+from numpy.exceptions import AxisError
+from ._helpers import _copy_into, _flat_arraylike_data
+from ._creation import array, asarray, arange, where
 
 __all__ = [
     'frompyfunc',
@@ -23,98 +24,95 @@ def frompyfunc(func, nin, nout):
 # Indexing helpers
 # ---------------------------------------------------------------------------
 
+def _normalize_along_axis_inputs(arr, indices, axis, *, allow_axis_none):
+    arr = asarray(arr)
+    indices = asarray(indices)
+    dtype_name = str(indices.dtype)
+    if dtype_name == 'bool':
+        raise IndexError("`indices` must be an integer array")
+    if not ('int' in dtype_name or 'uint' in dtype_name):
+        if 'float' not in dtype_name:
+            raise IndexError("`indices` must be an integer array")
+        casted = indices.astype('int64')
+        original = _flat_arraylike_data(indices)
+        cast_flat = _flat_arraylike_data(casted)
+        for before, after in zip(original, cast_flat):
+            if float(before) != float(after):
+                raise IndexError("`indices` must be an integer array")
+        indices = casted
+    if axis is None:
+        if not allow_axis_none:
+            raise ValueError("`axis` must be specified")
+        if indices.ndim != 1:
+            raise ValueError("when axis=None, `indices` must have a single dimension")
+        return arr.reshape((arr.size,)), indices.reshape((indices.size,)), 0
+    if axis < -arr.ndim or axis >= arr.ndim:
+        raise AxisError(axis, arr.ndim)
+    if indices.ndim != arr.ndim:
+        raise ValueError("`indices` and `arr` must have the same number of dimensions")
+    return arr, indices, axis % arr.ndim
+
+
+def _linearized_take_setup(arr, indices, axis):
+    from ._manipulation import moveaxis
+    from ._shape import broadcast_shapes, broadcast_to
+
+    arr_m = moveaxis(arr, axis, -1)
+    ind_m = moveaxis(indices, axis, -1)
+    arr_lead_shape = arr_m.shape[:-1]
+    ind_lead_shape = ind_m.shape[:-1]
+    out_lead_shape = broadcast_shapes(arr_lead_shape, ind_lead_shape)
+    axis_len = arr_m.shape[-1]
+    out_axis_len = ind_m.shape[-1]
+
+    arr_row_count = 1
+    for dim in arr_lead_shape:
+        arr_row_count *= dim
+    out_row_count = 1
+    for dim in out_lead_shape:
+        out_row_count *= dim
+
+    row_ids = arange(arr_row_count, dtype='int64').reshape(arr_lead_shape if arr_lead_shape else ())
+    row_ids_bc = broadcast_to(row_ids, out_lead_shape if out_lead_shape else ()).reshape((out_row_count, 1))
+    ind_rows = broadcast_to(ind_m, out_lead_shape + (out_axis_len,)).reshape((out_row_count, out_axis_len)).astype('int64')
+    norm_rows = where(ind_rows < 0, ind_rows + axis_len, ind_rows)
+
+    for idx in _flat_arraylike_data(norm_rows):
+        if idx < 0 or idx >= axis_len:
+            raise IndexError("index out of bounds")
+
+    flat_offsets = row_ids_bc * axis_len
+    linear = (flat_offsets + norm_rows).reshape((out_row_count * out_axis_len,))
+    arr_rows = arr_m.reshape((arr_row_count, axis_len))
+    out_shape = out_lead_shape + (out_axis_len,)
+    return arr_m, arr_rows, linear, out_shape
+
 def take_along_axis(arr, indices, axis):
     """Take values from the input array by matching 1-d index and data slices along the given axis."""
     from ._manipulation import moveaxis
-    arr = asarray(arr)
-    indices = asarray(indices)
-    if arr.ndim == 1:
-        result = []
-        for i in range(indices.size):
-            result.append(arr[int(indices[i])])
-        return array(result)
-    if arr.ndim == 2:
-        if axis == 0:
-            rows = []
-            for j in range(arr.shape[1]):
-                col = []
-                for i in range(indices.shape[0]):
-                    col.append(arr[int(indices[i][j])][j])
-                rows.append(col)
-            result = []
-            for i in range(indices.shape[0]):
-                row = [rows[j][i] for j in range(arr.shape[1])]
-                result.append(row)
-            return array(result)
-        else:
-            rows = []
-            for i in range(arr.shape[0]):
-                row = []
-                for j in range(indices.shape[1]):
-                    row.append(arr[i][int(indices[i][j])])
-                rows.append(row)
-            return array(rows)
-    if axis < 0:
-        axis = arr.ndim + axis
-    arr_m = moveaxis(arr, axis, -1)
-    ind_m = moveaxis(indices, axis, -1)
-    out_shape = ind_m.shape
-    n_axis = arr_m.shape[-1]
-    lead = 1
-    for s in arr_m.shape[:-1]:
-        lead *= s
-    arr_flat = arr_m.reshape((lead, n_axis))
-    ind_flat = ind_m.reshape((lead, ind_m.shape[-1]))
-    arr_list = [_flat_arraylike_data(arr_flat[i]) for i in range(lead)]
-    ind_list = [_flat_arraylike_data(ind_flat[i]) for i in range(lead)]
-    result = []
-    for i in range(lead):
-        row = arr_list[i]
-        idxs = ind_list[i]
-        result.append([row[int(j)] for j in idxs])
-    result_arr = array(result).reshape(out_shape)
-    return moveaxis(result_arr, -1, axis)
+
+    arr, indices, axis = _normalize_along_axis_inputs(arr, indices, axis, allow_axis_none=True)
+    arr_m, arr_rows, linear, out_shape = _linearized_take_setup(arr, indices, axis)
+    result = arr_rows.reshape((arr_rows.shape[0] * arr_rows.shape[1],))[linear].reshape(out_shape)
+    return moveaxis(result, -1, axis) if arr.ndim > 1 else result
 
 
 def put_along_axis(arr, indices, values, axis):
     """Put values into the destination array by matching 1-d index and data slices along the given axis."""
     from ._manipulation import moveaxis
-    arr = asarray(arr)
-    indices = asarray(indices)
-    values = asarray(values)
-    if arr.ndim == 1:
-        result = [arr[i] for i in range(arr.size)]
-        vals_flat = values.flatten()
-        for i in range(indices.size):
-            result[int(indices[i])] = vals_flat[i % vals_flat.size]
-        return array(result)
-    if arr.ndim == 2 and axis == 1:
-        rows = []
-        for i in range(arr.shape[0]):
-            row = [arr[i][j] for j in range(arr.shape[1])]
-            for j in range(indices.shape[1]):
-                idx = int(indices[i][j])
-                row[idx] = values[i][j] if values.ndim == 2 else values[j]
-            rows.append(row)
-        return array(rows)
-    if axis < 0:
-        axis = arr.ndim + axis
-    arr_m = moveaxis(arr, axis, -1)
-    ind_m = moveaxis(indices, axis, -1)
-    val_m = moveaxis(values, axis, -1)
-    out_shape = arr_m.shape
-    lead = 1
-    for s in arr_m.shape[:-1]:
-        lead *= s
-    n_axis = arr_m.shape[-1]
-    arr_flat = [_flat_arraylike_data(arr_m.reshape((lead, n_axis))[i]) for i in range(lead)]
-    ind_flat = [_flat_arraylike_data(ind_m.reshape((lead, ind_m.shape[-1]))[i]) for i in range(lead)]
-    val_flat = [_flat_arraylike_data(val_m.reshape((lead, val_m.shape[-1]))[i]) for i in range(lead)]
-    for i in range(lead):
-        for j in range(len(ind_flat[i])):
-            arr_flat[i][int(ind_flat[i][j])] = val_flat[i][j]
-    result = array(arr_flat).reshape(out_shape)
-    return moveaxis(result, -1, axis)
+    from ._shape import broadcast_to
+
+    arr, indices, axis = _normalize_along_axis_inputs(arr, indices, axis, allow_axis_none=True)
+    arr_m, arr_rows, linear, out_shape = _linearized_take_setup(arr, indices, axis)
+    values_arr = asarray(values)
+    values_src = moveaxis(values_arr, axis, -1) if values_arr.ndim == arr.ndim else values_arr
+    values_bc = broadcast_to(values_src, out_shape).reshape((linear.size,))
+    flat = _flat_arraylike_data(arr_rows.reshape((arr_rows.shape[0] * arr_rows.shape[1],)))
+    for idx, value in zip(_flat_arraylike_data(linear), _flat_arraylike_data(values_bc)):
+        flat[int(idx)] = value
+    updated = array(flat, dtype=str(arr.dtype)).reshape(arr_m.shape)
+    _copy_into(arr, moveaxis(updated, -1, axis))
+    return arr
 
 
 # ---------------------------------------------------------------------------

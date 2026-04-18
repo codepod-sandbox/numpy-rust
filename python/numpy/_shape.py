@@ -496,23 +496,23 @@ class broadcast:
             self.size *= s
         self.numiter = len(arrays)
         self._arrays = arrays
-        self._broadcasted = [broadcast_to(a, self.shape).flatten() for a in arrays]
-        self.iters = tuple(_BroadcastIter(broadcast_to(a, self.shape), a) for a in arrays)
-        self.index = 0
+        self._broadcasted = [broadcast_to(a, self.shape) for a in arrays]
+        self.iters = tuple(_BroadcastIter(bc, a) for bc, a in zip(self._broadcasted, arrays))
+        self.reset()
 
     def __iter__(self):
-        for i in range(self.size):
-            yield tuple(float(b[i]) for b in self._broadcasted)
+        return self
 
     def __next__(self):
         if self.index >= self.size:
             raise StopIteration
-        result = tuple(float(b[self.index]) for b in self._broadcasted)
+        result = tuple(float(next(it)) for it in self._flat_iters)
         self.index += 1
         return result
 
     def reset(self):
         self.index = 0
+        self._flat_iters = [bc.flat.__iter__() for bc in self._broadcasted]
 
 
 def broadcast_shapes(*shapes):
