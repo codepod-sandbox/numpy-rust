@@ -2183,7 +2183,7 @@ class legendre:
 # ===========================================================================
 
 def _hermval_scalar(x, c):
-    c = list(c) if isinstance(c, list) else list(np.asarray(c).flatten().tolist())
+    c = _coef_list(c)
     if len(c) == 0: return 0.0
     if len(c) == 1: return float(c[0])
     h0, h1 = 1.0, 2.0 * x
@@ -2196,7 +2196,7 @@ def _hermval_scalar(x, c):
 
 def _hermval(x, c):
     x = np.asarray(x)
-    c_list = list(np.asarray(c).flatten().tolist())
+    c_list = _flat_list(c)
     if len(c_list) == 0: return np.zeros_like(x)
     if len(c_list) == 1:
         return np.full(x.shape, c_list[0]) + np.zeros_like(x)
@@ -2210,24 +2210,24 @@ def _hermval(x, c):
     return result
 
 def _hermadd(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] + c2[i] for i in range(n)])
 
 def _hermsub(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] - c2[i] for i in range(n)])
 
 def _hermmul(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n1, n2 = len(c1), len(c2)
     out_deg = n1 + n2 - 2
     n_pts = out_deg + 1
@@ -2268,7 +2268,7 @@ def _hermder(c, m=1, scl=1, axis=0):
                 dc[j - 1] = 2.0 * j * c[j] * scl
             c = dc
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     for _ in range(m):
         n = len(c)
         if n <= 1: c = [0.0]; continue
@@ -2303,7 +2303,7 @@ def _hermint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
             ic[0] = k_list[step] - val_at_lbnd
             c = ic
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     k_list = list(k) if k else []
     while len(k_list) < m: k_list.append(0)
     for step in range(m):
@@ -2333,7 +2333,7 @@ def _hermfit(x, y, deg, w=None):
     y = np.asarray(y, dtype='float64')
     _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
-        deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
+        deg_list = _flat_int_list(deg)
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")
         if len(deg_list) == 0: raise TypeError("deg must be non-empty")
         max_deg = max(deg_list)
@@ -2352,7 +2352,7 @@ def _hermfit(x, y, deg, w=None):
     return np.linalg.lstsq(V, y)[0]
 
 def _hermfromroots(roots):
-    roots = list(np.asarray(roots).flatten().tolist())
+    roots = _flat_list(roots)
     if len(roots) == 0: return np.array([1.0])
     c = _poly2herm(np.array([-roots[0], 1.0]))
     for i in range(1, len(roots)):
@@ -2360,7 +2360,7 @@ def _hermfromroots(roots):
     return c
 
 def _hermroots(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0: c.pop()
     if len(c) <= 1: return np.array([])
     if len(c) == 2: return np.array([-c[0] / c[1]])
@@ -2369,10 +2369,10 @@ def _hermroots(c):
 
 def _hermcompanion(c):
     poly_c = _herm2poly(c)
-    return _polycompanion(list(poly_c.flatten().tolist()))
+    return _polycompanion(_flat_arraylike_data(poly_c.flatten()))
 
 def _herm2poly(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     h_prev = [1.0]
@@ -2394,7 +2394,7 @@ def _herm2poly(c):
     return np.array(result)
 
 def _poly2herm(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     result = [0.0] * n
@@ -2453,7 +2453,7 @@ def _hermgauss(n):
     return x, w
 
 def _hermmulx(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     if len(c) == 1 and c[0] == 0:
         return np.array([0.0])
     n = len(c)
@@ -2514,7 +2514,7 @@ class hermite:
 # ===========================================================================
 
 def _hermeval_scalar(x, c):
-    c = list(c) if isinstance(c, list) else list(np.asarray(c).flatten().tolist())
+    c = _coef_list(c)
     if len(c) == 0: return 0.0
     if len(c) == 1: return float(c[0])
     h0, h1 = 1.0, float(x)
@@ -2527,7 +2527,7 @@ def _hermeval_scalar(x, c):
 
 def _hermeval(x, c):
     x = np.asarray(x)
-    c_list = list(np.asarray(c).flatten().tolist())
+    c_list = _flat_list(c)
     if len(c_list) == 0: return np.zeros_like(x)
     if len(c_list) == 1:
         return np.full(x.shape, c_list[0]) + np.zeros_like(x)
@@ -2541,24 +2541,24 @@ def _hermeval(x, c):
     return result
 
 def _hermeadd(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] + c2[i] for i in range(n)])
 
 def _hermesub(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] - c2[i] for i in range(n)])
 
 def _hermemul(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n1, n2 = len(c1), len(c2)
     out_deg = n1 + n2 - 2
     n_pts = out_deg + 1
@@ -2596,7 +2596,7 @@ def _hermeder(c, m=1, scl=1, axis=0):
             for j in range(1, n): dc[j - 1] = float(j) * c[j] * scl
             c = dc
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     for _ in range(m):
         n = len(c)
         if n <= 1: c = [0.0]; continue
@@ -2630,7 +2630,7 @@ def _hermeint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
             ic[0] = k_list[step] - val_at_lbnd
             c = ic
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     k_list = list(k) if k else []
     while len(k_list) < m: k_list.append(0)
     for step in range(m):
@@ -2659,7 +2659,7 @@ def _hermefit(x, y, deg, w=None):
     y = np.asarray(y, dtype='float64')
     _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
-        deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
+        deg_list = _flat_int_list(deg)
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")
         if len(deg_list) == 0: raise TypeError("deg must be non-empty")
         max_deg = max(deg_list)
@@ -2678,7 +2678,7 @@ def _hermefit(x, y, deg, w=None):
     return np.linalg.lstsq(V, y)[0]
 
 def _hermefromroots(roots):
-    roots = list(np.asarray(roots).flatten().tolist())
+    roots = _flat_list(roots)
     if len(roots) == 0: return np.array([1.0])
     c = _poly2herme(np.array([-roots[0], 1.0]))
     for i in range(1, len(roots)):
@@ -2686,7 +2686,7 @@ def _hermefromroots(roots):
     return c
 
 def _hermeroots(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0: c.pop()
     if len(c) <= 1: return np.array([])
     if len(c) == 2: return np.array([-c[0] / c[1]])
@@ -2695,10 +2695,10 @@ def _hermeroots(c):
 
 def _hermecompanion(c):
     poly_c = _herme2poly(c)
-    return _polycompanion(list(poly_c.flatten().tolist()))
+    return _polycompanion(_flat_arraylike_data(poly_c.flatten()))
 
 def _herme2poly(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     h_prev = [1.0]
@@ -2720,7 +2720,7 @@ def _herme2poly(c):
     return np.array(result)
 
 def _poly2herme(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     result = [0.0] * n
@@ -2761,7 +2761,7 @@ class HermiteE(ABCPolyBase):
 
 
 def _hermemulx(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     if len(c) == 1 and c[0] == 0:
         return np.array([0.0])
     n = len(c)
@@ -2842,7 +2842,7 @@ class hermite_e:
 # ===========================================================================
 
 def _lagval_scalar(x, c):
-    c = list(c) if isinstance(c, list) else list(np.asarray(c).flatten().tolist())
+    c = _coef_list(c)
     if len(c) == 0: return 0.0
     if len(c) == 1: return float(c[0])
     l0, l1 = 1.0, 1.0 - float(x)
@@ -2855,7 +2855,7 @@ def _lagval_scalar(x, c):
 
 def _lagval(x, c):
     x = np.asarray(x)
-    c_list = list(np.asarray(c).flatten().tolist())
+    c_list = _flat_list(c)
     if len(c_list) == 0: return np.zeros_like(x)
     if len(c_list) == 1:
         return np.full(x.shape, c_list[0]) + np.zeros_like(x)
@@ -2870,24 +2870,24 @@ def _lagval(x, c):
     return result
 
 def _lagadd(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] + c2[i] for i in range(n)])
 
 def _lagsub(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] - c2[i] for i in range(n)])
 
 def _lagmul(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n1, n2 = len(c1), len(c2)
     out_deg = n1 + n2 - 2
     n_pts = out_deg + 1
@@ -2928,7 +2928,7 @@ def _lagder(c, m=1, scl=1, axis=0):
                 dc[kk] = s * scl
             c = dc
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     for _ in range(m):
         n = len(c)
         if n <= 1: c = [0.0]; continue
@@ -2968,7 +2968,7 @@ def _lagint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
             ic[0] = ic[0] + k_list[step] - val_at_lbnd
             c = ic
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     k_list = list(k) if k else []
     while len(k_list) < m: k_list.append(0)
     for step in range(m):
@@ -3000,7 +3000,7 @@ def _lagfit(x, y, deg, w=None):
     y = np.asarray(y, dtype='float64')
     _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
-        deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
+        deg_list = _flat_int_list(deg)
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")
         if len(deg_list) == 0: raise TypeError("deg must be non-empty")
         max_deg = max(deg_list)
@@ -3019,7 +3019,7 @@ def _lagfit(x, y, deg, w=None):
     return np.linalg.lstsq(V, y)[0]
 
 def _lagfromroots(roots):
-    roots = list(np.asarray(roots).flatten().tolist())
+    roots = _flat_list(roots)
     if len(roots) == 0: return np.array([1.0])
     c = _poly2lag(np.array([-roots[0], 1.0]))
     for i in range(1, len(roots)):
@@ -3027,7 +3027,7 @@ def _lagfromroots(roots):
     return c
 
 def _lagroots(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0: c.pop()
     if len(c) <= 1: return np.array([])
     if len(c) == 2: return np.array([-c[0] / c[1]])
@@ -3036,10 +3036,10 @@ def _lagroots(c):
 
 def _lagcompanion(c):
     poly_c = _lag2poly(c)
-    return _polycompanion(list(poly_c.flatten().tolist()))
+    return _polycompanion(_flat_arraylike_data(poly_c.flatten()))
 
 def _lag2poly(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     l_prev = [1.0]
@@ -3063,7 +3063,7 @@ def _lag2poly(c):
     return np.array(result)
 
 def _poly2lag(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     result = [0.0] * n
@@ -3129,7 +3129,7 @@ def _laggauss(n):
     return x, w
 
 def _lagmulx(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     if len(c) == 1 and c[0] == 0:
         return np.array([0.0])
     n = len(c)
@@ -3191,7 +3191,7 @@ class laguerre:
 # ===========================================================================
 
 def _pu_div(mul_func, c1, c2):
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c2 = _flat_list(c2)
     while len(c2) > 1 and c2[-1] == 0: c2.pop()
     if len(c2) == 0 or c2[-1] == 0:
         raise ZeroDivisionError("polynomial division by zero")
