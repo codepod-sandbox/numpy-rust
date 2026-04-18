@@ -1,6 +1,7 @@
 """File I/O functions."""
 import _numpy_native as _native
 from _numpy_native import ndarray
+from ._helpers import _flat_arraylike_data
 from ._creation import array, asarray
 from ._manipulation import reshape
 import struct as _struct
@@ -154,14 +155,14 @@ def _array_to_npy_bytes(arr):
     # ------------------------------------------------------------------ object
     if dtype_str in ('object', "<class 'object'>"):
         import pickle
-        flat = list(arr.flatten().tolist()) if hasattr(arr, 'flatten') else list(arr._data)
+        flat = _flat_arraylike_data(arr.flatten()) if hasattr(arr, 'flatten') else list(arr._data)
         data_bytes = pickle.dumps(flat)
         header_bytes, ver = _build_header('|O', shape)
         return _make_npy_bytes(ver, header_bytes, data_bytes)
 
     # ------------------------------------------------------------------- str
     if dtype_str == 'str':
-        flat = arr.flatten().tolist() if hasattr(arr, 'flatten') else list(arr._data)
+        flat = _flat_arraylike_data(arr.flatten()) if hasattr(arr, 'flatten') else list(arr._data)
         if flat:
             max_len = max(len(s) for s in flat)
         else:
@@ -250,7 +251,7 @@ def _array_to_npy_bytes(arr):
     # --------------------------------------------------------- standard numeric
     descr, struct_char, _ = _dtype_to_descr(dtype_str)
 
-    flat = arr.flatten().tolist()
+    flat = _flat_arraylike_data(arr.flatten())
     n = len(flat)
 
     if dtype_str in ('complex128', 'complex64'):
