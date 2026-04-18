@@ -2,7 +2,7 @@
 import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import _ObjectArray, _builtin_min, _builtin_max
+from ._helpers import _ObjectArray, _builtin_min, _builtin_max, _flat_arraylike_data
 from ._creation import array, asarray
 
 __all__ = [
@@ -33,7 +33,7 @@ def poly(seq_of_zeros):
             return array([1.0])
         seq_of_zeros = _np.linalg.eigvals(seq_of_zeros)
     # Build polynomial from roots: prod(x - r for r in roots)
-    roots_raw = seq_of_zeros.flatten().tolist()
+    roots_raw = _flat_arraylike_data(seq_of_zeros.flatten())
 
     def _to_complex(v):
         if isinstance(v, complex):
@@ -683,8 +683,8 @@ def convolve(a, v, mode='full'):
     na = len(a)
     nv = len(v)
     n_full = na + nv - 1
-    a_list = a.tolist()
-    v_list = v.tolist()
+    a_list = _flat_arraylike_data(a)
+    v_list = _flat_arraylike_data(v)
     _is_complex = 'complex' in str(a.dtype) or 'complex' in str(v.dtype)
     if not _is_complex:
         # Check if values are actually complex (e.g. _ObjectArray with complex)
@@ -745,15 +745,15 @@ def correlate(a, v, mode='valid'):
     _has_complex = 'complex' in a_dt or 'complex' in v_dt
     if not _has_complex:
         try:
-            _d = a.flatten().tolist() if hasattr(a, 'tolist') else list(a)
+            _d = _flat_arraylike_data(a.flatten()) if hasattr(a, 'flatten') else list(a)
             if len(_d) > 0 and isinstance(_d[0], complex):
                 _has_complex = True
         except Exception:
             pass
     if _has_complex:
         # Pure Python complex correlation
-        a_list = a.flatten().tolist()
-        v_list = v.flatten().tolist()
+        a_list = _flat_arraylike_data(a.flatten())
+        v_list = _flat_arraylike_data(v.flatten())
         na_l = len(a_list)
         nv_l = len(v_list)
         # Full correlation length
