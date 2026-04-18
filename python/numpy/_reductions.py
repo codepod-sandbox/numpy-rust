@@ -1570,6 +1570,14 @@ def _python_quantile_rows(a_2d, q, method):
     return results
 
 
+def _python_nan_quantile_rows(a_2d, q):
+    results = []
+    for i in range(a_2d.shape[0]):
+        row = a_2d[i]
+        results.append(_nan_quantile_1d(row if isinstance(row, ndarray) else asarray(row), q))
+    return results
+
+
 _NON_INTERPOLATING_METHODS = frozenset([
     'inverted_cdf', 'closest_observation', 'lower', 'higher', 'nearest'
 ])
