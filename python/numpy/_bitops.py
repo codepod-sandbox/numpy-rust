@@ -1,5 +1,6 @@
 """Bit manipulation functions for numpy-rust."""
 from _numpy_native import ndarray
+from ._helpers import _flat_arraylike_data
 from ._creation import array, asarray
 
 __all__ = [
@@ -17,7 +18,7 @@ def packbits(a, axis=None, bitorder='big'):
     if not isinstance(a, ndarray):
         a = asarray(a)
     if axis is None:
-        vals = a.flatten().tolist()
+        vals = _flat_arraylike_data(a.flatten())
         if bitorder == 'little':
             result = []
             for i in range(0, len(vals), 8):
@@ -45,7 +46,8 @@ def packbits(a, axis=None, bitorder='big'):
         orig_shape = a2.shape
         flat = a2.reshape(-1, orig_shape[-1])
         packed_rows = []
-        for row in flat.tolist():
+        for i in range(flat.shape[0]):
+            row = _flat_arraylike_data(flat[i])
             if bitorder == 'little':
                 out = []
                 for i in range(0, len(row), 8):
@@ -75,7 +77,7 @@ def unpackbits(a, axis=None, count=None, bitorder='big'):
     if not isinstance(a, ndarray):
         a = asarray(a)
     if axis is None:
-        vals = a.flatten().tolist()
+        vals = _flat_arraylike_data(a.flatten())
         result = []
         for v in vals:
             byte = int(v)
@@ -98,7 +100,8 @@ def unpackbits(a, axis=None, count=None, bitorder='big'):
         orig_shape = a2.shape
         flat = a2.reshape(-1, orig_shape[-1])
         unpacked_rows = []
-        for row in flat.tolist():
+        for i in range(flat.shape[0]):
+            row = _flat_arraylike_data(flat[i])
             bits = []
             for v in row:
                 byte = int(v)
