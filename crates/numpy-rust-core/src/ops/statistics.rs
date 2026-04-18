@@ -316,6 +316,80 @@ impl NdArray {
         Ok((counts_arr, edges_arr))
     }
 
+    /// Compute histogramdd counts for a 2-D sample matrix and explicit edges per dimension.
+    ///
+    /// `self` must be shaped `(n_samples, n_dims)`. `edges.len()` must equal `n_dims`, and each
+    /// edge vector must contain at least 2 monotonically increasing values.
+    ///
+    /// Returns a Float64 array shaped by the number of bins in each dimension.
+    pub fn histogramdd_counts(&self, edges: &[Vec<f64>]) -> Result<NdArray> {
+        let arr = to_float64(self);
+        if arr.ndim() != 2 {
+            return Err(NumpyError::ValueError("sample must be a 2-D array".into()));
+        }
+
+        let n_dims = arr.shape()[1];
+        if edges.len() != n_dims {
+            return Err(NumpyError::ValueError(
+                "number of edge arrays must match sample dimension".into(),
+            ));
+        }
+
+        let mut bins_per_dim = Vec::with_capacity(n_dims);
+        let mut total = 1usize;
+        for edge in edges {
+            if edge.len() < 2 {
+                return Err(NumpyError::ValueError(
+                    "edge arrays must have at least 2 values".into(),
+                ));
+            }
+            let bins = edge.len() - 1;
+            bins_per_dim.push(bins);
+            total = total
+                .checked_mul(bins)
+                .ok_or_else(|| NumpyError::ValueError("Too many bins".into()))?;
+        }
+
+        let mut counts = vec![0.0_f64; total];
+        for row in arr.outer_iter() {
+            let mut flat_idx = 0usize;
+            let mut stride = 1usize;
+            let mut valid = true;
+
+            for d in (0..n_dims).rev() {
+                let value = row[d];
+                let edge = &edges[d];
+                let bins = bins_per_dim[d];
+                let mut bin = None;
+                for j in 0..bins {
+                    let in_bin = if j == bins - 1 {
+                        edge[j] <= value && value <= edge[j + 1]
+                    } else {
+                        edge[j] <= value && value < edge[j + 1]
+                    };
+                    if in_bin {
+                        bin = Some(j);
+                        break;
+                    }
+                }
+                let Some(bin_idx) = bin else {
+                    valid = false;
+                    break;
+                };
+                flat_idx += bin_idx * stride;
+                stride *= bins;
+            }
+
+            if valid {
+                counts[flat_idx] += 1.0;
+            }
+        }
+
+        let counts_arr = ArrayD::from_shape_vec(IxDyn(&bins_per_dim), counts)
+            .map_err(|e| NumpyError::ValueError(e.to_string()))?;
+        Ok(NdArray::from_data(ArrayData::Float64(counts_arr)))
+    }
+
     /// Count occurrences of each value in an array of non-negative integers.
     ///
     /// - Cast to Int64, flatten.

@@ -578,22 +578,21 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
             raise ValueError(
                 "Too many bins: total number of bins exceeds maximum"
             )
-    counts = [0.0] * total
-
-    w_list = None
-    if weights is not None:
-        w_list = _flat_weight_values(weights)
-
-    for idx_s in _builtin_range(n_samples):
-        row = [sample_cols[d][idx_s] for d in _builtin_range(n_dims)]
-        bin_indices = _histogramdd_row_bin_indices(row, edges, bins_per_dim)
-        if bin_indices is None:
-            continue
-        flat_idx = _histogramdd_flat_index(bin_indices, bins_per_dim)
-        counts[flat_idx] += (w_list[idx_s] if w_list is not None else 1.0)
-
-    hist = array(counts).reshape(shape)
     edge_arrays = [array(e) for e in edges]
+
+    if weights is None:
+        hist = _native.histogramdd_counts(sample, edge_arrays)
+    else:
+        counts = [0.0] * total
+        w_list = _flat_weight_values(weights)
+        for idx_s in _builtin_range(n_samples):
+            row = [sample_cols[d][idx_s] for d in _builtin_range(n_dims)]
+            bin_indices = _histogramdd_row_bin_indices(row, edges, bins_per_dim)
+            if bin_indices is None:
+                continue
+            flat_idx = _histogramdd_flat_index(bin_indices, bins_per_dim)
+            counts[flat_idx] += w_list[idx_s]
+        hist = array(counts).reshape(shape)
 
     if density and float(sum(hist)) > 0:
         # Normalize

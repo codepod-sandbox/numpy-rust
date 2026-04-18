@@ -121,6 +121,38 @@ pub mod _numpy_native {
             .collect::<PyResult<Vec<_>>>()
     }
 
+    fn parse_float_edge_sequence(
+        obj: &PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        let items = py_sequence_items(obj, vm, "edges must be a list or tuple")?;
+        items
+            .into_iter()
+            .map(|item| {
+                if let Some(arr) = item.downcast_ref::<PyNdArray>() {
+                    let cast = arr
+                        .inner()
+                        .flatten()
+                        .astype(numpy_rust_core::DType::Float64);
+                    let numpy_rust_core::ArrayData::Float64(values) = cast.data() else {
+                        unreachable!("float64 cast must produce float64 storage")
+                    };
+                    Ok(values.iter().copied().collect())
+                } else {
+                    let edge_items = py_sequence_items(
+                        &item,
+                        vm,
+                        "each edge array must be a list, tuple, or ndarray",
+                    )?;
+                    edge_items
+                        .into_iter()
+                        .map(|edge| edge.try_into_value::<f64>(vm))
+                        .collect::<PyResult<Vec<_>>>()
+                }
+            })
+            .collect::<PyResult<Vec<_>>>()
+    }
+
     fn parse_usize_pair(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<(usize, usize)> {
         let items = py_sequence_items(obj, vm, "expected pair of integers")?;
         if items.len() != 2 {
@@ -1420,6 +1452,20 @@ pub mod _numpy_native {
         let py_counts = PyNdArray::from_core(counts).into_pyobject(vm);
         let py_edges = PyNdArray::from_core(edges).into_pyobject(vm);
         Ok(vm.ctx.new_tuple(vec![py_counts, py_edges]).into())
+    }
+
+    #[pyfunction]
+    fn histogramdd_counts(
+        sample: vm::PyRef<PyNdArray>,
+        edges: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> {
+        let edge_vecs = parse_float_edge_sequence(&edges, vm)?;
+        let counts = sample
+            .inner()
+            .histogramdd_counts(&edge_vecs)
+            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        Ok(PyNdArray::from_core(counts))
     }
 
     #[pyfunction]
