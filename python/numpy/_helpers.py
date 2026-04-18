@@ -1011,10 +1011,12 @@ def _flat_arraylike_data(data):
         if data.ndim == 0:
             scalar = data.item() if hasattr(data, 'item') else data[()]
             return [scalar]
+        try:
+            return [v for v in data.reshape((-1,))]
+        except Exception:
+            return [v for v in data]
     if isinstance(data, (list, tuple)):
         return list(data)
-    if hasattr(data, 'flatten'):
-        return data.flatten().tolist()
     return None
 
 
@@ -1109,7 +1111,19 @@ def _to_float_list(data):
 def _copy_into(dst, src):
     """Copy src array values into dst array (element-wise) by direct index assignment."""
     _min = __import__("builtins").min
+    try:
+        if hasattr(src, "shape") and getattr(src, "shape", None) == getattr(dst, "shape", None):
+            dst[...] = src
+            return
+    except Exception:
+        pass
     sf = _flat_arraylike_data(src)
+    try:
+        if sf is not None and len(sf) == dst.size and dst.ndim > 1:
+            dst[...] = array(sf).reshape(dst.shape)
+            return
+    except Exception:
+        pass
     n = _min(dst.size, len(sf))
     if dst.ndim == 1:
         for i in range(n):
