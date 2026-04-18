@@ -1507,7 +1507,9 @@ def _quantile_along_axis(a, q, axis, method):
     # Flatten all but last axis
     if len(orig_shape) == 0:
         # Result is scalar
-        vals = a_moved.flatten().tolist()
+        vals = _flat_arraylike_data(a_moved)
+        if vals is None:
+            vals = a_moved.flatten().tolist()
         vals.sort(key=_quantile_sort_key)
         return _compute_quantile_1d(vals, q, method)
     a_2d = a_moved.reshape(-1, n)
@@ -1549,7 +1551,9 @@ def _quantile_tuple_axis(a, q, axes, method):
         return result.reshape(result_shape)
 
     if len(result_shape) == 0:
-        vals = a_t.flatten().tolist()
+        vals = _flat_arraylike_data(a_t)
+        if vals is None:
+            vals = a_t.flatten().tolist()
         vals.sort(key=_quantile_sort_key)
         return _compute_quantile_1d(vals, q, method)
 
@@ -1564,7 +1568,9 @@ def _quantile_tuple_axis(a, q, axes, method):
 def _python_quantile_rows(a_2d, q, method):
     results = []
     for i in range(a_2d.shape[0]):
-        row = a_2d[i].tolist()
+        row = _flat_arraylike_data(a_2d[i])
+        if row is None:
+            row = a_2d[i].tolist()
         row.sort(key=_quantile_sort_key)
         results.append(_compute_quantile_1d(row, q, method))
     return results
@@ -1639,7 +1645,9 @@ def _quantile_core(a, q, axis, method, keepdims, orig_axis_for_keepdims=None, ta
     else:
         # Python implementation for non-linear methods
         if axis is None:
-            vals = a.flatten().tolist()
+            vals = _flat_arraylike_data(a)
+            if vals is None:
+                vals = a.flatten().tolist()
             vals.sort(key=_quantile_sort_key)
             result = _compute_quantile_1d(vals, q, method)
         else:
@@ -2629,12 +2637,7 @@ def _nan_quantile_impl(a, q, axis):
         return _np.zeros(other_shape)
 
     flat_2d = a_moved.reshape((other_size, axis_len))
-    results = []
-    for i in range(other_size):
-        row = flat_2d[i]
-        results.append(
-            _nan_quantile_1d(row if isinstance(row, ndarray) else asarray(row), q)
-        )
+    results = _python_nan_quantile_rows(flat_2d, q)
 
     if not other_shape:
         return results[0]  # scalar result
