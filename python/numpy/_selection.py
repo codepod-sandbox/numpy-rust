@@ -162,13 +162,7 @@ def extract(condition, arr):
     """Return elements of arr where condition is True."""
     condition = asarray(condition).flatten()
     arr = asarray(arr).flatten()
-    result = []
-    for i in range(len(arr)):
-        if float(condition[i]) != 0.0:
-            result.append(float(arr[i]))
-    if not result:
-        return array([])
-    return array(result)
+    return _native.compress(condition, arr, None)
 
 
 def select(condlist, choicelist, default=0):
