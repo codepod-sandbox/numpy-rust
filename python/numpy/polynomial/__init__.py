@@ -1703,23 +1703,23 @@ def _legline(off, scl):
     return np.array([off, scl])
 
 def _legadd(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] + c2[i] for i in range(n)])
 
 def _legsub(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] - c2[i] for i in range(n)])
 
 def _legmulx(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     if len(c) == 1 and c[0] == 0:
         return np.array([0.0])
     n = len(c)
@@ -1735,8 +1735,8 @@ def _legmulx(c):
     return np.array(result)
 
 def _legmul(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n1, n2 = len(c1), len(c2)
     out_deg = n1 + n2 - 2
     n_pts = out_deg + 1
@@ -1766,7 +1766,7 @@ def _legpow(c, n, maxpower=None):
     return result
 
 def _legval_scalar(x, c):
-    c = list(c) if isinstance(c, list) else list(np.asarray(c).flatten().tolist())
+    c = _coef_list(c)
     if len(c) == 0: return 0.0
     if len(c) == 1: return float(c[0])
     p0, p1 = 1.0, float(x)
@@ -1779,7 +1779,7 @@ def _legval_scalar(x, c):
 
 def _legval(x, c):
     x = np.asarray(x)
-    c_list = list(np.asarray(c).flatten().tolist())
+    c_list = _flat_list(c)
     if len(c_list) == 0:
         return np.zeros_like(x)
     if len(c_list) == 1:
@@ -1817,7 +1817,7 @@ def _legder(c, m=1, scl=1, axis=0):
                     c_work[j - 2] = c_work[j - 2] + c_work[j]
             c = dc
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     for _ in range(m):
         n = len(c)
         if n <= 1:
@@ -1868,7 +1868,7 @@ def _legint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
             ic[0] = k_list[step] - val_at_lbnd
             c = ic
         return np.moveaxis(c, 0, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     k_list = list(k) if k else []
     while len(k_list) < m: k_list.append(0)
     for step in range(m):
@@ -1890,7 +1890,7 @@ def _legint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
     return np.array(c)
 
 def _legfromroots(roots):
-    roots = list(np.asarray(roots).flatten().tolist())
+    roots = _flat_list(roots)
     if len(roots) == 0:
         return np.array([1.0])
     c = _poly2leg(np.array([-roots[0], 1.0]))
@@ -1899,7 +1899,7 @@ def _legfromroots(roots):
     return c
 
 def _legroots(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0: c.pop()
     if len(c) <= 1: return np.array([])
     if len(c) == 2: return np.array([-c[0] / c[1]])
@@ -1908,7 +1908,7 @@ def _legroots(c):
 
 def _legcompanion(c):
     poly_c = _leg2poly(c)
-    return _polycompanion(list(poly_c.flatten().tolist()))
+    return _polycompanion(_flat_arraylike_data(poly_c.flatten()))
 
 def _legvander(x, deg):
     x = np.asarray(x)
@@ -1928,7 +1928,7 @@ def _legfit(x, y, deg, w=None):
     y = np.asarray(y, dtype='float64')
     _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
-        deg_list = [int(d) for d in np.asarray(deg).flatten().tolist()]
+        deg_list = _flat_int_list(deg)
         if any(d < 0 for d in deg_list): raise ValueError("deg must be non-negative")
         if len(deg_list) == 0: raise TypeError("deg must be non-empty")
         max_deg = max(deg_list)
@@ -1953,7 +1953,7 @@ def _legfit(x, y, deg, w=None):
         return np.linalg.lstsq(V, y)[0]
 
 def _leg2poly(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     p_prev = [1.0]
@@ -1979,7 +1979,7 @@ def _leg2poly(c):
     return np.array(result)
 
 def _poly2leg(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     n = len(c)
     if n == 0: return np.array([0.0])
     result = [0.0] * n
