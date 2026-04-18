@@ -1458,13 +1458,22 @@ pub mod _numpy_native {
     fn histogramdd_counts(
         sample: vm::PyRef<PyNdArray>,
         edges: PyObjectRef,
+        weights: vm::function::OptionalArg<vm::PyRef<PyNdArray>>,
         vm: &VirtualMachine,
     ) -> PyResult<PyNdArray> {
         let edge_vecs = parse_float_edge_sequence(&edges, vm)?;
-        let counts = sample
-            .inner()
-            .histogramdd_counts(&edge_vecs)
-            .map_err(|e| vm.new_value_error(e.to_string()))?;
+        let sample_inner = sample.inner();
+        let counts = match weights.into_option() {
+            Some(weights_arr) => {
+                let weights_inner = weights_arr.inner();
+                sample_inner
+                    .histogramdd_counts(&edge_vecs, Some(&weights_inner))
+                    .map_err(|e| vm.new_value_error(e.to_string()))?
+            }
+            None => sample_inner
+                .histogramdd_counts(&edge_vecs, None)
+                .map_err(|e| vm.new_value_error(e.to_string()))?,
+        };
         Ok(PyNdArray::from_core(counts))
     }
 

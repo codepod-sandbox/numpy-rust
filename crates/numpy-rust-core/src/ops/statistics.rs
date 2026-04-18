@@ -322,7 +322,11 @@ impl NdArray {
     /// edge vector must contain at least 2 monotonically increasing values.
     ///
     /// Returns a Float64 array shaped by the number of bins in each dimension.
-    pub fn histogramdd_counts(&self, edges: &[Vec<f64>]) -> Result<NdArray> {
+    pub fn histogramdd_counts(
+        &self,
+        edges: &[Vec<f64>],
+        weights: Option<&NdArray>,
+    ) -> Result<NdArray> {
         let arr = to_float64(self);
         if arr.ndim() != 2 {
             return Err(NumpyError::ValueError("sample must be a 2-D array".into()));
@@ -350,8 +354,20 @@ impl NdArray {
                 .ok_or_else(|| NumpyError::ValueError("Too many bins".into()))?;
         }
 
+        let weight_values = if let Some(weights) = weights {
+            let flat = flatten_to_float64_vec(weights);
+            if flat.len() != arr.shape()[0] {
+                return Err(NumpyError::ValueError(
+                    "weights should have the same shape as sample rows".into(),
+                ));
+            }
+            Some(flat)
+        } else {
+            None
+        };
+
         let mut counts = vec![0.0_f64; total];
-        for row in arr.outer_iter() {
+        for (row_idx, row) in arr.outer_iter().enumerate() {
             let mut flat_idx = 0usize;
             let mut stride = 1usize;
             let mut valid = true;
@@ -381,7 +397,10 @@ impl NdArray {
             }
 
             if valid {
-                counts[flat_idx] += 1.0;
+                counts[flat_idx] += weight_values
+                    .as_ref()
+                    .map(|values| values[row_idx])
+                    .unwrap_or(1.0);
             }
         }
 

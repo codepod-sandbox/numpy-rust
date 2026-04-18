@@ -580,8 +580,16 @@ def histogramdd(sample, bins=10, range=None, density=False, weights=None):
             )
     edge_arrays = [array(e) for e in edges]
 
+    native_weights = None
+    if weights is not None:
+        w_arr = asarray(weights)
+        if getattr(w_arr.dtype, "kind", "") != "c":
+            native_weights = w_arr
+
     if weights is None:
         hist = _native.histogramdd_counts(sample, edge_arrays)
+    elif native_weights is not None:
+        hist = _native.histogramdd_counts(sample, edge_arrays, native_weights)
     else:
         counts = [0.0] * total
         w_list = _flat_weight_values(weights)
