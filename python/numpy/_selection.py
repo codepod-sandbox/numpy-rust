@@ -525,26 +525,14 @@ def _take_along_axis(arr, indices, axis):
 def copyto(dst, src, casting='same_kind', where=True):
     """Copy values from one array to another, broadcasting as necessary."""
     from ._shape import broadcast_to
+    from ._creation import where as _where
     src = asarray(src)
     dst = asarray(dst)
     src_b = broadcast_to(src, dst.shape)
     if where is True:
         return src_b
     mask = asarray(where)
-    flat_m = mask.flatten()
-    flat_s = src_b.flatten()
-    flat_d = dst.flatten()
-    n = flat_d.size
-    result_vals = []
-    for i in range(n):
-        if flat_m[i]:
-            result_vals.append(float(flat_s[i]))
-        else:
-            result_vals.append(float(flat_d[i]))
-    result = array(result_vals)
-    if dst.ndim > 1:
-        result = result.reshape(dst.shape)
-    return result
+    return _where(mask, src_b, dst)
 
 
 def place(arr, mask, vals):
