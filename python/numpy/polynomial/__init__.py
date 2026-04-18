@@ -1,5 +1,6 @@
 """numpy.polynomial - polynomial module."""
 import numpy as np
+from numpy._helpers import _flat_arraylike_data
 from numpy.polynomial import polyutils as pu
 
 
@@ -14,6 +15,18 @@ def _set_last(arr, i, val):
 def _get_last(arr, i):
     """arr[..., i] without using Ellipsis."""
     return arr[_last_axis_idx(arr.ndim, i)]
+
+
+def _flat_list(values):
+    return _flat_arraylike_data(np.asarray(values).flatten())
+
+
+def _coef_list(values):
+    return list(values) if isinstance(values, list) else _flat_list(values)
+
+
+def _flat_int_list(values):
+    return [int(v) for v in _flat_list(values)]
 
 # ---------------------------------------------------------------------------
 # Default print style
@@ -31,7 +44,7 @@ def set_default_printstyle(style):
 def _trimcoef(c, tol=0):
     if tol < 0:
         raise ValueError("tol must be non-negative")
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and abs(c[-1]) <= tol:
         c.pop()
     if len(c) == 1 and abs(c[0]) <= tol:
@@ -69,7 +82,7 @@ class ABCPolyBase:
         elif hasattr(_cc, 'dtype') and _cc.dtype == np.float32:
             self._coef = np.asarray(list(_cc.flatten()), dtype=np.float32)
         else:
-            self._coef = np.asarray(list(np.asarray(coef).flatten().tolist()), dtype='float64')
+            self._coef = np.asarray(_flat_list(coef), dtype='float64')
         self._domain = np.array(domain if domain is not None else self.__class__.domain, dtype='float64')
         self._window = np.array(window if window is not None else self.__class__.window, dtype='float64')
         self._symbol = symbol
@@ -126,7 +139,7 @@ class ABCPolyBase:
             # Map x through self's domain/window mapping first
             x_mapped = pu.mapdomain(x, self._domain, self._window)
             # Evaluate self at x_mapped using Horner-like composition
-            c = list(self._coef.flatten().tolist()) if hasattr(self._coef, 'flatten') else list(self._coef)
+            c = _flat_arraylike_data(self._coef.flatten()) if hasattr(self._coef, 'flatten') else list(self._coef)
             if len(c) == 0:
                 return x.__class__([0], domain=x._domain, window=x._window, symbol=x._symbol)
             result = x.__class__([c[-1]], domain=x._domain, window=x._window, symbol=x._symbol)
@@ -557,8 +570,8 @@ def _polyline(off, scl):
     return np.array([off, scl])
 
 def _polyadd(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n:
         c1.append(0.0)
@@ -567,8 +580,8 @@ def _polyadd(c1, c2):
     return np.array([c1[i] + c2[i] for i in range(n)])
 
 def _polysub(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n:
         c1.append(0.0)
@@ -577,7 +590,7 @@ def _polysub(c1, c2):
     return np.array([c1[i] - c2[i] for i in range(n)])
 
 def _polymulx(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     result = [0.0] + c
     # trim trailing zeros
     while len(result) > 1 and result[-1] == 0:
@@ -585,8 +598,8 @@ def _polymulx(c):
     return np.array(result)
 
 def _polymul(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = len(c1) + len(c2) - 1
     result = [0.0] * n
     for i in range(len(c1)):
@@ -595,8 +608,8 @@ def _polymul(c1, c2):
     return np.array(result)
 
 def _polydiv(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     # trim trailing zeros
     while len(c2) > 1 and c2[-1] == 0:
         c2.pop()
@@ -646,7 +659,7 @@ def _validate_fit_args(x, y, w=None):
 
 def _polyval(x, c):
     x = np.asarray(x)
-    c_list = list(np.asarray(c).flatten().tolist())
+    c_list = _flat_list(c)
     if len(c_list) == 0:
         return np.zeros_like(x)
     # Horner's method (ascending order) - works for any shape including 0-d
@@ -719,7 +732,7 @@ def _polyder(c, m=1, scl=1, axis=0):
     c = np.asarray(c)
     if c.ndim > 1:
         return _polyder_nd(c, m, scl, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     for _ in range(m):
         c = [c[i] * i * scl for i in range(1, len(c))]
         if not c:
@@ -760,7 +773,7 @@ def _polyint(c, m=1, k=[], lbnd=0, scl=1, axis=0):
         raise ValueError("Too many integration constants")
     if c.ndim > 1:
         return _polyint_nd(c, m, k, lbnd, scl, axis)
-    c = list(c.flatten().tolist())
+    c = _flat_arraylike_data(c.flatten())
     k_list = list(k) if k else []
     while len(k_list) < m:
         k_list.append(0)
@@ -798,7 +811,7 @@ def _polyint_nd(c, m, k, lbnd, scl, axis):
     return c
 
 def _polyroots(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0:
         c.pop()
     if len(c) <= 1:
@@ -808,7 +821,7 @@ def _polyroots(c):
     # Build companion matrix
     comp = _polycompanion(c)
     roots = np.linalg.eigvals(comp)
-    roots = np.sort(roots.real) if all(abs(r.imag) < 1e-10 for r in roots.tolist()) else np.sort(roots)
+    roots = np.sort(roots.real) if all(abs(r.imag) < 1e-10 for r in _flat_arraylike_data(roots)) else np.sort(roots)
     return roots
 
 def _polyvander(x, deg):
@@ -859,7 +872,7 @@ def _polyvander3d(x, y, z, deg):
     return v
 
 def _polycompanion(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     while len(c) > 1 and c[-1] == 0:
         c.pop()
     if len(c) < 2:
@@ -873,7 +886,7 @@ def _polycompanion(c):
     return comp
 
 def _polyfromroots(roots):
-    roots = list(np.asarray(roots).flatten().tolist())
+    roots = _flat_list(roots)
     if len(roots) == 0:
         return np.array([1.0])
     c = [1.0]
@@ -892,7 +905,7 @@ def _polyvalfromroots(x, r, tensor=True):
         if tensor is False and r.ndim == 1:
             raise ValueError("x and r must have at least 2 dimensions for tensor=False")
         result = np.ones(x.shape)
-        for ri in r.flatten().tolist():
+        for ri in _flat_arraylike_data(r.flatten()):
             result = result * (x - ri)
         return result
     # r has multiple dimensions
@@ -903,7 +916,7 @@ def _polyvalfromroots(x, r, tensor=True):
                 xi = x.flatten()[ii] if x.size > ii else x
                 ri = r[:, ii] if r.ndim == 2 else r[:, ii]
                 v = 1.0
-                for rr in ri.flatten().tolist():
+                for rr in _flat_arraylike_data(ri.flatten()):
                     v *= (float(xi) - rr)
                 result.flat[ii] = v
             return result
@@ -919,7 +932,7 @@ def _polyvalfromroots(x, r, tensor=True):
                 xslice = x[jj] if x.ndim >= 1 else x
                 rslice = r[:, ii] if r.ndim == 2 else r[:, ii]
                 v = np.ones(xslice.shape if hasattr(xslice, 'shape') and len(xslice.shape) > 0 else ())
-                for rr in rslice.flatten().tolist():
+                for rr in _flat_arraylike_data(rslice.flatten()):
                     v = v * (xslice - rr)
                 if x.ndim == 1:
                     result[ii] = v
@@ -933,8 +946,7 @@ def _polyfit(x, y, deg, w=None):
     y = np.asarray(y, dtype='float64')
     _validate_fit_args(x, y, w)
     if isinstance(deg, (list, tuple, np.ndarray)):
-        deg_list = list(np.asarray(deg).flatten().tolist())
-        deg_list = [int(d) for d in deg_list]
+        deg_list = _flat_int_list(deg)
         if any(d < 0 for d in deg_list):
             raise ValueError("deg must be non-negative")
         if len(deg_list) == 0:
@@ -1032,23 +1044,23 @@ def _chebline(off, scl):
     return np.array([off, scl])
 
 def _chebadd(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] + c2[i] for i in range(n)])
 
 def _chebsub(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n = max(len(c1), len(c2))
     while len(c1) < n: c1.append(0.0)
     while len(c2) < n: c2.append(0.0)
     return np.array([c1[i] - c2[i] for i in range(n)])
 
 def _chebmulx(c):
-    c = list(np.asarray(c).flatten().tolist())
+    c = _flat_list(c)
     if len(c) == 1 and c[0] == 0:
         return np.array([0.0])
     n = len(c)
@@ -1064,8 +1076,8 @@ def _chebmulx(c):
     return np.array(result)
 
 def _chebmul(c1, c2):
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     n1 = len(c1)
     n2 = len(c2)
     out_len = n1 + n2 - 1
@@ -1086,8 +1098,8 @@ def _chebmul(c1, c2):
 
 def _chebdiv(c1, c2):
     """Divide Chebyshev series c1 by c2."""
-    c1 = list(np.asarray(c1).flatten().tolist())
-    c2 = list(np.asarray(c2).flatten().tolist())
+    c1 = _flat_list(c1)
+    c2 = _flat_list(c2)
     while len(c2) > 1 and c2[-1] == 0:
         c2.pop()
     if len(c2) == 0 or c2[-1] == 0:
@@ -1106,7 +1118,7 @@ def _chebdiv(c1, c2):
         q = rem[deg2 + i] / c2[-1]
         quo[i] = q
         sub = _chebmul([0.0] * i + [q], c2)
-        sub = list(np.asarray(sub).flatten().tolist())
+        sub = _flat_list(sub)
         for j in range(len(sub)):
             if j < len(rem):
                 rem[j] -= sub[j]
@@ -1127,7 +1139,7 @@ def _chebpow(c, n, maxpower=None):
 def _chebval(x, c):
     """Clenshaw recurrence for Chebyshev series."""
     x = np.asarray(x)
-    c_list = list(np.asarray(c).flatten().tolist())
+    c_list = _flat_list(c)
     if len(c_list) == 0:
         return np.zeros_like(x)
     if len(c_list) == 1:
