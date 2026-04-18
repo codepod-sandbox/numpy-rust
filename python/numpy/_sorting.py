@@ -4,6 +4,7 @@ from _numpy_native import ndarray
 from ._helpers import (
     AxisError, _ObjectArray,
     _builtin_range, _builtin_min, _builtin_max,
+    _flat_arraylike_data,
 )
 
 _builtin_sorted = sorted
@@ -26,7 +27,7 @@ def _sort_complex_axis(a, axis):
     """Sort a complex ndarray along the given axis, lexicographically by (real, imag)."""
     from ._creation import _make_complex_array
     if a.ndim == 1:
-        flat = a.tolist()
+        flat = _flat_arraylike_data(a)
         def _cx_key(v):
             if isinstance(v, tuple):
                 return (v[0], v[1])
@@ -54,7 +55,7 @@ def _sort_complex_axis(a, axis):
         # Get the 1D slice for this combination
         idx = list(_np.unravel_index(i, out_shape[1:]))
         vec_idx = tuple([slice(None)] + idx)
-        vec = moved[vec_idx].tolist()
+        vec = _flat_arraylike_data(moved[vec_idx])
         def _cx_key(v):
             if isinstance(v, tuple):
                 return (v[0], v[1])
@@ -85,7 +86,7 @@ def sort(a, axis=-1, kind=None, order=None):
     # Complex arrays: sort lexicographically by (real, imag)
     if original_dtype in ('complex64', 'complex128'):
         if axis is None:
-            flat = a.flatten().tolist()
+            flat = _flat_arraylike_data(a.flatten())
             # Each element from complex ndarray is a (re, im) tuple
             def _cx_key(v):
                 if isinstance(v, tuple):
@@ -253,7 +254,7 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
                     pass
             return v
         if isinstance(sl, ndarray):
-            flat = sl.flatten().tolist()
+            flat = _flat_arraylike_data(sl.flatten())
             return tuple(_to_sortable(v) for v in flat)
         if isinstance(sl, _ObjectArray):
             return tuple(_to_sortable(v) for v in sl._data)
@@ -265,7 +266,7 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
                         result.extend(_deep_flatten(v))
                     return result
                 return [x]
-            return tuple(_deep_flatten(sl.tolist()))
+            return tuple(_deep_flatten(_flat_arraylike_data(sl)))
         return (sl,)
 
     def _is_nan_val(v):
@@ -374,10 +375,10 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
                 # Flatten ND row to list of scalar tuples
                 def _flatten_sa(sa):
                     if sa.ndim == 0:
-                        v = sa.tolist()
+                        v = _flat_arraylike_data(sa)
                         return [v if isinstance(v, tuple) else (v,)]
                     if sa.ndim == 1:
-                        lst = sa.tolist()
+                        lst = _flat_arraylike_data(sa)
                         return [x if isinstance(x, tuple) else (x,) for x in lst]
                     result_inner = []
                     for i in range(sa.shape[0]):
@@ -446,7 +447,7 @@ def unique(a, return_index=False, return_inverse=False, return_counts=False, axi
         return ret
     flat = a.flatten()
     n = flat.shape[0]
-    vals = flat.tolist()
+    vals = _flat_arraylike_data(flat)
 
     # If dtype is complex, convert (re, im) tuples from tolist() to Python complex
     _dt = str(a.dtype)
