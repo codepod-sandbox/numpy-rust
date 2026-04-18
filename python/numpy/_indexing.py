@@ -2,7 +2,10 @@
 import math as _math
 import _numpy_native as _native
 from _numpy_native import ndarray
-from ._helpers import AxisError, _ObjectArray, _builtin_range, _builtin_min, _builtin_max
+from ._helpers import (
+    AxisError, _ObjectArray, _builtin_range, _builtin_min, _builtin_max,
+    _flat_arraylike_data,
+)
 from ._core_types import _normalize_dtype
 from ._creation import array, asarray, zeros, ones, arange, linspace, empty
 from ._math import floor as _floor, isnan
@@ -286,12 +289,18 @@ def _histogramdd_row_bin_indices(row, edges, bins_per_dim):
 
 
 def _flat_int_index_values(arr):
+    flat = _flat_arraylike_data(arr)
+    if flat is not None:
+        return [int(v) for v in flat]
     if hasattr(arr, 'flatten'):
         return [int(v) for v in arr.flatten().tolist()]
     return [int(arr)]
 
 
 def _flat_values(arr):
+    flat = _flat_arraylike_data(arr)
+    if flat is not None:
+        return flat
     return arr.flatten().tolist() if hasattr(arr, 'flatten') else [arr]
 
 
