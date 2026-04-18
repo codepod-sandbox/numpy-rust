@@ -731,6 +731,7 @@ def busday_count(begindates, enddates, weekmask='1111100', holidays=None, busday
     from ._shape import broadcast_arrays
     from ._creation import asarray
     weekmask, holidays = _calendar_parts(weekmask, holidays, busdaycal)
+    scalar_input = _is_dt64(begindates) and _is_dt64(enddates)
     begin = asarray(begindates)
     end = asarray(enddates)
     begin_b, end_b = broadcast_arrays(begin, end)
@@ -743,7 +744,7 @@ def busday_count(begindates, enddates, weekmask='1111100', holidays=None, busday
     out = _native.array([float(v) for v in result]).astype('int64')
     if begin_b.shape:
         out = out.reshape(list(begin_b.shape))
-    return int(result[0]) if not begin_b.shape else out
+    return int(result[0]) if scalar_input or not begin_b.shape else out
 
 
 def is_busday(dates, weekmask='1111100', holidays=None, busdaycal=None):

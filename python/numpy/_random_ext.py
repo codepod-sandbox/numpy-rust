@@ -74,7 +74,7 @@ class _bitgen_context:
 def _active_rng():
     if _ACTIVE_BITGEN is not None and hasattr(_ACTIVE_BITGEN, "_rng"):
         return _ACTIVE_BITGEN._rng
-    return None
+    return _GLOBAL_RNG
 
 
 class _NativeRngAdapter:
@@ -280,6 +280,9 @@ class _NativeRngAdapter:
     def getrandbits(self, bits):
         self._state, value = _native_random_module.randbits_with_state(self._state, int(bits))
         return int(value)
+
+
+_GLOBAL_RNG = _NativeRngAdapter()
 
 
 def _proxy_seed(seed):
@@ -767,11 +770,20 @@ def _broadcast_call_3(func, a, b, c, size=None):
 def _normalize_random_size(size):
     if size is None:
         return None
-    if hasattr(size, '__iter__') and not isinstance(size, (tuple, list)):
-        size = tuple(int(x) for x in size)
     if isinstance(size, int):
         return (size,)
-    return tuple(int(x) for x in size)
+    if isinstance(size, (tuple, list)):
+        return tuple(int(x) for x in size)
+    flat = _flat_arraylike_data(size)
+    if flat is not None:
+        if hasattr(size, 'ndim') and int(getattr(size, 'ndim')) > 0:
+            return tuple(int(x) for x in flat)
+        else:
+            return (int(flat[0]),)
+    try:
+        return (int(size),)
+    except Exception:
+        return tuple(int(x) for x in size)
 
 
 def _reshape_random_result(result, shape):
@@ -1377,6 +1389,7 @@ def _random_hypergeometric(ngood, nbad, nsample, size=None):
             int(ngood), int(nbad), int(nsample), shape
         ),
         lambda rng, shape: rng.hypergeometric_array(ngood, nbad, nsample, shape),
+        scalar_cast=int,
     )
 
 

@@ -935,7 +935,8 @@ mod _random {
     #[pyfunction]
     fn randbits_with_state(state: u64, bits: usize, vm: &VirtualMachine) -> PyObjectRef {
         let mut rng = numpy_rust_core::random::StatefulRng::from_state(state);
-        make_state_tuple(rng.state(), vm.ctx.new_int(rng.randbits(bits)).into(), vm)
+        let value = rng.randbits(bits);
+        make_state_tuple(rng.state(), vm.ctx.new_int(value).into(), vm)
     }
 
     #[pyfunction]

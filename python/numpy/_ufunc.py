@@ -358,6 +358,13 @@ class ufunc:
                 f"operand type(s) all returned NotImplemented from "
                 f"__array_ufunc__({type(self).__name__}, '__call__', ...)")
 
+        # Check for MaskedArray inputs before any array coercion so we do not
+        # erase masked semantics by calling asarray() on them.
+        _has_masked = any(
+            hasattr(a, 'filled') and hasattr(a, 'mask') and not isinstance(a, ndarray)
+            for a in args
+        )
+
         # Coerce plain array-like inputs that do not participate in
         # __array_ufunc__ dispatch onto the ndarray path, while remembering
         # wrappers for post-processing (__array_wrap__).
@@ -365,6 +372,8 @@ class ufunc:
         _array_wrap_candidates = []
         for i, a in enumerate(_wrapped_args):
             if isinstance(a, (ndarray, int, float, bool, complex, list, tuple)):
+                continue
+            if hasattr(a, 'filled') and hasattr(a, 'mask'):
                 continue
             if hasattr(a, '__array_interface__') or hasattr(a, '__array__'):
                 try:
@@ -374,12 +383,6 @@ class ufunc:
                 except Exception:
                     pass
         args = tuple(_wrapped_args)
-
-        # Check for MaskedArray inputs — delegate to numpy.ma and preserve type
-        _has_masked = any(
-            hasattr(a, 'filled') and hasattr(a, 'mask') and not isinstance(a, ndarray)
-            for a in args
-        )
 
         try:
             result = self._func(*args, **kwargs)

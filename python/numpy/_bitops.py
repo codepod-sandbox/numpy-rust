@@ -9,6 +9,18 @@ __all__ = [
     'binary_repr', 'base_repr',
 ]
 
+def _reverse_unpackbits_blocks(bits, count=None):
+    vals = _flat_arraylike_data(bits)
+    out = []
+    for i in range(0, len(vals), 8):
+        out.extend(reversed(vals[i:i + 8]))
+    if count is not None:
+        if count >= 0:
+            out = out[:count]
+        else:
+            out = out[:len(out) + count]
+    return array(out)
+
 
 # ---------------------------------------------------------------------------
 # Bit manipulation
@@ -26,7 +38,14 @@ def packbits(a, axis=None, bitorder='big'):
             axis += a.ndim
         if axis < 0 or axis >= a.ndim:
             raise ValueError("axis out of range")
-    return _native.packbits(a, axis=axis, bitorder=bitorder)
+    if axis is None:
+        flat = a.flatten()
+        if bitorder == 'big':
+            return _native.packbits(flat, 0)
+        return _native.packbits(flat, 0, bitorder)
+    if bitorder == 'big':
+        return _native.packbits(a, axis)
+    return _native.packbits(a, axis, bitorder)
 
 
 def unpackbits(a, axis=None, count=None, bitorder='big'):
@@ -42,7 +61,22 @@ def unpackbits(a, axis=None, count=None, bitorder='big'):
         if axis < 0 or axis >= a.ndim:
             raise ValueError("axis out of range")
     count = None if count is None else int(count)
-    return _native.unpackbits(a, axis=axis, count=count, bitorder=bitorder)
+    if axis is None:
+        flat = a.flatten()
+        if count is None and bitorder == 'big':
+            return _native.unpackbits(flat, 0)
+        if count is None:
+            return _reverse_unpackbits_blocks(_native.unpackbits(flat, 0))
+        if bitorder == 'big':
+            return _native.unpackbits(flat, 0, count)
+        return _reverse_unpackbits_blocks(_native.unpackbits(flat, 0), count=count)
+    if count is None and bitorder == 'big':
+        return _native.unpackbits(a, axis)
+    if count is None:
+        return _native.unpackbits(a, axis, None, bitorder)
+    if bitorder == 'big':
+        return _native.unpackbits(a, axis, count)
+    return _native.unpackbits(a, axis, count, bitorder)
 
 
 # ---------------------------------------------------------------------------

@@ -170,9 +170,7 @@ def indices(dimensions, dtype=None, sparse=False):
         grid = tile(idx, reps)
         grids.append(grid)
 
-    # Force contiguous layout before stacking to avoid memory layout issues
-    contiguous = [asarray(_flat_arraylike_data(g)) for g in grids]
-    result = stack(contiguous)
+    result = stack(grids)
     if _dt is not None:
         result = result.astype(_dt)
     return result
@@ -498,8 +496,8 @@ def histogram(a, bins=10, range=None, density=None, weights=None):
             if total > 0.0:
                 hist = hist / (total * widths)
         return hist, edges
-    # Unweighted integer bins: use native, including explicit range
-    native_range = None if range is None else (lo, hi)
+    # Unweighted integer bins: native histogram expects an explicit finite range pair.
+    native_range = (lo, hi)
     counts, edges = _native.histogram(a, bins, native_range)
     if density:
         bin_widths = diff(edges)

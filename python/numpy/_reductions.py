@@ -3247,10 +3247,16 @@ def gradient(f, *varargs, axis=None, edge_order=1):
         raise ValueError("'edge_order' must be 1 or 2")
     axes, single_axis = _resolve_gradient_axes(axis, f.ndim)
     spacings = _resolve_gradient_spacings(varargs, axes, f.shape)
-    if isinstance(f, ndarray) and not isinstance(f, _ObjectArray) and not _is_temporal_dtype(str(f.dtype)):
+    native_uniform_spacing = not any(isinstance(sp, ndarray) for sp in spacings)
+    if (
+        isinstance(f, ndarray)
+        and not isinstance(f, _ObjectArray)
+        and not _is_temporal_dtype(str(f.dtype))
+        and native_uniform_spacing
+    ):
         try:
             native_result = _native.gradient(f, spacings, int(edge_order), axes)
-            if single_axis:
+            if single_axis or (axis is None and f.ndim == 1):
                 return native_result[0]
             return tuple(native_result)
         except Exception:
