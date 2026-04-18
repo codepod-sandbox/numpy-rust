@@ -133,7 +133,7 @@ def interp(x, xp, fp, left=None, right=None, period=None):
         flat = _flat_arraylike_data(arr)
         if flat is not None:
             return flat
-        return arr.flatten().tolist()
+        return [arr]
 
     def _result_values(arr):
         return list(_flat_values(arr))

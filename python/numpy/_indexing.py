@@ -296,7 +296,7 @@ def _flat_values(arr):
     flat = _flat_arraylike_data(arr)
     if flat is not None:
         return flat
-    return arr.flatten().tolist() if hasattr(arr, 'flatten') else [arr]
+    return [arr]
 
 
 def _flat_weight_values(weights):

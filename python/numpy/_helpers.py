@@ -1011,9 +1011,10 @@ def _flat_arraylike_data(data):
         if data.ndim == 0:
             scalar = data.item() if hasattr(data, 'item') else data[()]
             return [scalar]
-        return data.flatten().tolist()
     if isinstance(data, (list, tuple)):
         return list(data)
+    if hasattr(data, 'flatten'):
+        return data.flatten().tolist()
     return None
 
 

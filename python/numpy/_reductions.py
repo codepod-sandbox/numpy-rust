@@ -100,8 +100,6 @@ def _flat_fallback_data(arr):
     flat = _flat_arraylike_data(arr)
     if flat is not None:
         return flat
-    if hasattr(arr, "flatten"):
-        return arr.flatten().tolist()
     return None
 
 

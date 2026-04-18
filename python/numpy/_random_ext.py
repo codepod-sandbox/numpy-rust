@@ -696,8 +696,6 @@ def _flat_random_data(value):
     flat = _flat_arraylike_data(value)
     if flat is not None:
         return flat
-    if isinstance(value, ndarray):
-        return value.flatten().tolist()
     return None
 
 
